@@ -45,6 +45,10 @@ export default function AuthPage() {
 
     // Session exists - verify it's set
     console.log("Session created:", !!result.data.session);
+    console.log("User ID:", result.data.session.user.id);
+    
+    // Small delay to ensure cookies are set before redirect
+    await new Promise(resolve => setTimeout(resolve, 100));
     
     // Redirect to onboarding
     router.replace("/onboarding");

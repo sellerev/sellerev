@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { supabaseBrowser } from "@/lib/supabase/client";
 
 type Stage = "new" | "existing" | "thinking";
 
 export default function OnboardingPage() {
-  const supabase = createClient();
+  const supabase = supabaseBrowser;
 
   const [stage, setStage] = useState<Stage | null>(null);
   const [experience, setExperience] = useState("");
