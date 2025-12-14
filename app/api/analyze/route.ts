@@ -2,23 +2,167 @@ import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 
 // Sellerev production SYSTEM PROMPT
-// TODO: Replace with actual production system prompt
-const SYSTEM_PROMPT = `You are an expert Amazon seller advisor. Analyze the provided input (either an ASIN or a product idea) and return a structured JSON decision with the following keys:
-- viability_score: number (0-100)
-- market_analysis: object with keys: competition_level, market_size, trends
-- recommendations: array of strings
-- risk_factors: array of strings
-- next_steps: array of strings
+const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
 
-Return ONLY valid JSON, no markdown, no code blocks, no explanations.`;
+Your role is to make clear, conservative, professional decisions about whether an Amazon product or idea is viable for a specific seller, based on limited but realistic information.
+
+You are not a data dashboard.
+You are not neutral.
+You are an expert advisor whose output may influence real financial decisions.
+
+Your primary objective is to prevent sellers from making costly mistakes.
+
+CORE OPERATING PRINCIPLES (NON-NEGOTIABLE)
+
+1. Decision over data
+   - Always provide a clear verdict.
+   - Never dump raw metrics without interpretation.
+
+2. Conservatism
+   - If evidence is incomplete or ambiguous, default to caution or rejection.
+   - It is acceptable and encouraged to recommend not proceeding.
+
+3. Seller-specific reasoning
+   - The same product may be viable for one seller and inappropriate for another.
+   - Always incorporate seller context into your reasoning.
+
+4. Explicit uncertainty
+   - State assumptions and limitations clearly.
+   - Never imply certainty where none exists.
+
+5. Professional tone
+   - Calm, analytical, and precise.
+   - No hype, no emojis, no sales language.
+
+STRICT PROHIBITIONS (YOU MUST NEVER DO THESE)
+
+You must NOT:
+- Guess or fabricate revenue, sales volume, or BSR
+- Guess PPC costs or conversion rates
+- Claim high demand without qualification
+- Use definitive financial guarantees
+- Encourage risky launches without clear justification
+- Reference proprietary or private Amazon data
+- Hallucinate supplier costs or margins
+
+If required information is unavailable, you must explicitly state that limitation.
+
+REQUIRED INPUT CONTEXT
+
+You will always receive:
+
+Seller Context:
+- stage: one of new, existing, thinking
+- experience_months: integer or null
+- revenue_range: string or null
+
+Product Input:
+- Either an Amazon ASIN
+- Or a plain-text product idea or keyword
+
+You must treat this as partial information, not a complete dataset.
+
+REQUIRED OUTPUT FORMAT (STRICT JSON ONLY)
+
+You must output valid JSON that conforms exactly to the following structure:
+
+{
+  "decision": {
+    "verdict": "GO" | "CAUTION" | "NO_GO",
+    "confidence": number
+  },
+  "executive_summary": string,
+  "reasoning": {
+    "primary_factors": string[],
+    "seller_context_impact": string
+  },
+  "risks": {
+    "competition": {
+      "level": "Low" | "Medium" | "High",
+      "explanation": string
+    },
+    "pricing": {
+      "level": "Low" | "Medium" | "High",
+      "explanation": string
+    },
+    "differentiation": {
+      "level": "Low" | "Medium" | "High",
+      "explanation": string
+    },
+    "operations": {
+      "level": "Low" | "Medium" | "High",
+      "explanation": string
+    }
+  },
+  "recommended_actions": {
+    "must_do": string[],
+    "should_do": string[],
+    "avoid": string[]
+  },
+  "assumptions_and_limits": string[]
+}
+
+No additional keys.
+No missing keys.
+No markdown.
+No commentary outside JSON.
+
+VERDICT GUIDELINES
+
+GO:
+- Risks are manageable
+- Seller is appropriately positioned
+- Clear path to differentiation or execution exists
+
+CAUTION:
+- Viability depends on specific conditions
+- Risks are meaningful but not fatal
+- Proceed only if recommendations are followed
+
+NO_GO:
+- Competitive, structural, or execution risks outweigh upside
+- Particularly unsuitable for the seller's stage
+- Recommend abandoning or postponing
+
+Confidence score (0–100) reflects decision confidence, not success probability.
+
+SELLER CONTEXT INTERPRETATION
+
+New seller:
+- Penalize high competition
+- Penalize heavy PPC reliance
+- Penalize weak differentiation
+- Favor simplicity and speed to validation
+
+Existing seller:
+- Allow for higher competition if strategic advantages exist
+- Consider portfolio synergies
+- Weigh opportunity cost
+
+Thinking:
+- Focus on educational clarity
+- Highlight why something would or would not work
+- Emphasize learning, not execution
+
+FINAL CHECK BEFORE RESPONDING
+
+Before returning your answer, verify:
+- Verdict matches reasoning
+- Risks are internally consistent
+- Recommendations are actionable
+- Assumptions are explicitly stated
+- Output is conservative, professional, and honest
+
+Output should read like advice from a senior Amazon operator.`;
 
 // Decision contract keys that must be present in the OpenAI response
 const REQUIRED_DECISION_KEYS = [
-  "viability_score",
-  "market_analysis",
-  "recommendations",
-  "risk_factors",
-  "next_steps",
+  "decision",
+  "executive_summary",
+  "reasoning",
+  "risks",
+  "recommended_actions",
+  "assumptions_and_limits",
 ];
 
 interface AnalyzeRequestBody {
@@ -27,15 +171,39 @@ interface AnalyzeRequestBody {
 }
 
 interface DecisionContract {
-  viability_score: number;
-  market_analysis: {
-    competition_level: string;
-    market_size: string;
-    trends: string;
+  decision: {
+    verdict: "GO" | "CAUTION" | "NO_GO";
+    confidence: number;
   };
-  recommendations: string[];
-  risk_factors: string[];
-  next_steps: string[];
+  executive_summary: string;
+  reasoning: {
+    primary_factors: string[];
+    seller_context_impact: string;
+  };
+  risks: {
+    competition: {
+      level: "Low" | "Medium" | "High";
+      explanation: string;
+    };
+    pricing: {
+      level: "Low" | "Medium" | "High";
+      explanation: string;
+    };
+    differentiation: {
+      level: "Low" | "Medium" | "High";
+      explanation: string;
+    };
+    operations: {
+      level: "Low" | "Medium" | "High";
+      explanation: string;
+    };
+  };
+  recommended_actions: {
+    must_do: string[];
+    should_do: string[];
+    avoid: string[];
+  };
+  assumptions_and_limits: string[];
 }
 
 function validateRequestBody(body: any): body is AnalyzeRequestBody {
@@ -60,42 +228,77 @@ function validateDecisionContract(data: any): data is DecisionContract {
     }
   }
 
-  // Validate structure
+  // Validate decision object
   if (
-    typeof data.viability_score !== "number" ||
-    data.viability_score < 0 ||
-    data.viability_score > 100
+    typeof data.decision !== "object" ||
+    data.decision === null ||
+    !["GO", "CAUTION", "NO_GO"].includes(data.decision.verdict) ||
+    typeof data.decision.confidence !== "number" ||
+    data.decision.confidence < 0 ||
+    data.decision.confidence > 100
   ) {
     return false;
   }
 
+  // Validate executive_summary
+  if (typeof data.executive_summary !== "string") {
+    return false;
+  }
+
+  // Validate reasoning object
   if (
-    typeof data.market_analysis !== "object" ||
-    data.market_analysis === null ||
-    typeof data.market_analysis.competition_level !== "string" ||
-    typeof data.market_analysis.market_size !== "string" ||
-    typeof data.market_analysis.trends !== "string"
+    typeof data.reasoning !== "object" ||
+    data.reasoning === null ||
+    !Array.isArray(data.reasoning.primary_factors) ||
+    !data.reasoning.primary_factors.every((item: any) => typeof item === "string") ||
+    typeof data.reasoning.seller_context_impact !== "string"
   ) {
     return false;
   }
 
+  // Validate risks object
+  const riskLevels = ["Low", "Medium", "High"];
+  const riskKeys = ["competition", "pricing", "differentiation", "operations"];
   if (
-    !Array.isArray(data.recommendations) ||
-    !data.recommendations.every((item: any) => typeof item === "string")
+    typeof data.risks !== "object" ||
+    data.risks === null
   ) {
     return false;
   }
+  for (const riskKey of riskKeys) {
+    if (
+      !(riskKey in data.risks) ||
+      typeof data.risks[riskKey] !== "object" ||
+      data.risks[riskKey] === null ||
+      !riskLevels.includes(data.risks[riskKey].level) ||
+      typeof data.risks[riskKey].explanation !== "string"
+    ) {
+      return false;
+    }
+  }
 
+  // Validate recommended_actions object
+  const actionKeys = ["must_do", "should_do", "avoid"];
   if (
-    !Array.isArray(data.risk_factors) ||
-    !data.risk_factors.every((item: any) => typeof item === "string")
+    typeof data.recommended_actions !== "object" ||
+    data.recommended_actions === null
   ) {
     return false;
   }
+  for (const actionKey of actionKeys) {
+    if (
+      !(actionKey in data.recommended_actions) ||
+      !Array.isArray(data.recommended_actions[actionKey]) ||
+      !data.recommended_actions[actionKey].every((item: any) => typeof item === "string")
+    ) {
+      return false;
+    }
+  }
 
+  // Validate assumptions_and_limits
   if (
-    !Array.isArray(data.next_steps) ||
-    !data.next_steps.every((item: any) => typeof item === "string")
+    !Array.isArray(data.assumptions_and_limits) ||
+    !data.assumptions_and_limits.every((item: any) => typeof item === "string")
   ) {
     return false;
   }
@@ -167,10 +370,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const userMessage =
-      body.input_type === "asin"
-        ? `Analyze this ASIN: ${body.input_value}`
-        : `Analyze this product idea: ${body.input_value}`;
+    // Build user message with seller context
+    const sellerContext = `Seller Context:
+- stage: ${profile.stage}
+- experience_months: ${profile.experience_months ?? "null"}
+- revenue_range: ${profile.monthly_revenue_range ?? "null"}
+
+Product Input:
+- ${body.input_type === "asin" ? "ASIN" : "Product idea"}: ${body.input_value}`;
+
+    const userMessage = sellerContext;
 
     const openaiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",
@@ -289,3 +498,4 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
