@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createServerClient } from "@/lib/supabase/server";
 
 export default async function DashboardPage() {
-  const supabase = await createClient();
+  const supabase = createServerClient();
 
   const {
     data: { user },
@@ -14,11 +14,10 @@ export default async function DashboardPage() {
 
   const { data: profile } = await supabase
     .from("seller_profiles")
-    .select("*")
+    .select("id")
     .eq("id", user.id)
     .single();
 
-  // If no profile exists, redirect to onboarding
   if (!profile) {
     redirect("/onboarding");
   }
