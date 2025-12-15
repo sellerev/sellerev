@@ -325,17 +325,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Load seller profile
-    const { data: profile, error: profileError } = await supabase
+    // 2. Load seller profile (required for AI context)
+    const { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
-      .select("*")
+      .select("stage, experience_months, monthly_revenue_range")
       .eq("id", user.id)
       .single();
 
-    if (profileError || !profile) {
+    if (profileError || !sellerProfile) {
       return NextResponse.json(
-        { ok: false, error: "Seller profile not found" },
-        { status: 404, headers: res.headers }
+        { ok: false, error: "Seller profile not found. Onboarding incomplete." },
+        { status: 400, headers: res.headers }
       );
     }
 
@@ -361,7 +361,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Call OpenAI
+    // 4. Structure seller context
+    const sellerContext = {
+      stage: sellerProfile.stage,
+      experience_months: sellerProfile.experience_months,
+      monthly_revenue_range: sellerProfile.monthly_revenue_range,
+    };
+
+    // 5. Call OpenAI
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) {
       return NextResponse.json(
@@ -370,16 +377,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Build user message with seller context
-    const sellerContext = `Seller Context:
-- stage: ${profile.stage}
-- experience_months: ${profile.experience_months ?? "null"}
-- revenue_range: ${profile.monthly_revenue_range ?? "null"}
+    // 6. Build user message with seller context (raw values, no interpretation)
+    const userMessage = `SELLER CONTEXT:
+- Stage: ${sellerContext.stage}
+- Experience (months): ${sellerContext.experience_months ?? "null"}
+- Monthly revenue range: ${sellerContext.monthly_revenue_range ?? "null"}
 
-Product Input:
-- ${body.input_type === "asin" ? "ASIN" : "Product idea"}: ${body.input_value}`;
-
-    const userMessage = sellerContext;
+ANALYSIS REQUEST:
+${body.input_value}`;
 
     const openaiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",
@@ -423,7 +428,7 @@ Product Input:
       );
     }
 
-    // 5. Parse and validate JSON output
+    // 7. Parse and validate OpenAI JSON output
     let decisionJson: any;
     try {
       // Remove markdown code blocks if present
@@ -444,7 +449,7 @@ Product Input:
       );
     }
 
-    // 6. Validate decision contract
+    // 8. Validate decision contract structure
     if (!validateDecisionContract(decisionJson)) {
       return NextResponse.json(
         {
@@ -457,7 +462,7 @@ Product Input:
       );
     }
 
-    // 7. Save to analysis_runs
+    // 9. Save to analysis_runs with seller context snapshot
     const { error: saveError } = await supabase
       .from("analysis_runs")
       .insert({
@@ -465,6 +470,9 @@ Product Input:
         input_type: body.input_type,
         input_value: body.input_value,
         response: decisionJson,
+        seller_stage: sellerContext.stage,
+        seller_experience_months: sellerContext.experience_months,
+        seller_monthly_revenue_range: sellerContext.monthly_revenue_range,
       });
 
     if (saveError) {
@@ -478,7 +486,7 @@ Product Input:
       );
     }
 
-    // 8. Return success response with cookies preserved
+    // 10. Return success response with cookies preserved
     return NextResponse.json(
       {
         ok: true,
