@@ -164,3 +164,4 @@ export default async function AnalyzeHistoryPage() {
     </div>
   );
 }
+
