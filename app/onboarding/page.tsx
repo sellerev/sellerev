@@ -101,9 +101,9 @@ export default function OnboardingPage() {
             disabled={loading}
           >
             <option value="">Select stage</option>
-            <option value="new_seller">New Seller</option>
-            <option value="existing_seller">Existing Seller</option>
-            <option value="researching">Researching</option>
+            <option value="new_seller">New seller</option>
+            <option value="existing_seller">Existing seller</option>
+            <option value="researching">Just researching</option>
           </select>
         </div>
 
