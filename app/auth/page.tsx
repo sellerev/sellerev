@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
@@ -13,10 +13,28 @@ export default function AuthPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [signupSuccess, setSignupSuccess] = useState(false);
+
+  // Listen for auth state changes
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session) {
+        // User has signed in (e.g., after email confirmation)
+        router.replace("/onboarding");
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [router, supabase]);
 
   const submit = async () => {
     setLoading(true);
     setError(null);
+    setSignupSuccess(false);
 
     let result;
 
@@ -32,26 +50,21 @@ export default function AuthPage() {
       return;
     }
 
-    // Verify session exists in result.data.session
-    if (!result.data.session) {
-      setError(
-        mode === "signup"
-          ? "Account created but session not available. Please check your email for confirmation."
-          : "No session available. Please try again."
-      );
+    if (mode === "signup") {
+      // Sign-up: Show success message, don't redirect
+      // User will be redirected via onAuthStateChange when they confirm email
+      setSignupSuccess(true);
       setLoading(false);
-      return;
+    } else {
+      // Sign-in: Check if session exists
+      if (result.data.session) {
+        // Session exists - redirect to onboarding
+        router.replace("/onboarding");
+      } else {
+        setError("Sign in failed. Please try again.");
+        setLoading(false);
+      }
     }
-
-    // Session exists - verify it's set
-    console.log("Session created:", !!result.data.session);
-    console.log("User ID:", result.data.session.user.id);
-    
-    // Small delay to ensure cookies are set before redirect
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    // Redirect to onboarding
-    router.replace("/onboarding");
   };
 
   return (
@@ -59,12 +72,22 @@ export default function AuthPage() {
       <div className="w-full max-w-sm space-y-4 border rounded-xl p-6">
         <h1 className="text-xl font-semibold">Sellerev</h1>
 
+        {signupSuccess && (
+          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded text-sm">
+            Check your email to confirm your account
+          </div>
+        )}
+
         <div className="flex gap-2">
           <button
             className={`flex-1 border rounded p-2 ${
               mode === "signup" ? "bg-black text-white" : ""
             }`}
-            onClick={() => setMode("signup")}
+            onClick={() => {
+              setMode("signup");
+              setSignupSuccess(false);
+              setError(null);
+            }}
           >
             Sign up
           </button>
@@ -72,7 +95,11 @@ export default function AuthPage() {
             className={`flex-1 border rounded p-2 ${
               mode === "signin" ? "bg-black text-white" : ""
             }`}
-            onClick={() => setMode("signin")}
+            onClick={() => {
+              setMode("signin");
+              setSignupSuccess(false);
+              setError(null);
+            }}
           >
             Sign in
           </button>

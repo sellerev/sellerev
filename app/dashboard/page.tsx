@@ -18,6 +18,7 @@ export default async function DashboardPage() {
     .eq("id", user.id)
     .single();
 
+  // If no profile exists, redirect to onboarding
   if (!profile) {
     redirect("/onboarding");
   }
