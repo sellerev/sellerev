@@ -50,17 +50,20 @@ export default function OnboardingPage() {
         return;
       }
 
-      const { error: insertError } = await supabase
+      const { error: upsertError } = await supabase
         .from("seller_profiles")
-        .insert({
-          id: user.id,
-          stage,
-          experience_months: experienceMonths === "" ? null : experienceMonths,
-          monthly_revenue_range: revenueRange || null,
-        });
+        .upsert(
+          {
+            id: user.id,
+            stage,
+            experience_months: experienceMonths === "" ? null : experienceMonths,
+            monthly_revenue_range: revenueRange || null,
+          },
+          { onConflict: "id" }
+        );
 
-      if (insertError) {
-        setError(insertError.message);
+      if (upsertError) {
+        setError(upsertError.message);
         setLoading(false);
       } else {
         router.push("/dashboard");
@@ -103,7 +106,7 @@ export default function OnboardingPage() {
             <option value="">Select stage</option>
             <option value="new">New seller</option>
             <option value="existing">Existing seller</option>
-            <option value="thinking">Just researching</option>
+            <option value="researching">Just researching</option>
           </select>
         </div>
 
@@ -137,10 +140,10 @@ export default function OnboardingPage() {
             disabled={loading}
           >
             <option value="">Select range</option>
-            <option value="$0">$0</option>
-            <option value="$1k–$10k">$1k–$10k</option>
-            <option value="$10k–$50k">$10k–$50k</option>
-            <option value="$50k+">$50k+</option>
+            <option value="0">$0</option>
+            <option value="1k_10k">$1k–$10k</option>
+            <option value="10k_50k">$10k–$50k</option>
+            <option value="50k_plus">$50k+</option>
           </select>
         </div>
 
