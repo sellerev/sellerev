@@ -328,7 +328,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Load seller profile (required for AI context)
+    // 2. Gate: Require seller profile (onboarding must be complete)
     const { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
       .select("stage, experience_months, monthly_revenue_range")
@@ -337,8 +337,8 @@ export async function POST(req: NextRequest) {
 
     if (profileError || !sellerProfile) {
       return NextResponse.json(
-        { ok: false, error: "Seller profile not found. Onboarding incomplete." },
-        { status: 400, headers: res.headers }
+        { ok: false, error: "Onboarding incomplete" },
+        { status: 403, headers: res.headers }
       );
     }
 
