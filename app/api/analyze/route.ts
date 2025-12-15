@@ -462,17 +462,23 @@ ${body.input_value}`;
       );
     }
 
-    // 9. Save to analysis_runs with seller context snapshot
+    // 9. Extract verdict and confidence for analytics
+    const verdict = decisionJson.decision.verdict;
+    const confidence = decisionJson.decision.confidence;
+
+    // 10. Save to analysis_runs with verdict, confidence, and seller context snapshot
     const { error: saveError } = await supabase
       .from("analysis_runs")
       .insert({
         user_id: user.id,
         input_type: body.input_type,
         input_value: body.input_value,
-        response: decisionJson,
+        ai_verdict: verdict,
+        ai_confidence: confidence,
         seller_stage: sellerContext.stage,
         seller_experience_months: sellerContext.experience_months,
         seller_monthly_revenue_range: sellerContext.monthly_revenue_range,
+        response: decisionJson,
       });
 
     if (saveError) {
