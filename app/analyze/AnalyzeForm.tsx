@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
+import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 
 /**
  * Sellerev Analyze Page - Core Product Component
@@ -26,11 +27,6 @@ import { useState, useRef, useEffect } from "react";
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPE DEFINITIONS
 // ─────────────────────────────────────────────────────────────────────────────
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
 
 interface RiskLevel {
   level: "Low" | "Medium" | "High";
@@ -107,18 +103,6 @@ function formatTimeAgo(dateString: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUGGESTED QUESTIONS (shown after analysis)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const SUGGESTED_QUESTIONS = [
-  "Help me calculate potential margins",
-  "What would change this verdict?",
-  "Compare to the top competitor",
-  "Explain the main risks in detail",
-  "What differentiation strategies could work?",
-];
-
-// ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT PROPS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -127,6 +111,9 @@ interface AnalyzeFormProps {
   initialAnalysis?: AnalysisResponse | null;
   // Initial chat messages (when loading from history)
   initialMessages?: ChatMessage[];
+  // Read-only mode: disables input bar and analyze button
+  // Used when viewing historical analyses
+  readOnly?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -136,6 +123,7 @@ interface AnalyzeFormProps {
 export default function AnalyzeForm({
   initialAnalysis = null,
   initialMessages = [],
+  readOnly = false,
 }: AnalyzeFormProps) {
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
@@ -157,23 +145,8 @@ export default function AnalyzeForm({
     initialAnalysis
   );
 
-  // Chat state - initialize with provided messages if available
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // EFFECTS
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // Auto-scroll chat to bottom when new messages arrive
-  useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages, chatLoading]);
+  // Chat messages state (synced with ChatSidebar)
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(initialMessages);
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -201,7 +174,7 @@ export default function AnalyzeForm({
     setLoading(true);
     setError(null);
     setAnalysis(null);
-    setMessages([]); // Clear previous chat
+    setChatMessages([]); // Clear previous chat
 
     try {
       const res = await fetch("/api/analyze", {
@@ -225,57 +198,6 @@ export default function AnalyzeForm({
       setError(errorMessage);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const sendChatMessage = async (messageOverride?: string) => {
-    const messageToSend = messageOverride || chatInput.trim();
-    if (!messageToSend || !analysis) return;
-
-    const userMessage: ChatMessage = {
-      role: "user",
-      content: messageToSend,
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-    setChatInput("");
-    setChatLoading(true);
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          analysis_run_id: analysis.analysis_run_id,
-          message: messageToSend,
-          history: messages, // Send conversation history
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || "Chat failed");
-      }
-
-      const assistantMessage: ChatMessage = {
-        role: "assistant",
-        content: data.data.message,
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-    } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : "Chat failed";
-      // Add error message to chat
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: `Error: ${errorMessage}. Please try again.`,
-        },
-      ]);
-    } finally {
-      setChatLoading(false);
     }
   };
 
@@ -329,6 +251,7 @@ export default function AnalyzeForm({
     <div className="min-h-screen flex flex-col bg-gray-50">
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* BLOCK 1: INPUT BAR (TOP - FULL WIDTH)                               */}
+      {/* In readOnly mode: inputs and button are disabled                    */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div className="border-b bg-white shadow-sm sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 py-4">
@@ -338,16 +261,16 @@ export default function AnalyzeForm({
               <label className="block text-xs font-medium text-gray-600 mb-1.5">
                 Type
               </label>
-              <div className="flex border rounded-lg overflow-hidden">
+              <div className={`flex border rounded-lg overflow-hidden ${readOnly ? "opacity-60" : ""}`}>
                 <button
                   type="button"
                   className={`flex-1 py-2 px-3 text-sm font-medium transition-colors ${
                     inputType === "asin"
                       ? "bg-black text-white"
                       : "bg-white text-gray-700 hover:bg-gray-50"
-                  }`}
-                  onClick={() => setInputType("asin")}
-                  disabled={loading}
+                  } ${readOnly ? "cursor-not-allowed" : ""}`}
+                  onClick={() => !readOnly && setInputType("asin")}
+                  disabled={loading || readOnly}
                 >
                   ASIN
                 </button>
@@ -357,9 +280,9 @@ export default function AnalyzeForm({
                     inputType === "keyword"
                       ? "bg-black text-white"
                       : "bg-white text-gray-700 hover:bg-gray-50"
-                  }`}
-                  onClick={() => setInputType("keyword")}
-                  disabled={loading}
+                  } ${readOnly ? "cursor-not-allowed" : ""}`}
+                  onClick={() => !readOnly && setInputType("keyword")}
+                  disabled={loading || readOnly}
                 >
                   Keyword
                 </button>
@@ -375,68 +298,92 @@ export default function AnalyzeForm({
                 type="text"
                 className={`w-full border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent ${
                   inputError ? "border-red-300" : "border-gray-300"
-                }`}
+                } ${readOnly ? "bg-gray-50 cursor-not-allowed" : ""}`}
                 value={inputValue}
                 onChange={(e) => {
-                  setInputValue(e.target.value);
-                  setInputError(null);
+                  if (!readOnly) {
+                    setInputValue(e.target.value);
+                    setInputError(null);
+                  }
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading) {
+                  if (e.key === "Enter" && !loading && !readOnly) {
                     analyze();
                   }
                 }}
-                disabled={loading}
+                disabled={loading || readOnly}
                 placeholder={
                   inputType === "asin"
                     ? "e.g., B0CHX3PNKD"
                     : "e.g., yoga mat, wireless earbuds"
                 }
+                readOnly={readOnly}
               />
               {inputError && (
                 <p className="text-red-600 text-xs mt-1">{inputError}</p>
               )}
             </div>
 
-            {/* Analyze Button */}
-            <button
-              className="bg-black text-white rounded-lg px-8 py-2 font-medium text-sm hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              onClick={analyze}
-              disabled={loading || !inputValue.trim()}
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <svg
-                    className="animate-spin h-4 w-4"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    />
-                  </svg>
-                  Analyzing...
-                </span>
-              ) : (
-                "Analyze"
-              )}
-            </button>
+            {/* Analyze Button - Hidden in readOnly mode */}
+            {readOnly ? (
+              <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-lg text-sm text-gray-500">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                View Only
+              </div>
+            ) : (
+              <button
+                className="bg-black text-white rounded-lg px-8 py-2 font-medium text-sm hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                onClick={analyze}
+                disabled={loading || !inputValue.trim()}
+              >
+                {loading ? (
+                  <span className="flex items-center gap-2">
+                    <svg
+                      className="animate-spin h-4 w-4"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      />
+                    </svg>
+                    Analyzing...
+                  </span>
+                ) : (
+                  "Analyze"
+                )}
+              </button>
+            )}
           </div>
 
           {/* Global Error */}
           {error && (
             <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
               <p className="text-red-700 text-sm">{error}</p>
+            </div>
+          )}
+
+          {/* Read-only banner */}
+          {readOnly && (
+            <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
+              <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="text-blue-700 text-sm">
+                Viewing saved analysis. Chat is available for follow-up questions.
+              </p>
             </div>
           )}
         </div>
@@ -880,161 +827,12 @@ export default function AnalyzeForm({
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* RIGHT COLUMN: AI CHAT SIDEBAR (~30%)                            */}
         {/* BLOCK 10: This is the PRODUCT, not a helper                     */}
-        {/* - Always visible after analysis                                 */}
-        {/* - Anchored to this analysis only                                */}
-        {/* - Cannot fetch new data, cannot invent metrics                  */}
-        {/* - Cannot silently override verdict                              */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div
-          className="border-l bg-white flex flex-col"
-          style={{ width: "30%", minWidth: "320px" }}
-        >
-          {/* Chat Header */}
-          <div className="p-4 border-b bg-gray-50">
-            <h2 className="font-semibold text-gray-900">AI Assistant</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {analysis
-                ? "Ask questions about this analysis"
-                : "Complete an analysis to start chatting"}
-            </p>
-          </div>
-
-          {/* Chat Messages Area */}
-          <div
-            ref={chatContainerRef}
-            className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50"
-          >
-            {!analysis ? (
-              /* Pre-analysis: Show capabilities */
-              <div className="text-center py-8">
-                <div className="w-12 h-12 mx-auto mb-3 bg-gray-200 rounded-full flex items-center justify-center">
-                  <svg
-                    className="w-6 h-6 text-gray-400"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                    />
-                  </svg>
-                </div>
-                <p className="text-gray-500 text-sm">
-                  The AI assistant will help you:
-                </p>
-                <ul className="text-xs text-gray-400 mt-2 space-y-1">
-                  <li>• Explain the verdict</li>
-                  <li>• Run what-if scenarios</li>
-                  <li>• Calculate margins</li>
-                  <li>• Compare competitors</li>
-                </ul>
-              </div>
-            ) : messages.length === 0 ? (
-              /* Post-analysis, no messages yet: Show suggested questions */
-              <div className="space-y-3">
-                <p className="text-xs text-gray-500 text-center">
-                  Suggested questions:
-                </p>
-                {SUGGESTED_QUESTIONS.map((question, idx) => (
-                  <button
-                    key={idx}
-                    className="w-full text-left text-sm p-3 bg-white border rounded-lg hover:bg-gray-50 hover:border-gray-300 transition-colors text-gray-700"
-                    onClick={() => sendChatMessage(question)}
-                    disabled={chatLoading}
-                  >
-                    {question}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              /* Chat messages */
-              <>
-                {messages.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    className={`p-3 rounded-lg ${
-                      msg.role === "user"
-                        ? "bg-black text-white ml-6"
-                        : "bg-white border mr-6"
-                    }`}
-                  >
-                    <div
-                      className={`text-xs font-medium mb-1 ${
-                        msg.role === "user" ? "text-gray-300" : "text-gray-500"
-                      }`}
-                    >
-                      {msg.role === "user" ? "You" : "Sellerev"}
-                    </div>
-                    <div
-                      className={`text-sm whitespace-pre-wrap ${
-                        msg.role === "user" ? "" : "text-gray-700"
-                      }`}
-                    >
-                      {msg.content}
-                    </div>
-                  </div>
-                ))}
-
-                {/* Loading indicator */}
-                {chatLoading && (
-                  <div className="bg-white border rounded-lg p-3 mr-6">
-                    <div className="text-xs font-medium mb-1 text-gray-500">
-                      Sellerev
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" />
-                      <span
-                        className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"
-                        style={{ animationDelay: "0.1s" }}
-                      />
-                      <span
-                        className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"
-                        style={{ animationDelay: "0.2s" }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Scroll anchor */}
-                <div ref={chatEndRef} />
-              </>
-            )}
-          </div>
-
-          {/* Chat Input */}
-          <div className="p-4 border-t bg-white">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !chatLoading && chatInput.trim() && analysis) {
-                    sendChatMessage();
-                  }
-                }}
-                placeholder={analysis ? "Ask about the analysis..." : "Run an analysis first"}
-                disabled={!analysis || chatLoading}
-              />
-              <button
-                className="bg-black text-white rounded-lg px-4 py-2 font-medium text-sm hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                onClick={() => sendChatMessage()}
-                disabled={!analysis || !chatInput.trim() || chatLoading}
-              >
-                Send
-              </button>
-            </div>
-            {analysis && (
-              <p className="text-xs text-gray-400 mt-2 text-center">
-                Chat is grounded to this analysis only
-              </p>
-            )}
-          </div>
-        </div>
+        <ChatSidebar
+          analysisRunId={analysis?.analysis_run_id || null}
+          initialMessages={chatMessages}
+          onMessagesChange={setChatMessages}
+        />
       </div>
     </div>
   );

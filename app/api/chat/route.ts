@@ -3,38 +3,32 @@ import { createApiClient } from "@/lib/supabase/server-api";
 import { CHAT_SYSTEM_PROMPT } from "@/lib/ai/chatSystemPrompt";
 
 /**
- * Sellerev Chat API Route
+ * Sellerev Chat API Route (Streaming)
  * 
  * This endpoint continues a conversation anchored to a completed analysis.
  * 
+ * HARD CONSTRAINTS:
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 1. Chat only works if analysis_run_id exists and belongs to the user
+ * 2. All responses grounded in:
+ *    - analysis_runs.response (original AI verdict)
+ *    - analysis_runs.rainforest_data (cached market data)
+ *    - seller_profiles (user context)
+ * 3. NEVER invents data
+ * 4. NEVER fetches new market data
+ * 5. If data is missing, says so explicitly
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 
  * ANTI-HALLUCINATION GUARANTEES:
- * ─────────────────────────────────────────────────────────────────────────────
- * 1. NO LIVE DATA FETCHING: This route does NOT call Rainforest API or SP-API.
- *    All data is retrieved from cached analysis_runs records, ensuring the AI
- *    can only reason over data that was already validated and stored.
- * 
- * 2. GROUNDED CONTEXT INJECTION: The AI receives explicit, structured context
- *    including the original analysis, cached market data, and seller profile.
- *    This prevents the model from inventing data it doesn't have.
- * 
- * 3. VERDICT IMMUTABILITY: The original verdict is injected as authoritative.
- *    The system prompt explicitly forbids silent verdict changes. Any verdict
- *    discussion must explain what conditions would need to change.
- * 
- * 4. EXPLICIT LIMITATIONS: When data is missing, the system prompt requires
- *    the AI to acknowledge gaps rather than fill them with estimates.
- * ─────────────────────────────────────────────────────────────────────────────
+ * - NO LIVE DATA FETCHING: This route does NOT call Rainforest API or SP-API
+ * - GROUNDED CONTEXT INJECTION: AI receives explicit, structured context
+ * - VERDICT IMMUTABILITY: Original verdict is authoritative
+ * - EXPLICIT LIMITATIONS: Must acknowledge gaps, not fill with estimates
  */
 
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
 interface ChatRequestBody {
-  analysis_run_id: string;
+  analysisRunId: string;
   message: string;
-  history?: ChatMessage[];
 }
 
 function validateRequestBody(body: unknown): body is ChatRequestBody {
@@ -43,11 +37,10 @@ function validateRequestBody(body: unknown): body is ChatRequestBody {
   }
   const b = body as Record<string, unknown>;
   return (
-    typeof b.analysis_run_id === "string" &&
-    b.analysis_run_id.trim().length > 0 &&
+    typeof b.analysisRunId === "string" &&
+    b.analysisRunId.trim().length > 0 &&
     typeof b.message === "string" &&
-    b.message.trim().length > 0 &&
-    (b.history === undefined || Array.isArray(b.history))
+    b.message.trim().length > 0
   );
 }
 
@@ -151,7 +144,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           ok: false,
-          error: "Invalid request body. Expected { analysis_run_id: string, message: string, history?: ChatMessage[] }",
+          error: "Invalid request body. Expected { analysisRunId: string, message: string }",
         },
         { status: 400, headers: res.headers }
       );
@@ -164,8 +157,8 @@ export async function POST(req: NextRequest) {
     const { data: analysisRun, error: analysisError } = await supabase
       .from("analysis_runs")
       .select("*")
-      .eq("id", body.analysis_run_id)
-      .eq("user_id", user.id) // Ensure user owns this analysis
+      .eq("id", body.analysisRunId)
+      .eq("user_id", user.id) // Security: ensure user owns this analysis
       .single();
 
     if (analysisError || !analysisRun) {
@@ -176,7 +169,6 @@ export async function POST(req: NextRequest) {
     }
 
     // 4. Fetch seller profile snapshot
-    // Using current profile data to ensure advice matches seller's current stage
     const { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
       .select("stage, experience_months, monthly_revenue_range")
@@ -190,7 +182,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 5. Build grounded context message
+    // 5. Fetch all prior analysis_messages for this run (conversation history)
+    // ────────────────────────────────────────────────────────────────────────
+    // Load from database to ensure continuity across sessions
+    const { data: priorMessages } = await supabase
+      .from("analysis_messages")
+      .select("role, content")
+      .eq("analysis_run_id", body.analysisRunId)
+      .order("created_at", { ascending: true });
+
+    // 6. Build grounded context message
     // ─────────────────────────────────────────────────────────────────────
     // WHY VERDICTS CANNOT SILENTLY CHANGE:
     // The original verdict is injected as "AUTHORITATIVE" in the context.
@@ -207,7 +208,7 @@ export async function POST(req: NextRequest) {
       analysisRun.input_value
     );
 
-    // 6. Build message array for OpenAI
+    // 7. Build message array for OpenAI
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       // System prompt: Contains all rules and constraints
       { role: "system", content: CHAT_SYSTEM_PROMPT },
@@ -216,19 +217,19 @@ export async function POST(req: NextRequest) {
       { role: "assistant", content: "I understand. I have the analysis context and will only reason over the provided data. I will not invent numbers, estimate sales or PPC, or reference data not provided. How can I help you explore this analysis?" },
     ];
 
-    // 7. Append conversation history (if provided)
-    if (body.history && Array.isArray(body.history)) {
-      for (const msg of body.history) {
+    // 8. Append conversation history from database
+    if (priorMessages && priorMessages.length > 0) {
+      for (const msg of priorMessages) {
         if (msg.role === "user" || msg.role === "assistant") {
-          messages.push({ role: msg.role, content: msg.content });
+          messages.push({ role: msg.role as "user" | "assistant", content: msg.content });
         }
       }
     }
 
-    // 8. Append the new user message
+    // 9. Append the new user message
     messages.push({ role: "user", content: body.message });
 
-    // 9. Call OpenAI (reasoning over cached data only)
+    // 10. Call OpenAI with streaming enabled
     // ────────────────────────────────────────────────────────────────────────
     // IMPORTANT: This call does NOT trigger any external data fetching.
     // The AI can ONLY use data injected via the context message above.
@@ -254,6 +255,7 @@ export async function POST(req: NextRequest) {
           messages,
           temperature: 0.7,
           max_tokens: 1500,
+          stream: true, // Enable streaming
         }),
       }
     );
@@ -270,56 +272,95 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const openaiData = await openaiResponse.json();
-    const assistantMessage = openaiData.choices?.[0]?.message?.content;
-
-    if (!assistantMessage) {
-      return NextResponse.json(
-        { ok: false, error: "No response from AI" },
-        { status: 500, headers: res.headers }
-      );
-    }
-
-    // 10. Persist chat messages to database for history restoration
+    // 11. Stream the response to the client
     // ────────────────────────────────────────────────────────────────────────
-    // Save both user and assistant messages to enable conversation continuity
-    // when users return to a previous analysis from history.
+    // We collect the full response while streaming to save it to the database
     // ────────────────────────────────────────────────────────────────────────
-    try {
-      await supabase.from("analysis_messages").insert([
-        {
-          analysis_run_id: body.analysis_run_id,
-          user_id: user.id,
-          role: "user",
-          content: body.message,
-        },
-        {
-          analysis_run_id: body.analysis_run_id,
-          user_id: user.id,
-          role: "assistant",
-          content: assistantMessage,
-        },
-      ]);
-    } catch (saveError) {
-      // Log but don't fail - chat history is non-critical
-      console.error("Failed to save chat messages:", saveError);
-    }
+    const encoder = new TextEncoder();
+    let fullAssistantMessage = "";
 
-    // 11. Return the response
-    // The response is grounded because:
-    // - The AI was given explicit constraints via CHAT_SYSTEM_PROMPT
-    // - All data came from cached analysis_runs and seller_profiles
-    // - No live API calls were made during this request
-    return NextResponse.json(
-      {
-        ok: true,
-        data: {
-          message: assistantMessage,
-          analysis_run_id: body.analysis_run_id,
-        },
+    const stream = new ReadableStream({
+      async start(controller) {
+        const reader = openaiResponse.body?.getReader();
+        if (!reader) {
+          controller.close();
+          return;
+        }
+
+        const decoder = new TextDecoder();
+        
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split("\n").filter((line) => line.trim() !== "");
+
+            for (const line of lines) {
+              if (line === "data: [DONE]") {
+                continue;
+              }
+
+              if (line.startsWith("data: ")) {
+                try {
+                  const json = JSON.parse(line.slice(6));
+                  const content = json.choices?.[0]?.delta?.content;
+                  if (content) {
+                    fullAssistantMessage += content;
+                    // Send each chunk to the client
+                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+                  }
+                } catch {
+                  // Skip malformed JSON chunks
+                }
+              }
+            }
+          }
+
+          // 12. Save messages to database after streaming completes
+          // ────────────────────────────────────────────────────────────────
+          // Persist both user and assistant messages for history restoration
+          // ────────────────────────────────────────────────────────────────
+          if (fullAssistantMessage.trim()) {
+            try {
+              await supabase.from("analysis_messages").insert([
+                {
+                  analysis_run_id: body.analysisRunId,
+                  user_id: user.id,
+                  role: "user",
+                  content: body.message,
+                },
+                {
+                  analysis_run_id: body.analysisRunId,
+                  user_id: user.id,
+                  role: "assistant",
+                  content: fullAssistantMessage,
+                },
+              ]);
+            } catch (saveError) {
+              console.error("Failed to save chat messages:", saveError);
+            }
+          }
+
+          // Signal end of stream
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        } catch (error) {
+          console.error("Streaming error:", error);
+          controller.error(error);
+        }
       },
-      { status: 200, headers: res.headers }
-    );
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        ...Object.fromEntries(res.headers.entries()),
+      },
+    });
   } catch (error) {
     console.error("Chat endpoint error:", error);
     return NextResponse.json(
@@ -328,7 +369,7 @@ export async function POST(req: NextRequest) {
         error: "Internal server error",
         details: error instanceof Error ? error.message : "Unknown error",
       },
-      { status: 500, headers: res.headers }
+      { status: 500 }
     );
   }
 }
