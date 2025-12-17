@@ -280,7 +280,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 10. Return the response
+    // 10. Persist chat messages to database for history restoration
+    // ────────────────────────────────────────────────────────────────────────
+    // Save both user and assistant messages to enable conversation continuity
+    // when users return to a previous analysis from history.
+    // ────────────────────────────────────────────────────────────────────────
+    try {
+      await supabase.from("analysis_messages").insert([
+        {
+          analysis_run_id: body.analysis_run_id,
+          user_id: user.id,
+          role: "user",
+          content: body.message,
+        },
+        {
+          analysis_run_id: body.analysis_run_id,
+          user_id: user.id,
+          role: "assistant",
+          content: assistantMessage,
+        },
+      ]);
+    } catch (saveError) {
+      // Log but don't fail - chat history is non-critical
+      console.error("Failed to save chat messages:", saveError);
+    }
+
+    // 11. Return the response
     // The response is grounded because:
     // - The AI was given explicit constraints via CHAT_SYSTEM_PROMPT
     // - All data came from cached analysis_runs and seller_profiles

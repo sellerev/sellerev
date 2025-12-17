@@ -554,7 +554,8 @@ ${body.input_value}`;
     const confidence = decisionJson.decision.confidence;
 
     // 12. Save to analysis_runs with verdict, confidence, and seller context snapshot
-    const { error: saveError } = await supabase
+    // Returns the created row to get the analysis_run_id (required for chat integration)
+    const { data: savedAnalysis, error: saveError } = await supabase
       .from("analysis_runs")
       .insert({
         user_id: user.id,
@@ -566,14 +567,16 @@ ${body.input_value}`;
         seller_experience_months: sellerContext.experience_months,
         seller_monthly_revenue_range: sellerContext.monthly_revenue_range,
         response: decisionJson,
-      });
+      })
+      .select("id, created_at")
+      .single();
 
-    if (saveError) {
+    if (saveError || !savedAnalysis) {
       return NextResponse.json(
         {
           ok: false,
           error: "Failed to save analysis run",
-          details: saveError.message,
+          details: saveError?.message || "Unknown error",
         },
         { status: 500, headers: res.headers }
       );
@@ -593,10 +596,17 @@ ${body.input_value}`;
     }
 
     // 14. Return success response with cookies preserved
+    // Includes analysis_run_id for chat continuation
     return NextResponse.json(
       {
         ok: true,
-        data: decisionJson,
+        data: {
+          ...decisionJson,
+          analysis_run_id: savedAnalysis.id,
+          created_at: savedAnalysis.created_at,
+          input_type: body.input_type,
+          input_value: body.input_value,
+        },
       },
       { status: 200, headers: res.headers }
     );

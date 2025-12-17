@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 
 interface AnalysisRun {
@@ -6,7 +7,7 @@ interface AnalysisRun {
   input_type: string;
   input_value: string;
   created_at: string;
-  response: any;
+  response: Record<string, unknown>;
   ai_verdict?: string;
   ai_confidence?: number;
 }
@@ -126,14 +127,15 @@ export default async function AnalyzeHistoryPage() {
             const confidence = getConfidence(run);
 
             return (
-              <div
+              <Link
                 key={run.id}
-                className="border rounded-lg p-4 hover:bg-gray-50 transition-colors"
+                href={`/analyze?id=${run.id}`}
+                className="block border rounded-lg p-4 hover:bg-gray-50 hover:border-gray-400 transition-colors cursor-pointer"
               >
                 <div className="flex items-start justify-between mb-2">
                   <div className="flex items-center gap-3">
                     <span className={`text-lg ${getVerdictColor(verdict)}`}>
-                      {verdict}
+                      {verdict === "NO_GO" ? "NO GO" : verdict}
                     </span>
                     {confidence !== null && (
                       <span className="text-sm text-gray-500">
@@ -156,7 +158,14 @@ export default async function AnalyzeHistoryPage() {
                     <span className="font-medium">{run.input_value}</span>
                   </div>
                 </div>
-              </div>
+
+                <div className="mt-3 text-xs text-gray-400 flex items-center gap-1">
+                  <span>Click to view full analysis</span>
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+              </Link>
             );
           })}
         </div>
