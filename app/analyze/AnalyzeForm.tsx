@@ -177,11 +177,15 @@ export default function AnalyzeForm({
     setChatMessages([]); // Clear previous chat
 
     try {
+      // Map UI input type to API input type
+      // UI shows "Keyword" but API expects "idea"
+      const apiInputType = inputType === "keyword" ? "idea" : "asin";
+
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          input_type: inputType,
+          input_type: apiInputType,
           input_value: inputValue.trim(),
         }),
       });
