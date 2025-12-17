@@ -430,14 +430,19 @@ export default function AnalyzeForm({
               </div>
             </div>
           ) : (
-            /* POST-ANALYSIS STATE: ALL BLOCKS */
+            {/* ═══════════════════════════════════════════════════════════════ */}
+            {/* POST-ANALYSIS STATE: LOCKED VISUAL HIERARCHY                  */}
+            {/* Order: Decision → Market → Summary → Risks → Actions → Limits */}
+            {/* ═══════════════════════════════════════════════════════════════ */}
             <div className="p-6 space-y-6 max-w-4xl">
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 3: DECISION HEADER (ABOVE THE FOLD)                   */}
-              {/* Verdict does not change unless explicitly revised in chat   */}
+              {/* BLOCK 2: DECISION HEADER (HIGHEST PRIORITY)                 */}
+              {/* - Verdict badge (GO / CAUTION / NO_GO)                      */}
+              {/* - Confidence percentage                                     */}
+              {/* - One-line interpretation                                   */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <div className="flex items-center gap-4 mb-4">
+                <div className="flex items-center gap-4 mb-3">
                   <span
                     className={`px-5 py-2 rounded-lg border-2 font-bold text-lg ${
                       getVerdictStyles(analysis.decision.verdict).badge
@@ -454,15 +459,21 @@ export default function AnalyzeForm({
                     <span className="text-gray-500 ml-2">confidence</span>
                   </div>
                 </div>
-                <p className="text-sm text-gray-500 italic">
-                  Decision support, not a guarantee
+                {/* One-line interpretation */}
+                <p className={`text-sm font-medium ${getVerdictStyles(analysis.decision.verdict).text}`}>
+                  {analysis.decision.verdict === "GO" &&
+                    "This product shows potential for your seller profile."}
+                  {analysis.decision.verdict === "CAUTION" &&
+                    "Proceed carefully — review risks before committing."}
+                  {analysis.decision.verdict === "NO_GO" &&
+                    "Not recommended for your current seller stage."}
                 </p>
               </div>
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 2: MARKET SNAPSHOT (DATA-FIRST)                       */}
-              {/* Shows exact data the AI is using - builds trust             */}
-              {/* NO revenue estimates, NO sales projections                  */}
+              {/* BLOCK 3: MARKET SNAPSHOT                                    */}
+              {/* - 4 compact stat cards (2x2 grid)                           */}
+              {/* - Rainforest data only                                      */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
@@ -478,90 +489,48 @@ export default function AnalyzeForm({
 
                 {analysis.market_data &&
                 Object.keys(analysis.market_data).length > 0 ? (
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                    {analysis.market_data.average_price !== undefined && (
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">
-                          Average Price
-                        </div>
-                        <div className="text-lg font-semibold">
-                          {formatCurrency(analysis.market_data.average_price)}
-                        </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Card 1: Average Price */}
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-xs text-gray-500 mb-1">Avg Price</div>
+                      <div className="text-lg font-semibold">
+                        {analysis.market_data.average_price !== undefined
+                          ? formatCurrency(analysis.market_data.average_price)
+                          : "—"}
                       </div>
-                    )}
-
-                    {(analysis.market_data.price_min !== undefined ||
-                      analysis.market_data.price_max !== undefined) && (
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">
-                          Price Range
-                        </div>
-                        <div className="text-lg font-semibold">
-                          {analysis.market_data.price_min !== undefined
-                            ? formatCurrency(analysis.market_data.price_min)
-                            : "—"}{" "}
-                          –{" "}
-                          {analysis.market_data.price_max !== undefined
-                            ? formatCurrency(analysis.market_data.price_max)
-                            : "—"}
-                        </div>
+                    </div>
+                    {/* Card 2: Avg Rating */}
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-xs text-gray-500 mb-1">Avg Rating</div>
+                      <div className="text-lg font-semibold">
+                        {analysis.market_data.average_rating !== undefined
+                          ? `${analysis.market_data.average_rating.toFixed(1)} ★`
+                          : "—"}
                       </div>
-                    )}
-
-                    {analysis.market_data.review_count_avg !== undefined && (
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">
-                          Avg Reviews
-                        </div>
-                        <div className="text-lg font-semibold">
-                          {analysis.market_data.review_count_avg.toLocaleString()}
-                        </div>
+                    </div>
+                    {/* Card 3: Review Count */}
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-xs text-gray-500 mb-1">Avg Reviews</div>
+                      <div className="text-lg font-semibold">
+                        {analysis.market_data.review_count_avg !== undefined
+                          ? analysis.market_data.review_count_avg.toLocaleString()
+                          : "—"}
                       </div>
-                    )}
-
-                    {analysis.market_data.average_rating !== undefined && (
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">
-                          Avg Rating
-                        </div>
-                        <div className="text-lg font-semibold">
-                          {analysis.market_data.average_rating.toFixed(1)} ★
-                        </div>
+                    </div>
+                    {/* Card 4: Competitors */}
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-xs text-gray-500 mb-1">Competitors</div>
+                      <div className="text-lg font-semibold">
+                        {analysis.market_data.competitor_count !== undefined
+                          ? analysis.market_data.competitor_count
+                          : "—"}
                       </div>
-                    )}
-
-                    {analysis.market_data.competitor_count !== undefined && (
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <div className="text-xs text-gray-500 mb-1">
-                          Competitors
-                        </div>
-                        <div className="text-lg font-semibold">
-                          {analysis.market_data.competitor_count}
-                        </div>
-                      </div>
-                    )}
-
-                    {analysis.market_data.top_asins &&
-                      analysis.market_data.top_asins.length > 0 && (
-                        <div className="bg-gray-50 rounded-lg p-3 col-span-2 md:col-span-1">
-                          <div className="text-xs text-gray-500 mb-1">
-                            Top ASINs
-                          </div>
-                          <div className="text-sm font-mono">
-                            {analysis.market_data.top_asins
-                              .slice(0, 3)
-                              .join(", ")}
-                          </div>
-                        </div>
-                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="bg-gray-50 rounded-lg p-4 text-center">
                     <p className="text-gray-500 text-sm">
                       No market data available for this analysis.
-                    </p>
-                    <p className="text-gray-400 text-xs mt-1">
-                      AI reasoning is based on general market knowledge.
                     </p>
                   </div>
                 )}
@@ -569,7 +538,8 @@ export default function AnalyzeForm({
 
               {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 4: EXECUTIVE SUMMARY                                  */}
-              {/* Explains WHY the verdict exists                             */}
+              {/* - 1-2 paragraphs                                            */}
+              {/* - Natural language explanation                              */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <h2 className="text-lg font-semibold text-gray-900 mb-3">
@@ -578,54 +548,26 @@ export default function AnalyzeForm({
                 <p className="text-gray-700 leading-relaxed">
                   {analysis.executive_summary}
                 </p>
+                {/* Seller context impact as secondary paragraph */}
+                {analysis.reasoning?.seller_context_impact && (
+                  <p className="text-gray-600 text-sm mt-3 pt-3 border-t">
+                    <span className="font-medium">For your seller profile: </span>
+                    {analysis.reasoning.seller_context_impact}
+                  </p>
+                )}
               </div>
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 5: REASONING (PRIMARY FACTORS)                        */}
-              {/* Exposes decision logic with seller context impact           */}
-              {/* ─────────────────────────────────────────────────────────── */}
-              <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                  Reasoning
-                </h2>
-
-                <div className="space-y-4">
-                  <div>
-                    <h3 className="text-sm font-medium text-gray-600 mb-2">
-                      Primary Factors
-                    </h3>
-                    <ul className="space-y-2">
-                      {analysis.reasoning.primary_factors.map((factor, idx) => (
-                        <li key={idx} className="flex items-start gap-2">
-                          <span className="text-gray-400 mt-1">•</span>
-                          <span className="text-gray-700">{factor}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div className="pt-3 border-t">
-                    <h3 className="text-sm font-medium text-gray-600 mb-2">
-                      Seller Context Impact
-                    </h3>
-                    <p className="text-gray-700 bg-blue-50 border border-blue-100 rounded-lg p-3">
-                      {analysis.reasoning.seller_context_impact}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 6: RISK BREAKDOWN (GRID)                              */}
-              {/* Fixed categories: Competition, Pricing, Differentiation,    */}
-              {/* Operations. No numeric scoring, no hidden weighting.        */}
+              {/* BLOCK 5: RISK BREAKDOWN                                     */}
+              {/* - 2x2 grid                                                  */}
+              {/* - Competition, Pricing, Differentiation, Operations         */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">
                   Risk Breakdown
                 </h2>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-3">
                   {(
                     Object.entries(analysis.risks) as [
                       string,
@@ -634,14 +576,14 @@ export default function AnalyzeForm({
                   ).map(([category, risk]) => (
                     <div
                       key={category}
-                      className={`border rounded-lg p-4 ${getRiskLevelStyles(
+                      className={`border rounded-lg p-3 ${getRiskLevelStyles(
                         risk.level
                       )}`}
                     >
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-medium capitalize">{category}</h3>
+                      <div className="flex items-center justify-between mb-1">
+                        <h3 className="font-medium capitalize text-sm">{category}</h3>
                         <span
-                          className={`text-xs font-bold px-2 py-1 rounded ${
+                          className={`text-xs font-bold px-2 py-0.5 rounded ${
                             risk.level === "Low"
                               ? "bg-green-100"
                               : risk.level === "Medium"
@@ -652,16 +594,16 @@ export default function AnalyzeForm({
                           {risk.level}
                         </span>
                       </div>
-                      <p className="text-sm opacity-90">{risk.explanation}</p>
+                      <p className="text-xs opacity-90">{risk.explanation}</p>
                     </div>
                   ))}
                 </div>
               </div>
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 7: RECOMMENDED ACTIONS                                */}
-              {/* Three columns: Must Do, Should Do, Avoid                    */}
-              {/* Actions realistic for seller stage, no generic advice       */}
+              {/* BLOCK 6: RECOMMENDED ACTIONS                                */}
+              {/* - Must do / Should do / Avoid                               */}
+              {/* - Bullet lists                                              */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">
@@ -753,70 +695,47 @@ export default function AnalyzeForm({
               </div>
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 8: ASSUMPTIONS & LIMITS (MANDATORY)                   */}
-              {/* Sets expectations and protects trust                        */}
+              {/* BLOCK 7: ASSUMPTIONS & LIMITS (COLLAPSIBLE)                 */}
+              {/* - Low visual priority                                       */}
+              {/* - Sets expectations and protects trust                      */}
               {/* ─────────────────────────────────────────────────────────── */}
-              <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-gray-900 mb-3">
-                  Assumptions & Limits
-                </h2>
-                <p className="text-xs text-gray-500 mb-4">
-                  This analysis is based on available data. The following
-                  limitations apply:
-                </p>
-
-                <ul className="space-y-2">
-                  {analysis.assumptions_and_limits.map((item, idx) => (
-                    <li
-                      key={idx}
-                      className="flex items-start gap-2 text-gray-600 text-sm"
-                    >
-                      <span className="text-amber-500 mt-0.5">⚠</span>
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 9: DATA SOURCES FOOTER                                */}
-              {/* Reinforces credibility                                      */}
-              {/* ─────────────────────────────────────────────────────────── */}
-              <div className="bg-gray-100 border rounded-xl p-4">
-                <h3 className="text-sm font-medium text-gray-600 mb-3">
-                  Data Sources
-                </h3>
-                <div className="flex flex-wrap gap-4 text-sm">
+              <details className="bg-gray-50 border rounded-xl shadow-sm group">
+                <summary className="px-6 py-4 cursor-pointer list-none flex items-center justify-between hover:bg-gray-100 rounded-xl transition-colors">
                   <div className="flex items-center gap-2">
-                    {analysis.market_data &&
-                    Object.keys(analysis.market_data).length > 0 ? (
-                      <span className="text-green-600">✓</span>
-                    ) : (
-                      <span className="text-gray-400">○</span>
-                    )}
-                    <span
-                      className={
-                        analysis.market_data &&
-                        Object.keys(analysis.market_data).length > 0
-                          ? "text-gray-700"
-                          : "text-gray-400"
-                      }
-                    >
-                      Rainforest market data
+                    <span className="text-amber-500">⚠</span>
+                    <h2 className="text-sm font-medium text-gray-700">
+                      Assumptions & Limits
+                    </h2>
+                    <span className="text-xs text-gray-400">
+                      ({analysis.assumptions_and_limits.length} items)
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-green-600">✓</span>
-                    <span className="text-gray-700">Seller profile context</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-400">○</span>
-                    <span className="text-gray-400">
-                      Amazon SP-API not connected
-                    </span>
-                  </div>
+                  <svg
+                    className="w-4 h-4 text-gray-400 transform group-open:rotate-180 transition-transform"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </summary>
+                <div className="px-6 pb-4">
+                  <p className="text-xs text-gray-500 mb-3">
+                    This analysis is based on available data. The following limitations apply:
+                  </p>
+                  <ul className="space-y-2">
+                    {analysis.assumptions_and_limits.map((item, idx) => (
+                      <li
+                        key={idx}
+                        className="flex items-start gap-2 text-gray-600 text-sm"
+                      >
+                        <span className="text-gray-400 mt-0.5">•</span>
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-              </div>
+              </details>
 
               {/* Spacer for scrolling past chat sidebar */}
               <div className="h-8" />
