@@ -430,11 +430,11 @@ export default function AnalyzeForm({
               </div>
             </div>
           ) : (
-            {/* ═══════════════════════════════════════════════════════════════ */}
-            {/* POST-ANALYSIS STATE: LOCKED VISUAL HIERARCHY                  */}
-            {/* Order: Decision → Market → Summary → Risks → Actions → Limits */}
-            {/* ═══════════════════════════════════════════════════════════════ */}
             <div className="p-6 space-y-6 max-w-4xl">
+              {/* ═══════════════════════════════════════════════════════════════ */}
+              {/* POST-ANALYSIS STATE: LOCKED VISUAL HIERARCHY                  */}
+              {/* Order: Decision → Market → Summary → Risks → Actions → Limits */}
+              {/* ═══════════════════════════════════════════════════════════════ */}
               {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 2: DECISION HEADER (HIGHEST PRIORITY)                 */}
               {/* - Verdict badge (GO / CAUTION / NO_GO)                      */}
