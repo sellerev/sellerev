@@ -51,6 +51,47 @@ const SUGGESTED_QUESTIONS = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TRUST INDICATOR CHIPS
+// Source chips shown beneath assistant messages to reinforce grounding
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SOURCE_CHIPS = [
+  "This analysis",
+  "Amazon market data",
+  "Your seller profile",
+] as const;
+
+/**
+ * SourceChips - Renders trust indicator chips beneath assistant messages
+ * Shows 2-3 chips per message, always includes "This analysis"
+ */
+function SourceChips() {
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-gray-100">
+      {SOURCE_CHIPS.map((chip) => (
+        <span
+          key={chip}
+          className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium text-gray-500 bg-gray-100 rounded"
+        >
+          <svg
+            className="w-2.5 h-2.5 mr-1 text-gray-400"
+            fill="currentColor"
+            viewBox="0 0 20 20"
+          >
+            <path
+              fillRule="evenodd"
+              d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+              clipRule="evenodd"
+            />
+          </svg>
+          {chip}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -297,6 +338,10 @@ export default function ChatSidebar({
                 >
                   {msg.content}
                 </div>
+                {/* Trust indicator chips - assistant messages only */}
+                {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
+                  <SourceChips />
+                )}
               </div>
             ))}
 
@@ -309,6 +354,17 @@ export default function ChatSidebar({
                 <div className="text-sm whitespace-pre-wrap text-gray-700 leading-relaxed">
                   {streamingContent}
                   <span className="inline-block w-1.5 h-4 bg-gray-400 animate-pulse ml-0.5" />
+                </div>
+                {/* Show chips while streaming (faded) */}
+                <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-gray-100 opacity-50">
+                  {SOURCE_CHIPS.map((chip) => (
+                    <span
+                      key={chip}
+                      className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium text-gray-500 bg-gray-100 rounded"
+                    >
+                      {chip}
+                    </span>
+                  ))}
                 </div>
               </div>
             )}
@@ -385,10 +441,10 @@ export default function ChatSidebar({
           </button>
         </div>
         
-        {/* Grounding disclaimer */}
+        {/* One-time trust disclaimer */}
         {!isDisabled && (
-          <p className="text-xs text-gray-400 mt-2 text-center">
-            Chat is grounded to this analysis only
+          <p className="text-[10px] text-gray-400 mt-2 text-center leading-relaxed">
+            Responses are based on Amazon market data, your seller profile, and this analysis. No live scraping or predictions.
           </p>
         )}
       </div>
