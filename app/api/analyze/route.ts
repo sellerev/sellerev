@@ -915,9 +915,36 @@ ${body.input_value}`;
     // 13. Save to analysis_runs with verdict, confidence, and seller context snapshot
     // Returns the created row to get the analysis_run_id (required for chat integration)
     // Store market data in both response (for structured access) and rainforest_data (for consistency)
-    const { data: savedAnalysis, error: saveError } = await supabase
-      .from("analysis_runs")
-      .insert({
+    
+    // Prepare rainforest_data (omit null fields to avoid database issues)
+    let rainforestData = null;
+    if (body.input_type === "idea" && marketSnapshot) {
+      rainforestData = {
+        average_price: marketSnapshot.avg_price,
+        review_count_avg: marketSnapshot.avg_reviews,
+        competitor_count: marketSnapshot.total_listings,
+        dominance_score: marketSnapshot.dominance_score,
+        sponsored_count: marketSnapshot.sponsored_count,
+        data_fetched_at: new Date().toISOString(),
+      };
+      // Only include fields that are not null
+      if (rainforestData.average_price === null) delete rainforestData.average_price;
+      if (rainforestData.review_count_avg === null) delete rainforestData.review_count_avg;
+      if (rainforestData.dominance_score === null) delete rainforestData.dominance_score;
+    }
+
+    console.log("SAVE_ATTEMPT", {
+      user_id: user.id,
+      input_type: body.input_type,
+      has_market_snapshot: !!marketSnapshotJson,
+      market_snapshot_structure: marketSnapshotJson ? Object.keys(marketSnapshotJson) : null,
+      rainforest_data_keys: rainforestData ? Object.keys(rainforestData) : null,
+      decision_json_keys: Object.keys(decisionJson),
+    });
+
+    let savedAnalysis: any = null;
+    try {
+      const insertData = {
         user_id: user.id,
         input_type: body.input_type,
         input_value: body.input_value,
@@ -927,32 +954,51 @@ ${body.input_value}`;
         seller_experience_months: sellerContext.experience_months,
         seller_monthly_revenue_range: sellerContext.monthly_revenue_range,
         response: decisionJson,
-        // Store market data in rainforest_data column for consistency with existing code
-        rainforest_data: body.input_type === "idea" && marketSnapshot
-          ? {
-              average_price: marketSnapshot.avg_price,
-              price_min: null, // Not available in new structure
-              price_max: null, // Not available in new structure
-              review_count_avg: marketSnapshot.avg_reviews,
-              average_rating: null, // Not available in new structure
-              competitor_count: marketSnapshot.total_listings,
-              dominance_score: marketSnapshot.dominance_score,
-              sponsored_count: marketSnapshot.sponsored_count,
-              data_fetched_at: new Date().toISOString(),
-            }
-          : null,
-        // Store aggregated snapshot in dedicated column for keyword analyses
+        rainforest_data: rainforestData,
         market_snapshot_json: body.input_type === "idea" ? marketSnapshotJson : null,
-      })
-      .select("id, created_at")
-      .single();
+      };
 
-    if (saveError || !savedAnalysis) {
+      console.log("INSERT_DATA_STRUCTURE", {
+        keys: Object.keys(insertData),
+        response_type: typeof insertData.response,
+        response_keys: insertData.response ? Object.keys(insertData.response) : null,
+        market_snapshot_json_type: typeof insertData.market_snapshot_json,
+      });
+
+      const { data, error: saveError } = await supabase
+        .from("analysis_runs")
+        .insert(insertData)
+        .select("id, created_at")
+        .single();
+
+      if (saveError || !data) {
+        console.error("SAVE_ERROR", {
+          error: saveError,
+          message: saveError?.message,
+          details: saveError?.details,
+          hint: saveError?.hint,
+          code: saveError?.code,
+        });
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "Failed to save analysis run",
+            details: saveError?.message || "Unknown error",
+            hint: saveError?.hint || undefined,
+          },
+          { status: 500, headers: res.headers }
+        );
+      }
+
+      savedAnalysis = data;
+      console.log("SAVE_SUCCESS", { analysis_run_id: savedAnalysis.id });
+    } catch (saveException) {
+      console.error("SAVE_EXCEPTION", saveException);
       return NextResponse.json(
         {
           ok: false,
           error: "Failed to save analysis run",
-          details: saveError?.message || "Unknown error",
+          details: saveException instanceof Error ? saveException.message : String(saveException),
         },
         { status: 500, headers: res.headers }
       );
