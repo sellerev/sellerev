@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { fetchKeywordMarketSnapshot } from "@/lib/amazon/keywordMarket";
-import { aggregateKeywordMarketData } from "@/lib/market/keywordAggregation";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 
 // Sellerev production SYSTEM PROMPT
@@ -669,41 +668,8 @@ export async function POST(req: NextRequest) {
       keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
       console.log("RAIN_DATA_RAW", keywordMarketData);
       
-      // TEMPORARY: Return raw payload for inspection
-      if (keywordMarketData && (keywordMarketData as any)._raw_payload) {
-        return NextResponse.json(
-          {
-            ok: true,
-            debug: true,
-            raw_rainforest_payload: (keywordMarketData as any)._raw_payload,
-            message: "Returning raw Rainforest payload for inspection",
-          },
-          { status: 200, headers: res.headers }
-        );
-      }
-      
-      if (keywordMarketData && keywordMarketData.listings.length >= 5) {
-        // Use aggregation module to compute metrics
-        const aggregated = aggregateKeywordMarketData(
-          keywordMarketData.listings.map((l) => ({
-            price: l.price,
-            reviews: l.review_count,
-            rating: l.rating,
-            brand: l.brand,
-            asin: l.asin,
-          }))
-        );
-        
-        console.log("RAIN_DATA_AGG", aggregated);
-        
-        if (aggregated) {
-          marketSnapshot = aggregated;
-          marketSnapshotJson = aggregated;
-        }
-      }
-      
-      // Guard: Check if we have market data before using aggregated snapshot
-      if (!keywordMarketData || keywordMarketData.listings.length === 0) {
+      // Guard: 422 ONLY if search_results is empty or missing
+      if (!keywordMarketData || keywordMarketData.snapshot.total_listings === 0) {
         return NextResponse.json(
           {
             ok: false,
@@ -712,15 +678,10 @@ export async function POST(req: NextRequest) {
           { status: 422, headers: res.headers }
         );
       }
-      if (!marketSnapshot) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error: "No market data available for this keyword",
-          },
-          { status: 422, headers: res.headers }
-        );
-      }
+      
+      // Use the snapshot directly (already aggregated)
+      marketSnapshot = keywordMarketData.snapshot;
+      marketSnapshotJson = keywordMarketData.snapshot;
     }
 
     // 8. Build system prompt (with keyword-specific rules if applicable)
@@ -728,42 +689,55 @@ export async function POST(req: NextRequest) {
     
     if (body.input_type === "idea" && marketSnapshot) {
       // Add keyword-specific market data section
+      const avgPriceText = marketSnapshot.avg_price !== null 
+        ? `$${marketSnapshot.avg_price.toFixed(2)}` 
+        : "Not available";
+      const avgReviewsText = marketSnapshot.avg_reviews !== null 
+        ? marketSnapshot.avg_reviews.toLocaleString() 
+        : "Not available";
+      const dominanceText = marketSnapshot.dominance_score !== null 
+        ? `${marketSnapshot.dominance_score}%` 
+        : "Not available";
+      const topBrandsText = marketSnapshot.top_brands.length > 0
+        ? marketSnapshot.top_brands.slice(0, 3).map(b => `${b.brand} (${b.count})`).join(", ")
+        : "Not available";
+      const totalResultsText = marketSnapshot.total_results_estimate !== null
+        ? marketSnapshot.total_results_estimate.toLocaleString()
+        : "Not available";
+
       const marketDataSection = `
 
 KEYWORD ANALYSIS CONTEXT:
 
-MARKET DATA (Amazon search results for this keyword):
-- Avg price: $${marketSnapshot.avg_price.toFixed(2)}
-- Price range: $${marketSnapshot.price_range[0].toFixed(2)} - $${marketSnapshot.price_range[1].toFixed(2)}
-- Avg reviews: ${marketSnapshot.avg_reviews.toLocaleString()}
-- Median reviews: ${marketSnapshot.median_reviews.toLocaleString()}
-- Review density: ${marketSnapshot.review_density_pct}% (listings with >1000 reviews)
-- Brand concentration: ${marketSnapshot.brand_concentration_pct}% (top brand share)
-- Competitor count: ${marketSnapshot.competitor_count} listings on page 1
-- Avg rating: ${marketSnapshot.avg_rating.toFixed(1)} stars
+MARKET DATA (Amazon search results for "${marketSnapshot.keyword}"):
+- Total listings analyzed: ${marketSnapshot.total_listings}
+- Sponsored listings: ${marketSnapshot.sponsored_count}
+- Total results estimate: ${totalResultsText}
+- Avg price: ${avgPriceText}
+- Avg reviews: ${avgReviewsText}
+- Top brands: ${topBrandsText}
+- Brand dominance score: ${dominanceText} (top brand share of page 1)
 
 KEYWORD ANALYSIS RULES (NON-NEGOTIABLE):
 - Treat keyword analysis as directional, not definitive
 - Reference aggregated signals, not individual ASIN performance
-- If brand_concentration_pct > 50%, flag brand dominance as a risk
+- If dominance_score > 50%, flag brand dominance as a risk
 - If avg_reviews > 2000, flag high review barrier as a risk
-- If competitor_count >= 10, flag crowded page 1 as a risk
+- If total_listings >= 10, flag crowded page 1 as a risk
 - This is aggregated market context, not a specific product listing
 - Cite specific numbers from market data when available
-- If you cannot cite a number, explicitly say so
+- If a metric is "Not available", explicitly state that in your analysis
 
 METRIC CITATION REQUIREMENTS:
 - Executive Summary MUST include at least TWO metrics from the market data above
 - Each Risk Breakdown explanation MUST reference at least ONE metric from the market data above
-- Fill numbers_used field with actual values from market_snapshot_json:
-  - If you cite avg_price in your analysis, set numbers_used.avg_price to ${marketSnapshot.avg_price}
-  - If you cite price_range, set numbers_used.price_range to [${marketSnapshot.price_range[0]}, ${marketSnapshot.price_range[1]}]
-  - If you cite median_reviews, set numbers_used.median_reviews to ${marketSnapshot.median_reviews}
-  - If you cite review_density_pct, set numbers_used.review_density_pct to ${marketSnapshot.review_density_pct}
-  - If you cite brand_concentration_pct, set numbers_used.brand_concentration_pct to ${marketSnapshot.brand_concentration_pct}
-  - If you cite competitor_count, set numbers_used.competitor_count to ${marketSnapshot.competitor_count}
-  - If you cite avg_rating, set numbers_used.avg_rating to ${marketSnapshot.avg_rating}
-  - For metrics you do NOT cite, set to null`;
+- Fill numbers_used field with actual values from market_snapshot_json (use null if metric is not available):
+  - If you cite avg_price in your analysis, set numbers_used.avg_price to ${marketSnapshot.avg_price !== null ? marketSnapshot.avg_price : 'null'}
+  - If you cite avg_reviews, set numbers_used.avg_reviews to ${marketSnapshot.avg_reviews !== null ? marketSnapshot.avg_reviews : 'null'}
+  - If you cite total_listings, set numbers_used.competitor_count to ${marketSnapshot.total_listings}
+  - If you cite dominance_score, set numbers_used.brand_concentration_pct to ${marketSnapshot.dominance_score !== null ? marketSnapshot.dominance_score : 'null'}
+  - For metrics you do NOT cite or that are not available, set to null
+  - Note: price_range, median_reviews, review_density_pct, and avg_rating are not available in this snapshot structure`;
 
       systemPrompt = SYSTEM_PROMPT + marketDataSection;
     } else if (body.input_type === "idea") {
@@ -914,14 +888,14 @@ ${body.input_value}`;
       if (!decisionJson.numbers_used) {
         decisionJson.numbers_used = {};
       }
-      // Populate from market snapshot (AI should have done this, but ensure it's correct)
+      // Map new snapshot structure to numbers_used format
       decisionJson.numbers_used.avg_price = marketSnapshot.avg_price;
-      decisionJson.numbers_used.price_range = marketSnapshot.price_range;
-      decisionJson.numbers_used.median_reviews = marketSnapshot.median_reviews;
-      decisionJson.numbers_used.review_density_pct = marketSnapshot.review_density_pct;
-      decisionJson.numbers_used.brand_concentration_pct = marketSnapshot.brand_concentration_pct;
-      decisionJson.numbers_used.competitor_count = marketSnapshot.competitor_count;
-      decisionJson.numbers_used.avg_rating = marketSnapshot.avg_rating;
+      decisionJson.numbers_used.price_range = null; // Not available in new structure
+      decisionJson.numbers_used.median_reviews = null; // Not available in new structure
+      decisionJson.numbers_used.review_density_pct = null; // Not available in new structure
+      decisionJson.numbers_used.brand_concentration_pct = marketSnapshot.dominance_score;
+      decisionJson.numbers_used.competitor_count = marketSnapshot.total_listings;
+      decisionJson.numbers_used.avg_rating = null; // Not available in new structure
     } else if (body.input_type === "idea") {
       // Ensure numbers_used is all null if no market data
       if (!decisionJson.numbers_used) {
@@ -956,11 +930,13 @@ ${body.input_value}`;
         rainforest_data: body.input_type === "idea" && marketSnapshot
           ? {
               average_price: marketSnapshot.avg_price,
-              price_min: marketSnapshot.price_range[0],
-              price_max: marketSnapshot.price_range[1],
+              price_min: null, // Not available in new structure
+              price_max: null, // Not available in new structure
               review_count_avg: marketSnapshot.avg_reviews,
-              average_rating: marketSnapshot.avg_rating,
-              competitor_count: marketSnapshot.competitor_count,
+              average_rating: null, // Not available in new structure
+              competitor_count: marketSnapshot.total_listings,
+              dominance_score: marketSnapshot.dominance_score,
+              sponsored_count: marketSnapshot.sponsored_count,
               data_fetched_at: new Date().toISOString(),
             }
           : null,
