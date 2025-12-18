@@ -955,7 +955,7 @@ ${body.input_value}`;
         seller_monthly_revenue_range: sellerContext.monthly_revenue_range,
         response: decisionJson,
         rainforest_data: rainforestData,
-        market_snapshot_json: body.input_type === "idea" ? marketSnapshotJson : null,
+        // Note: market_snapshot_json column doesn't exist yet - storing in response.market_snapshot instead
       };
 
       console.log("INSERT_DATA_STRUCTURE", {
