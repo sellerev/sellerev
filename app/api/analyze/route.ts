@@ -649,12 +649,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    console.log("INPUT", body.input_type, body.input_value);
+
     // 6. Structure seller context
     const sellerContext = {
       stage: sellerProfile.stage,
       experience_months: sellerProfile.experience_months,
       monthly_revenue_range: sellerProfile.monthly_revenue_range,
     };
+
+    console.log("SELLER_PROFILE", sellerProfile);
 
     // 7. Fetch keyword market data if input_type is "idea"
     let keywordMarketData = null;
@@ -663,6 +667,8 @@ export async function POST(req: NextRequest) {
     
     if (body.input_type === "idea") {
       keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
+      console.log("RAIN_DATA_RAW", keywordMarketData);
+      
       if (keywordMarketData && keywordMarketData.listings.length >= 5) {
         // Use aggregation module to compute metrics
         const aggregated = aggregateKeywordMarketData(
@@ -675,10 +681,32 @@ export async function POST(req: NextRequest) {
           }))
         );
         
+        console.log("RAIN_DATA_AGG", aggregated);
+        
         if (aggregated) {
           marketSnapshot = aggregated;
           marketSnapshotJson = aggregated;
         }
+      }
+      
+      // Guard: Check if we have market data before using aggregated snapshot
+      if (!keywordMarketData || keywordMarketData.listings.length === 0) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "No market data available for this keyword",
+          },
+          { status: 422, headers: res.headers }
+        );
+      }
+      if (!marketSnapshot) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "No market data available for this keyword",
+          },
+          { status: 422, headers: res.headers }
+        );
       }
     }
 
@@ -744,6 +772,16 @@ KEYWORD ANALYSIS RULES:
       systemPrompt = SYSTEM_PROMPT + warningSection;
     }
 
+    // Guard: Ensure required data before AI call
+    if (!sellerProfile) {
+      throw new Error("Missing seller profile");
+    }
+    if (body.input_type === "idea" && !marketSnapshot) {
+      throw new Error("Missing market snapshot");
+    }
+
+    console.log("AI_PROMPT_READY");
+
     // 9. Call OpenAI
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) {
@@ -797,6 +835,8 @@ ${body.input_value}`;
     const openaiData = await openaiResponse.json();
     const content = openaiData.choices?.[0]?.message?.content;
 
+    console.log("AI_RESPONSE_RAW", content?.substring(0, 500));
+
     if (!content) {
       return NextResponse.json(
         { ok: false, error: "No content in OpenAI response" },
@@ -837,6 +877,8 @@ ${body.input_value}`;
         { status: 500, headers: res.headers }
       );
     }
+
+    console.log("AI_VALIDATED");
 
     // 11. Extract verdict and confidence for analytics
     const verdict = decisionJson.decision.verdict;
@@ -958,13 +1000,13 @@ ${body.input_value}`;
       },
       { status: 200, headers: res.headers }
     );
-  } catch (error) {
-    console.error("Analyze endpoint error:", error);
+  } catch (err) {
+    console.error("ANALYZE_ERROR", err);
     return NextResponse.json(
       {
         ok: false,
-        error: "Internal server error",
-        details: error instanceof Error ? error.message : "Unknown error",
+        error: "Internal analyze error",
+        details: err instanceof Error ? err.message : String(err),
       },
       { status: 500, headers: res.headers }
     );
