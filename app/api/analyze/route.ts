@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { fetchKeywordMarketSnapshot } from "@/lib/amazon/keywordMarket";
 import { aggregateKeywordMarketData } from "@/lib/market/keywordAggregation";
+import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -515,7 +516,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Gate: Require seller profile (onboarding must be complete)
+    // 2. Get user email for admin/dev bypass check
+    const userEmail = user.email || null;
+
+    // 3. Gate: Require seller profile (onboarding must be complete)
     const { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
       .select("stage, experience_months, monthly_revenue_range")
@@ -529,66 +533,37 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Load or create usage counter
-    const { data: usageCounter, error: usageError } = await supabase
-      .from("usage_counters")
-      .select("analyze_count, reset_at")
-      .eq("user_id", user.id)
-      .single();
-
+    // 4. Load or create usage counter (only check if not bypassing)
     let currentCount = 0;
     let resetAt: Date;
 
-    if (usageError || !usageCounter) {
-      // Create new usage counter row
-      const newResetAt = new Date();
-      newResetAt.setDate(newResetAt.getDate() + USAGE_PERIOD_DAYS);
-
-      const { error: createError } = await supabase
+    // Only load/check usage counter if not bypassing limits
+    if (shouldIncrementUsage(userEmail)) {
+      const { data: usageCounter, error: usageError } = await supabase
         .from("usage_counters")
-        .insert({
-          user_id: user.id,
-          analyze_count: 0,
-          reset_at: newResetAt.toISOString(),
-        });
+        .select("analyze_count, reset_at")
+        .eq("user_id", user.id)
+        .single();
 
-      if (createError) {
-        return NextResponse.json(
-          {
-            ok: false,
-            error: "Failed to initialize usage counter",
-            details: createError.message,
-          },
-          { status: 500, headers: res.headers }
-        );
-      }
-
-      currentCount = 0;
-      resetAt = newResetAt;
-    } else {
-      // Check if reset period has passed
-      const resetAtDate = new Date(usageCounter.reset_at);
-      const now = new Date();
-
-      if (now > resetAtDate) {
-        // Reset the counter
+      if (usageError || !usageCounter) {
+        // Create new usage counter row
         const newResetAt = new Date();
         newResetAt.setDate(newResetAt.getDate() + USAGE_PERIOD_DAYS);
 
-        const { error: resetError } = await supabase
+        const { error: createError } = await supabase
           .from("usage_counters")
-          .update({
+          .insert({
+            user_id: user.id,
             analyze_count: 0,
             reset_at: newResetAt.toISOString(),
-          })
-          .eq("user_id", user.id);
+          });
 
-        if (resetError) {
+        if (createError) {
           return NextResponse.json(
             {
               ok: false,
-              error: "Failed to reset usage counter",
-              details: resetError.message,
+              error: "Failed to initialize usage counter",
+              details: createError.message,
             },
             { status: 500, headers: res.headers }
           );
@@ -597,20 +572,59 @@ export async function POST(req: NextRequest) {
         currentCount = 0;
         resetAt = newResetAt;
       } else {
-        currentCount = usageCounter.analyze_count;
-        resetAt = resetAtDate;
-      }
-    }
+        // Check if reset period has passed
+        const resetAtDate = new Date(usageCounter.reset_at);
+        const now = new Date();
 
-    // 4. Enforce usage limit
-    if (currentCount >= MAX_ANALYSES_PER_PERIOD) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "Usage limit reached. Upgrade to continue analyzing products.",
-        },
-        { status: 429, headers: res.headers }
+        if (now > resetAtDate) {
+          // Reset the counter
+          const newResetAt = new Date();
+          newResetAt.setDate(newResetAt.getDate() + USAGE_PERIOD_DAYS);
+
+          const { error: resetError } = await supabase
+            .from("usage_counters")
+            .update({
+              analyze_count: 0,
+              reset_at: newResetAt.toISOString(),
+            })
+            .eq("user_id", user.id);
+
+          if (resetError) {
+            return NextResponse.json(
+              {
+                ok: false,
+                error: "Failed to reset usage counter",
+                details: resetError.message,
+              },
+              { status: 500, headers: res.headers }
+            );
+          }
+
+          currentCount = 0;
+          resetAt = newResetAt;
+        } else {
+          currentCount = usageCounter.analyze_count;
+          resetAt = resetAtDate;
+        }
+      }
+
+      // Check usage limit (only for non-bypass users)
+      const usageCheck = await checkUsageLimit(
+        user.id,
+        userEmail,
+        currentCount,
+        MAX_ANALYSES_PER_PERIOD
       );
+
+      if (!usageCheck.allowed) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "Usage limit reached. Upgrade to continue analyzing products.",
+          },
+          { status: 429, headers: res.headers }
+        );
+      }
     }
 
     // 5. Parse and validate request body
@@ -912,17 +926,19 @@ ${body.input_value}`;
       );
     }
 
-    // 13. Increment usage counter (only after successful AI analysis)
-    const { error: incrementError } = await supabase
-      .from("usage_counters")
-      .update({
-        analyze_count: currentCount + 1,
-      })
-      .eq("user_id", user.id);
+    // 13. Increment usage counter (only after successful AI analysis, and only if not bypassing)
+    if (shouldIncrementUsage(userEmail)) {
+      const { error: incrementError } = await supabase
+        .from("usage_counters")
+        .update({
+          analyze_count: currentCount + 1,
+        })
+        .eq("user_id", user.id);
 
-    if (incrementError) {
-      // Log error but don't fail the request since analysis already succeeded
-      console.error("Failed to increment usage counter:", incrementError);
+      if (incrementError) {
+        // Log error but don't fail the request since analysis already succeeded
+        console.error("Failed to increment usage counter:", incrementError);
+      }
     }
 
     // 14. Return success response with cookies preserved
