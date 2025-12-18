@@ -669,6 +669,19 @@ export async function POST(req: NextRequest) {
       keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
       console.log("RAIN_DATA_RAW", keywordMarketData);
       
+      // TEMPORARY: Return raw payload for inspection
+      if (keywordMarketData && (keywordMarketData as any)._raw_payload) {
+        return NextResponse.json(
+          {
+            ok: true,
+            debug: true,
+            raw_rainforest_payload: (keywordMarketData as any)._raw_payload,
+            message: "Returning raw Rainforest payload for inspection",
+          },
+          { status: 200, headers: res.headers }
+        );
+      }
+      
       if (keywordMarketData && keywordMarketData.listings.length >= 5) {
         // Use aggregation module to compute metrics
         const aggregated = aggregateKeywordMarketData(

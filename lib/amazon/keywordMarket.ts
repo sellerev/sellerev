@@ -68,6 +68,17 @@ export async function fetchKeywordMarketSnapshot(
 
     const data = await response.json();
 
+    // TEMPORARY: Log raw payload for inspection
+    console.log("RAW_KEYWORD_RESULTS", JSON.stringify(data, null, 2));
+
+    // TEMPORARY: Return raw payload structure for inspection
+    // This will help us see the actual structure before processing
+    return {
+      snapshot: null as any,
+      listings: [],
+      _raw_payload: data, // Temporary field for inspection
+    } as any;
+
     // Extract organic listings (ignore sponsored if possible)
     const searchResults = data.search_results || [];
     const organicListings = searchResults
