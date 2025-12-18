@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
+import { fetchKeywordMarketSnapshot } from "@/lib/amazon/keywordMarket";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -455,7 +456,63 @@ export async function POST(req: NextRequest) {
       monthly_revenue_range: sellerProfile.monthly_revenue_range,
     };
 
-    // 7. Call OpenAI
+    // 7. Fetch keyword market data if input_type is "idea"
+    let keywordMarketData = null;
+    let marketSnapshot = null;
+    
+    if (body.input_type === "idea") {
+      keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
+      if (keywordMarketData) {
+        marketSnapshot = keywordMarketData.snapshot;
+      }
+    }
+
+    // 8. Build system prompt (with keyword-specific rules if applicable)
+    let systemPrompt = SYSTEM_PROMPT;
+    
+    if (body.input_type === "idea" && marketSnapshot) {
+      // Add keyword-specific market data section
+      const marketDataSection = `
+
+KEYWORD ANALYSIS CONTEXT:
+
+MARKET DATA (Amazon search results for this keyword):
+- Avg price: $${marketSnapshot.avg_price.toFixed(2)}
+- Price range: $${marketSnapshot.min_price.toFixed(2)} - $${marketSnapshot.max_price.toFixed(2)}
+- Avg reviews: ${marketSnapshot.avg_reviews.toLocaleString()}
+- Review density: ${marketSnapshot.review_density}% (listings with >1000 reviews)
+- Brand concentration: ${marketSnapshot.brand_concentration}% (top brand share)
+- Competitor count: ${marketSnapshot.competitor_count} listings on page 1
+
+KEYWORD ANALYSIS RULES (NON-NEGOTIABLE):
+- Treat keyword analysis as directional, not definitive
+- Reference aggregated signals, not individual ASIN performance
+- If brand concentration > 50%, flag brand dominance as a risk
+- If avg_reviews > 2000, flag high review barrier as a risk
+- If competitor_count >= 10, flag crowded page 1 as a risk
+- This is aggregated market context, not a specific product listing
+- Cite specific numbers from market data when available
+- If you cannot cite a number, explicitly say so`;
+
+      systemPrompt = SYSTEM_PROMPT + marketDataSection;
+    } else if (body.input_type === "idea") {
+      // No market data available - add warning
+      const warningSection = `
+
+KEYWORD ANALYSIS CONTEXT:
+
+MARKET DATA: Not available (insufficient search results or API error)
+
+KEYWORD ANALYSIS RULES:
+- Treat keyword analysis as directional, not definitive
+- Without market data, analysis is based on general market knowledge only
+- Confidence must be capped at 50% maximum
+- Explicitly state that market data is unavailable`;
+
+      systemPrompt = SYSTEM_PROMPT + warningSection;
+    }
+
+    // 9. Call OpenAI
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) {
       return NextResponse.json(
@@ -464,7 +521,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 8. Build user message with seller context (raw values, no interpretation)
+    // 10. Build user message with seller context (raw values, no interpretation)
     const userMessage = `SELLER CONTEXT:
 - Stage: ${sellerContext.stage}
 - Experience (months): ${sellerContext.experience_months ?? "null"}
@@ -484,7 +541,7 @@ ${body.input_value}`;
         body: JSON.stringify({
           model: "gpt-4o-mini",
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: systemPrompt },
             { role: "user", content: userMessage },
           ],
           response_format: { type: "json_object" },
@@ -551,10 +608,23 @@ ${body.input_value}`;
 
     // 11. Extract verdict and confidence for analytics
     const verdict = decisionJson.decision.verdict;
-    const confidence = decisionJson.decision.confidence;
+    let confidence = decisionJson.decision.confidence;
 
-    // 12. Save to analysis_runs with verdict, confidence, and seller context snapshot
+    // Cap confidence at 50 if keyword analysis has no market data
+    if (body.input_type === "idea" && !marketSnapshot && confidence > 50) {
+      confidence = 50;
+      decisionJson.decision.confidence = 50;
+    }
+
+    // 12. Store market data in response for keyword analyses
+    if (body.input_type === "idea" && keywordMarketData) {
+      decisionJson.market_snapshot = marketSnapshot;
+      decisionJson.market_listings = keywordMarketData.listings;
+    }
+
+    // 13. Save to analysis_runs with verdict, confidence, and seller context snapshot
     // Returns the created row to get the analysis_run_id (required for chat integration)
+    // Store market data in both response (for structured access) and rainforest_data (for consistency)
     const { data: savedAnalysis, error: saveError } = await supabase
       .from("analysis_runs")
       .insert({
@@ -567,6 +637,18 @@ ${body.input_value}`;
         seller_experience_months: sellerContext.experience_months,
         seller_monthly_revenue_range: sellerContext.monthly_revenue_range,
         response: decisionJson,
+        // Store market data in rainforest_data column for consistency with existing code
+        rainforest_data: body.input_type === "idea" && marketSnapshot
+          ? {
+              average_price: marketSnapshot.avg_price,
+              price_min: marketSnapshot.min_price,
+              price_max: marketSnapshot.max_price,
+              review_count_avg: marketSnapshot.avg_reviews,
+              average_rating: 0, // Not computed from keyword search
+              competitor_count: marketSnapshot.competitor_count,
+              data_fetched_at: new Date().toISOString(),
+            }
+          : null,
       })
       .select("id, created_at")
       .single();
