@@ -505,32 +505,68 @@ export default function AnalyzeForm({
                 {/* Check for keyword market snapshot first, then fall back to market_data */}
                 {analysis.market_snapshot_json ? (
                   <div className="grid grid-cols-2 gap-3">
-                    {/* Card 1: Average Price */}
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Avg Price</div>
-                      <div className="text-lg font-semibold">
+                    {/* Card 1: Price Band */}
+                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div className="text-xs text-gray-500 mb-1">Price Band</div>
+                      <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {formatCurrency(analysis.market_snapshot_json.avg_price)}
                       </div>
+                      <div className="text-xs text-gray-600 mb-1">
+                        {formatCurrency(analysis.market_snapshot_json.price_range[0])}–{formatCurrency(analysis.market_snapshot_json.price_range[1])}
+                      </div>
+                      <div className="text-[10px] text-gray-500 font-medium">
+                        {(() => {
+                          const range = analysis.market_snapshot_json.price_range[1] - analysis.market_snapshot_json.price_range[0];
+                          const avg = analysis.market_snapshot_json.avg_price;
+                          return range / avg < 0.35 ? "Tight band" : "Wide band";
+                        })()}
+                      </div>
                     </div>
-                    {/* Card 2: Avg Rating */}
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Avg Rating</div>
-                      <div className="text-lg font-semibold">
+                    {/* Card 2: Review Barrier */}
+                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div className="text-xs text-gray-500 mb-1">Review Barrier</div>
+                      <div className="text-lg font-semibold text-gray-900 mb-0.5">
+                        {analysis.market_snapshot_json.median_reviews.toLocaleString()}
+                      </div>
+                      <div className="text-xs text-gray-600 mb-1">
+                        Avg {analysis.market_snapshot_json.avg_reviews.toLocaleString()} • Density {analysis.market_snapshot_json.review_density_pct}% &gt;1k
+                      </div>
+                      <div className="text-[10px] text-gray-500 font-medium">
+                        {analysis.market_snapshot_json.median_reviews > 800 || analysis.market_snapshot_json.review_density_pct > 50
+                          ? "High barrier"
+                          : analysis.market_snapshot_json.median_reviews > 300
+                          ? "Moderate"
+                          : "Low"}
+                      </div>
+                    </div>
+                    {/* Card 3: Brand Control */}
+                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div className="text-xs text-gray-500 mb-1">Brand Control</div>
+                      <div className="text-lg font-semibold text-gray-900 mb-0.5">
+                        Top brand: {analysis.market_snapshot_json.brand_concentration_pct}%
+                      </div>
+                      <div className="text-xs text-gray-600 mb-1">
+                        Competitors: {analysis.market_snapshot_json.competitor_count} listings
+                      </div>
+                      <div className="text-[10px] text-gray-500 font-medium">
+                        {analysis.market_snapshot_json.brand_concentration_pct >= 35 ? "Concentrated" : "Fragmented"}
+                      </div>
+                    </div>
+                    {/* Card 4: Rating Level */}
+                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div className="text-xs text-gray-500 mb-1">Rating Level</div>
+                      <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot_json.avg_rating.toFixed(1)} ★
                       </div>
-                    </div>
-                    {/* Card 3: Avg Reviews */}
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Avg Reviews</div>
-                      <div className="text-lg font-semibold">
-                        {analysis.market_snapshot_json.avg_reviews.toLocaleString()}
+                      <div className="text-xs text-gray-600 mb-1">
+                        Based on {analysis.market_snapshot_json.competitor_count} listings
                       </div>
-                    </div>
-                    {/* Card 4: Competitors */}
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Competitors</div>
-                      <div className="text-lg font-semibold">
-                        {analysis.market_snapshot_json.competitor_count}
+                      <div className="text-[10px] text-gray-500 font-medium">
+                        {analysis.market_snapshot_json.avg_rating >= 4.4
+                          ? "Strong"
+                          : analysis.market_snapshot_json.avg_rating >= 4.0
+                          ? "Mixed"
+                          : "Weak"}
                       </div>
                     </div>
                   </div>
@@ -575,8 +611,8 @@ export default function AnalyzeForm({
                     </div>
                   </div>
                 ) : (
-                  <div className="bg-gray-50 rounded-lg p-4 text-center">
-                    <p className="text-gray-500 text-sm">
+                  <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
+                    <p className="text-gray-500 text-xs">
                       {analysis.input_type === "keyword"
                         ? "Insufficient market data for this keyword."
                         : "No market data available for this analysis."}

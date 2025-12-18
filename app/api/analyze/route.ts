@@ -147,7 +147,16 @@ You must output valid JSON that conforms exactly to the following structure:
     "should_do": string[],
     "avoid": string[]
   },
-  "assumptions_and_limits": string[]
+  "assumptions_and_limits": string[],
+  "numbers_used": {
+    "avg_price": number | null,
+    "price_range": [number, number] | null,
+    "median_reviews": number | null,
+    "review_density_pct": number | null,
+    "brand_concentration_pct": number | null,
+    "competitor_count": number | null,
+    "avg_rating": number | null
+  }
 }
 
 No additional keys.
@@ -202,6 +211,11 @@ Executive Summary MUST follow this structure:
 2. Cite at least 2 market metrics in second sentence
 3. Tie feasibility to seller profile in third sentence
 
+HARD RULE FOR KEYWORD ANALYSES:
+- Every Executive Summary paragraph MUST include at least TWO concrete metrics from market_snapshot_json
+- Required metrics: price (avg_price or price_range), reviews (avg_reviews or median_reviews), density (review_density_pct), brand concentration (brand_concentration_pct), rating (avg_rating), or competitor count (competitor_count)
+- If market_snapshot_json is missing, you MUST explicitly say "Insufficient Amazon market data for numeric citation"
+
 Example format:
 "This opportunity is rated CAUTION. Page 1 shows an average of 2,800 reviews across 10 competitors, with the top brand controlling ~55% of listings. For an existing seller, entry is possible only with clear differentiation or bundling."
 
@@ -215,6 +229,11 @@ RISK BREAKDOWN TIGHTENING (MANDATORY)
 Each risk category MUST include:
 - A numeric trigger (specific threshold from market data)
 - A short explanation tied to that trigger
+
+HARD RULE FOR KEYWORD ANALYSES:
+- The Risk Breakdown explanations MUST reference at least one metric each from market_snapshot_json
+- Each risk must cite: avg_price, price_range, avg_reviews, median_reviews, review_density_pct, brand_concentration_pct, avg_rating, or competitor_count
+- If market_snapshot_json is missing, state "Insufficient Amazon market data for numeric citation" in each risk explanation
 
 Example format:
 
@@ -280,6 +299,7 @@ const REQUIRED_DECISION_KEYS = [
   "risks",
   "recommended_actions",
   "assumptions_and_limits",
+  "numbers_used",
 ];
 
 const MAX_ANALYSES_PER_PERIOD = 5;
@@ -324,6 +344,15 @@ interface DecisionContract {
     avoid: string[];
   };
   assumptions_and_limits: string[];
+  numbers_used: {
+    avg_price: number | null;
+    price_range: [number, number] | null;
+    median_reviews: number | null;
+    review_density_pct: number | null;
+    brand_concentration_pct: number | null;
+    competitor_count: number | null;
+    avg_rating: number | null;
+  };
 }
 
 function validateRequestBody(body: any): body is AnalyzeRequestBody {
@@ -421,6 +450,47 @@ function validateDecisionContract(data: any): data is DecisionContract {
     !data.assumptions_and_limits.every((item: any) => typeof item === "string")
   ) {
     return false;
+  }
+
+  // Validate numbers_used object
+  if (
+    typeof data.numbers_used !== "object" ||
+    data.numbers_used === null
+  ) {
+    return false;
+  }
+  const numbersUsedKeys = [
+    "avg_price",
+    "price_range",
+    "median_reviews",
+    "review_density_pct",
+    "brand_concentration_pct",
+    "competitor_count",
+    "avg_rating",
+  ];
+  for (const key of numbersUsedKeys) {
+    if (!(key in data.numbers_used)) {
+      return false;
+    }
+    // Validate types: number | null, or [number, number] | null for price_range
+    if (key === "price_range") {
+      if (
+        data.numbers_used[key] !== null &&
+        (!Array.isArray(data.numbers_used[key]) ||
+          data.numbers_used[key].length !== 2 ||
+          typeof data.numbers_used[key][0] !== "number" ||
+          typeof data.numbers_used[key][1] !== "number")
+      ) {
+        return false;
+      }
+    } else {
+      if (
+        data.numbers_used[key] !== null &&
+        typeof data.numbers_used[key] !== "number"
+      ) {
+        return false;
+      }
+    }
   }
 
   return true;
@@ -625,7 +695,20 @@ KEYWORD ANALYSIS RULES (NON-NEGOTIABLE):
 - If competitor_count >= 10, flag crowded page 1 as a risk
 - This is aggregated market context, not a specific product listing
 - Cite specific numbers from market data when available
-- If you cannot cite a number, explicitly say so`;
+- If you cannot cite a number, explicitly say so
+
+METRIC CITATION REQUIREMENTS:
+- Executive Summary MUST include at least TWO metrics from the market data above
+- Each Risk Breakdown explanation MUST reference at least ONE metric from the market data above
+- Fill numbers_used field with actual values from market_snapshot_json:
+  - If you cite avg_price in your analysis, set numbers_used.avg_price to ${marketSnapshot.avg_price}
+  - If you cite price_range, set numbers_used.price_range to [${marketSnapshot.price_range[0]}, ${marketSnapshot.price_range[1]}]
+  - If you cite median_reviews, set numbers_used.median_reviews to ${marketSnapshot.median_reviews}
+  - If you cite review_density_pct, set numbers_used.review_density_pct to ${marketSnapshot.review_density_pct}
+  - If you cite brand_concentration_pct, set numbers_used.brand_concentration_pct to ${marketSnapshot.brand_concentration_pct}
+  - If you cite competitor_count, set numbers_used.competitor_count to ${marketSnapshot.competitor_count}
+  - If you cite avg_rating, set numbers_used.avg_rating to ${marketSnapshot.avg_rating}
+  - For metrics you do NOT cite, set to null`;
 
       systemPrompt = SYSTEM_PROMPT + marketDataSection;
     } else if (body.input_type === "idea") {
@@ -639,8 +722,10 @@ MARKET DATA: Not available (insufficient search results or API error)
 KEYWORD ANALYSIS RULES:
 - Treat keyword analysis as directional, not definitive
 - Without market data, analysis is based on general market knowledge only
-- Confidence must be capped at 50% maximum
-- Explicitly state that market data is unavailable`;
+- Confidence must be capped at <= 55% maximum
+- Explicitly state "Insufficient Amazon market data for numeric citation" in Executive Summary
+- Each Risk Breakdown explanation must state "Insufficient Amazon market data for numeric citation"
+- Fill numbers_used field with all null values`;
 
       systemPrompt = SYSTEM_PROMPT + warningSection;
     }
@@ -743,16 +828,44 @@ ${body.input_value}`;
     const verdict = decisionJson.decision.verdict;
     let confidence = decisionJson.decision.confidence;
 
-    // Cap confidence at 50 if keyword analysis has no market data
-    if (body.input_type === "idea" && !marketSnapshot && confidence > 50) {
-      confidence = 50;
-      decisionJson.decision.confidence = 50;
+    // Cap confidence at 55 if keyword analysis has no market data
+    if (body.input_type === "idea" && !marketSnapshot && confidence > 55) {
+      confidence = 55;
+      decisionJson.decision.confidence = 55;
     }
 
     // 12. Store market data in response for keyword analyses
     if (body.input_type === "idea" && keywordMarketData) {
       decisionJson.market_snapshot = marketSnapshot;
       decisionJson.market_listings = keywordMarketData.listings;
+    }
+
+    // 12a. Ensure numbers_used is populated from market snapshot if available
+    if (body.input_type === "idea" && marketSnapshot) {
+      if (!decisionJson.numbers_used) {
+        decisionJson.numbers_used = {};
+      }
+      // Populate from market snapshot (AI should have done this, but ensure it's correct)
+      decisionJson.numbers_used.avg_price = marketSnapshot.avg_price;
+      decisionJson.numbers_used.price_range = marketSnapshot.price_range;
+      decisionJson.numbers_used.median_reviews = marketSnapshot.median_reviews;
+      decisionJson.numbers_used.review_density_pct = marketSnapshot.review_density_pct;
+      decisionJson.numbers_used.brand_concentration_pct = marketSnapshot.brand_concentration_pct;
+      decisionJson.numbers_used.competitor_count = marketSnapshot.competitor_count;
+      decisionJson.numbers_used.avg_rating = marketSnapshot.avg_rating;
+    } else if (body.input_type === "idea") {
+      // Ensure numbers_used is all null if no market data
+      if (!decisionJson.numbers_used) {
+        decisionJson.numbers_used = {
+          avg_price: null,
+          price_range: null,
+          median_reviews: null,
+          review_density_pct: null,
+          brand_concentration_pct: null,
+          competitor_count: null,
+          avg_rating: null,
+        };
+      }
     }
 
     // 13. Save to analysis_runs with verdict, confidence, and seller context snapshot
