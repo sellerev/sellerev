@@ -669,7 +669,7 @@ export async function POST(req: NextRequest) {
       console.log("RAIN_DATA_RAW", keywordMarketData);
       
       // Guard: 422 ONLY if search_results is empty or missing
-      if (!keywordMarketData || keywordMarketData.snapshot.total_listings === 0) {
+      if (!keywordMarketData || !keywordMarketData.snapshot || keywordMarketData.snapshot.total_listings === 0) {
         return NextResponse.json(
           {
             ok: false,
@@ -689,6 +689,7 @@ export async function POST(req: NextRequest) {
     
     if (body.input_type === "idea" && marketSnapshot) {
       // Add keyword-specific market data section
+      const keywordText = (marketSnapshot as any).keyword || body.input_value;
       const avgPriceText = marketSnapshot.avg_price !== null 
         ? `$${marketSnapshot.avg_price.toFixed(2)}` 
         : "Not available";
@@ -698,8 +699,8 @@ export async function POST(req: NextRequest) {
       const dominanceText = marketSnapshot.dominance_score !== null 
         ? `${marketSnapshot.dominance_score}%` 
         : "Not available";
-      const topBrandsText = marketSnapshot.top_brands.length > 0
-        ? marketSnapshot.top_brands.slice(0, 3).map(b => `${b.brand} (${b.count})`).join(", ")
+      const topBrandsText = marketSnapshot.top_brands && marketSnapshot.top_brands.length > 0
+        ? marketSnapshot.top_brands.slice(0, 3).map((b: any) => `${b.brand} (${b.count})`).join(", ")
         : "Not available";
       const totalResultsText = marketSnapshot.total_results_estimate !== null
         ? marketSnapshot.total_results_estimate.toLocaleString()
@@ -709,7 +710,7 @@ export async function POST(req: NextRequest) {
 
 KEYWORD ANALYSIS CONTEXT:
 
-MARKET DATA (Amazon search results for "${marketSnapshot.keyword}"):
+MARKET DATA (Amazon search results for "${keywordText}"):
 - Total listings analyzed: ${marketSnapshot.total_listings}
 - Sponsored listings: ${marketSnapshot.sponsored_count}
 - Total results estimate: ${totalResultsText}

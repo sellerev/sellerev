@@ -133,6 +133,11 @@ export async function fetchKeywordMarketSnapshot(
     console.log("RAW_KEYWORD_RESULTS", JSON.stringify(raw, null, 2));
 
     // Extract search_results array
+    if (!raw || typeof raw !== "object") {
+      console.error("Invalid Rainforest API response structure");
+      return null;
+    }
+
     const searchResults = raw.search_results || [];
 
     // 422 ONLY if search_results is empty or missing
@@ -142,7 +147,9 @@ export async function fetchKeywordMarketSnapshot(
     }
 
     // Parse each search result item
-    const parsedListings: ParsedListing[] = searchResults.map((item: any, index: number) => {
+    let parsedListings: ParsedListing[] = [];
+    try {
+      parsedListings = searchResults.map((item: any, index: number) => {
       const asin = item.asin ?? null;
       const title = item.title ?? null;
       const price = parsePrice(item);
@@ -168,6 +175,10 @@ export async function fetchKeywordMarketSnapshot(
         brand,
       };
     });
+    } catch (parseError) {
+      console.error("Error parsing search results:", parseError);
+      return null;
+    }
 
     // VALID listing rule: A listing is valid if asin exists AND title exists
     const validListings = parsedListings.filter(
