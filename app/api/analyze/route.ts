@@ -933,73 +933,27 @@ ${body.input_value}`;
       if (rainforestData.dominance_score === null) delete rainforestData.dominance_score;
     }
 
-    console.log("SAVE_ATTEMPT", {
-      user_id: user.id,
-      input_type: body.input_type,
-      has_market_snapshot: !!marketSnapshotJson,
-      market_snapshot_structure: marketSnapshotJson ? Object.keys(marketSnapshotJson) : null,
-      rainforest_data_keys: rainforestData ? Object.keys(rainforestData) : null,
-      decision_json_keys: Object.keys(decisionJson),
-    });
-
-    let savedAnalysis: any = null;
-    try {
-      const insertData = {
+    // 13. Save to analysis_runs
+    const { data: insertedRun, error: insertError } = await supabase
+      .from("analysis_runs")
+      .insert({
         user_id: user.id,
         input_type: body.input_type,
         input_value: body.input_value,
-        ai_verdict: verdict,
-        ai_confidence: confidence,
-        seller_stage: sellerContext.stage,
-        seller_experience_months: sellerContext.experience_months,
-        seller_monthly_revenue_range: sellerContext.monthly_revenue_range,
+        verdict: decisionJson.decision.verdict,
+        confidence: decisionJson.decision.confidence,
+        seller_stage: sellerProfile.stage,
+        seller_experience_months: sellerProfile.experience_months,
+        seller_monthly_revenue_range: sellerProfile.monthly_revenue_range,
         response: decisionJson,
-        rainforest_data: rainforestData,
-        // Note: market_snapshot_json column doesn't exist yet - storing in response.market_snapshot instead
-      };
+      })
+      .select("id")
+      .single();
 
-      console.log("INSERT_DATA_STRUCTURE", {
-        keys: Object.keys(insertData),
-        response_type: typeof insertData.response,
-        response_keys: insertData.response ? Object.keys(insertData.response) : null,
-        market_snapshot_json_type: typeof insertData.market_snapshot_json,
-      });
-
-      const { data, error: saveError } = await supabase
-        .from("analysis_runs")
-        .insert(insertData)
-        .select("id, created_at")
-        .single();
-
-      if (saveError || !data) {
-        console.error("SAVE_ERROR", {
-          error: saveError,
-          message: saveError?.message,
-          details: saveError?.details,
-          hint: saveError?.hint,
-          code: saveError?.code,
-        });
-        return NextResponse.json(
-          {
-            ok: false,
-            error: "Failed to save analysis run",
-            details: saveError?.message || "Unknown error",
-            hint: saveError?.hint || undefined,
-          },
-          { status: 500, headers: res.headers }
-        );
-      }
-
-      savedAnalysis = data;
-      console.log("SAVE_SUCCESS", { analysis_run_id: savedAnalysis.id });
-    } catch (saveException) {
-      console.error("SAVE_EXCEPTION", saveException);
+    if (insertError) {
+      console.error("ANALYSIS_RUN_INSERT_ERROR", insertError);
       return NextResponse.json(
-        {
-          ok: false,
-          error: "Failed to save analysis run",
-          details: saveException instanceof Error ? saveException.message : String(saveException),
-        },
+        { error: "Failed to save analysis run" },
         { status: 500, headers: res.headers }
       );
     }
@@ -1019,20 +973,11 @@ ${body.input_value}`;
       }
     }
 
-    // 14. Return success response with cookies preserved
-    // Includes analysis_run_id for chat continuation
+    // 14. Return success response
     return NextResponse.json(
       {
-        ok: true,
-        data: {
-          ...decisionJson,
-          analysis_run_id: savedAnalysis.id,
-          created_at: savedAnalysis.created_at,
-          input_type: body.input_type,
-          input_value: body.input_value,
-          // Include market snapshot for keyword analyses
-          market_snapshot_json: marketSnapshotJson || undefined,
-        },
+        analysis_run_id: insertedRun.id,
+        decision: decisionJson,
       },
       { status: 200, headers: res.headers }
     );
