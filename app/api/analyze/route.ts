@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { fetchKeywordMarketSnapshot } from "@/lib/amazon/keywordMarket";
+import { aggregateKeywordMarketData } from "@/lib/market/keywordAggregation";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -574,11 +575,26 @@ export async function POST(req: NextRequest) {
     // 7. Fetch keyword market data if input_type is "idea"
     let keywordMarketData = null;
     let marketSnapshot = null;
+    let marketSnapshotJson = null;
     
     if (body.input_type === "idea") {
       keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
-      if (keywordMarketData) {
-        marketSnapshot = keywordMarketData.snapshot;
+      if (keywordMarketData && keywordMarketData.listings.length >= 5) {
+        // Use aggregation module to compute metrics
+        const aggregated = aggregateKeywordMarketData(
+          keywordMarketData.listings.map((l) => ({
+            price: l.price,
+            reviews: l.review_count,
+            rating: l.rating,
+            brand: l.brand,
+            asin: l.asin,
+          }))
+        );
+        
+        if (aggregated) {
+          marketSnapshot = aggregated;
+          marketSnapshotJson = aggregated;
+        }
       }
     }
 
@@ -593,16 +609,18 @@ KEYWORD ANALYSIS CONTEXT:
 
 MARKET DATA (Amazon search results for this keyword):
 - Avg price: $${marketSnapshot.avg_price.toFixed(2)}
-- Price range: $${marketSnapshot.min_price.toFixed(2)} - $${marketSnapshot.max_price.toFixed(2)}
+- Price range: $${marketSnapshot.price_range[0].toFixed(2)} - $${marketSnapshot.price_range[1].toFixed(2)}
 - Avg reviews: ${marketSnapshot.avg_reviews.toLocaleString()}
-- Review density: ${marketSnapshot.review_density}% (listings with >1000 reviews)
-- Brand concentration: ${marketSnapshot.brand_concentration}% (top brand share)
+- Median reviews: ${marketSnapshot.median_reviews.toLocaleString()}
+- Review density: ${marketSnapshot.review_density_pct}% (listings with >1000 reviews)
+- Brand concentration: ${marketSnapshot.brand_concentration_pct}% (top brand share)
 - Competitor count: ${marketSnapshot.competitor_count} listings on page 1
+- Avg rating: ${marketSnapshot.avg_rating.toFixed(1)} stars
 
 KEYWORD ANALYSIS RULES (NON-NEGOTIABLE):
 - Treat keyword analysis as directional, not definitive
 - Reference aggregated signals, not individual ASIN performance
-- If brand concentration > 50%, flag brand dominance as a risk
+- If brand_concentration_pct > 50%, flag brand dominance as a risk
 - If avg_reviews > 2000, flag high review barrier as a risk
 - If competitor_count >= 10, flag crowded page 1 as a risk
 - This is aggregated market context, not a specific product listing
@@ -756,14 +774,16 @@ ${body.input_value}`;
         rainforest_data: body.input_type === "idea" && marketSnapshot
           ? {
               average_price: marketSnapshot.avg_price,
-              price_min: marketSnapshot.min_price,
-              price_max: marketSnapshot.max_price,
+              price_min: marketSnapshot.price_range[0],
+              price_max: marketSnapshot.price_range[1],
               review_count_avg: marketSnapshot.avg_reviews,
-              average_rating: 0, // Not computed from keyword search
+              average_rating: marketSnapshot.avg_rating,
               competitor_count: marketSnapshot.competitor_count,
               data_fetched_at: new Date().toISOString(),
             }
           : null,
+        // Store aggregated snapshot in dedicated column for keyword analyses
+        market_snapshot_json: body.input_type === "idea" ? marketSnapshotJson : null,
       })
       .select("id, created_at")
       .single();
@@ -803,6 +823,8 @@ ${body.input_value}`;
           created_at: savedAnalysis.created_at,
           input_type: body.input_type,
           input_value: body.input_value,
+          // Include market snapshot for keyword analyses
+          market_snapshot_json: marketSnapshotJson || undefined,
         },
       },
       { status: 200, headers: res.headers }

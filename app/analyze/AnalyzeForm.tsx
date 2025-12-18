@@ -59,7 +59,7 @@ interface AnalysisResponse {
     avoid: string[];
   };
   assumptions_and_limits: string[];
-  // Optional: Rainforest market data (when available)
+  // Optional: Market data (from keyword aggregation or ASIN analysis)
   market_data?: {
     average_price?: number;
     price_min?: number;
@@ -69,6 +69,17 @@ interface AnalysisResponse {
     competitor_count?: number;
     top_asins?: string[];
     data_fetched_at?: string;
+  };
+  // Optional: Aggregated keyword market snapshot (when input_type === "keyword")
+  market_snapshot_json?: {
+    avg_price: number;
+    price_range: [number, number];
+    avg_reviews: number;
+    median_reviews: number;
+    review_density_pct: number;
+    competitor_count: number;
+    brand_concentration_pct: number;
+    avg_rating: number;
   };
 }
 
@@ -477,7 +488,7 @@ export default function AnalyzeForm({
               {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 3: MARKET SNAPSHOT                                    */}
               {/* - 4 compact stat cards (2x2 grid)                           */}
-              {/* - Rainforest data only                                      */}
+              {/* - Uses market_snapshot_json for keywords, market_data for ASINs */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
@@ -491,8 +502,40 @@ export default function AnalyzeForm({
                   )}
                 </div>
 
-                {analysis.market_data &&
-                Object.keys(analysis.market_data).length > 0 ? (
+                {/* Check for keyword market snapshot first, then fall back to market_data */}
+                {analysis.market_snapshot_json ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Card 1: Average Price */}
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-xs text-gray-500 mb-1">Avg Price</div>
+                      <div className="text-lg font-semibold">
+                        {formatCurrency(analysis.market_snapshot_json.avg_price)}
+                      </div>
+                    </div>
+                    {/* Card 2: Avg Rating */}
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-xs text-gray-500 mb-1">Avg Rating</div>
+                      <div className="text-lg font-semibold">
+                        {analysis.market_snapshot_json.avg_rating.toFixed(1)} ★
+                      </div>
+                    </div>
+                    {/* Card 3: Avg Reviews */}
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-xs text-gray-500 mb-1">Avg Reviews</div>
+                      <div className="text-lg font-semibold">
+                        {analysis.market_snapshot_json.avg_reviews.toLocaleString()}
+                      </div>
+                    </div>
+                    {/* Card 4: Competitors */}
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-xs text-gray-500 mb-1">Competitors</div>
+                      <div className="text-lg font-semibold">
+                        {analysis.market_snapshot_json.competitor_count}
+                      </div>
+                    </div>
+                  </div>
+                ) : analysis.market_data &&
+                  Object.keys(analysis.market_data).length > 0 ? (
                   <div className="grid grid-cols-2 gap-3">
                     {/* Card 1: Average Price */}
                     <div className="bg-gray-50 rounded-lg p-3">
@@ -534,7 +577,9 @@ export default function AnalyzeForm({
                 ) : (
                   <div className="bg-gray-50 rounded-lg p-4 text-center">
                     <p className="text-gray-500 text-sm">
-                      No market data available for this analysis.
+                      {analysis.input_type === "keyword"
+                        ? "Insufficient market data for this keyword."
+                        : "No market data available for this analysis."}
                     </p>
                   </div>
                 )}

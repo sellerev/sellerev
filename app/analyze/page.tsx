@@ -71,6 +71,17 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
         assumptions_and_limits: response.assumptions_and_limits as string[],
         // Include market data if available (from rainforest_data column)
         market_data: analysisRun.rainforest_data as Record<string, unknown> | undefined,
+        // Include keyword market snapshot if available
+        market_snapshot_json: analysisRun.market_snapshot_json as {
+          avg_price: number;
+          price_range: [number, number];
+          avg_reviews: number;
+          median_reviews: number;
+          review_density_pct: number;
+          competitor_count: number;
+          brand_concentration_pct: number;
+          avg_rating: number;
+        } | undefined,
       };
 
       // Fetch chat history for this analysis
