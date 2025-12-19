@@ -123,6 +123,60 @@ function formatTimeAgo(dateString: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MARKET SNAPSHOT INTERPRETATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Get price interpretation (opinionated, deterministic)
+ */
+function getPriceInterpretation(avgPrice: number | null): string {
+  if (avgPrice === null || avgPrice === undefined) return "";
+  if (avgPrice < 15) return "Race-to-the-bottom pricing";
+  if (avgPrice < 30) return "Tightly clustered price band";
+  return "Room for premium positioning";
+}
+
+/**
+ * Get review barrier interpretation
+ */
+function getReviewBarrierInterpretation(avgReviews: number | null): string {
+  if (avgReviews === null || avgReviews === undefined) return "";
+  if (avgReviews < 1000) return "<1,000: Accessible";
+  if (avgReviews < 5000) return "1,000–5,000: Hard to crack";
+  return "5,000+: Entrenched leaders";
+}
+
+/**
+ * Get quality expectation interpretation
+ */
+function getQualityExpectationInterpretation(avgRating: number | null): string {
+  if (avgRating === null || avgRating === undefined) return "";
+  if (avgRating < 4.2) return "<4.2: Opportunity to out-quality";
+  if (avgRating < 4.7) return "4.2–4.6: Table stakes";
+  return "4.7+: Perfection required";
+}
+
+/**
+ * Get Page 1 competition interpretation
+ */
+function getCompetitionInterpretation(totalListings: number): string {
+  if (totalListings < 20) return "<20: Manageable";
+  if (totalListings < 35) return "20–35: Competitive";
+  return "35+: Crowded";
+}
+
+/**
+ * Get paid competition interpretation
+ */
+function getPaidCompetitionInterpretation(sponsoredCount: number, totalListings: number): string {
+  if (totalListings === 0) return "";
+  const sponsoredRatio = sponsoredCount / totalListings;
+  if (sponsoredRatio < 0.2) return "Low PPC pressure";
+  if (sponsoredRatio < 0.4) return "Moderate PPC dependence";
+  return "Heavy paid visibility";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT PROPS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -638,7 +692,22 @@ export default function AnalyzeForm({
                         {getReviewBarrierInterpretation(analysis.market_snapshot.avg_reviews)}
                       </div>
                     </div>
-                    {/* Card 3: Brand Control */}
+                    {/* Card 3: Quality Expectation */}
+                    {analysis.market_snapshot.avg_rating !== null && analysis.market_snapshot.avg_rating !== undefined && (
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Quality Expectation</div>
+                        <div className="text-lg font-semibold text-gray-900 mb-0.5">
+                          {analysis.market_snapshot.avg_rating.toFixed(1)} ★
+                        </div>
+                        <div className="text-xs text-gray-600 mb-1">
+                          Buyer standard on Page 1
+                        </div>
+                        <div className="text-[10px] text-gray-500 font-medium">
+                          {getQualityExpectationInterpretation(analysis.market_snapshot.avg_rating)}
+                        </div>
+                      </div>
+                    )}
+                    {/* Card 4: Brand Control */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Brand Control</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
@@ -655,7 +724,7 @@ export default function AnalyzeForm({
                           : "Fragmented"}
                       </div>
                     </div>
-                    {/* Card 4: Page 1 Competition */}
+                    {/* Card 6: Page 1 Competition */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Page 1 Competition</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
@@ -668,7 +737,22 @@ export default function AnalyzeForm({
                         {getCompetitionInterpretation(analysis.market_snapshot.total_page1_listings)}
                       </div>
                     </div>
-                    {/* Card 5: Amazon Fees (est.) */}
+                    {/* Card 7: Paid Competition */}
+                    {analysis.market_snapshot.sponsored_count > 0 && (
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Paid Competition</div>
+                        <div className="text-lg font-semibold text-gray-900 mb-0.5">
+                          {analysis.market_snapshot.sponsored_count} sponsored
+                        </div>
+                        <div className="text-xs text-gray-600 mb-1">
+                          Sponsored listings on Page 1
+                        </div>
+                        <div className="text-[10px] text-gray-500 font-medium">
+                          {getPaidCompetitionInterpretation(analysis.market_snapshot.sponsored_count, analysis.market_snapshot.total_page1_listings)}
+                        </div>
+                      </div>
+                    )}
+                    {/* Card 8: Amazon Fees (est.) */}
                     {analysis.market_snapshot?.fba_fees && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Amazon Fees (est.)</div>
@@ -697,6 +781,9 @@ export default function AnalyzeForm({
                       <div className="text-xs text-gray-600 mb-1">
                         Most sellers cluster here on Page 1
                       </div>
+                      <div className="text-[10px] text-gray-500 font-medium">
+                        {getPriceInterpretation(analysis.market_data.average_price ?? null)}
+                      </div>
                     </div>
                     {/* Card 2: Quality Expectation */}
                     <div className="bg-gray-50 rounded-lg p-3">
@@ -708,6 +795,9 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         Buyer standard on Page 1
+                      </div>
+                      <div className="text-[10px] text-gray-500 font-medium">
+                        {getQualityExpectationInterpretation(analysis.market_data.average_rating ?? null)}
                       </div>
                     </div>
                     {/* Card 3: Review Barrier */}
@@ -721,6 +811,9 @@ export default function AnalyzeForm({
                       <div className="text-xs text-gray-600 mb-1">
                         What you must compete against
                       </div>
+                      <div className="text-[10px] text-gray-500 font-medium">
+                        {getReviewBarrierInterpretation(analysis.market_data.review_count_avg ?? null)}
+                      </div>
                     </div>
                     {/* Card 4: Page 1 Competition */}
                     <div className="bg-gray-50 rounded-lg p-3">
@@ -732,6 +825,11 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         Listings you must beat
+                      </div>
+                      <div className="text-[10px] text-gray-500 font-medium">
+                        {analysis.market_data.competitor_count !== undefined
+                          ? getCompetitionInterpretation(analysis.market_data.competitor_count)
+                          : ""}
                       </div>
                     </div>
                   </div>
