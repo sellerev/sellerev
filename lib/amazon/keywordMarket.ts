@@ -30,6 +30,15 @@ export interface KeywordMarketSnapshot {
   sponsored_count: number;
   dominance_score: number; // 0-100, % of listings belonging to top brand
   representative_asin?: string | null; // Optional representative ASIN for fee estimation
+  // Competitive Pressure Index (CPI) - seller-context aware, 0-100
+  competitive_pressure_index?: number;
+  cpi_components?: {
+    reviewBarrierScore: number;
+    sponsoredCompetitionScore: number;
+    brandDominanceScore: number;
+    listingDensityScore: number;
+  };
+  cpi_explanation?: string;
 }
 
 export interface KeywordMarketData {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { fetchKeywordMarketSnapshot, KeywordMarketData } from "@/lib/amazon/keywordMarket";
 import { pickRepresentativeAsin } from "@/lib/amazon/representativeAsin";
+import { calculateCPI } from "@/lib/amazon/competitivePressureIndex";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 import { getFbaFeesEstimateForAsin } from "@/lib/spapi/fees";
 import { getCachedFee, setCachedFee } from "@/lib/spapi/feeCache";
@@ -695,6 +696,21 @@ export async function POST(req: NextRequest) {
       // Use the snapshot directly (already aggregated)
       marketSnapshot = keywordMarketData.snapshot;
       marketSnapshotJson = keywordMarketData.snapshot;
+      
+      // Calculate Competitive Pressure Index (CPI) from Page 1 listings
+      // CPI is seller-context aware and computed deterministically
+      if (keywordMarketData.listings && keywordMarketData.listings.length > 0) {
+        const cpiResult = calculateCPI({
+          listings: keywordMarketData.listings,
+          sellerStage: sellerProfile.stage as "new" | "existing" | "scaling",
+          sellerExperienceMonths: sellerProfile.experience_months,
+        });
+        
+        // Inject CPI into market snapshot
+        (marketSnapshot as any).competitive_pressure_index = cpiResult.cpi;
+        (marketSnapshot as any).cpi_components = cpiResult.components;
+        (marketSnapshot as any).cpi_explanation = cpiResult.explanation;
+      }
     }
 
     // 8. Build system prompt (with keyword-specific rules if applicable)

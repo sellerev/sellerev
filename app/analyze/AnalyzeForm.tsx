@@ -82,6 +82,15 @@ interface AnalysisResponse {
     sponsored_count: number;
     dominance_score: number; // 0-100, % of listings belonging to top brand
     representative_asin?: string | null; // Optional representative ASIN for fee estimation
+    // Competitive Pressure Index (CPI) - seller-context aware, 0-100
+    competitive_pressure_index?: number;
+    cpi_components?: {
+      reviewBarrierScore: number;
+      sponsoredCompetitionScore: number;
+      brandDominanceScore: number;
+      listingDensityScore: number;
+    };
+    cpi_explanation?: string;
     // FBA fee estimate (from SP-API or estimated)
     // New structure (from resolveFbaFees):
     fba_fees?: {
