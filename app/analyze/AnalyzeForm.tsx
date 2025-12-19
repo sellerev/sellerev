@@ -704,7 +704,7 @@ export default function AnalyzeForm({
                       <div className="text-xs text-gray-600 mb-1">
                         {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
                           ? "Most sellers cluster here on Page 1"
-                          : "Price data unavailable on Page 1"}
+                          : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {getPriceInterpretation(analysis.market_snapshot.avg_price)}
@@ -719,7 +719,9 @@ export default function AnalyzeForm({
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        What you must compete against
+                        {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
+                          ? "What you must compete against"
+                          : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {getReviewBarrierInterpretation(analysis.market_snapshot.avg_reviews)}
@@ -761,41 +763,55 @@ export default function AnalyzeForm({
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Page 1 Competition</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {analysis.market_snapshot.total_page1_listings} listings
+                        {analysis.market_snapshot.total_page1_listings > 0
+                          ? `${analysis.market_snapshot.total_page1_listings} listings`
+                          : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Listings you must beat
+                        {analysis.market_snapshot.total_page1_listings > 0
+                          ? "Listings you must beat"
+                          : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {getCompetitionInterpretation(analysis.market_snapshot.total_page1_listings)}
+                        {analysis.market_snapshot.total_page1_listings > 0
+                          ? getCompetitionInterpretation(analysis.market_snapshot.total_page1_listings)
+                          : ""}
                       </div>
                     </div>
                     {/* Card 7: Paid Competition */}
-                    {analysis.market_snapshot.sponsored_count > 0 && (
+                    {analysis.market_snapshot.sponsored_count !== undefined && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Paid Competition</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                          {analysis.market_snapshot.sponsored_count} sponsored
+                          {analysis.market_snapshot.sponsored_count > 0
+                            ? `${analysis.market_snapshot.sponsored_count} sponsored`
+                            : "—"}
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
-                          Sponsored listings on Page 1
+                          {analysis.market_snapshot.sponsored_count > 0
+                            ? "Sponsored listings on Page 1"
+                            : "Insufficient Page 1 data"}
                         </div>
                         <div className="text-[10px] text-gray-500 font-medium">
-                          {getPaidCompetitionInterpretation(analysis.market_snapshot.sponsored_count, analysis.market_snapshot.total_page1_listings)}
+                          {analysis.market_snapshot.sponsored_count > 0 && analysis.market_snapshot.total_page1_listings > 0
+                            ? getPaidCompetitionInterpretation(analysis.market_snapshot.sponsored_count, analysis.market_snapshot.total_page1_listings)
+                            : ""}
                         </div>
                       </div>
                     )}
-                    {/* Card 8: Amazon Fees (est.) */}
+                    {/* Card 8: Amazon Fees */}
                     {analysis.market_snapshot?.fba_fees && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Amazon Fees (est.)</div>
+                        <div className="text-xs text-gray-500 mb-1">Amazon Fees</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
                           {analysis.market_snapshot.fba_fees.total_fee !== null && analysis.market_snapshot.fba_fees.total_fee !== undefined
                             ? formatCurrency(analysis.market_snapshot.fba_fees.total_fee)
                             : "—"}
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
-                          Typical fulfillment cost
+                          {analysis.market_snapshot.fba_fees.total_fee !== null && analysis.market_snapshot.fba_fees.total_fee !== undefined
+                            ? "Typical fulfillment cost"
+                            : "Insufficient Page 1 data"}
                         </div>
                       </div>
                     )}
@@ -838,7 +854,9 @@ export default function AnalyzeForm({
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Most sellers cluster here on Page 1
+                        {analysis.market_data.average_price !== undefined
+                          ? "Most sellers cluster here on Page 1"
+                          : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {getPriceInterpretation(analysis.market_data.average_price ?? null)}
@@ -853,7 +871,9 @@ export default function AnalyzeForm({
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Buyer standard on Page 1
+                        {analysis.market_data.average_rating !== undefined
+                          ? "Buyer standard on Page 1"
+                          : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {getQualityExpectationInterpretation(analysis.market_data.average_rating ?? null)}
@@ -868,7 +888,9 @@ export default function AnalyzeForm({
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        What you must compete against
+                        {analysis.market_data.review_count_avg !== undefined
+                          ? "What you must compete against"
+                          : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {getReviewBarrierInterpretation(analysis.market_data.review_count_avg ?? null)}
@@ -883,7 +905,9 @@ export default function AnalyzeForm({
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Listings you must beat
+                        {analysis.market_data.competitor_count !== undefined
+                          ? "Listings you must beat"
+                          : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {analysis.market_data.competitor_count !== undefined
@@ -921,12 +945,9 @@ export default function AnalyzeForm({
                   </>
                 ) : (
                   <div className="bg-gray-50 rounded-lg p-4 text-center border border-gray-200">
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                      No Page 1 Market Data
-                    </h3>
-                    <p className="text-gray-600 text-xs leading-relaxed">
-                      This keyword does not return reliable Page 1 listing data.<br />
-                      Try a more specific keyword or analyze an individual ASIN.
+                    <div className="text-lg font-semibold text-gray-900 mb-1">—</div>
+                    <p className="text-gray-600 text-xs">
+                      Insufficient Page 1 data
                     </p>
                   </div>
                 )}
