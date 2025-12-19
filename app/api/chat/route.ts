@@ -376,6 +376,233 @@ function canAnswerQuestion(
 }
 
 /**
+ * Validates AI response for hallucinations and scope violations
+ * 
+ * Tripwire conditions:
+ * - Mentions data not present in context
+ * - Uses forbidden phrases without citation (typically, usually, industry standard, most sellers, on average)
+ * - References Amazon metrics not provided (ACOS, TACOS, CVR, sales velocity)
+ * - Claims outside Amazon FBA scope
+ * 
+ * @param response - AI response text
+ * @param allowedNumbers - Set of numbers that are allowed (from context)
+ * @param allowedMetrics - Set of metrics that are allowed (from context)
+ * @returns Object with isValid boolean and reason if invalid
+ */
+function validateResponseForHallucination(
+  response: string,
+  allowedNumbers: Set<number>,
+  allowedMetrics: Set<string>
+): {
+  isValid: boolean;
+  reason?: string;
+} {
+  const normalized = response.toLowerCase();
+  
+  // Forbidden phrases that require citation
+  const forbiddenPhrases = [
+    /\btypically\b/i,
+    /\busually\b/i,
+    /\bindustry standard\b/i,
+    /\bmost sellers\b/i,
+    /\bon average\b/i,
+    /\bgenerally\b/i,
+    /\bcommonly\b/i,
+  ];
+  
+  // Check for forbidden phrases without citation
+  for (const pattern of forbiddenPhrases) {
+    if (pattern.test(response)) {
+      // Check if there's a citation nearby (within 50 chars)
+      const matches = response.matchAll(pattern);
+      for (const match of matches) {
+        const index = match.index || 0;
+        const contextBefore = response.substring(Math.max(0, index - 50), index);
+        const contextAfter = response.substring(index, Math.min(response.length, index + 100));
+        const hasCitation = /(?:according to|based on|from|per|according|data shows|analysis shows|market data)/i.test(contextBefore + contextAfter);
+        
+        if (!hasCitation) {
+          return {
+            isValid: false,
+            reason: `Forbidden phrase "${match[0]}" used without citation`,
+          };
+        }
+      }
+    }
+  }
+  
+  // Check for unsupported Amazon metrics
+  const unsupportedMetrics = [
+    /\bacos\b/i,
+    /\btacos\b/i,
+    /\bcvr\b/i,
+    /\bconversion rate\b/i,
+    /\bsales velocity\b/i,
+    /\bunits per day\b/i,
+    /\bunits per month\b/i,
+    /\bmonthly sales\b/i,
+    /\bdaily sales\b/i,
+  ];
+  
+  for (const pattern of unsupportedMetrics) {
+    if (pattern.test(response)) {
+      return {
+        isValid: false,
+        reason: `Unsupported metric referenced: ${pattern.source}`,
+      };
+    }
+  }
+  
+  // Extract numbers from response and check against allowed set
+  const numberPattern = /\$?(\d+(?:\.\d+)?)/g;
+  const numbersInResponse: number[] = [];
+  let match;
+  
+  while ((match = numberPattern.exec(response)) !== null) {
+    const num = parseFloat(match[1]);
+    if (!isNaN(num) && num > 0) {
+      numbersInResponse.push(num);
+    }
+  }
+  
+  // Check if any numbers are outside allowed set (with tolerance for rounding)
+  // Allow numbers that are close to allowed numbers (±0.01 for small numbers, ±1% for larger)
+  for (const num of numbersInResponse) {
+    let isAllowed = false;
+    
+    for (const allowed of allowedNumbers) {
+      const tolerance = allowed < 1 ? 0.01 : allowed * 0.01;
+      if (Math.abs(num - allowed) <= tolerance) {
+        isAllowed = true;
+        break;
+      }
+    }
+    
+    // Also allow common percentages (0-100) if they're reasonable
+    if (!isAllowed && num >= 0 && num <= 100 && num % 1 === 0) {
+      // Could be a percentage - allow if it's a round number
+      isAllowed = true;
+    }
+    
+    // Allow currency amounts that are reasonable (not suspiciously specific)
+    if (!isAllowed && num >= 1 && num <= 10000 && num % 0.01 === 0) {
+      // Could be a price - allow if it's a reasonable currency amount
+      isAllowed = true;
+    }
+    
+    if (!isAllowed && num > 10000) {
+      // Large numbers are suspicious - flag them
+      return {
+        isValid: false,
+        reason: `Suspicious number referenced: ${num} (not in allowed dataset)`,
+      };
+    }
+  }
+  
+  // Check for claims outside Amazon FBA scope
+  const outOfScopePatterns = [
+    /\b(ebay|etsy|shopify|walmart|target|retail store|brick and mortar)\b/i,
+    /\b(manufacturing|factory|supply chain|logistics)\b/i,
+    /\b(seo|google ads|facebook ads|social media marketing)\b/i,
+  ];
+  
+  for (const pattern of outOfScopePatterns) {
+    if (pattern.test(response)) {
+      return {
+        isValid: false,
+        reason: `Out of scope claim: ${pattern.source}`,
+      };
+    }
+  }
+  
+  return { isValid: true };
+}
+
+/**
+ * Extracts allowed numbers from context data
+ * 
+ * @param analysisResponse - Analysis response data
+ * @param marketSnapshot - Market snapshot data
+ * @param sellerProfile - Seller profile data
+ * @returns Set of allowed numbers
+ */
+function extractAllowedNumbers(
+  analysisResponse: Record<string, unknown>,
+  marketSnapshot: Record<string, unknown> | null,
+  sellerProfile: {
+    stage: string;
+    experience_months: number | null;
+    monthly_revenue_range: string | null;
+    sourcing_model: string;
+  }
+): Set<number> {
+  const allowed = new Set<number>();
+  
+  // Extract from market snapshot
+  if (marketSnapshot) {
+    if (typeof marketSnapshot.avg_price === 'number') allowed.add(marketSnapshot.avg_price);
+    if (typeof marketSnapshot.avg_reviews === 'number') allowed.add(marketSnapshot.avg_reviews);
+    if (typeof marketSnapshot.avg_rating === 'number') allowed.add(marketSnapshot.avg_rating);
+    if (typeof marketSnapshot.total_page1_listings === 'number') allowed.add(marketSnapshot.total_page1_listings);
+    if (typeof marketSnapshot.sponsored_count === 'number') allowed.add(marketSnapshot.sponsored_count);
+    if (typeof marketSnapshot.dominance_score === 'number') allowed.add(marketSnapshot.dominance_score);
+    
+    // Extract from margin snapshot
+    const marginSnapshot = marketSnapshot.margin_snapshot as Record<string, unknown> | null;
+    if (marginSnapshot) {
+      if (typeof marginSnapshot.selling_price === 'number') allowed.add(marginSnapshot.selling_price);
+      if (typeof marginSnapshot.cogs_assumed_low === 'number') allowed.add(marginSnapshot.cogs_assumed_low);
+      if (typeof marginSnapshot.cogs_assumed_high === 'number') allowed.add(marginSnapshot.cogs_assumed_high);
+      if (typeof marginSnapshot.fba_fees === 'number') allowed.add(marginSnapshot.fba_fees);
+      if (typeof marginSnapshot.net_margin_low_pct === 'number') allowed.add(marginSnapshot.net_margin_low_pct);
+      if (typeof marginSnapshot.net_margin_high_pct === 'number') allowed.add(marginSnapshot.net_margin_high_pct);
+      if (typeof marginSnapshot.breakeven_price_low === 'number') allowed.add(marginSnapshot.breakeven_price_low);
+      if (typeof marginSnapshot.breakeven_price_high === 'number') allowed.add(marginSnapshot.breakeven_price_high);
+    }
+    
+    // Extract from FBA fees
+    const fbaFees = marketSnapshot.fba_fees as Record<string, unknown> | null;
+    if (fbaFees) {
+      if (typeof fbaFees.total_fba_fees === 'number') allowed.add(fbaFees.total_fba_fees);
+      if (typeof fbaFees.total_fee === 'number') allowed.add(fbaFees.total_fee);
+      if (typeof fbaFees.fulfillment_fee === 'number') allowed.add(fbaFees.fulfillment_fee);
+      if (typeof fbaFees.referral_fee === 'number') allowed.add(fbaFees.referral_fee);
+    }
+  }
+  
+  // Extract from analysis response
+  const decision = analysisResponse.decision as Record<string, unknown> | null;
+  if (decision && typeof decision.confidence === 'number') {
+    allowed.add(decision.confidence);
+  }
+  
+  const numbersUsed = analysisResponse.numbers_used as Record<string, unknown> | null;
+  if (numbersUsed) {
+    Object.values(numbersUsed).forEach(val => {
+      if (typeof val === 'number') allowed.add(val);
+      if (Array.isArray(val) && val.length === 2 && typeof val[0] === 'number' && typeof val[1] === 'number') {
+        allowed.add(val[0]);
+        allowed.add(val[1]);
+      }
+    });
+  }
+  
+  // Extract from seller profile
+  if (typeof sellerProfile.experience_months === 'number') {
+    allowed.add(sellerProfile.experience_months);
+  }
+  
+  // Extract from cost overrides
+  const costOverrides = analysisResponse.cost_overrides as Record<string, unknown> | null;
+  if (costOverrides) {
+    if (typeof costOverrides.cogs === 'number') allowed.add(costOverrides.cogs);
+    if (typeof costOverrides.fba_fees === 'number') allowed.add(costOverrides.fba_fees);
+  }
+  
+  return allowed;
+}
+
+/**
  * Formats a refusal response according to strict requirements
  * 
  * @param missingItems - Array of missing data items
@@ -1000,11 +1227,60 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // 14. Enforce confidence tier disclaimers (backend enforcement)
+          // 14. Validate response for hallucinations (TRIPWIRE)
+          // ────────────────────────────────────────────────────────────────
+          // Scan response for invented data, forbidden phrases, unsupported metrics
+          // ────────────────────────────────────────────────────────────────
+          let finalMessage = fullAssistantMessage.trim();
+          let tripwireTriggered = false;
+          let tripwireReason: string | undefined;
+          
+          if (finalMessage) {
+            // Extract allowed numbers from context
+            const allowedNumbers = extractAllowedNumbers(
+              analysisResponse,
+              marketSnapshot,
+              sellerProfile
+            );
+            
+            // Extract allowed metrics (currently none - we don't support ACOS, TACOS, etc.)
+            const allowedMetrics = new Set<string>();
+            
+            // Validate response
+            const validation = validateResponseForHallucination(
+              finalMessage,
+              allowedNumbers,
+              allowedMetrics
+            );
+            
+            if (!validation.isValid) {
+              tripwireTriggered = true;
+              tripwireReason = validation.reason;
+              
+              // Log the event
+              console.error("HALLUCINATION_TRIPWIRE_TRIGGERED", {
+                analysisRunId: body.analysisRunId,
+                reason: validation.reason,
+                messagePreview: finalMessage.substring(0, 200),
+                timestamp: new Date().toISOString(),
+              });
+              
+              // Replace with safe fallback
+              const fallbackMessage = "I can't answer that reliably with the data available.\n\nThis question would require assumptions beyond verified inputs.";
+              
+              // Send correction notice and fallback
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: "\n\n[Response corrected due to data validation]\n\n" })}\n\n`));
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: fallbackMessage })}\n\n`));
+              
+              // Replace final message with fallback for database storage
+              finalMessage = fallbackMessage;
+            }
+          }
+
+          // 15. Enforce confidence tier disclaimers (backend enforcement)
           // ────────────────────────────────────────────────────────────────
           // If assistant gives numeric conclusions with LOW confidence, append disclaimer
           // ────────────────────────────────────────────────────────────────
-          let finalMessage = fullAssistantMessage.trim();
           let disclaimerAppended = false;
           
           if (finalMessage) {
@@ -1031,7 +1307,7 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // 15. Save messages to database after streaming completes
+          // 16. Save messages to database after streaming completes
           // ────────────────────────────────────────────────────────────────
           // Persist both user and assistant messages for history restoration
           // ────────────────────────────────────────────────────────────────
