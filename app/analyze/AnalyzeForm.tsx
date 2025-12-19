@@ -606,9 +606,9 @@ export default function AnalyzeForm({
                 {/* Check for keyword market snapshot first, then fall back to market_data */}
                 {analysis.market_snapshot ? (
                   <div className="grid grid-cols-2 gap-3">
-                    {/* Card 1: Price Band */}
+                    {/* Card 1: Typical Price */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Price Band</div>
+                      <div className="text-xs text-gray-500 mb-1">Typical Price</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
                           ? formatCurrency(analysis.market_snapshot.avg_price)
@@ -616,7 +616,7 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
-                          ? "Page 1 average selling price"
+                          ? "Most sellers cluster here on Page 1"
                           : "Price data unavailable on Page 1"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
@@ -634,7 +634,7 @@ export default function AnalyzeForm({
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Average reviews on Page 1
+                        What you must compete against
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
@@ -663,14 +663,14 @@ export default function AnalyzeForm({
                           : "Fragmented"}
                       </div>
                     </div>
-                    {/* Card 4: Market Size */}
+                    {/* Card 4: Page 1 Competition */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Market Size</div>
+                      <div className="text-xs text-gray-500 mb-1">Page 1 Competition</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot.total_page1_listings} listings
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Products competing on Page 1
+                        Listings you must beat
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {analysis.market_snapshot.total_page1_listings >= 60
@@ -680,21 +680,17 @@ export default function AnalyzeForm({
                           : "Open"}
                       </div>
                     </div>
-                    {/* Card 5: FBA Fees (est.) */}
+                    {/* Card 5: Amazon Fees (est.) */}
                     {analysis.market_snapshot?.fba_fees && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">FBA Fees (est.)</div>
+                        <div className="text-xs text-gray-500 mb-1">Amazon Fees (est.)</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
                           {analysis.market_snapshot.fba_fees.total_fee !== null && analysis.market_snapshot.fba_fees.total_fee !== undefined
                             ? formatCurrency(analysis.market_snapshot.fba_fees.total_fee)
                             : "—"}
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
-                          {analysis.market_snapshot.fba_fees.source === "sp_api"
-                            ? "Amazon estimate"
-                            : analysis.market_snapshot.fba_fees.source === "estimated"
-                            ? "Model estimate"
-                            : ""}
+                          Typical fulfillment cost
                         </div>
                       </div>
                     )}
@@ -702,40 +698,52 @@ export default function AnalyzeForm({
                 ) : analysis.market_data &&
                   Object.keys(analysis.market_data).length > 0 ? (
                   <div className="grid grid-cols-2 gap-3">
-                    {/* Card 1: Average Price */}
+                    {/* Card 1: Typical Price */}
                     <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Avg Price</div>
-                      <div className="text-lg font-semibold">
+                      <div className="text-xs text-gray-500 mb-1">Typical Price</div>
+                      <div className="text-lg font-semibold mb-0.5">
                         {analysis.market_data.average_price !== undefined
                           ? formatCurrency(analysis.market_data.average_price)
                           : "—"}
                       </div>
+                      <div className="text-xs text-gray-600 mb-1">
+                        Most sellers cluster here on Page 1
+                      </div>
                     </div>
-                    {/* Card 2: Avg Rating */}
+                    {/* Card 2: Quality Expectation */}
                     <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Avg Rating</div>
-                      <div className="text-lg font-semibold">
+                      <div className="text-xs text-gray-500 mb-1">Quality Expectation</div>
+                      <div className="text-lg font-semibold mb-0.5">
                         {analysis.market_data.average_rating !== undefined
                           ? `${analysis.market_data.average_rating.toFixed(1)} ★`
                           : "—"}
                       </div>
+                      <div className="text-xs text-gray-600 mb-1">
+                        Buyer standard on Page 1
+                      </div>
                     </div>
-                    {/* Card 3: Review Count */}
+                    {/* Card 3: Review Barrier */}
                     <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Avg Reviews</div>
-                      <div className="text-lg font-semibold">
+                      <div className="text-xs text-gray-500 mb-1">Review Barrier</div>
+                      <div className="text-lg font-semibold mb-0.5">
                         {analysis.market_data.review_count_avg !== undefined
                           ? analysis.market_data.review_count_avg.toLocaleString()
                           : "—"}
                       </div>
+                      <div className="text-xs text-gray-600 mb-1">
+                        What you must compete against
+                      </div>
                     </div>
-                    {/* Card 4: Competitors */}
+                    {/* Card 4: Page 1 Competition */}
                     <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Competitors</div>
-                      <div className="text-lg font-semibold">
+                      <div className="text-xs text-gray-500 mb-1">Page 1 Competition</div>
+                      <div className="text-lg font-semibold mb-0.5">
                         {analysis.market_data.competitor_count !== undefined
                           ? analysis.market_data.competitor_count
                           : "—"}
+                      </div>
+                      <div className="text-xs text-gray-600 mb-1">
+                        Listings you must beat
                       </div>
                     </div>
                   </div>
