@@ -118,24 +118,35 @@ For margin calculations, use the sourcing_model to infer COGS ranges automatical
   
   // Section 4a: Competitive Pressure Index (CPI) - MUST be cited in strategic answers
   if (marketSnapshot) {
-    const cpi = (marketSnapshot.cpi as {
-      score: number;
-      label: string;
-      breakdown: Record<string, number>;
-    } | null) || null;
-    
-    if (cpi) {
-      contextParts.push(`=== COMPETITIVE PRESSURE INDEX (CPI) ===
+    try {
+      const cpi = (marketSnapshot.cpi as {
+        score?: number;
+        label?: string;
+        breakdown?: Record<string, number>;
+      } | null) || null;
+      
+      if (cpi && typeof cpi === 'object' && cpi !== null && 
+          typeof cpi.score === 'number' && 
+          typeof cpi.label === 'string' && 
+          cpi.breakdown && typeof cpi.breakdown === 'object') {
+        const breakdown = cpi.breakdown;
+        contextParts.push(`=== COMPETITIVE PRESSURE INDEX (CPI) ===
 CPI Score: ${cpi.score} (${cpi.label})
 Breakdown:
-- Review dominance: ${cpi.breakdown.review_dominance} pts
-- Brand concentration: ${cpi.breakdown.brand_concentration} pts
-- Sponsored saturation: ${cpi.breakdown.sponsored_saturation} pts
-- Price compression: ${cpi.breakdown.price_compression} pts
-- Seller fit modifier: ${cpi.breakdown.seller_fit_modifier > 0 ? '+' : ''}${cpi.breakdown.seller_fit_modifier} pts
+- Review dominance: ${breakdown.review_dominance ?? 0} pts
+- Brand concentration: ${breakdown.brand_concentration ?? 0} pts
+- Sponsored saturation: ${breakdown.sponsored_saturation ?? 0} pts
+- Price compression: ${breakdown.price_compression ?? 0} pts
+- Seller fit modifier: ${(breakdown.seller_fit_modifier ?? 0) > 0 ? '+' : ''}${breakdown.seller_fit_modifier ?? 0} pts
 
 CRITICAL: CPI must be cited in every strategic answer. CPI is computed once, cached, immutable. Never recalculate or override CPI.`);
-    } else {
+      } else {
+        contextParts.push(`=== COMPETITIVE PRESSURE INDEX (CPI) ===
+CPI: Not available (insufficient Page 1 data)`);
+      }
+    } catch (error) {
+      // If CPI access fails, just skip it
+      console.error("Error accessing CPI data:", error);
       contextParts.push(`=== COMPETITIVE PRESSURE INDEX (CPI) ===
 CPI: Not available (insufficient Page 1 data)`);
     }
@@ -381,8 +392,18 @@ function canAnswerQuestion(
   ];
   
   if (strategicPatterns.some(p => p.test(normalized))) {
-    const cpi = (marketSnapshot?.cpi as { score: number; label: string } | null) || null;
-    if (!cpi) {
+    try {
+      const cpi = (marketSnapshot?.cpi as { score?: number; label?: string } | null) || null;
+      if (!cpi || typeof cpi !== 'object' || cpi === null || 
+          typeof cpi.score !== 'number' || typeof cpi.label !== 'string') {
+        return {
+          canAnswer: false,
+          missingItems: ["Competitive Pressure Index (CPI) not available"],
+          options: ["Run an analysis to get CPI data", "Ask about specific metrics available in the market snapshot"],
+        };
+      }
+    } catch (error) {
+      // If CPI access fails, refuse to answer
       return {
         canAnswer: false,
         missingItems: ["Competitive Pressure Index (CPI) not available"],
@@ -806,12 +827,18 @@ function buildMarketSnapshotSummary(
   const parts: string[] = [];
   
   // Competitive Pressure (CPI) - MUST be first
-  const cpi = (marketSnapshot.cpi as {
-    score: number;
-    label: string;
-  } | null) || null;
-  if (cpi) {
-    parts.push(`- Competitive Pressure: ${cpi.label} (CPI ${cpi.score})`);
+  try {
+    const cpi = (marketSnapshot.cpi as {
+      score?: number;
+      label?: string;
+    } | null) || null;
+    if (cpi && typeof cpi === 'object' && cpi !== null && 
+        typeof cpi.score === 'number' && typeof cpi.label === 'string') {
+      parts.push(`- Competitive Pressure: ${cpi.label} (CPI ${cpi.score})`);
+    }
+  } catch (error) {
+    // If CPI access fails, skip it
+    console.error("Error accessing CPI in summary:", error);
   }
   
   // Typical Price
