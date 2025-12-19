@@ -135,6 +135,75 @@ Use fba_fees.total_fee if available, otherwise estimate 15-20% of price.`);
   return contextParts.join("\n\n");
 }
 
+/**
+ * Builds Market Snapshot Summary from cached response.market_snapshot data.
+ * NO recomputation - uses only cached values.
+ */
+function buildMarketSnapshotSummary(
+  marketSnapshot: Record<string, unknown> | null
+): string {
+  if (!marketSnapshot) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  
+  // Typical Price
+  const avgPrice = (marketSnapshot.avg_price as number) || null;
+  if (avgPrice !== null) {
+    parts.push(`- Typical Price: $${avgPrice.toFixed(2)}`);
+  }
+  
+  // Review Barrier
+  const avgReviews = (marketSnapshot.avg_reviews as number) || null;
+  if (avgReviews !== null) {
+    parts.push(`- Review Barrier: ${avgReviews.toLocaleString()} reviews`);
+  }
+  
+  // Quality Expectation
+  const avgRating = (marketSnapshot.avg_rating as number) || null;
+  if (avgRating !== null) {
+    parts.push(`- Quality Expectation: ${avgRating.toFixed(1)} rating`);
+  }
+  
+  // Page 1 Competition
+  const totalListings = (marketSnapshot.total_page1_listings as number) || null;
+  if (totalListings !== null && totalListings !== undefined) {
+    parts.push(`- Page 1 Competition: ${totalListings} listings`);
+  }
+  
+  // Paid Competition
+  const sponsoredCount = (marketSnapshot.sponsored_count as number) || null;
+  if (sponsoredCount !== null && sponsoredCount !== undefined) {
+    parts.push(`- Paid Competition: ${sponsoredCount} sponsored`);
+  }
+  
+  // Market Pressure (calculate from cached values only)
+  if (avgReviews !== null && sponsoredCount !== null && totalListings !== null) {
+    const dominanceScore = (marketSnapshot.dominance_score as number) || 0;
+    
+    // Simple calculation using cached values (no recomputation, just transformation)
+    let pressureScore = 0;
+    if (avgReviews >= 5000) pressureScore += 2;
+    else if (avgReviews >= 1000) pressureScore += 1;
+    
+    if (sponsoredCount >= 8) pressureScore += 2;
+    else if (sponsoredCount >= 4) pressureScore += 1;
+    
+    if (dominanceScore >= 40) pressureScore += 2;
+    else if (dominanceScore >= 20) pressureScore += 1;
+    
+    const pressure = pressureScore <= 2 ? "Low" : pressureScore <= 4 ? "Moderate" : "High";
+    parts.push(`- Market Pressure: ${pressure}`);
+  }
+  
+  if (parts.length === 0) {
+    return "";
+  }
+  
+  return `MARKET SNAPSHOT SUMMARY:\n${parts.join("\n")}`;
+}
+
 export async function POST(req: NextRequest) {
   // Create response object for cookie handling
   const res = new NextResponse();
@@ -267,7 +336,12 @@ export async function POST(req: NextRequest) {
       analysisRun.input_value
     );
 
-    // 8. Build message array for OpenAI
+    // 8. Build Market Snapshot Summary (from cached response.market_snapshot only)
+    const marketSnapshotSummary = buildMarketSnapshotSummary(
+      (analysisResponse.market_snapshot as Record<string, unknown>) || null
+    );
+
+    // 9. Build message array for OpenAI
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       // System prompt: Contains all rules and constraints + COGS assumptions
       { role: "system", content: CHAT_SYSTEM_PROMPT + cogsAssumptions },
@@ -276,7 +350,15 @@ export async function POST(req: NextRequest) {
       { role: "assistant", content: "I understand. I have the analysis context and will only reason over the provided data. I will not invent numbers, estimate sales or PPC, or reference data not provided. How can I help you explore this analysis?" },
     ];
 
-    // 9. Append conversation history from database
+    // 10. Inject Market Snapshot Summary ABOVE conversation history (if available)
+    if (marketSnapshotSummary) {
+      messages.push({
+        role: "user",
+        content: marketSnapshotSummary,
+      });
+    }
+
+    // 11. Append conversation history from database
     if (priorMessages && priorMessages.length > 0) {
       for (const msg of priorMessages) {
         if (msg.role === "user" || msg.role === "assistant") {
@@ -285,10 +367,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 10. Append the new user message
+    // 12. Append the new user message
     messages.push({ role: "user", content: body.message });
 
-    // 11. Call OpenAI with streaming enabled
+    // 13. Call OpenAI with streaming enabled
     // ────────────────────────────────────────────────────────────────────────
     // IMPORTANT: This call does NOT trigger any external data fetching.
     // The AI can ONLY use data injected via the context message above.
@@ -377,7 +459,7 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // 13. Save messages to database after streaming completes
+          // 14. Save messages to database after streaming completes
           // ────────────────────────────────────────────────────────────────
           // Persist both user and assistant messages for history restoration
           // ────────────────────────────────────────────────────────────────
