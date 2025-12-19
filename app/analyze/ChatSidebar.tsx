@@ -129,9 +129,18 @@ export default function ChatSidebar({
   }, [analysisRunId, initialMessages]);
 
   // Auto-scroll to bottom when new messages arrive or streaming updates
+  // Scrolls the messages container, not the page (prevents page from scrolling)
   useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    if (messagesContainerRef.current) {
+      // Use requestAnimationFrame to ensure DOM has updated
+      requestAnimationFrame(() => {
+        if (messagesContainerRef.current) {
+          const container = messagesContainerRef.current;
+          // Always scroll to bottom during streaming or when new messages arrive
+          // This keeps the chat viewport fixed while content scrolls internally
+          container.scrollTop = container.scrollHeight;
+        }
+      });
     }
   }, [messages, streamingContent, isLoading]);
 
@@ -266,6 +275,7 @@ export default function ChatSidebar({
       <div
         ref={messagesContainerRef}
         className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50"
+        style={{ minHeight: 0 }}
       >
         {isDisabled ? (
           /* Pre-analysis: Show capabilities */
