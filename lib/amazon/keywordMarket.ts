@@ -10,7 +10,7 @@
  * - If data cannot be computed, omit it (do NOT fake it)
  */
 
-interface ParsedListing {
+export interface ParsedListing {
   asin: string | null;
   title: string | null;
   price: number | null;

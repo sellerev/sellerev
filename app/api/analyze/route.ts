@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { fetchKeywordMarketSnapshot, KeywordMarketData } from "@/lib/amazon/keywordMarket";
+import { pickRepresentativeAsin } from "@/lib/amazon/representativeAsin";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 import { getFbaFeesEstimateForAsin } from "@/lib/spapi/fees";
 
@@ -366,29 +367,6 @@ function validateRequestBody(body: any): body is AnalyzeRequestBody {
   );
 }
 
-/**
- * Pick a representative ASIN from keyword market listings
- * Prefers non-sponsored listings with valid ASIN and price
- */
-function pickRepresentativeAsin(keywordMarketData: KeywordMarketData | null): string | null {
-  if (!keywordMarketData || !keywordMarketData.listings || keywordMarketData.listings.length === 0) {
-    return null;
-  }
-
-  // Prefer non-sponsored listings with ASIN and price
-  const candidates = keywordMarketData.listings.filter(
-    (listing) => listing.asin && listing.price !== null && !listing.is_sponsored
-  );
-
-  if (candidates.length > 0) {
-    // Return first valid candidate
-    return candidates[0].asin!;
-  }
-
-  // Fallback: any listing with ASIN
-  const anyWithAsin = keywordMarketData.listings.find((listing) => listing.asin);
-  return anyWithAsin?.asin || null;
-}
 
 function validateDecisionContract(data: any): data is DecisionContract {
   if (typeof data !== "object" || data === null) {
@@ -935,7 +913,7 @@ ${body.input_value}`;
         decisionJson.market_snapshot.representative_asin = asin;
       } else if (body.input_type === "idea" && keywordMarketData && marketSnapshot) {
         // Keyword analysis: pick representative ASIN and use avg price
-        const representativeAsin = pickRepresentativeAsin(keywordMarketData);
+        const representativeAsin = pickRepresentativeAsin(keywordMarketData.listings);
         const priceUsed = marketSnapshot.avg_price || 25.0; // Use avg price or fallback
 
         if (representativeAsin) {
