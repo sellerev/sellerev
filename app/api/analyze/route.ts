@@ -4,8 +4,6 @@ import { fetchKeywordMarketSnapshot, KeywordMarketData } from "@/lib/amazon/keyw
 import { pickRepresentativeAsin } from "@/lib/amazon/representativeAsin";
 import { calculateCPI } from "@/lib/amazon/competitivePressureIndex";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
-import { getFbaFeesEstimateForAsin } from "@/lib/spapi/fees";
-import { getCachedFee, setCachedFee } from "@/lib/spapi/feeCache";
 import { resolveFbaFees } from "@/lib/spapi/resolveFbaFees";
 import { calculateMarginSnapshot } from "@/lib/margins/calculateMarginSnapshot";
 
@@ -979,28 +977,32 @@ ${body.input_value}`;
         const priceUsed = marketSnapshot.avg_price || 25.0; // Use avg price or fallback
 
         if (representativeAsin) {
-          // Check cache first
-          let feeEstimate = await getCachedFee(marketplaceId, representativeAsin, priceUsed);
-          
-          if (!feeEstimate) {
-            // Cache miss - call SP-API
-            feeEstimate = await getFbaFeesEstimateForAsin({
-              asin: representativeAsin,
-              price: priceUsed,
-            });
-            
-            // Cache the result (best effort, don't wait)
-            setCachedFee(marketplaceId, representativeAsin, priceUsed, feeEstimate).catch(() => {
-              // Silently fail - caching is best effort
-            });
-          }
+          // Use cache-first resolver (same as ASIN analysis)
+          const fbaFeesResult = await resolveFbaFees(representativeAsin, priceUsed);
 
           // Ensure market_snapshot exists (should already exist from step 12)
           if (!decisionJson.market_snapshot) {
             decisionJson.market_snapshot = marketSnapshot;
           }
           
-          decisionJson.market_snapshot.fba_fees = feeEstimate;
+          // Inject into decision JSON with new structure (same as ASIN analysis)
+          if (fbaFeesResult) {
+            decisionJson.market_snapshot.fba_fees = {
+              fulfillment_fee: fbaFeesResult.fulfillment_fee,
+              referral_fee: fbaFeesResult.referral_fee,
+              total_fba_fees: fbaFeesResult.total_fba_fees,
+              source: "amazon",
+            };
+          } else {
+            // Fallback: set estimated fees structure
+            decisionJson.market_snapshot.fba_fees = {
+              fulfillment_fee: null,
+              referral_fee: null,
+              total_fba_fees: null,
+              source: "estimated",
+            };
+          }
+          
           decisionJson.market_snapshot.representative_asin = representativeAsin;
         } else {
           // No representative ASIN found - set estimated fees
@@ -1008,10 +1010,10 @@ ${body.input_value}`;
             decisionJson.market_snapshot = marketSnapshot;
           }
           decisionJson.market_snapshot.fba_fees = {
-            total_fee: null,
+            fulfillment_fee: null,
+            referral_fee: null,
+            total_fba_fees: null,
             source: "estimated",
-            asin_used: "",
-            price_used: priceUsed,
           };
           decisionJson.market_snapshot.representative_asin = null;
         }
