@@ -960,33 +960,33 @@ export async function POST(req: NextRequest) {
       .eq("analysis_run_id", body.analysisRunId)
       .order("created_at", { ascending: true });
 
-    // 6. Compute COGS assumptions for margin calculations
+    // 6. Compute COGS assumptions for margin calculations (chat layer only)
     // ─────────────────────────────────────────────────────────────────────
     const analysisResponse = analysisRun.response as Record<string, unknown>;
     let marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
     const avgPrice = (marketSnapshot?.avg_price as number) || null;
     const category = (marketSnapshot?.category as string) || null;
     
-    let cogsAssumptions: string = "";
+    let cogsAssumption: string = "";
     if (avgPrice !== null && avgPrice > 0 && sellerProfile.sourcing_model) {
       try {
         const cogsEstimate = estimateCogsRange({
-          sourcing_model: sellerProfile.sourcing_model as any,
+          price: avgPrice,
           category: category,
-          avg_price: avgPrice,
+          sourcing_model: sellerProfile.sourcing_model as any,
         });
         
         const estimatedRange = `$${cogsEstimate.low.toFixed(2)}–$${cogsEstimate.high.toFixed(2)}`;
-        const percentRange = `${cogsEstimate.percent_range[0]}–${cogsEstimate.percent_range[1]}%`;
         const confidenceLabel = cogsEstimate.confidence === "low" ? "Low confidence" 
           : cogsEstimate.confidence === "medium" ? "Medium confidence" 
           : "High confidence";
         
-        cogsAssumptions = `\n\nCOGS_ASSUMPTIONS:\n{
+        cogsAssumption = `\n\nCOGS_ASSUMPTION:\n{
   estimated_range: "${estimatedRange}",
-  percent_range: "${percentRange}",
   confidence: "${confidenceLabel}",
-  basis: "Typical sellers using ${sellerProfile.sourcing_model} sourcing model"
+  rationale: "${cogsEstimate.rationale}",
+  sourcing_model: "${sellerProfile.sourcing_model}",
+  category: "${category || "not specified"}"
 }`;
       } catch (error) {
         // Fail silently - COGS assumptions are optional
@@ -1106,8 +1106,8 @@ export async function POST(req: NextRequest) {
       : "";
 
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-      // System prompt: Contains all rules and constraints + COGS assumptions
-      { role: "system", content: CHAT_SYSTEM_PROMPT + cogsAssumptions },
+      // System prompt: Contains all rules and constraints + COGS assumption
+      { role: "system", content: CHAT_SYSTEM_PROMPT + cogsAssumption },
       // Context injection: Provides grounded data (no hallucination possible)
       { role: "user", content: `[CONTEXT FOR THIS CONVERSATION]\n\n${contextMessage}${validationContext}` },
       { role: "assistant", content: "I understand. I have the analysis context and will only reason over the provided data. I will not invent numbers, estimate sales or PPC, or reference data not provided. How can I help you explore this analysis?" },
