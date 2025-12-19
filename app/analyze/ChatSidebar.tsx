@@ -29,6 +29,13 @@ export interface ChatMessage {
   isStreaming?: boolean;
 }
 
+interface MarketSnapshot {
+  avg_reviews: number | null;
+  sponsored_count: number;
+  dominance_score: number;
+  total_page1_listings: number;
+}
+
 interface ChatSidebarProps {
   /** The analysis run ID to anchor chat to. If null, chat is disabled. */
   analysisRunId: string | null;
@@ -36,19 +43,81 @@ interface ChatSidebarProps {
   initialMessages?: ChatMessage[];
   /** Callback when messages change (for parent state sync) */
   onMessagesChange?: (messages: ChatMessage[]) => void;
+  /** Market snapshot data for dynamic question chips */
+  marketSnapshot?: MarketSnapshot | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SUGGESTED FOLLOW-UP QUESTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SUGGESTED_QUESTIONS = [
-  "Help me calculate potential margins",
-  "What would change this verdict?",
-  "Compare to the top competitor",
-  "Explain the main risks in detail",
-  "What differentiation strategies could work?",
-];
+/**
+ * Calculate Market Pressure from snapshot data (same logic as AnalyzeForm)
+ */
+function calculateMarketPressure(
+  avgReviews: number | null,
+  sponsoredCount: number,
+  dominanceScore: number
+): "Low" | "Moderate" | "High" {
+  let pressureScore = 0;
+
+  if (avgReviews !== null && avgReviews !== undefined) {
+    if (avgReviews >= 5000) pressureScore += 2;
+    else if (avgReviews >= 1000) pressureScore += 1;
+  }
+
+  if (sponsoredCount >= 8) pressureScore += 2;
+  else if (sponsoredCount >= 4) pressureScore += 1;
+
+  if (dominanceScore >= 40) pressureScore += 2;
+  else if (dominanceScore >= 20) pressureScore += 1;
+
+  if (pressureScore <= 2) return "Low";
+  if (pressureScore <= 4) return "Moderate";
+  return "High";
+}
+
+/**
+ * Get suggested questions based on Market Pressure
+ */
+function getSuggestedQuestions(marketSnapshot: MarketSnapshot | null): string[] {
+  if (!marketSnapshot) {
+    // Default questions if no snapshot
+    return [
+      "Can I beat this review barrier?",
+      "Where do margins break here?",
+      "Is PPC required in this market?",
+      "What would differentiation need to look like?",
+      "What price do I need to win?",
+    ];
+  }
+
+  const pressure = calculateMarketPressure(
+    marketSnapshot.avg_reviews,
+    marketSnapshot.sponsored_count,
+    marketSnapshot.dominance_score
+  );
+
+  if (pressure === "High") {
+    // High pressure → risk & margin chips
+    return [
+      "Can I beat this review barrier?",
+      "Where do margins break here?",
+      "Is PPC required in this market?",
+      "What would differentiation need to look like?",
+      "What price do I need to win?",
+    ];
+  } else {
+    // Low/Moderate pressure → opportunity chips
+    return [
+      "Where do margins break here?",
+      "What price do I need to win?",
+      "What would differentiation need to look like?",
+      "Can I beat this review barrier?",
+      "Is PPC required in this market?",
+    ];
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TRUST INDICATOR CHIPS
@@ -99,6 +168,7 @@ export default function ChatSidebar({
   analysisRunId,
   initialMessages = [],
   onMessagesChange,
+  marketSnapshot = null,
 }: ChatSidebarProps) {
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
@@ -311,7 +381,7 @@ export default function ChatSidebar({
             <p className="text-xs text-gray-500 text-center mb-4">
               Suggested questions:
             </p>
-            {SUGGESTED_QUESTIONS.map((question, idx) => (
+            {getSuggestedQuestions(marketSnapshot).map((question, idx) => (
               <button
                 key={idx}
                 className="w-full text-left text-sm p-3 bg-white border rounded-lg hover:bg-gray-50 hover:border-gray-300 transition-colors text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"

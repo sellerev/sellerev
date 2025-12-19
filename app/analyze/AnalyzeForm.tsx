@@ -1081,6 +1081,7 @@ export default function AnalyzeForm({
           analysisRunId={analysis?.analysis_run_id || null}
           initialMessages={chatMessages}
           onMessagesChange={setChatMessages}
+          marketSnapshot={analysis?.market_snapshot || null}
         />
       </div>
     </div>
