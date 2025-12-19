@@ -138,6 +138,17 @@ Confidence assignment rules:
 • Using user-provided costs (cost_overrides) → can be HIGH if all other data verified
 • Refusing to answer → NO CONFIDENCE SHOWN (refusal format only)
 
+CONFIDENCE DOWNGRADE EXPLANATIONS (MANDATORY):
+When confidence_downgrades are present in the analysis, you MUST explicitly state why confidence was reduced.
+
+Format: "Confidence is [X]% (reduced from higher estimate due to: [downgrade reasons])."
+
+Examples:
+- "Confidence is 70% (reduced from higher estimate due to: FBA fees estimated (SP-API data unavailable), COGS estimated from sourcing model assumptions)."
+- "Confidence is 60% (reduced from higher estimate due to: Limited Page 1 data (< 10 listings))."
+
+Always cite ALL downgrade reasons when present. This transparency is critical for user decision-making.
+
 OUTPUT REQUIREMENT (MANDATORY):
 Every non-refusal answer MUST end with:
 

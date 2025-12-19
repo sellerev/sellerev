@@ -321,6 +321,7 @@ interface DecisionContract {
     verdict: "GO" | "CAUTION" | "NO_GO";
     confidence: number;
   };
+  confidence_downgrades?: string[]; // Reasons why confidence was reduced
   executive_summary: string;
   reasoning: {
     primary_factors: string[];
@@ -900,12 +901,31 @@ ${body.input_value}`;
     // 11. Extract verdict and confidence for analytics
     const verdict = decisionJson.decision.verdict;
     let confidence = decisionJson.decision.confidence;
+    const confidenceDowngrades: string[] = [];
 
-    // Cap confidence at 55 if keyword analysis has no market data
-    if (body.input_type === "idea" && !marketSnapshot && confidence > 55) {
-      confidence = 55;
-      decisionJson.decision.confidence = 55;
+    // Apply initial confidence downgrade rules
+    // Rule 1: Keyword searches always start at max 75%
+    if (body.input_type === "idea" && confidence > 75) {
+      confidence = 75;
+      confidenceDowngrades.push("Keyword searches capped at 75% maximum confidence");
     }
+
+    // Rule 4: Sparse page-1 data → downgrade
+    if (body.input_type === "idea" && marketSnapshot) {
+      const totalListings = marketSnapshot.total_page1_listings || 0;
+      if (totalListings < 5) {
+        confidence = Math.min(confidence, 40);
+        confidenceDowngrades.push("Sparse Page 1 data (< 5 listings)");
+      } else if (totalListings < 10) {
+        confidence = Math.min(confidence, 60);
+        if (!confidenceDowngrades.some(d => d.includes("Limited") || d.includes("Sparse"))) {
+          confidenceDowngrades.push("Limited Page 1 data (< 10 listings)");
+        }
+      }
+    }
+
+    // Store initial downgrades (will be updated after FBA fees and margin snapshot are calculated)
+    decisionJson.decision.confidence = Math.round(confidence);
 
     // 12. Store market data in response for keyword analyses
     if (body.input_type === "idea" && keywordMarketData) {
@@ -1093,6 +1113,49 @@ ${body.input_value}`;
         decisionJson.market_snapshot = {};
       }
       (decisionJson.market_snapshot as any).margin_snapshot = marginSnapshot;
+    }
+
+    // 12c. Apply final confidence downgrades (after FBA fees and margin snapshot are calculated)
+    // Rule 2: Missing SP-API fees → downgrade
+    const fbaFees = decisionJson.market_snapshot?.fba_fees;
+    let hasSpApiFees = false;
+    
+    if (fbaFees && typeof fbaFees === 'object' && fbaFees !== null) {
+      // Check for new structure with source field
+      if ('source' in fbaFees) {
+        hasSpApiFees = fbaFees.source === "amazon" || fbaFees.source === "sp_api";
+      }
+    }
+    
+    if (!hasSpApiFees && body.input_type === "asin") {
+      // For ASIN analyses, missing SP-API fees is a significant downgrade
+      confidence = Math.min(confidence, 70);
+      if (!confidenceDowngrades.some(d => d.includes("FBA fees"))) {
+        confidenceDowngrades.push("FBA fees estimated (SP-API data unavailable)");
+      }
+    } else if (!hasSpApiFees && body.input_type === "idea") {
+      // For keyword analyses, estimated fees are expected but still downgrade slightly
+      confidence = Math.min(confidence, Math.round(confidence * 0.95));
+      if (!confidenceDowngrades.some(d => d.includes("fees"))) {
+        confidenceDowngrades.push("FBA fees estimated (not from SP-API)");
+      }
+    }
+
+    // Rule 3: Estimated COGS → downgrade
+    const marginSnapshotFinal = decisionJson.market_snapshot?.margin_snapshot;
+    if (marginSnapshotFinal && marginSnapshotFinal.source === "assumption_engine") {
+      confidence = Math.min(confidence, 75);
+      if (!confidenceDowngrades.some(d => d.includes("COGS"))) {
+        confidenceDowngrades.push("COGS estimated from sourcing model assumptions");
+      }
+    }
+
+    // Apply final downgraded confidence
+    decisionJson.decision.confidence = Math.round(confidence);
+    
+    // Store downgrade reasons for chat explanations
+    if (confidenceDowngrades.length > 0) {
+      decisionJson.confidence_downgrades = confidenceDowngrades;
     }
 
     // 12a. Ensure numbers_used is populated from market snapshot if available

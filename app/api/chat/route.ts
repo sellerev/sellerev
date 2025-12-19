@@ -71,13 +71,18 @@ function buildContextMessage(
   const contextParts: string[] = [];
 
   // Section 1: Original Analysis (marked as AUTHORITATIVE to prevent silent overrides)
+  const confidenceDowngrades = (analysisResponse.confidence_downgrades as string[] | undefined) || [];
+  const confidenceDowngradeText = confidenceDowngrades.length > 0
+    ? `\n\nConfidence Downgrades:\n${confidenceDowngrades.map((reason, idx) => `- ${reason}`).join("\n")}`
+    : "";
+  
   contextParts.push(`=== ORIGINAL ANALYSIS (AUTHORITATIVE) ===
 This analysis anchors this conversation. Do not contradict without explicit explanation.
 
 Input: ${inputType.toUpperCase()} - ${inputValue}
 
 Verdict: ${(analysisResponse.decision as { verdict: string })?.verdict || "UNKNOWN"}
-Confidence: ${(analysisResponse.decision as { confidence: number })?.confidence || "N/A"}%
+Confidence: ${(analysisResponse.decision as { confidence: number })?.confidence || "N/A"}%${confidenceDowngradeText}
 
 Executive Summary:
 ${analysisResponse.executive_summary || "Not available"}

@@ -42,6 +42,7 @@ interface AnalysisResponse {
     verdict: "GO" | "CAUTION" | "NO_GO";
     confidence: number;
   };
+  confidence_downgrades?: string[]; // Reasons why confidence was reduced
   executive_summary: string;
   reasoning: {
     primary_factors: string[];
@@ -742,8 +743,26 @@ export default function AnalyzeForm({
                       {analysis.decision.confidence}%
                     </span>
                     <span className="text-gray-500 ml-2">confidence</span>
+                    {analysis.confidence_downgrades && analysis.confidence_downgrades.length > 0 && (
+                      <div className="mt-1">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                          Reduced confidence
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
+                {/* Confidence downgrade explanations */}
+                {analysis.confidence_downgrades && analysis.confidence_downgrades.length > 0 && (
+                  <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                    <div className="font-medium mb-1">Confidence reduced due to:</div>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      {analysis.confidence_downgrades.map((reason, idx) => (
+                        <li key={idx}>{reason}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {/* One-line interpretation */}
                 <p className={`text-sm font-medium ${getVerdictStyles(analysis.decision.verdict).text}`}>
                   {analysis.decision.verdict === "GO" &&
