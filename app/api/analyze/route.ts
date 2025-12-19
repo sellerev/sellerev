@@ -6,6 +6,7 @@ import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 import { getFbaFeesEstimateForAsin } from "@/lib/spapi/fees";
 import { getCachedFee, setCachedFee } from "@/lib/spapi/feeCache";
 import { resolveFbaFees } from "@/lib/spapi/resolveFbaFees";
+import { calculateMarginSnapshot } from "@/lib/margins/calculateMarginSnapshot";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -986,6 +987,83 @@ ${body.input_value}`;
           };
         }
       }
+    }
+
+    // 12c. Calculate and inject margin snapshot (always present for ASIN and keyword)
+    try {
+      // Ensure market_snapshot exists
+      if (!decisionJson.market_snapshot) {
+        decisionJson.market_snapshot = {};
+      }
+
+      // Extract avg_price (required for margin calculation)
+      // For keyword: use marketSnapshot.avg_price
+      // For ASIN: may not have avg_price, use default or try to extract from market_data
+      let avgPrice: number | null = null;
+      
+      if (body.input_type === "idea" && marketSnapshot?.avg_price) {
+        avgPrice = marketSnapshot.avg_price;
+      } else if (body.input_type === "asin") {
+        // For ASIN, check market_snapshot first, then market_data, then default
+        const snapshotPrice = (decisionJson.market_snapshot as any)?.avg_price;
+        if (snapshotPrice !== null && typeof snapshotPrice === 'number' && snapshotPrice > 0) {
+          avgPrice = snapshotPrice;
+        } else {
+          // Check market_data (from ASIN analysis)
+          const marketDataPrice = (decisionJson.market_data as any)?.average_price;
+          if (marketDataPrice !== null && typeof marketDataPrice === 'number' && marketDataPrice > 0) {
+            avgPrice = marketDataPrice;
+          }
+        }
+      }
+
+      // Use default if no price found
+      if (avgPrice === null || avgPrice <= 0) {
+        avgPrice = 25.0; // Default fallback
+      }
+
+      // Extract FBA fees (may be new structure or legacy structure)
+      const fbaFeesData = (decisionJson.market_snapshot as any).fba_fees;
+      let fbaFeesValue: number | null = null;
+
+      if (fbaFeesData && typeof fbaFeesData === 'object' && !Array.isArray(fbaFeesData) && fbaFeesData !== null) {
+        // Check for new structure (from resolveFbaFees)
+        if ('total_fba_fees' in fbaFeesData && fbaFeesData.total_fba_fees !== null) {
+          fbaFeesValue = parseFloat(fbaFeesData.total_fba_fees);
+        } else if ('total_fee' in fbaFeesData && fbaFeesData.total_fee !== null) {
+          // Legacy structure
+          fbaFeesValue = parseFloat(fbaFeesData.total_fee);
+        }
+      }
+
+      // Calculate margin snapshot
+      const marginSnapshot = calculateMarginSnapshot({
+        avg_price: avgPrice,
+        sourcing_model: sellerProfile.sourcing_model as any,
+        category_hint: null, // Category hint not available in current data flow
+        fba_fees: fbaFeesValue,
+      });
+
+      // Inject into decision JSON
+      (decisionJson.market_snapshot as any).margin_snapshot = marginSnapshot;
+    } catch (error) {
+      // Never throw - ensure margin_snapshot is always present
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      console.error("Margin snapshot calculation error:", errorMessage);
+
+      // Create safe default margin snapshot
+      const defaultPrice = 25.0;
+      const marginSnapshot = calculateMarginSnapshot({
+        avg_price: defaultPrice,
+        sourcing_model: sellerProfile.sourcing_model as any,
+        category_hint: null,
+        fba_fees: null,
+      });
+      
+      if (!decisionJson.market_snapshot) {
+        decisionJson.market_snapshot = {};
+      }
+      (decisionJson.market_snapshot as any).margin_snapshot = marginSnapshot;
     }
 
     // 12a. Ensure numbers_used is populated from market snapshot if available
