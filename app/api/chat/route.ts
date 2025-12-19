@@ -1000,11 +1000,42 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // 14. Save messages to database after streaming completes
+          // 14. Enforce confidence tier disclaimers (backend enforcement)
+          // ────────────────────────────────────────────────────────────────
+          // If assistant gives numeric conclusions with LOW confidence, append disclaimer
+          // ────────────────────────────────────────────────────────────────
+          let finalMessage = fullAssistantMessage.trim();
+          let disclaimerAppended = false;
+          
+          if (finalMessage) {
+            // Check if message contains numeric conclusions (dollar amounts, percentages, margins)
+            const hasNumericConclusions = /\$\d+|\d+%|margin|profit|breakeven/i.test(finalMessage);
+            
+            // Check if confidence level is LOW
+            const hasLowConfidence = /confidence level:\s*low/i.test(finalMessage);
+            
+            // Check if it's NOT a refusal response
+            const isNotRefusal = !finalMessage.includes("I don't have enough verified data");
+            
+            // If LOW confidence + numeric conclusions + not refusal → append disclaimer
+            if (hasLowConfidence && hasNumericConclusions && isNotRefusal) {
+              // Check if disclaimer already present
+              if (!finalMessage.includes("directional only") && !finalMessage.includes("capital decisions")) {
+                const disclaimer = "\n\nThis estimate is directional only and should not be used for capital decisions.";
+                finalMessage += disclaimer;
+                disclaimerAppended = true;
+                
+                // Send disclaimer to client as additional content chunk
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: disclaimer })}\n\n`));
+              }
+            }
+          }
+
+          // 15. Save messages to database after streaming completes
           // ────────────────────────────────────────────────────────────────
           // Persist both user and assistant messages for history restoration
           // ────────────────────────────────────────────────────────────────
-          if (fullAssistantMessage.trim()) {
+          if (finalMessage) {
             try {
               await supabase.from("analysis_messages").insert([
                 {
@@ -1017,7 +1048,7 @@ export async function POST(req: NextRequest) {
                   analysis_run_id: body.analysisRunId,
                   user_id: user.id,
                   role: "assistant",
-                  content: fullAssistantMessage,
+                  content: finalMessage,
                 },
               ]);
             } catch (saveError) {
