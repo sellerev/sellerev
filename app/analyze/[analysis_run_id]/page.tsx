@@ -123,3 +123,4 @@ export default async function AnalysisDetailPage({ params }: AnalysisDetailPageP
     />
   );
 }
+

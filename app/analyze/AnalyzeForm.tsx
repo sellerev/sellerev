@@ -192,6 +192,8 @@ export default function AnalyzeForm({
       // UI shows "Keyword" but API expects "idea"
       const apiInputType = inputType === "keyword" ? "idea" : "asin";
 
+      console.log("ANALYZE_REQUEST_START", { apiInputType, inputValue: inputValue.trim() });
+
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -202,14 +204,64 @@ export default function AnalyzeForm({
       });
 
       const data = await res.json();
+      console.log("ANALYZE_RESPONSE", { 
+        status: res.status, 
+        ok: res.ok, 
+        success: data.success, 
+        has_analysisRunId: !!data.analysisRunId,
+        has_decision: !!data.decision,
+        error: data.error 
+      });
 
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error || "Analysis failed");
+      if (!res.ok || !data.success) {
+        const errorMsg = data.error || "Analysis failed";
+        console.error("ANALYZE_ERROR", { error: errorMsg, data });
+        setError(errorMsg);
+        setLoading(false);
+        return;
       }
 
-      setAnalysis(data.data);
+      if (!data.analysisRunId) {
+        console.error("ANALYZE_MISSING_RUN_ID", { data });
+        setError("Analysis completed but no run ID returned");
+        setLoading(false);
+        return;
+      }
+
+      if (!data.decision) {
+        console.error("ANALYZE_MISSING_DECISION", { data });
+        setError("Analysis completed but no decision data returned");
+        setLoading(false);
+        return;
+      }
+
+      // Transform response to match AnalysisResponse interface
+      // data.decision already contains: decision, executive_summary, reasoning, risks, recommended_actions, assumptions_and_limits, numbers_used, market_snapshot
+      const analysisData: AnalysisResponse = {
+        analysis_run_id: data.analysisRunId,
+        created_at: new Date().toISOString(),
+        input_type: inputType,
+        input_value: inputValue.trim(),
+        decision: data.decision.decision,
+        executive_summary: data.decision.executive_summary,
+        reasoning: data.decision.reasoning,
+        risks: data.decision.risks,
+        recommended_actions: data.decision.recommended_actions,
+        assumptions_and_limits: data.decision.assumptions_and_limits,
+        market_snapshot_json: data.decision.market_snapshot,
+        market_data: data.decision.market_data,
+      };
+
+      console.log("ANALYZE_SUCCESS", { 
+        analysisRunId: data.analysisRunId,
+        has_analysis: !!analysisData 
+      });
+
+      setAnalysis(analysisData);
+      setError(null);
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Analysis failed";
+      console.error("ANALYZE_EXCEPTION", { error: errorMessage, exception: e });
       setError(errorMessage);
     } finally {
       setLoading(false);

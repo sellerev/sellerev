@@ -79,3 +79,4 @@ export function shouldIncrementUsage(userEmail: string | null | undefined): bool
   // Do NOT increment for development or admin users
   return !shouldBypassLimits(userEmail);
 }
+

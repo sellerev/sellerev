@@ -510,7 +510,7 @@ export async function POST(req: NextRequest) {
 
     if (authError || !user) {
       return NextResponse.json(
-        { ok: false, error: "Unauthorized" },
+        { success: false, error: "Unauthorized" },
         { status: 401, headers: res.headers }
       );
     }
@@ -527,7 +527,7 @@ export async function POST(req: NextRequest) {
 
     if (profileError || !sellerProfile) {
       return NextResponse.json(
-        { ok: false, error: "Onboarding incomplete" },
+        { success: false, error: "Onboarding incomplete" },
         { status: 403, headers: res.headers }
       );
     }
@@ -560,7 +560,7 @@ export async function POST(req: NextRequest) {
         if (createError) {
           return NextResponse.json(
             {
-              ok: false,
+              success: false,
               error: "Failed to initialize usage counter",
               details: createError.message,
             },
@@ -591,7 +591,7 @@ export async function POST(req: NextRequest) {
           if (resetError) {
             return NextResponse.json(
               {
-                ok: false,
+                success: false,
                 error: "Failed to reset usage counter",
                 details: resetError.message,
               },
@@ -618,7 +618,7 @@ export async function POST(req: NextRequest) {
       if (!usageCheck.allowed) {
         return NextResponse.json(
           {
-            ok: false,
+            success: false,
             error: "Usage limit reached. Upgrade to continue analyzing products.",
           },
           { status: 429, headers: res.headers }
@@ -632,7 +632,7 @@ export async function POST(req: NextRequest) {
       body = await req.json();
     } catch {
       return NextResponse.json(
-        { ok: false, error: "Invalid JSON in request body" },
+        { success: false, error: "Invalid JSON in request body" },
         { status: 400, headers: res.headers }
       );
     }
@@ -640,7 +640,7 @@ export async function POST(req: NextRequest) {
     if (!validateRequestBody(body)) {
       return NextResponse.json(
         {
-          ok: false,
+          success: false,
           error:
             "Invalid request body. Expected { input_type: 'asin' | 'idea', input_value: string }",
         },
@@ -672,7 +672,7 @@ export async function POST(req: NextRequest) {
       if (!keywordMarketData || !keywordMarketData.snapshot || keywordMarketData.snapshot.total_listings === 0) {
         return NextResponse.json(
           {
-            ok: false,
+            success: false,
             error: "No market data available for this keyword",
           },
           { status: 422, headers: res.headers }
@@ -774,7 +774,7 @@ KEYWORD ANALYSIS RULES:
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) {
       return NextResponse.json(
-        { ok: false, error: "OpenAI API key not configured" },
+        { success: false, error: "OpenAI API key not configured" },
         { status: 500, headers: res.headers }
       );
     }
@@ -812,7 +812,7 @@ ${body.input_value}`;
       const errorData = await openaiResponse.text();
       return NextResponse.json(
         {
-          ok: false,
+          success: false,
           error: `OpenAI API error: ${openaiResponse.statusText}`,
           details: errorData,
         },
@@ -827,7 +827,7 @@ ${body.input_value}`;
 
     if (!content) {
       return NextResponse.json(
-        { ok: false, error: "No content in OpenAI response" },
+        { success: false, error: "No content in OpenAI response" },
         { status: 500, headers: res.headers }
       );
     }
@@ -845,7 +845,7 @@ ${body.input_value}`;
     } catch (parseError) {
       return NextResponse.json(
         {
-          ok: false,
+          success: false,
           error: "OpenAI returned invalid JSON",
           details: content.substring(0, 200),
         },
@@ -857,7 +857,7 @@ ${body.input_value}`;
     if (!validateDecisionContract(decisionJson)) {
       return NextResponse.json(
         {
-          ok: false,
+          success: false,
           error: "OpenAI output does not match decision contract. Missing required keys or invalid structure.",
           received_keys: Object.keys(decisionJson),
           required_keys: REQUIRED_DECISION_KEYS,
@@ -934,6 +934,12 @@ ${body.input_value}`;
     }
 
     // 13. Save to analysis_runs
+    console.log("BEFORE_INSERT", {
+      user_id: user.id,
+      input_type: body.input_type,
+      has_decision: !!decisionJson.decision,
+    });
+
     const { data: insertedRun, error: insertError } = await supabase
       .from("analysis_runs")
       .insert({
@@ -951,12 +957,22 @@ ${body.input_value}`;
       .single();
 
     if (insertError) {
-      console.error("ANALYSIS_RUN_INSERT_ERROR", insertError);
+      console.error("ANALYSIS_RUN_INSERT_ERROR", {
+        error: insertError,
+        message: insertError?.message,
+        details: insertError?.details,
+        hint: insertError?.hint,
+        code: insertError?.code,
+      });
       return NextResponse.json(
-        { error: "Failed to save analysis run" },
+        { success: false, error: "Failed to save analysis run" },
         { status: 500, headers: res.headers }
       );
     }
+
+    console.log("AFTER_INSERT_SUCCESS", {
+      analysis_run_id: insertedRun.id,
+    });
 
     // 13. Increment usage counter (only after successful AI analysis, and only if not bypassing)
     if (shouldIncrementUsage(userEmail)) {
@@ -974,9 +990,14 @@ ${body.input_value}`;
     }
 
     // 14. Return success response
+    console.log("RETURNING_SUCCESS", {
+      analysisRunId: insertedRun.id,
+      has_decision: !!decisionJson,
+    });
     return NextResponse.json(
       {
-        analysis_run_id: insertedRun.id,
+        success: true,
+        analysisRunId: insertedRun.id,
         decision: decisionJson,
       },
       { status: 200, headers: res.headers }
@@ -985,7 +1006,7 @@ ${body.input_value}`;
     console.error("ANALYZE_ERROR", err);
     return NextResponse.json(
       {
-        ok: false,
+        success: false,
         error: "Internal analyze error",
         details: err instanceof Error ? err.message : String(err),
       },

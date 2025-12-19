@@ -202,3 +202,4 @@ export default function HistoryGrid({ runs }: HistoryGridProps) {
     </div>
   );
 }
+

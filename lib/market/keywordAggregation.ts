@@ -123,3 +123,4 @@ export function aggregateKeywordMarketData(
     avg_rating: Math.round(avgRating * 10) / 10, // Round to 1 decimal
   };
 }
+
