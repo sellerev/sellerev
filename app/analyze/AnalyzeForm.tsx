@@ -309,6 +309,32 @@ export default function AnalyzeForm({
     normalizeAnalysis(initialAnalysis)
   );
 
+  // Handler for margin snapshot updates from chat
+  const handleMarginSnapshotUpdate = (updatedSnapshot: {
+    selling_price: number;
+    cogs_assumed_low: number;
+    cogs_assumed_high: number;
+    fba_fees: number | null;
+    net_margin_low_pct: number;
+    net_margin_high_pct: number;
+    breakeven_price_low: number;
+    breakeven_price_high: number;
+    confidence: "estimated" | "refined";
+    source: "assumption_engine" | "amazon_fees";
+  }) => {
+    setAnalysis((prev) => {
+      if (!prev || !prev.market_snapshot) return prev;
+      
+      return {
+        ...prev,
+        market_snapshot: {
+          ...prev.market_snapshot,
+          margin_snapshot: updatedSnapshot,
+        },
+      };
+    });
+  };
+
   // Chat messages state (synced with ChatSidebar)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(initialMessages);
 
@@ -908,9 +934,16 @@ export default function AnalyzeForm({
               {/* ─────────────────────────────────────────────────────────── */}
               {analysis.market_snapshot?.margin_snapshot && (
                 <div className="bg-white border rounded-xl p-6 shadow-sm">
-                  <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                    Margin Snapshot (Estimated)
-                  </h2>
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      Margin Snapshot {analysis.market_snapshot.margin_snapshot.confidence === "refined" ? "(Refined)" : "(Estimated)"}
+                    </h2>
+                    {analysis.market_snapshot.margin_snapshot.confidence === "refined" && (
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                        Refined
+                      </span>
+                    )}
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     {/* Assumed selling price */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">

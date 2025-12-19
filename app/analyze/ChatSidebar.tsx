@@ -36,6 +36,19 @@ interface MarketSnapshot {
   total_page1_listings: number;
 }
 
+interface MarginSnapshot {
+  selling_price: number;
+  cogs_assumed_low: number;
+  cogs_assumed_high: number;
+  fba_fees: number | null;
+  net_margin_low_pct: number;
+  net_margin_high_pct: number;
+  breakeven_price_low: number;
+  breakeven_price_high: number;
+  confidence: "estimated" | "refined";
+  source: "assumption_engine" | "amazon_fees";
+}
+
 interface ChatSidebarProps {
   /** The analysis run ID to anchor chat to. If null, chat is disabled. */
   analysisRunId: string | null;
@@ -45,6 +58,8 @@ interface ChatSidebarProps {
   onMessagesChange?: (messages: ChatMessage[]) => void;
   /** Market snapshot data for dynamic question chips */
   marketSnapshot?: MarketSnapshot | null;
+  /** Callback when margin snapshot is updated from chat */
+  onMarginSnapshotUpdate?: (snapshot: MarginSnapshot) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,6 +184,7 @@ export default function ChatSidebar({
   initialMessages = [],
   onMessagesChange,
   marketSnapshot = null,
+  onMarginSnapshotUpdate,
 }: ChatSidebarProps) {
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
@@ -275,6 +291,16 @@ export default function ChatSidebar({
           if (line.startsWith("data: ")) {
             try {
               const json = JSON.parse(line.slice(6));
+              
+              // Handle metadata (e.g., cost override updates)
+              if (json.metadata && json.metadata.type === "cost_override_applied") {
+                const { margin_snapshot } = json.metadata;
+                if (margin_snapshot && onMarginSnapshotUpdate) {
+                  onMarginSnapshotUpdate(margin_snapshot);
+                }
+              }
+              
+              // Handle content chunks
               if (json.content) {
                 accumulatedContent += json.content;
                 setStreamingContent(accumulatedContent);
@@ -310,7 +336,7 @@ export default function ChatSidebar({
       // Focus input after send
       inputRef.current?.focus();
     }
-  }, [analysisRunId, input]);
+  }, [analysisRunId, input, onMarginSnapshotUpdate]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey && !isLoading && input.trim() && analysisRunId) {

@@ -234,11 +234,16 @@ This margin snapshot is pre-calculated. Always reference it first when answering
  * - "fees: $10"
  * 
  * @param message - User message text
- * @returns Cost overrides object with cogs and/or fba_fees, or null if not detected
+ * @param sellingPrice - Current selling price for validation
+ * @returns Cost overrides object with cogs and/or fba_fees, or null if not detected or invalid
  */
-function detectCostOverrides(message: string): {
+function detectCostOverrides(
+  message: string,
+  sellingPrice?: number | null
+): {
   cogs: number | null;
   fba_fees: number | null;
+  validationError?: string;
 } | null {
   const normalized = message.toLowerCase().trim();
   let cogs: number | null = null;
@@ -295,7 +300,42 @@ function detectCostOverrides(message: string): {
     }
   }
 
-  // Only return if at least one value was detected
+  // Validation guardrails
+  if (cogs !== null) {
+    if (cogs <= 0) {
+      return {
+        cogs: null,
+        fba_fees: fbaFees,
+        validationError: "COGS must be greater than zero. Please provide a valid cost.",
+      };
+    }
+    if (sellingPrice !== null && sellingPrice !== undefined && cogs >= sellingPrice) {
+      return {
+        cogs: null,
+        fba_fees: fbaFees,
+        validationError: `COGS ($${cogs.toFixed(2)}) cannot be greater than or equal to the selling price ($${sellingPrice.toFixed(2)}). Please provide a valid cost.`,
+      };
+    }
+  }
+
+  if (fbaFees !== null) {
+    if (fbaFees <= 0) {
+      return {
+        cogs,
+        fba_fees: null,
+        validationError: "FBA fees must be greater than zero. Please provide a valid fee amount.",
+      };
+    }
+    if (sellingPrice !== null && sellingPrice !== undefined && fbaFees >= sellingPrice) {
+      return {
+        cogs,
+        fba_fees: null,
+        validationError: `FBA fees ($${fbaFees.toFixed(2)}) cannot be greater than or equal to the selling price ($${sellingPrice.toFixed(2)}). Please provide a valid fee amount.`,
+      };
+    }
+  }
+
+  // Only return if at least one value was detected and validated
   if (cogs !== null || fbaFees !== null) {
     return { cogs, fba_fees: fbaFees };
   }
@@ -494,22 +534,31 @@ export async function POST(req: NextRequest) {
     // - "FBA fees are $9.80"
     // - "Use $20 cost and $8 fees"
     // ────────────────────────────────────────────────────────────────────────
-    const costOverrides = detectCostOverrides(body.message);
+    const sellingPrice = (marketSnapshot?.avg_price as number) || 
+      ((analysisResponse.market_snapshot as Record<string, unknown>)?.margin_snapshot as MarginSnapshot)?.selling_price || 
+      null;
+    const costOverrides = detectCostOverrides(body.message, sellingPrice);
     let refinedMarginSnapshot: MarginSnapshot | null = null; // Store for response
+    let costOverrideError: string | null = null; // Store validation error
     
     if (costOverrides) {
-      // Update analysis_run.response.cost_overrides
-      // IMPORTANT: Override applies ONLY to this analysis_run (via .eq("id", body.analysisRunId))
-      const currentResponse = analysisResponse as Record<string, unknown>;
-      const updatedResponse = {
-        ...currentResponse,
-        cost_overrides: {
-          cogs: costOverrides.cogs,
-          fba_fees: costOverrides.fba_fees,
-          last_updated: new Date().toISOString(),
-          source: "user" as const,
-        },
-      };
+      // Check for validation errors
+      if (costOverrides.validationError) {
+        costOverrideError = costOverrides.validationError;
+        // Don't process invalid overrides - let AI explain the error
+      } else {
+        // Update analysis_run.response.cost_overrides
+        // IMPORTANT: Override applies ONLY to this analysis_run (via .eq("id", body.analysisRunId))
+        const currentResponse = analysisResponse as Record<string, unknown>;
+        const updatedResponse = {
+          ...currentResponse,
+          cost_overrides: {
+            cogs: costOverrides.cogs,
+            fba_fees: costOverrides.fba_fees,
+            last_updated: new Date().toISOString(),
+            source: "user" as const,
+          },
+        };
 
       // Recalculate margin snapshot using overrides
       const defaultMarginSnapshot = (
@@ -548,6 +597,7 @@ export async function POST(req: NextRequest) {
         // Also update marketSnapshot reference
         marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
       }
+      }
     }
 
     // 8. Build grounded context message
@@ -573,11 +623,16 @@ export async function POST(req: NextRequest) {
     );
 
     // 9. Build message array for OpenAI
+    // If cost override validation failed, inject error message for AI to explain
+    const validationContext = costOverrideError 
+      ? `\n\nIMPORTANT: The user attempted to provide cost overrides, but validation failed:\n${costOverrideError}\n\nYou must explain why the input is invalid and do NOT save or process the override. Be helpful and suggest valid ranges.`
+      : "";
+
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       // System prompt: Contains all rules and constraints + COGS assumptions
       { role: "system", content: CHAT_SYSTEM_PROMPT + cogsAssumptions },
       // Context injection: Provides grounded data (no hallucination possible)
-      { role: "user", content: `[CONTEXT FOR THIS CONVERSATION]\n\n${contextMessage}` },
+      { role: "user", content: `[CONTEXT FOR THIS CONVERSATION]\n\n${contextMessage}${validationContext}` },
       { role: "assistant", content: "I understand. I have the analysis context and will only reason over the provided data. I will not invent numbers, estimate sales or PPC, or reference data not provided. How can I help you explore this analysis?" },
     ];
 
