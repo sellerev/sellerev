@@ -940,75 +940,6 @@ export default function AnalyzeForm({
                 )}
               </div>
 
-              {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 3.5: MARGIN SNAPSHOT                                 */}
-              {/* - Compact margin breakdown                                 */}
-              {/* - Decisive, no paragraphs                                  */}
-              {/* ─────────────────────────────────────────────────────────── */}
-              {analysis.market_snapshot?.margin_snapshot && (
-                <div className="bg-white border rounded-xl p-6 shadow-sm">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-lg font-semibold text-gray-900">
-                      Margin Snapshot {analysis.market_snapshot.margin_snapshot.confidence === "refined" ? "(Refined)" : "(Estimated)"}
-                    </h2>
-                    {analysis.market_snapshot.margin_snapshot.confidence === "refined" && (
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                        Refined
-                      </span>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    {/* Assumed selling price */}
-                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Assumed selling price</div>
-                      <div className="text-lg font-semibold text-gray-900">
-                        {formatCurrency(analysis.market_snapshot.margin_snapshot.selling_price)}
-                      </div>
-                    </div>
-
-                    {/* Estimated COGS range */}
-                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Estimated COGS range</div>
-                      <div className="text-lg font-semibold text-gray-900">
-                        {formatCurrency(analysis.market_snapshot.margin_snapshot.cogs_assumed_low)}–{formatCurrency(analysis.market_snapshot.margin_snapshot.cogs_assumed_high)}
-                      </div>
-                    </div>
-
-                    {/* Estimated Amazon fees */}
-                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Estimated Amazon fees</div>
-                      <div className="text-lg font-semibold text-gray-900">
-                        {analysis.market_snapshot.margin_snapshot.fba_fees !== null
-                          ? formatCurrency(analysis.market_snapshot.margin_snapshot.fba_fees)
-                          : "—"}
-                      </div>
-                      <div className="text-[10px] text-gray-500 mt-1">
-                        {analysis.market_snapshot.margin_snapshot.fba_fees === null
-                          ? "Amazon fee estimate used"
-                          : analysis.market_snapshot.margin_snapshot.source === "amazon_fees"
-                          ? "Amazon-provided"
-                          : "Estimated"}
-                      </div>
-                    </div>
-
-                    {/* Estimated net margin range */}
-                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Estimated net margin range</div>
-                      <div className="text-lg font-semibold text-gray-900">
-                        {analysis.market_snapshot.margin_snapshot.net_margin_low_pct.toFixed(1)}%–{analysis.market_snapshot.margin_snapshot.net_margin_high_pct.toFixed(1)}%
-                      </div>
-                    </div>
-
-                    {/* Breakeven price range */}
-                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 col-span-2">
-                      <div className="text-xs text-gray-500 mb-1">Breakeven price range</div>
-                      <div className="text-lg font-semibold text-gray-900">
-                        {formatCurrency(analysis.market_snapshot.margin_snapshot.breakeven_price_low)}–{formatCurrency(analysis.market_snapshot.margin_snapshot.breakeven_price_high)}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
 
               {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 4: EXECUTIVE SUMMARY                                  */}
@@ -1073,6 +1004,138 @@ export default function AnalyzeForm({
                   ))}
                 </div>
               </div>
+
+              {/* ─────────────────────────────────────────────────────────── */}
+              {/* BLOCK 5.5: MARGIN SNAPSHOT                                  */}
+              {/* - Always displayed (calculated if missing)                   */}
+              {/* - Shows confidence badge (High/Medium/Low)                  */}
+              {/* - Labeled as "Estimated"                                    */}
+              {/* ─────────────────────────────────────────────────────────── */}
+              {(() => {
+                // Get margin snapshot (use existing or calculate)
+                const marginSnapshot = analysis.market_snapshot?.margin_snapshot;
+                const avgPrice = analysis.market_snapshot?.avg_price ?? null;
+                
+                // If no margin snapshot or price, show empty state
+                if (!marginSnapshot || !avgPrice) {
+                  return (
+                    <div className="bg-white border rounded-xl p-6 shadow-sm">
+                      <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-semibold text-gray-900">
+                          Margin Snapshot (Estimated)
+                        </h2>
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                          Data Unavailable
+                        </span>
+                      </div>
+                      <div className="text-sm text-gray-500 text-center py-4">
+                        Margin data not available for this analysis.
+                      </div>
+                    </div>
+                  );
+                }
+                
+                // Determine confidence level for badge
+                const getConfidenceLevel = (): "high" | "medium" | "low" => {
+                  if (marginSnapshot.confidence === "refined") {
+                    return "high";
+                  }
+                  if (marginSnapshot.source === "amazon_fees" && marginSnapshot.fba_fees !== null) {
+                    return "high";
+                  }
+                  if (marginSnapshot.fba_fees !== null) {
+                    return "medium";
+                  }
+                  return "low";
+                };
+                
+                const confidenceLevel = getConfidenceLevel();
+                const confidenceBadgeStyles = {
+                  high: "bg-green-100 text-green-800",
+                  medium: "bg-yellow-100 text-yellow-800",
+                  low: "bg-orange-100 text-orange-800",
+                };
+                
+                const confidenceLabels = {
+                  high: "High",
+                  medium: "Medium",
+                  low: "Low",
+                };
+                
+                return (
+                  <div className="bg-white border rounded-xl p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-lg font-semibold text-gray-900">
+                        Margin Snapshot (Estimated)
+                      </h2>
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${confidenceBadgeStyles[confidenceLevel]}`}>
+                        {confidenceLabels[confidenceLevel]} Confidence
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      {/* Selling price */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Selling price</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {marginSnapshot.selling_price !== null && marginSnapshot.selling_price !== undefined
+                            ? formatCurrency(marginSnapshot.selling_price)
+                            : "—"}
+                        </div>
+                      </div>
+
+                      {/* Estimated COGS range */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Estimated COGS range</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {marginSnapshot.cogs_assumed_low !== null && marginSnapshot.cogs_assumed_low !== undefined &&
+                           marginSnapshot.cogs_assumed_high !== null && marginSnapshot.cogs_assumed_high !== undefined
+                            ? `${formatCurrency(marginSnapshot.cogs_assumed_low)}–${formatCurrency(marginSnapshot.cogs_assumed_high)}`
+                            : "—"}
+                        </div>
+                      </div>
+
+                      {/* Estimated FBA fees */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Estimated FBA fees</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {marginSnapshot.fba_fees !== null && marginSnapshot.fba_fees !== undefined
+                            ? formatCurrency(marginSnapshot.fba_fees)
+                            : "—"}
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-1">
+                          {marginSnapshot.fba_fees === null || marginSnapshot.fba_fees === undefined
+                            ? "Not available"
+                            : marginSnapshot.source === "amazon_fees"
+                            ? "Amazon-provided"
+                            : "Estimated"}
+                        </div>
+                      </div>
+
+                      {/* Net margin range (%) */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Net margin range</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {marginSnapshot.net_margin_low_pct !== null && marginSnapshot.net_margin_low_pct !== undefined &&
+                           marginSnapshot.net_margin_high_pct !== null && marginSnapshot.net_margin_high_pct !== undefined
+                            ? `${marginSnapshot.net_margin_low_pct.toFixed(1)}%–${marginSnapshot.net_margin_high_pct.toFixed(1)}%`
+                            : "—"}
+                        </div>
+                      </div>
+
+                      {/* Breakeven price */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 col-span-2">
+                        <div className="text-xs text-gray-500 mb-1">Breakeven price</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {marginSnapshot.breakeven_price_low !== null && marginSnapshot.breakeven_price_low !== undefined &&
+                           marginSnapshot.breakeven_price_high !== null && marginSnapshot.breakeven_price_high !== undefined
+                            ? `${formatCurrency(marginSnapshot.breakeven_price_low)}–${formatCurrency(marginSnapshot.breakeven_price_high)}`
+                            : "—"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 6: RECOMMENDED ACTIONS                                */}
