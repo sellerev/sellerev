@@ -152,12 +152,13 @@ CPI: Not available (insufficient Page 1 data)`);
     }
   }
   
-  if (marketSnapshot) {
+  if (marketSnapshot && typeof marketSnapshot === 'object') {
     const avgPrice = (marketSnapshot.avg_price as number) || null;
+    const representativeAsin = (marketSnapshot.representative_asin as string) || "Not available";
     
     contextParts.push(`=== MARKET SNAPSHOT (FOR MARGIN CALCULATIONS) ===
 Average Page 1 Price: ${avgPrice !== null ? `$${avgPrice.toFixed(2)}` : "Not available"}
-Representative ASIN: ${marketSnapshot.representative_asin || "Not available"}
+Representative ASIN: ${representativeAsin}
 
 Use avg_price as the selling price for margin calculations.`);
   }
@@ -165,7 +166,7 @@ Use avg_price as the selling price for margin calculations.`);
   // Section 5: FBA Fees (new structure from resolveFbaFees or legacy structure)
   contextParts.push(`=== FBA FEES (ESTIMATED) ===`);
   
-  if (marketSnapshot) {
+  if (marketSnapshot && typeof marketSnapshot === 'object') {
     const fbaFees = marketSnapshot.fba_fees as any;
     
     if (fbaFees && typeof fbaFees === 'object' && !Array.isArray(fbaFees) && fbaFees !== null) {
@@ -224,11 +225,11 @@ ${isAmazonProvided ? "These fees are Amazon-provided (from SP-API)." : "These fe
 
   // Section 6: Margin Snapshot (calculated from COGS assumptions and FBA fees)
   // May include user-refined costs if cost_overrides exist
-  if (marketSnapshot) {
+  if (marketSnapshot && typeof marketSnapshot === 'object') {
     const marginSnapshot = (marketSnapshot.margin_snapshot as Record<string, unknown>) || null;
     if (marginSnapshot) {
       const confidence = (marginSnapshot.confidence as string) || "estimated";
-      const costOverrides = (response.cost_overrides as Record<string, unknown>) || null;
+      const costOverrides = (analysisResponse.cost_overrides as Record<string, unknown>) || null;
       
       let overrideNote = "";
       if (costOverrides && confidence === "refined") {
@@ -1075,18 +1076,28 @@ export async function POST(req: NextRequest) {
     // - "Verdict does not change automatically"
     // - "Explain what would need to change for verdict to change"
     // ─────────────────────────────────────────────────────────────────────
-    const contextMessage = buildContextMessage(
-      analysisResponse,
-      analysisRun.rainforest_data as Record<string, unknown> | null,
-      sellerProfile,
-      analysisRun.input_type,
-      analysisRun.input_value
-    );
+    let contextMessage: string;
+    let marketSnapshotSummary: string;
+    
+    try {
+      contextMessage = buildContextMessage(
+        analysisResponse,
+        analysisRun.rainforest_data as Record<string, unknown> | null,
+        sellerProfile,
+        analysisRun.input_type,
+        analysisRun.input_value
+      );
 
-    // 9. Build Market Snapshot Summary (from cached response.market_snapshot only)
-    const marketSnapshotSummary = buildMarketSnapshotSummary(
-      (analysisResponse.market_snapshot as Record<string, unknown>) || null
-    );
+      // 9. Build Market Snapshot Summary (from cached response.market_snapshot only)
+      marketSnapshotSummary = buildMarketSnapshotSummary(
+        (analysisResponse.market_snapshot as Record<string, unknown>) || null
+      );
+    } catch (error) {
+      console.error("Error building context message:", error);
+      // Fallback to minimal context
+      contextMessage = `Analysis for ${analysisRun.input_type}: ${analysisRun.input_value}`;
+      marketSnapshotSummary = "";
+    }
 
     // 9. Build message array for OpenAI
     // If cost override validation failed, inject error message for AI to explain
