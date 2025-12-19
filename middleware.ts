@@ -37,17 +37,17 @@ export async function middleware(req: NextRequest) {
   if (user) {
     const { data: profile } = await supabase
       .from("seller_profiles")
-      .select("id")
+      .select("id, sourcing_model")
       .eq("id", user.id)
       .single();
 
-    // No profile yet → force onboarding
-    if (!profile && !isOnboarding) {
+    // No profile yet OR missing sourcing_model → force onboarding
+    if ((!profile || !profile.sourcing_model) && !isOnboarding) {
       return NextResponse.redirect(new URL("/onboarding", req.url));
     }
 
-    // Profile exists → block auth + onboarding
-    if (profile && (isAuth || isOnboarding)) {
+    // Profile exists with sourcing_model → block auth + onboarding
+    if (profile && profile.sourcing_model && (isAuth || isOnboarding)) {
       return NextResponse.redirect(new URL("/dashboard", req.url));
     }
   }

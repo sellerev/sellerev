@@ -60,6 +60,7 @@ function buildContextMessage(
     stage: string;
     experience_months: number | null;
     monthly_revenue_range: string | null;
+    sourcing_model: string;
   },
   inputType: string,
   inputValue: string
@@ -171,7 +172,7 @@ export async function POST(req: NextRequest) {
     // 4. Fetch seller profile snapshot
     const { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
-      .select("stage, experience_months, monthly_revenue_range")
+      .select("stage, experience_months, monthly_revenue_range, sourcing_model")
       .eq("id", user.id)
       .single();
 

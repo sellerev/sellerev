@@ -521,7 +521,7 @@ export async function POST(req: NextRequest) {
     // 3. Gate: Require seller profile (onboarding must be complete)
     const { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
-      .select("stage, experience_months, monthly_revenue_range")
+      .select("stage, experience_months, monthly_revenue_range, sourcing_model")
       .eq("id", user.id)
       .single();
 

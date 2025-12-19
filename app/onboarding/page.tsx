@@ -19,6 +19,14 @@ const REVENUE_OPTIONS = [
   { label: "$100k+ / month", value: "$100k+" },
 ];
 
+const SOURCING_MODEL_OPTIONS = [
+  { label: "Private Label (manufactured / Alibaba)", value: "private_label" },
+  { label: "Wholesale / Arbitrage", value: "wholesale_arbitrage" },
+  { label: "Retail Arbitrage", value: "retail_arbitrage" },
+  { label: "Dropshipping", value: "dropshipping" },
+  { label: "Not sure yet", value: "not_sure" },
+];
+
 export default function OnboardingPage() {
   const supabase = supabaseBrowser;
   const router = useRouter();
@@ -26,6 +34,7 @@ export default function OnboardingPage() {
   const [stage, setStage] = useState("");
   const [experienceMonths, setExperienceMonths] = useState<number | "">("");
   const [revenueRange, setRevenueRange] = useState("");
+  const [sourcingModel, setSourcingModel] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -73,6 +82,7 @@ export default function OnboardingPage() {
             stage,
             experience_months: experienceMonths === "" ? null : Number(experienceMonths),
             monthly_revenue_range: revenueRange || null,
+            sourcing_model: sourcingModel || null,
           },
           { onConflict: "id" }
         );
@@ -165,9 +175,28 @@ export default function OnboardingPage() {
           </select>
         </div>
 
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            How do you source products?
+          </label>
+          <select
+            className="border rounded p-2 w-full"
+            value={sourcingModel}
+            onChange={(e) => setSourcingModel(e.target.value)}
+            disabled={loading}
+          >
+            <option value="">Select sourcing model</option>
+            {SOURCING_MODEL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <button
           className="bg-black text-white rounded p-2 w-full disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled={loading || !stage || !revenueRange}
+          disabled={loading || !stage || !revenueRange || !sourcingModel}
           onClick={submit}
         >
           {loading ? "Saving..." : "Continue"}
