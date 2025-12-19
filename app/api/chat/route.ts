@@ -105,8 +105,31 @@ You must explicitly state this limitation if the user asks about market metrics.
 Stage: ${sellerProfile.stage}
 Experience: ${sellerProfile.experience_months !== null ? `${sellerProfile.experience_months} months` : "Not specified"}
 Revenue Range: ${sellerProfile.monthly_revenue_range || "Not specified"}
+Sourcing Model: ${sellerProfile.sourcing_model || "not_sure"}
 
-Use this context to tailor your advice. A new seller receives different guidance than a scaling seller.`);
+Use this context to tailor your advice. A new seller receives different guidance than a scaling seller.
+For margin calculations, use the sourcing_model to infer COGS ranges automatically.`);
+
+  // Section 4: Market Snapshot (includes FBA fees and pricing data for margin calculations)
+  const marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
+  if (marketSnapshot) {
+    const avgPrice = (marketSnapshot.avg_price as number) || null;
+    const fbaFees = (marketSnapshot.fba_fees as {
+      total_fee: number | null;
+      source: "sp_api" | "estimated";
+      asin_used: string;
+      price_used: number;
+    }) || null;
+    
+    contextParts.push(`=== MARKET SNAPSHOT (FOR MARGIN CALCULATIONS) ===
+Average Page 1 Price: ${avgPrice !== null ? `$${avgPrice.toFixed(2)}` : "Not available"}
+FBA Fees Estimate: ${fbaFees && fbaFees.total_fee !== null ? `$${fbaFees.total_fee.toFixed(2)}` : "Not available"}
+FBA Fees Source: ${fbaFees ? fbaFees.source : "Not available"}
+Representative ASIN: ${marketSnapshot.representative_asin || "Not available"}
+
+Use avg_price as the selling price for margin calculations.
+Use fba_fees.total_fee if available, otherwise estimate 15-20% of price.`);
+  }
 
   return contextParts.join("\n\n");
 }
