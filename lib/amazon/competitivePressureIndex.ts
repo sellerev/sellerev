@@ -8,7 +8,7 @@
  * - Cached (computed from stored data)
  * - Reproducible (same inputs = same output)
  * - Explainable (clear formula)
- * - Seller-context aware (considers seller stage/experience)
+ * - Seller-context aware (considers seller stage)
  * - NOT an AI opinion (pure calculation)
  * 
  * CPI RANGES:
@@ -16,6 +16,14 @@
  * - 31-60: Moderate pressure
  * - 61-80: High pressure
  * - 81-100: Extreme / brand-locked
+ * 
+ * CPI COMPONENTS (DETERMINISTIC):
+ * A. Review Dominance Score (0-30)
+ * B. Brand Concentration Score (0-25)
+ * C. Sponsored Saturation Score (0-20)
+ * D. Price Compression Score (0-15)
+ * E. Seller Fit Modifier (-10 to +10)
+ * Total: 0-100
  */
 
 import { ParsedListing } from "./keywordMarket";
@@ -31,12 +39,12 @@ interface CPIContext {
 interface CPICalculation {
   cpi: number; // 0-100
   components: {
-    reviewBarrierScore: number; // 0-40 points
-    sponsoredCompetitionScore: number; // 0-25 points
-    brandDominanceScore: number; // 0-20 points
-    listingDensityScore: number; // 0-15 points
+    reviewDominanceScore: number; // 0-30 points
+    brandConcentrationScore: number; // 0-25 points
+    sponsoredSaturationScore: number; // 0-20 points
+    priceCompressionScore: number; // 0-15 points
+    sellerFitModifier: number; // -10 to +10 points
   };
-  sellerContextModifier: number; // Multiplier based on seller experience
   explanation: string;
 }
 
@@ -54,56 +62,43 @@ export function calculateCPI(context: CPIContext): CPICalculation {
     return {
       cpi: 0,
       components: {
-        reviewBarrierScore: 0,
-        sponsoredCompetitionScore: 0,
-        brandDominanceScore: 0,
-        listingDensityScore: 0,
+        reviewDominanceScore: 0,
+        brandConcentrationScore: 0,
+        sponsoredSaturationScore: 0,
+        priceCompressionScore: 0,
+        sellerFitModifier: 0,
       },
-      sellerContextModifier: 1.0,
       explanation: "No Page 1 listings available",
     };
   }
 
-  // Component 1: Review Barrier Score (0-40 points)
-  // Higher average reviews = higher pressure
-  const listingsWithReviews = listings.filter(l => l.reviews !== null && l.reviews > 0);
-  const avgReviews = listingsWithReviews.length > 0
-    ? listingsWithReviews.reduce((sum, l) => sum + (l.reviews ?? 0), 0) / listingsWithReviews.length
-    : 0;
+  // Component A: Review Dominance Score (0-30 points)
+  // top3_reviews = sum reviews of top 3 listings
+  // page1_reviews = sum reviews of all page-1 listings
+  // review_dominance = top3_reviews / page1_reviews
+  const listingsWithReviews = listings
+    .filter(l => l.reviews !== null && l.reviews !== undefined && l.reviews > 0)
+    .map(l => ({ ...l, reviews: l.reviews ?? 0 }));
   
-  let reviewBarrierScore = 0;
-  if (avgReviews >= 10000) {
-    reviewBarrierScore = 40; // Extreme barrier
-  } else if (avgReviews >= 5000) {
-    reviewBarrierScore = 30; // High barrier
-  } else if (avgReviews >= 2000) {
-    reviewBarrierScore = 20; // Moderate barrier
-  } else if (avgReviews >= 500) {
-    reviewBarrierScore = 10; // Low barrier
-  } else {
-    reviewBarrierScore = 0; // Minimal barrier
+  const sortedByReviews = [...listingsWithReviews].sort((a, b) => (b.reviews ?? 0) - (a.reviews ?? 0));
+  const top3Reviews = sortedByReviews.slice(0, 3).reduce((sum, l) => sum + (l.reviews ?? 0), 0);
+  const page1Reviews = listingsWithReviews.reduce((sum, l) => sum + (l.reviews ?? 0), 0);
+  
+  const reviewDominance = page1Reviews > 0 ? top3Reviews / page1Reviews : 0;
+  
+  let reviewDominanceScore = 0;
+  if (reviewDominance > 0.55) {
+    reviewDominanceScore = 30;
+  } else if (reviewDominance >= 0.40) {
+    reviewDominanceScore = 22;
+  } else if (reviewDominance >= 0.25) {
+    reviewDominanceScore = 14;
+  } else if (reviewDominance > 0) {
+    reviewDominanceScore = 6;
   }
 
-  // Component 2: Sponsored Competition Score (0-25 points)
-  // More sponsored listings = higher pressure (indicates paid competition)
-  const sponsoredCount = listings.filter(l => l.is_sponsored).length;
-  const sponsoredPercentage = (sponsoredCount / listings.length) * 100;
-  
-  let sponsoredCompetitionScore = 0;
-  if (sponsoredPercentage >= 50) {
-    sponsoredCompetitionScore = 25; // Extreme paid competition
-  } else if (sponsoredPercentage >= 30) {
-    sponsoredCompetitionScore = 18; // High paid competition
-  } else if (sponsoredPercentage >= 15) {
-    sponsoredCompetitionScore = 12; // Moderate paid competition
-  } else if (sponsoredPercentage >= 5) {
-    sponsoredCompetitionScore = 6; // Low paid competition
-  } else {
-    sponsoredCompetitionScore = 0; // Minimal paid competition
-  }
-
-  // Component 3: Brand Dominance Score (0-20 points)
-  // Higher brand concentration = harder to break in
+  // Component B: Brand Concentration Score (0-25 points)
+  // Top brand's share of Page 1 listings
   const brandCounts: Record<string, number> = {};
   listings.forEach(l => {
     if (l.brand) {
@@ -115,96 +110,128 @@ export function calculateCPI(context: CPIContext): CPICalculation {
     .map(([brand, count]) => ({ brand, count }))
     .sort((a, b) => b.count - a.count);
   
-  const topBrandDominance = topBrands.length > 0 && listings.length > 0
+  const brandConcentration = topBrands.length > 0 && listings.length > 0
     ? (topBrands[0].count / listings.length) * 100
     : 0;
   
-  let brandDominanceScore = 0;
-  if (topBrandDominance >= 60) {
-    brandDominanceScore = 20; // Extreme dominance (brand-locked)
-  } else if (topBrandDominance >= 40) {
-    brandDominanceScore = 15; // High dominance
-  } else if (topBrandDominance >= 25) {
-    brandDominanceScore = 10; // Moderate dominance
-  } else if (topBrandDominance >= 15) {
-    brandDominanceScore = 5; // Low dominance
-  } else {
-    brandDominanceScore = 0; // Minimal dominance
+  let brandConcentrationScore = 0;
+  if (brandConcentration >= 40) {
+    brandConcentrationScore = 25;
+  } else if (brandConcentration >= 25) {
+    brandConcentrationScore = 18;
+  } else if (brandConcentration >= 15) {
+    brandConcentrationScore = 10;
+  } else if (brandConcentration > 0) {
+    brandConcentrationScore = 4;
   }
 
-  // Component 4: Listing Density Score (0-15 points)
-  // More listings on Page 1 = more competition
-  const totalListings = listings.length;
+  // Component C: Sponsored Saturation Score (0-20 points)
+  // sponsored_ratio = sponsored_listings / page1_listings
+  const sponsoredCount = listings.filter(l => l.is_sponsored).length;
+  const sponsoredRatio = listings.length > 0 ? sponsoredCount / listings.length : 0;
+  const sponsoredPercentage = sponsoredRatio * 100;
   
-  let listingDensityScore = 0;
-  if (totalListings >= 40) {
-    listingDensityScore = 15; // Very crowded
-  } else if (totalListings >= 25) {
-    listingDensityScore = 10; // Crowded
-  } else if (totalListings >= 15) {
-    listingDensityScore = 6; // Moderate density
-  } else if (totalListings >= 8) {
-    listingDensityScore = 3; // Low density
-  } else {
-    listingDensityScore = 0; // Minimal density
+  let sponsoredSaturationScore = 0;
+  if (sponsoredPercentage >= 50) {
+    sponsoredSaturationScore = 20;
+  } else if (sponsoredPercentage >= 30) {
+    sponsoredSaturationScore = 14;
+  } else if (sponsoredPercentage >= 15) {
+    sponsoredSaturationScore = 8;
+  } else if (sponsoredPercentage > 0) {
+    sponsoredSaturationScore = 3;
   }
 
-  // Calculate base CPI (0-100)
-  const baseCPI = reviewBarrierScore + sponsoredCompetitionScore + brandDominanceScore + listingDensityScore;
-
-  // Seller Context Modifier
-  // New sellers face higher effective pressure (multiplier > 1.0)
-  // Experienced sellers face lower effective pressure (multiplier < 1.0)
-  let sellerContextModifier = 1.0;
+  // Component D: Price Compression Score (0-15 points)
+  // price_range = (p90 - p10) / avg_price
+  const listingsWithPrice = listings
+    .filter(l => l.price !== null && l.price !== undefined && l.price > 0)
+    .map(l => l.price!);
   
+  let priceCompressionScore = 0;
+  if (listingsWithPrice.length >= 10) {
+    // Need at least 10 prices to calculate p10 and p90
+    const sortedPrices = [...listingsWithPrice].sort((a, b) => a - b);
+    const p10Index = Math.floor(sortedPrices.length * 0.1);
+    const p90Index = Math.floor(sortedPrices.length * 0.9);
+    const p10 = sortedPrices[p10Index];
+    const p90 = sortedPrices[p90Index];
+    const avgPrice = listingsWithPrice.reduce((sum, p) => sum + p, 0) / listingsWithPrice.length;
+    
+      if (avgPrice > 0) {
+        const priceRange = (p90 - p10) / avgPrice;
+        const priceRangePercent = priceRange * 100;
+        
+        if (priceRangePercent < 15) {
+          priceCompressionScore = 15; // Race to bottom
+        } else if (priceRangePercent < 30) {
+          priceCompressionScore = 9;
+        } else {
+          priceCompressionScore = 4; // ≥ 30%
+        }
+      }
+  } else if (listingsWithPrice.length > 0) {
+    // Fallback: use min/max if we have fewer than 10 prices
+    const sortedPrices = [...listingsWithPrice].sort((a, b) => a - b);
+    const minPrice = sortedPrices[0];
+    const maxPrice = sortedPrices[sortedPrices.length - 1];
+    const avgPrice = listingsWithPrice.reduce((sum, p) => sum + p, 0) / listingsWithPrice.length;
+    
+      if (avgPrice > 0) {
+        const priceRange = (maxPrice - minPrice) / avgPrice;
+        const priceRangePercent = priceRange * 100;
+        
+        if (priceRangePercent < 15) {
+          priceCompressionScore = 15; // Race to bottom
+        } else if (priceRangePercent < 30) {
+          priceCompressionScore = 9;
+        } else {
+          priceCompressionScore = 4; // ≥ 30%
+        }
+      }
+  }
+
+  // Component E: Seller Fit Modifier (-10 to +10 points)
+  // Additive modifier based on seller stage
+  let sellerFitModifier = 0;
   if (sellerStage === "new") {
-    // New sellers: 1.2x multiplier (20% harder)
-    sellerContextModifier = 1.2;
+    sellerFitModifier = 10; // New sellers face higher pressure
   } else if (sellerStage === "existing") {
-    // Existing sellers: 0.9x multiplier (10% easier)
-    sellerContextModifier = 0.9;
+    sellerFitModifier = 0; // Neutral
   } else if (sellerStage === "scaling") {
-    // Scaling sellers: 0.8x multiplier (20% easier)
-    sellerContextModifier = 0.8;
-  }
-  
-  // Additional experience-based adjustment
-  if (sellerExperienceMonths !== null && sellerExperienceMonths > 0) {
-    if (sellerExperienceMonths >= 24) {
-      sellerContextModifier *= 0.85; // Very experienced: 15% easier
-    } else if (sellerExperienceMonths >= 12) {
-      sellerContextModifier *= 0.95; // Experienced: 5% easier
-    }
+    sellerFitModifier = -10; // Scaling sellers face lower pressure
   }
 
-  // Apply modifier and clamp to 0-100
-  const finalCPI = Math.min(100, Math.max(0, Math.round(baseCPI * sellerContextModifier)));
+  // Calculate final CPI (0-100)
+  const baseCPI = reviewDominanceScore + brandConcentrationScore + sponsoredSaturationScore + priceCompressionScore;
+  const finalCPI = Math.min(100, Math.max(0, Math.round(baseCPI + sellerFitModifier)));
 
   // Generate explanation
   const explanation = generateCPIExplanation(
     finalCPI,
     {
-      reviewBarrierScore,
-      sponsoredCompetitionScore,
-      brandDominanceScore,
-      listingDensityScore,
+      reviewDominanceScore,
+      brandConcentrationScore,
+      sponsoredSaturationScore,
+      priceCompressionScore,
+      sellerFitModifier,
     },
-    avgReviews,
+    reviewDominance,
+    brandConcentration,
     sponsoredPercentage,
-    topBrandDominance,
-    totalListings,
+    listings.length,
     sellerStage
   );
 
   return {
     cpi: finalCPI,
     components: {
-      reviewBarrierScore,
-      sponsoredCompetitionScore,
-      brandDominanceScore,
-      listingDensityScore,
+      reviewDominanceScore,
+      brandConcentrationScore,
+      sponsoredSaturationScore,
+      priceCompressionScore,
+      sellerFitModifier,
     },
-    sellerContextModifier,
     explanation,
   };
 }
@@ -215,14 +242,15 @@ export function calculateCPI(context: CPIContext): CPICalculation {
 function generateCPIExplanation(
   cpi: number,
   components: {
-    reviewBarrierScore: number;
-    sponsoredCompetitionScore: number;
-    brandDominanceScore: number;
-    listingDensityScore: number;
+    reviewDominanceScore: number;
+    brandConcentrationScore: number;
+    sponsoredSaturationScore: number;
+    priceCompressionScore: number;
+    sellerFitModifier: number;
   },
-  avgReviews: number,
+  reviewDominance: number,
+  brandConcentration: number,
   sponsoredPercentage: number,
-  topBrandDominance: number,
   totalListings: number,
   sellerStage: SellerStage
 ): string {
@@ -231,24 +259,27 @@ function generateCPIExplanation(
   const parts: string[] = [];
   parts.push(`CPI: ${cpi} (${pressureLevel} pressure)`);
   
-  if (components.reviewBarrierScore > 0) {
-    parts.push(`Review barrier: ${Math.round(avgReviews).toLocaleString()} avg reviews (${components.reviewBarrierScore} pts)`);
+  if (components.reviewDominanceScore > 0) {
+    parts.push(`Review dominance: ${(reviewDominance * 100).toFixed(0)}% top 3 share (${components.reviewDominanceScore} pts)`);
   }
   
-  if (components.sponsoredCompetitionScore > 0) {
-    parts.push(`Paid competition: ${Math.round(sponsoredPercentage)}% sponsored (${components.sponsoredCompetitionScore} pts)`);
+  if (components.brandConcentrationScore > 0) {
+    parts.push(`Brand concentration: ${brandConcentration.toFixed(0)}% top brand (${components.brandConcentrationScore} pts)`);
   }
   
-  if (components.brandDominanceScore > 0) {
-    parts.push(`Brand control: ${Math.round(topBrandDominance)}% top brand (${components.brandDominanceScore} pts)`);
+  if (components.sponsoredSaturationScore > 0) {
+    parts.push(`Sponsored saturation: ${sponsoredPercentage.toFixed(0)}% sponsored (${components.sponsoredSaturationScore} pts)`);
   }
   
-  if (components.listingDensityScore > 0) {
-    parts.push(`Page 1 density: ${totalListings} listings (${components.listingDensityScore} pts)`);
+  if (components.priceCompressionScore > 0) {
+    parts.push(`Price compression: ${components.priceCompressionScore} pts`);
   }
   
-  if (sellerStage === "new") {
-    parts.push(`Seller context: New seller (1.2x modifier applied)`);
+  if (components.sellerFitModifier !== 0) {
+    const modifierText = components.sellerFitModifier > 0 
+      ? `+${components.sellerFitModifier} (${sellerStage} seller)`
+      : `${components.sellerFitModifier} (${sellerStage} seller)`;
+    parts.push(`Seller fit modifier: ${modifierText}`);
   }
   
   return parts.join(" | ");

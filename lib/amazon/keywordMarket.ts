@@ -33,10 +33,11 @@ export interface KeywordMarketSnapshot {
   // Competitive Pressure Index (CPI) - seller-context aware, 0-100
   competitive_pressure_index?: number;
   cpi_components?: {
-    reviewBarrierScore: number;
-    sponsoredCompetitionScore: number;
-    brandDominanceScore: number;
-    listingDensityScore: number;
+    reviewDominanceScore: number; // 0-30 points
+    brandConcentrationScore: number; // 0-25 points
+    sponsoredSaturationScore: number; // 0-20 points
+    priceCompressionScore: number; // 0-15 points
+    sellerFitModifier: number; // -10 to +10 points
   };
   cpi_explanation?: string;
 }
