@@ -245,7 +245,7 @@ Example format:
 
 Competition Risk:
 - Trigger: avg_reviews > 2,000
-- Explanation: "Page 1 listings average 2,400 reviews, indicating entrenched competitors that new listings typically struggle to outrank."
+- Explanation: "Page 1 listings average 2,400 reviews, indicating entrenched competitors that new listings must overcome to rank."
 
 Pricing Risk:
 - Trigger: price_range < $5
@@ -264,9 +264,9 @@ NO abstract explanations allowed. Every risk explanation MUST reference a numeri
 SELLER CONTEXT INTERPRETATION
 
 New seller:
-- Penalize high competition (cite review counts, competitor counts)
-- Penalize heavy PPC reliance (cite price compression signals)
-- Penalize weak differentiation (cite brand concentration %)
+- Penalize competition (cite review counts, competitor counts with numbers)
+- Penalize PPC reliance (cite ad saturation with numbers)
+- Penalize weak differentiation (cite brand concentration % with numbers)
 - Favor simplicity and speed to validation
 - Use numeric thresholds: "For a new seller, entering a category where competitors average 3,000+ reviews is high risk."
 
@@ -1143,7 +1143,11 @@ ${body.input_value}`;
 
     // Rule 3: Estimated COGS → downgrade
     const marginSnapshotFinal = decisionJson.market_snapshot?.margin_snapshot;
-    if (marginSnapshotFinal && marginSnapshotFinal.source === "assumption_engine") {
+    if (marginSnapshotFinal && 
+        typeof marginSnapshotFinal === 'object' &&
+        marginSnapshotFinal !== null &&
+        'source' in marginSnapshotFinal &&
+        marginSnapshotFinal.source === "assumption_engine") {
       confidence = Math.min(confidence, 75);
       if (!confidenceDowngrades.some(d => d.includes("COGS"))) {
         confidenceDowngrades.push("COGS estimated from sourcing model assumptions");

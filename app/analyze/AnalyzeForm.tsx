@@ -143,7 +143,10 @@ function isValidASIN(value: string): boolean {
   return asinPattern.test(value.trim());
 }
 
-function formatCurrency(value: number): string {
+function formatCurrency(value: number | null | undefined): string {
+  if (value === null || value === undefined || typeof value !== 'number' || isNaN(value)) {
+    return "—";
+  }
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -812,7 +815,10 @@ export default function AnalyzeForm({
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Price Band</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
+                        {analysis.market_snapshot.avg_price !== null && 
+                         analysis.market_snapshot.avg_price !== undefined &&
+                         typeof analysis.market_snapshot.avg_price === 'number' &&
+                         !isNaN(analysis.market_snapshot.avg_price)
                           ? formatCurrency(analysis.market_snapshot.avg_price)
                           : "—"}
                       </div>
@@ -829,7 +835,10 @@ export default function AnalyzeForm({
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Review Moat</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
+                        {analysis.market_snapshot.avg_reviews !== null && 
+                         analysis.market_snapshot.avg_reviews !== undefined &&
+                         typeof analysis.market_snapshot.avg_reviews === 'number' &&
+                         !isNaN(analysis.market_snapshot.avg_reviews)
                           ? analysis.market_snapshot.avg_reviews.toLocaleString()
                           : "—"}
                       </div>
@@ -843,11 +852,15 @@ export default function AnalyzeForm({
                       </div>
                     </div>
                     {/* Card 3: Quality Threshold */}
-                    {analysis.market_snapshot.avg_rating !== null && analysis.market_snapshot.avg_rating !== undefined && (
+                    {analysis.market_snapshot.avg_rating !== null && 
+                     analysis.market_snapshot.avg_rating !== undefined && 
+                     !isNaN(analysis.market_snapshot.avg_rating) && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Quality Threshold</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                          {analysis.market_snapshot.avg_rating.toFixed(1)} ★
+                          {typeof analysis.market_snapshot.avg_rating === 'number' 
+                            ? analysis.market_snapshot.avg_rating.toFixed(1) 
+                            : "—"} ★
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
                           Minimum rating to compete
@@ -861,17 +874,25 @@ export default function AnalyzeForm({
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Brand Control</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {analysis.market_snapshot.dominance_score !== undefined && analysis.market_snapshot.dominance_score !== null
-                          ? `Top brand: ${analysis.market_snapshot.dominance_score}%`
+                        {analysis.market_snapshot.dominance_score !== undefined && 
+                         analysis.market_snapshot.dominance_score !== null &&
+                         typeof analysis.market_snapshot.dominance_score === 'number' &&
+                         !isNaN(analysis.market_snapshot.dominance_score)
+                          ? `Top brand: ${Math.round(analysis.market_snapshot.dominance_score)}%`
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        {analysis.market_snapshot.dominance_score !== undefined && analysis.market_snapshot.dominance_score !== null
+                        {analysis.market_snapshot.dominance_score !== undefined && 
+                         analysis.market_snapshot.dominance_score !== null &&
+                         typeof analysis.market_snapshot.dominance_score === 'number'
                           ? "Leading brand's Page 1 share"
                           : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.dominance_score !== undefined && analysis.market_snapshot.dominance_score !== null
+                        {analysis.market_snapshot.dominance_score !== undefined && 
+                         analysis.market_snapshot.dominance_score !== null &&
+                         typeof analysis.market_snapshot.dominance_score === 'number' &&
+                         !isNaN(analysis.market_snapshot.dominance_score)
                           ? (analysis.market_snapshot.dominance_score >= 40
                               ? "Brand-dominated"
                               : analysis.market_snapshot.dominance_score >= 20
@@ -884,37 +905,54 @@ export default function AnalyzeForm({
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Competitive Density</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {analysis.market_snapshot.total_page1_listings > 0
+                        {analysis.market_snapshot.total_page1_listings !== undefined &&
+                         analysis.market_snapshot.total_page1_listings !== null &&
+                         typeof analysis.market_snapshot.total_page1_listings === 'number' &&
+                         analysis.market_snapshot.total_page1_listings > 0
                           ? `${analysis.market_snapshot.total_page1_listings} listings`
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        {analysis.market_snapshot.total_page1_listings > 0
+                        {analysis.market_snapshot.total_page1_listings !== undefined &&
+                         analysis.market_snapshot.total_page1_listings !== null &&
+                         typeof analysis.market_snapshot.total_page1_listings === 'number' &&
+                         analysis.market_snapshot.total_page1_listings > 0
                           ? "Competitors on Page 1"
                           : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.total_page1_listings > 0
+                        {analysis.market_snapshot.total_page1_listings !== undefined &&
+                         analysis.market_snapshot.total_page1_listings !== null &&
+                         typeof analysis.market_snapshot.total_page1_listings === 'number' &&
+                         analysis.market_snapshot.total_page1_listings > 0
                           ? getCompetitionInterpretation(analysis.market_snapshot.total_page1_listings)
                           : ""}
                       </div>
                     </div>
                     {/* Card 7: Ad Saturation */}
-                    {analysis.market_snapshot.sponsored_count !== undefined && (
+                    {analysis.market_snapshot.sponsored_count !== undefined && 
+                     analysis.market_snapshot.sponsored_count !== null && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Ad Saturation</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                          {analysis.market_snapshot.sponsored_count > 0
+                          {typeof analysis.market_snapshot.sponsored_count === 'number' &&
+                           analysis.market_snapshot.sponsored_count > 0
                             ? `${analysis.market_snapshot.sponsored_count} sponsored`
                             : "—"}
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
-                          {analysis.market_snapshot.sponsored_count > 0
+                          {typeof analysis.market_snapshot.sponsored_count === 'number' &&
+                           analysis.market_snapshot.sponsored_count > 0
                             ? "Paid ads on Page 1"
                             : "Insufficient Page 1 data"}
                         </div>
                         <div className="text-[10px] text-gray-500 font-medium">
-                          {analysis.market_snapshot.sponsored_count > 0 && analysis.market_snapshot.total_page1_listings > 0
+                          {typeof analysis.market_snapshot.sponsored_count === 'number' &&
+                           analysis.market_snapshot.sponsored_count > 0 &&
+                           analysis.market_snapshot.total_page1_listings !== undefined &&
+                           analysis.market_snapshot.total_page1_listings !== null &&
+                           typeof analysis.market_snapshot.total_page1_listings === 'number' &&
+                           analysis.market_snapshot.total_page1_listings > 0
                             ? getPaidCompetitionInterpretation(analysis.market_snapshot.sponsored_count, analysis.market_snapshot.total_page1_listings)
                             : ""}
                         </div>
@@ -933,7 +971,12 @@ export default function AnalyzeForm({
                               : 'total_fee' in fees && fees.total_fee !== null
                               ? fees.total_fee
                               : null;
-                            return totalFee !== null ? formatCurrency(totalFee) : "—";
+                            return totalFee !== null && 
+                                   totalFee !== undefined && 
+                                   typeof totalFee === 'number' && 
+                                   !isNaN(totalFee)
+                              ? formatCurrency(totalFee) 
+                              : "—";
                           })()}
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
@@ -1054,17 +1097,29 @@ export default function AnalyzeForm({
                   );
                 }
                 
-                // Determine confidence level for badge
+                // Determine confidence level for badge (must match data quality)
                 const getConfidenceLevel = (): "high" | "medium" | "low" => {
-                  if (marginSnapshot.confidence === "refined") {
+                  // High: User-refined costs + Amazon-provided fees
+                  if (marginSnapshot.confidence === "refined" && 
+                      marginSnapshot.source === "amazon_fees" &&
+                      marginSnapshot.fba_fees !== null && 
+                      marginSnapshot.fba_fees !== undefined) {
                     return "high";
                   }
-                  if (marginSnapshot.source === "amazon_fees" && marginSnapshot.fba_fees !== null) {
+                  // High: Amazon-provided fees + estimated COGS (still high confidence on fees)
+                  if (marginSnapshot.source === "amazon_fees" && 
+                      marginSnapshot.fba_fees !== null && 
+                      marginSnapshot.fba_fees !== undefined) {
                     return "high";
                   }
-                  if (marginSnapshot.fba_fees !== null) {
+                  // Medium: Estimated fees but valid data
+                  if (marginSnapshot.fba_fees !== null && 
+                      marginSnapshot.fba_fees !== undefined &&
+                      marginSnapshot.cogs_assumed_low !== null &&
+                      marginSnapshot.cogs_assumed_high !== null) {
                     return "medium";
                   }
+                  // Low: Missing critical data
                   return "low";
                 };
                 
@@ -1096,7 +1151,11 @@ export default function AnalyzeForm({
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Selling price</div>
                         <div className="text-lg font-semibold text-gray-900">
-                          {marginSnapshot.selling_price !== null && marginSnapshot.selling_price !== undefined
+                          {marginSnapshot.selling_price !== null && 
+                           marginSnapshot.selling_price !== undefined &&
+                           typeof marginSnapshot.selling_price === 'number' &&
+                           !isNaN(marginSnapshot.selling_price) &&
+                           marginSnapshot.selling_price > 0
                             ? formatCurrency(marginSnapshot.selling_price)
                             : "—"}
                         </div>
@@ -1107,7 +1166,11 @@ export default function AnalyzeForm({
                         <div className="text-xs text-gray-500 mb-1">Estimated COGS range</div>
                         <div className="text-lg font-semibold text-gray-900">
                           {marginSnapshot.cogs_assumed_low !== null && marginSnapshot.cogs_assumed_low !== undefined &&
-                           marginSnapshot.cogs_assumed_high !== null && marginSnapshot.cogs_assumed_high !== undefined
+                           marginSnapshot.cogs_assumed_high !== null && marginSnapshot.cogs_assumed_high !== undefined &&
+                           typeof marginSnapshot.cogs_assumed_low === 'number' &&
+                           typeof marginSnapshot.cogs_assumed_high === 'number' &&
+                           !isNaN(marginSnapshot.cogs_assumed_low) &&
+                           !isNaN(marginSnapshot.cogs_assumed_high)
                             ? `${formatCurrency(marginSnapshot.cogs_assumed_low)}–${formatCurrency(marginSnapshot.cogs_assumed_high)}`
                             : "—"}
                         </div>
@@ -1117,14 +1180,21 @@ export default function AnalyzeForm({
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Estimated FBA fees</div>
                         <div className="text-lg font-semibold text-gray-900">
-                          {marginSnapshot.fba_fees !== null && marginSnapshot.fba_fees !== undefined
+                          {marginSnapshot.fba_fees !== null && 
+                           marginSnapshot.fba_fees !== undefined &&
+                           typeof marginSnapshot.fba_fees === 'number' &&
+                           !isNaN(marginSnapshot.fba_fees) &&
+                           marginSnapshot.fba_fees > 0
                             ? formatCurrency(marginSnapshot.fba_fees)
                             : "—"}
                         </div>
                         <div className="text-[10px] text-gray-500 mt-1">
                           {marginSnapshot.fba_fees === null || marginSnapshot.fba_fees === undefined
                             ? "Not available"
-                            : marginSnapshot.source === "amazon_fees"
+                            : marginSnapshot.source === "amazon_fees" &&
+                              marginSnapshot.fba_fees !== null &&
+                              marginSnapshot.fba_fees !== undefined &&
+                              typeof marginSnapshot.fba_fees === 'number'
                             ? "Amazon-provided"
                             : "Estimated"}
                         </div>
@@ -1135,7 +1205,11 @@ export default function AnalyzeForm({
                         <div className="text-xs text-gray-500 mb-1">Net margin range</div>
                         <div className="text-lg font-semibold text-gray-900">
                           {marginSnapshot.net_margin_low_pct !== null && marginSnapshot.net_margin_low_pct !== undefined &&
-                           marginSnapshot.net_margin_high_pct !== null && marginSnapshot.net_margin_high_pct !== undefined
+                           marginSnapshot.net_margin_high_pct !== null && marginSnapshot.net_margin_high_pct !== undefined &&
+                           typeof marginSnapshot.net_margin_low_pct === 'number' &&
+                           typeof marginSnapshot.net_margin_high_pct === 'number' &&
+                           !isNaN(marginSnapshot.net_margin_low_pct) &&
+                           !isNaN(marginSnapshot.net_margin_high_pct)
                             ? `${marginSnapshot.net_margin_low_pct.toFixed(1)}%–${marginSnapshot.net_margin_high_pct.toFixed(1)}%`
                             : "—"}
                         </div>
@@ -1146,7 +1220,11 @@ export default function AnalyzeForm({
                         <div className="text-xs text-gray-500 mb-1">Breakeven price</div>
                         <div className="text-lg font-semibold text-gray-900">
                           {marginSnapshot.breakeven_price_low !== null && marginSnapshot.breakeven_price_low !== undefined &&
-                           marginSnapshot.breakeven_price_high !== null && marginSnapshot.breakeven_price_high !== undefined
+                           marginSnapshot.breakeven_price_high !== null && marginSnapshot.breakeven_price_high !== undefined &&
+                           typeof marginSnapshot.breakeven_price_low === 'number' &&
+                           typeof marginSnapshot.breakeven_price_high === 'number' &&
+                           !isNaN(marginSnapshot.breakeven_price_low) &&
+                           !isNaN(marginSnapshot.breakeven_price_high)
                             ? `${formatCurrency(marginSnapshot.breakeven_price_low)}–${formatCurrency(marginSnapshot.breakeven_price_high)}`
                             : "—"}
                         </div>

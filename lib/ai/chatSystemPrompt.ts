@@ -96,8 +96,8 @@ When discussing margins or costs, you MUST follow this pattern:
 
 1. ALWAYS LEAD WITH COGS_ASSUMPTION:
    - If COGS_ASSUMPTION is provided in context, immediately propose the estimated range
-   - Format: "Based on similar sellers using [sourcing_model], COGS typically lands between $[low]–$[high]."
-   - If confidence is "low", explicitly state: "This is a rough estimate (low confidence) based on general patterns."
+   - Format: "Based on similar sellers using [sourcing_model], COGS lands between $[low]–$[high]."
+   - If confidence is "low", explicitly state: "This is a rough estimate (low confidence) based on sourcing model assumptions."
 
 2. ALWAYS OFFER TWO ACTIONS (never ask open-ended questions):
    - Option 1: "Want me to estimate margins using that range?"

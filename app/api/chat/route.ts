@@ -316,80 +316,28 @@ function canAnswerQuestion(
     /\b(how much profit|what's my margin|what margin|profitability)\b/i,
   ];
   
+  // Margin questions: Never block - always propose assumptions first
+  // The system prompt handles proposing COGS_ASSUMPTION and offering actions
+  // We only refuse if we have absolutely no data to work with
   if (marginPatterns.some(p => p.test(normalized))) {
     const marginSnapshot = (marketSnapshot?.margin_snapshot as Record<string, unknown>) || null;
-    const costOverrides = (analysisResponse.cost_overrides as Record<string, unknown>) || null;
     
-    // Check for required data
+    // Only block if we have NO margin snapshot at all
     if (!marginSnapshot) {
-      missingItems.push("Margin snapshot data");
-      options.push("Provide your COGS and FBA fees to calculate margins");
-    } else {
-      const sellingPrice = (marginSnapshot.selling_price as number) || null;
-      const cogsLow = (marginSnapshot.cogs_assumed_low as number) || null;
-      const fbaFees = (marginSnapshot.fba_fees as number) || null;
-      
-      if (!sellingPrice || sellingPrice <= 0) {
-        missingItems.push("Selling price");
-        options.push("Provide a selling price to calculate margins");
-      }
-      
-      // If no cost overrides, check if we have assumed COGS
-      if (!costOverrides || (costOverrides.cogs === null || costOverrides.cogs === undefined)) {
-        if (cogsLow === null || cogsLow <= 0) {
-          missingItems.push("COGS (cost of goods sold)");
-          options.push("Provide your COGS to calculate accurate margins");
-        }
-      }
-      
-      if (!costOverrides || (costOverrides.fba_fees === null || costOverrides.fba_fees === undefined)) {
-        if (fbaFees === null || fbaFees <= 0) {
-          missingItems.push("FBA fees");
-          options.push("Provide your FBA fees to calculate accurate margins");
-        }
-      }
+      // Even then, we can propose assumptions based on price band
+      // Don't block - let the system prompt handle it with COGS_ASSUMPTION
     }
+    // If margin snapshot exists, we can always work with assumptions
+    // System prompt will propose COGS_ASSUMPTION and offer actions
   }
 
   // Check for fee questions
-  const feePatterns = [
-    /\b(fba fee|amazon fee|fulfillment fee|referral fee|what.*fee|how much.*fee)\b/i,
-  ];
-  
-  if (feePatterns.some(p => p.test(normalized))) {
-    const fbaFees = (marketSnapshot?.fba_fees as Record<string, unknown>) || null;
-    const marginSnapshot = (marketSnapshot?.margin_snapshot as Record<string, unknown>) || null;
-    
-    if (!fbaFees && !marginSnapshot) {
-      missingItems.push("FBA fee data");
-      options.push("Provide your FBA fees to get accurate calculations");
-    } else {
-      const feesValue = (fbaFees?.total_fba_fees as number) || 
-                        (fbaFees?.total_fee as number) ||
-                        (marginSnapshot?.fba_fees as number) || null;
-      
-      if (feesValue === null || feesValue <= 0) {
-        missingItems.push("FBA fees");
-        options.push("Provide your FBA fees to get accurate calculations");
-      }
-    }
-  }
+  // Never block on fee questions - system prompt will cite available data or propose assumptions
+  // Fee questions can always be answered with available data from market snapshot or margin snapshot
 
   // Check for price questions
-  const pricePatterns = [
-    /\b(what.*price|how much.*price|selling price|list price|price point)\b/i,
-  ];
-  
-  if (pricePatterns.some(p => p.test(normalized))) {
-    const avgPrice = (marketSnapshot?.avg_price as number) || null;
-    const marginSnapshot = (marketSnapshot?.margin_snapshot as Record<string, unknown>) || null;
-    const sellingPrice = (marginSnapshot?.selling_price as number) || null;
-    
-    if (!avgPrice && !sellingPrice) {
-      missingItems.push("Price data");
-      options.push("Run an analysis to get market price data");
-    }
-  }
+  // Price questions can always be answered from market snapshot or margin snapshot
+  // Never block - system prompt will cite available data
 
   // Check for strategic questions about competition/viability - require CPI
   const strategicPatterns = [
