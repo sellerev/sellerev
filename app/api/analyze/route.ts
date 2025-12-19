@@ -893,11 +893,17 @@ ${body.input_value}`;
         // ASIN analysis: use the ASIN directly
         const asin = body.input_value.trim().toUpperCase();
         
-        // Determine price_used: For ASIN analysis, we would ideally fetch the listing price
-        // from the ASIN data, but that's not currently in the flow. Using a reasonable
-        // default that SP-API can use for fee estimation. This could be improved by
-        // fetching ASIN product data first to get the actual listing price.
-        const priceUsed = 25.0; // Default - could be improved by fetching ASIN listing price
+        // Determine price_used: listing price or avg snapshot price
+        // Check if market_snapshot has avg_price (unlikely for ASIN, but check anyway)
+        let priceUsed = 25.0; // Default fallback
+        if (decisionJson.market_snapshot && typeof decisionJson.market_snapshot === 'object' && 'avg_price' in decisionJson.market_snapshot) {
+          const avgPrice = (decisionJson.market_snapshot as any).avg_price;
+          if (avgPrice !== null && typeof avgPrice === 'number' && avgPrice > 0) {
+            priceUsed = avgPrice;
+          }
+        }
+        // Note: For ASIN analysis, we don't currently fetch listing price from product data.
+        // This could be improved by fetching ASIN product data first to get actual listing price.
         
         const feeEstimate = await getFbaFeesEstimateForAsin({
           asin,
