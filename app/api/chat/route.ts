@@ -935,7 +935,7 @@ export async function POST(req: NextRequest) {
     // 6. Compute COGS assumptions for margin calculations
     // ─────────────────────────────────────────────────────────────────────
     const analysisResponse = analysisRun.response as Record<string, unknown>;
-    const marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
+    let marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
     const avgPrice = (marketSnapshot?.avg_price as number) || null;
     const category = (marketSnapshot?.category as string) || null;
     
