@@ -63,19 +63,33 @@ export async function getFbaFees({
     // Determine endpoint based on marketplace
     const endpoint = getEndpointForMarketplace(marketplaceId);
     const host = new URL(endpoint).hostname;
-    const path = `/fees/v0/items/${asin}/feesEstimate`;
+    // Correct endpoint path for FBA fees (matches FBA calculator)
+    const path = `/products/fees/v0/items/${asin}/feesEstimate`;
 
-    // Prepare request body
+    // Prepare request body (matches FBA calculator format)
     const requestBody = JSON.stringify({
       FeesEstimateRequest: {
         MarketplaceId: marketplaceId,
+        IsAmazonFulfilled: true, // CRITICAL: Must be true for FBA fees
         PriceToEstimateFees: {
           ListingPrice: {
             Amount: price,
             CurrencyCode: "USD",
           },
+          Shipping: {
+            CurrencyCode: "USD",
+            Amount: 0.00, // Default shipping (can be adjusted if needed)
+          },
+          Points: {
+            PointsNumber: 0,
+            PointsMonetaryValue: {
+              CurrencyCode: "USD",
+              Amount: 0.00,
+            },
+          },
         },
         Identifier: `fees-estimate-${asin}-${Date.now()}`,
+        OptionalFulfillmentProgram: "FBA_CORE", // Specify FBA Core program
       },
     });
 
@@ -137,11 +151,15 @@ export async function getFbaFees({
 /**
  * Extract fulfillment fee, referral fee, and total fee from SP-API response
  * 
- * SP-API response structure:
+ * SP-API response structure (for FBA fees):
  * FeesEstimateResult.FeesEstimate.FeeDetailList[] contains individual fee breakdowns
  * - FeeType: "FBAFulfillmentFee" -> fulfillment_fee
  * - FeeType: "ReferralFee" -> referral_fee
+ * - FeeType: "VariableClosingFee" -> may be included
  * - TotalFeesEstimate.Amount -> total_fba_fees
+ * 
+ * Note: Response may have multiple entries (one per fulfillment program).
+ * We use the first valid FeesEstimate.
  */
 function extractFees(data: any): {
   fulfillmentFee: number | null;
@@ -149,7 +167,25 @@ function extractFees(data: any): {
   totalFee: number | null;
 } {
   try {
-    const feesEstimate = data?.FeesEstimateResult?.FeesEstimate;
+    // Handle array response (multiple fulfillment programs)
+    const feesEstimateResult = data?.FeesEstimateResult;
+    if (!feesEstimateResult) {
+      return {
+        fulfillmentFee: null,
+        referralFee: null,
+        totalFee: null,
+      };
+    }
+
+    // Get FeesEstimate (may be array or single object)
+    let feesEstimate;
+    if (Array.isArray(feesEstimateResult)) {
+      // Multiple estimates - use first one
+      feesEstimate = feesEstimateResult[0]?.FeesEstimate;
+    } else {
+      feesEstimate = feesEstimateResult.FeesEstimate;
+    }
+
     if (!feesEstimate) {
       return {
         fulfillmentFee: null,
@@ -174,9 +210,17 @@ function extractFees(data: any): {
         ? parseFloat(feeDetail.FeeAmount.Amount)
         : null;
 
-      if (feeType === "FBAFulfillmentFee" && amount !== null) {
+      if (amount === null) continue;
+
+      // Match FBA fulfillment fee (may have variations)
+      if (
+        (feeType === "FBAFulfillmentFee" || 
+         feeType === "FBAPerOrderFulfillmentFee" ||
+         feeType === "FBAFulfillmentFeePerUnit") &&
+        fulfillmentFee === null
+      ) {
         fulfillmentFee = amount;
-      } else if (feeType === "ReferralFee" && amount !== null) {
+      } else if (feeType === "ReferralFee" && referralFee === null) {
         referralFee = amount;
       }
     }
@@ -186,7 +230,8 @@ function extractFees(data: any): {
       referralFee,
       totalFee,
     };
-  } catch {
+  } catch (error) {
+    console.error("Error extracting fees from SP-API response:", error);
     return {
       fulfillmentFee: null,
       referralFee: null,
