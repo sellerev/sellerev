@@ -89,17 +89,19 @@ export default async function AnalysisDetailPage({ params }: AnalysisDetailPageP
     assumptions_and_limits: response.assumptions_and_limits as string[],
     // Include market data if available (from rainforest_data column)
     market_data: analysisRun.rainforest_data as Record<string, unknown> | undefined,
-    // Include keyword market snapshot if available
-    market_snapshot_json: analysisRun.market_snapshot_json as {
-      avg_price: number;
-      price_range: [number, number];
-      avg_reviews: number;
-      median_reviews: number;
-      review_density_pct: number;
-      competitor_count: number;
-      brand_concentration_pct: number;
-      avg_rating: number;
-    } | undefined,
+    // Include keyword market snapshot if available (from response.market_snapshot)
+    market_snapshot: (response.market_snapshot && typeof response.market_snapshot === 'object' && !Array.isArray(response.market_snapshot))
+      ? response.market_snapshot as {
+          keyword: string;
+          total_results_estimate: number | null;
+          total_listings: number;
+          sponsored_count: number;
+          avg_price: number | null;
+          avg_reviews: number | null;
+          top_brands: Array<{ brand: string; count: number }>;
+          dominance_score: number | null;
+        }
+      : null,
   };
 
   // Fetch chat history for this analysis

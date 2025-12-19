@@ -71,16 +71,17 @@ interface AnalysisResponse {
     data_fetched_at?: string;
   };
   // Optional: Aggregated keyword market snapshot (when input_type === "keyword")
-  market_snapshot_json?: {
-    avg_price: number;
-    price_range: [number, number];
-    avg_reviews: number;
-    median_reviews: number;
-    review_density_pct: number;
-    competitor_count: number;
-    brand_concentration_pct: number;
-    avg_rating: number;
-  };
+  // Matches KeywordMarketSnapshot from lib/amazon/keywordMarket.ts
+  market_snapshot?: {
+    keyword: string;
+    total_results_estimate: number | null;
+    total_listings: number;
+    sponsored_count: number;
+    avg_price: number | null;
+    avg_reviews: number | null;
+    top_brands: Array<{ brand: string; count: number }>;
+    dominance_score: number | null;
+  } | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,6 +129,37 @@ interface AnalyzeFormProps {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// NORMALIZATION HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Normalizes analysis data: ensures market_snapshot is always an object or null, never an array.
+ * Extracts from decision.market_snapshot or response.market_snapshot if needed.
+ */
+function normalizeAnalysis(analysisData: AnalysisResponse | null): AnalysisResponse | null {
+  if (!analysisData) return null;
+  
+  // Normalize market_snapshot: extract from response.market_snapshot or use existing
+  // Ensure it's an object, not an array, or null
+  let normalizedSnapshot = null;
+  if (analysisData.market_snapshot) {
+    if (typeof analysisData.market_snapshot === 'object' && !Array.isArray(analysisData.market_snapshot)) {
+      normalizedSnapshot = analysisData.market_snapshot;
+    }
+  } else if ((analysisData as any).response?.market_snapshot) {
+    const snapshot = (analysisData as any).response.market_snapshot;
+    if (typeof snapshot === 'object' && !Array.isArray(snapshot)) {
+      normalizedSnapshot = snapshot;
+    }
+  }
+  
+  return {
+    ...analysisData,
+    market_snapshot: normalizedSnapshot,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -149,11 +181,11 @@ export default function AnalyzeForm({
   );
   const [inputError, setInputError] = useState<string | null>(null);
 
-  // Analysis state - initialize with provided analysis if available
+  // Analysis state - initialize with provided analysis if available, normalized
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(
-    initialAnalysis
+    normalizeAnalysis(initialAnalysis)
   );
 
   // Chat messages state (synced with ChatSidebar)
@@ -237,6 +269,11 @@ export default function AnalyzeForm({
 
       // Transform response to match AnalysisResponse interface
       // data.decision already contains: decision, executive_summary, reasoning, risks, recommended_actions, assumptions_and_limits, numbers_used, market_snapshot
+      
+      // Normalize market_snapshot: extract from decision.market_snapshot and ensure it's an object or null
+      // Never assume arrays - snapshot is always an object with the new structure
+      const marketSnapshot = data.decision.market_snapshot || null;
+      
       const analysisData: AnalysisResponse = {
         analysis_run_id: data.analysisRunId,
         created_at: new Date().toISOString(),
@@ -248,7 +285,9 @@ export default function AnalyzeForm({
         risks: data.decision.risks,
         recommended_actions: data.decision.recommended_actions,
         assumptions_and_limits: data.decision.assumptions_and_limits,
-        market_snapshot_json: data.decision.market_snapshot,
+        market_snapshot: marketSnapshot && typeof marketSnapshot === 'object' && !Array.isArray(marketSnapshot) 
+          ? marketSnapshot 
+          : null,
         market_data: data.decision.market_data,
       };
 
@@ -257,7 +296,8 @@ export default function AnalyzeForm({
         has_analysis: !!analysisData 
       });
 
-      setAnalysis(analysisData);
+      // Normalize and set analysis
+      setAnalysis(normalizeAnalysis(analysisData));
       setError(null);
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Analysis failed";
@@ -502,6 +542,9 @@ export default function AnalyzeForm({
               {/* POST-ANALYSIS STATE: LOCKED VISUAL HIERARCHY                  */}
               {/* Order: Decision → Market → Summary → Risks → Actions → Limits */}
               {/* ═══════════════════════════════════════════════════════════════ */}
+              {/* Defensive invariant: ensure analysis and decision exist */}
+              {!analysis || !analysis.decision ? null : (
+              <>
               {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 2: DECISION HEADER (HIGHEST PRIORITY)                 */}
               {/* - Verdict badge (GO / CAUTION / NO_GO)                      */}
@@ -540,7 +583,7 @@ export default function AnalyzeForm({
               {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 3: MARKET SNAPSHOT                                    */}
               {/* - 4 compact stat cards (2x2 grid)                           */}
-              {/* - Uses market_snapshot_json for keywords, market_data for ASINs */}
+              {/* - Uses market_snapshot for keywords, market_data for ASINs */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
@@ -555,70 +598,85 @@ export default function AnalyzeForm({
                 </div>
 
                 {/* Check for keyword market snapshot first, then fall back to market_data */}
-                {analysis.market_snapshot_json ? (
+                {analysis.market_snapshot ? (
                   <div className="grid grid-cols-2 gap-3">
                     {/* Card 1: Price Band */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Price Band</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {formatCurrency(analysis.market_snapshot_json.avg_price)}
+                        {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
+                          ? formatCurrency(analysis.market_snapshot.avg_price)
+                          : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        {formatCurrency(analysis.market_snapshot_json.price_range[0])}–{formatCurrency(analysis.market_snapshot_json.price_range[1])}
+                        {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
+                          ? `Avg: ${formatCurrency(analysis.market_snapshot.avg_price)}`
+                          : "Price data unavailable"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {(() => {
-                          const range = analysis.market_snapshot_json.price_range[1] - analysis.market_snapshot_json.price_range[0];
-                          const avg = analysis.market_snapshot_json.avg_price;
-                          return range / avg < 0.35 ? "Tight band" : "Wide band";
-                        })()}
+                        {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
+                          ? analysis.market_snapshot.avg_price < 20 ? "Budget" : analysis.market_snapshot.avg_price < 50 ? "Mid-range" : "Premium"
+                          : "Unknown"}
                       </div>
                     </div>
                     {/* Card 2: Review Barrier */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Review Barrier</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {analysis.market_snapshot_json.median_reviews.toLocaleString()}
+                        {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
+                          ? analysis.market_snapshot.avg_reviews.toLocaleString()
+                          : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Avg {analysis.market_snapshot_json.avg_reviews.toLocaleString()} • Density {analysis.market_snapshot_json.review_density_pct}% &gt;1k
+                        {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
+                          ? `Avg reviews: ${analysis.market_snapshot.avg_reviews.toLocaleString()}`
+                          : "Review data unavailable"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot_json.median_reviews > 800 || analysis.market_snapshot_json.review_density_pct > 50
-                          ? "High barrier"
-                          : analysis.market_snapshot_json.median_reviews > 300
-                          ? "Moderate"
-                          : "Low"}
+                        {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
+                          ? analysis.market_snapshot.avg_reviews > 2000
+                            ? "High barrier"
+                            : analysis.market_snapshot.avg_reviews > 500
+                            ? "Moderate"
+                            : "Low"
+                          : "Unknown"}
                       </div>
                     </div>
                     {/* Card 3: Brand Control */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Brand Control</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        Top brand: {analysis.market_snapshot_json.brand_concentration_pct}%
+                        {analysis.market_snapshot.dominance_score !== null && analysis.market_snapshot.dominance_score !== undefined
+                          ? `Top brand: ${analysis.market_snapshot.dominance_score}%`
+                          : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Competitors: {analysis.market_snapshot_json.competitor_count} listings
+                        Competitors: {analysis.market_snapshot.total_listings} listings
+                        {analysis.market_snapshot.sponsored_count > 0 && ` • ${analysis.market_snapshot.sponsored_count} sponsored`}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot_json.brand_concentration_pct >= 35 ? "Concentrated" : "Fragmented"}
+                        {analysis.market_snapshot.dominance_score !== null && analysis.market_snapshot.dominance_score !== undefined
+                          ? analysis.market_snapshot.dominance_score >= 35 ? "Concentrated" : "Fragmented"
+                          : "Unknown"}
                       </div>
                     </div>
-                    {/* Card 4: Rating Level */}
+                    {/* Card 4: Market Size */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Rating Level</div>
+                      <div className="text-xs text-gray-500 mb-1">Market Size</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {analysis.market_snapshot_json.avg_rating.toFixed(1)} ★
+                        {analysis.market_snapshot.total_listings} listings
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Based on {analysis.market_snapshot_json.competitor_count} listings
+                        {analysis.market_snapshot.total_results_estimate !== null
+                          ? `~${analysis.market_snapshot.total_results_estimate.toLocaleString()} total results`
+                          : "Page 1 analysis"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot_json.avg_rating >= 4.4
-                          ? "Strong"
-                          : analysis.market_snapshot_json.avg_rating >= 4.0
-                          ? "Mixed"
-                          : "Weak"}
+                        {analysis.market_snapshot.total_listings >= 20
+                          ? "Large market"
+                          : analysis.market_snapshot.total_listings >= 10
+                          ? "Medium"
+                          : "Small"}
                       </div>
                     </div>
                   </div>
@@ -876,6 +934,8 @@ export default function AnalyzeForm({
 
               {/* Spacer for scrolling past chat sidebar */}
               <div className="h-8" />
+              </>
+              )}
             </div>
           )}
         </div>
