@@ -176,6 +176,38 @@ function getPaidCompetitionInterpretation(sponsoredCount: number, totalListings:
   return "Heavy paid visibility";
 }
 
+/**
+ * Calculate market pressure from avg_reviews, sponsored_count, and dominance_score
+ * Returns: "Low" | "Moderate" | "High"
+ */
+function calculateMarketPressure(
+  avgReviews: number | null,
+  sponsoredCount: number,
+  dominanceScore: number
+): "Low" | "Moderate" | "High" {
+  let pressureScore = 0;
+
+  // Review barrier contribution (0-2 points)
+  if (avgReviews !== null && avgReviews !== undefined) {
+    if (avgReviews >= 5000) pressureScore += 2;
+    else if (avgReviews >= 1000) pressureScore += 1;
+  }
+
+  // Sponsored competition contribution (0-2 points)
+  // High sponsored count indicates paid competition pressure
+  if (sponsoredCount >= 8) pressureScore += 2;
+  else if (sponsoredCount >= 4) pressureScore += 1;
+
+  // Brand dominance contribution (0-2 points)
+  if (dominanceScore >= 40) pressureScore += 2;
+  else if (dominanceScore >= 20) pressureScore += 1;
+
+  // Map total score (0-6) to pressure level
+  if (pressureScore <= 2) return "Low";
+  if (pressureScore <= 4) return "Moderate";
+  return "High";
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT PROPS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -659,7 +691,8 @@ export default function AnalyzeForm({
 
                 {/* Check for keyword market snapshot first, then fall back to market_data */}
                 {analysis.market_snapshot ? (
-                  <div className="grid grid-cols-2 gap-3">
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
                     {/* Card 1: Typical Price */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Typical Price</div>
@@ -767,9 +800,35 @@ export default function AnalyzeForm({
                       </div>
                     )}
                   </div>
+                    {/* Market Snapshot Verdict */}
+                    <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
+                      {(() => {
+                        const pressure = calculateMarketPressure(
+                          analysis.market_snapshot.avg_reviews,
+                          analysis.market_snapshot.sponsored_count,
+                          analysis.market_snapshot.dominance_score
+                        );
+                        const dotColor =
+                          pressure === "Low"
+                            ? "bg-green-500"
+                            : pressure === "Moderate"
+                            ? "bg-yellow-500"
+                            : "bg-red-500";
+                        return (
+                          <>
+                            <div className={`w-2 h-2 rounded-full ${dotColor}`}></div>
+                            <span className="text-sm font-medium text-gray-900">
+                              Market pressure: {pressure}
+                            </span>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </>
                 ) : analysis.market_data &&
                   Object.keys(analysis.market_data).length > 0 ? (
-                  <div className="grid grid-cols-2 gap-3">
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
                     {/* Card 1: Typical Price */}
                     <div className="bg-gray-50 rounded-lg p-3">
                       <div className="text-xs text-gray-500 mb-1">Typical Price</div>
@@ -833,6 +892,33 @@ export default function AnalyzeForm({
                       </div>
                     </div>
                   </div>
+                    {/* Market Snapshot Verdict */}
+                    <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
+                      {(() => {
+                        const pressure = calculateMarketPressure(
+                          analysis.market_data.review_count_avg ?? null,
+                          // ASIN analysis doesn't have sponsored_count, use 0 as default
+                          0,
+                          // ASIN analysis doesn't have dominance_score, use 0 as default
+                          0
+                        );
+                        const dotColor =
+                          pressure === "Low"
+                            ? "bg-green-500"
+                            : pressure === "Moderate"
+                            ? "bg-yellow-500"
+                            : "bg-red-500";
+                        return (
+                          <>
+                            <div className={`w-2 h-2 rounded-full ${dotColor}`}></div>
+                            <span className="text-sm font-medium text-gray-900">
+                              Market pressure: {pressure}
+                            </span>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </>
                 ) : (
                   <div className="bg-gray-50 rounded-lg p-4 text-center border border-gray-200">
                     <h3 className="text-sm font-semibold text-gray-900 mb-2">
