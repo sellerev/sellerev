@@ -111,25 +111,69 @@ Sourcing Model: ${sellerProfile.sourcing_model || "not_sure"}
 Use this context to tailor your advice. A new seller receives different guidance than a scaling seller.
 For margin calculations, use the sourcing_model to infer COGS ranges automatically.`);
 
-  // Section 4: Market Snapshot (includes FBA fees and pricing data for margin calculations)
+  // Section 4: Market Snapshot (includes pricing data for margin calculations)
   const marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
   if (marketSnapshot) {
     const avgPrice = (marketSnapshot.avg_price as number) || null;
-    const fbaFees = (marketSnapshot.fba_fees as {
-      total_fee: number | null;
-      source: "sp_api" | "estimated";
-      asin_used: string;
-      price_used: number;
-    }) || null;
     
     contextParts.push(`=== MARKET SNAPSHOT (FOR MARGIN CALCULATIONS) ===
 Average Page 1 Price: ${avgPrice !== null ? `$${avgPrice.toFixed(2)}` : "Not available"}
-FBA Fees Estimate: ${fbaFees && fbaFees.total_fee !== null ? `$${fbaFees.total_fee.toFixed(2)}` : "Not available"}
-FBA Fees Source: ${fbaFees ? fbaFees.source : "Not available"}
 Representative ASIN: ${marketSnapshot.representative_asin || "Not available"}
 
-Use avg_price as the selling price for margin calculations.
-Use fba_fees.total_fee if available, otherwise estimate 15-20% of price.`);
+Use avg_price as the selling price for margin calculations.`);
+  }
+
+  // Section 5: FBA Fees (new structure from resolveFbaFees or legacy structure)
+  if (marketSnapshot) {
+    const fbaFees = marketSnapshot.fba_fees as any;
+    
+    contextParts.push(`=== FBA FEES (ESTIMATED) ===`);
+    
+    if (fbaFees && typeof fbaFees === 'object' && !Array.isArray(fbaFees) && fbaFees !== null) {
+      // Check for new structure (from resolveFbaFees for ASIN inputs)
+      if ('fulfillment_fee' in fbaFees || 'referral_fee' in fbaFees || 'total_fba_fees' in fbaFees) {
+        const fulfillmentFee = fbaFees.fulfillment_fee !== null && fbaFees.fulfillment_fee !== undefined
+          ? `$${parseFloat(fbaFees.fulfillment_fee).toFixed(2)}`
+          : "Not available";
+        const referralFee = fbaFees.referral_fee !== null && fbaFees.referral_fee !== undefined
+          ? `$${parseFloat(fbaFees.referral_fee).toFixed(2)}`
+          : "Not available";
+        const totalFees = fbaFees.total_fba_fees !== null && fbaFees.total_fba_fees !== undefined
+          ? `$${parseFloat(fbaFees.total_fba_fees).toFixed(2)}`
+          : "Not available";
+        
+        if (fbaFees.source === "amazon" && totalFees !== "Not available") {
+          contextParts.push(`Fulfillment fee: ${fulfillmentFee}
+Referral fee: ${referralFee}
+Total Amazon fees: ${totalFees}
+
+These fees are Amazon-provided (from SP-API) for ASIN analysis.`);
+        } else {
+          contextParts.push(`Amazon fee estimate not available for this ASIN.`);
+        }
+      } else if ('total_fee' in fbaFees) {
+        // Legacy structure (for keyword analyses)
+        const totalFee = fbaFees.total_fee !== null && fbaFees.total_fee !== undefined
+          ? `$${parseFloat(fbaFees.total_fee).toFixed(2)}`
+          : null;
+        
+        if (totalFee) {
+          contextParts.push(`Total Amazon fees: ${totalFee}
+Source: ${fbaFees.source || "estimated"}
+
+${fbaFees.source === "sp_api" ? "These fees are Amazon-provided (from SP-API)." : "These fees are estimated (not from Amazon SP-API)."}`);
+        } else {
+          contextParts.push(`Amazon fee estimate not available for this ASIN.`);
+        }
+      } else {
+        contextParts.push(`Amazon fee estimate not available for this ASIN.`);
+      }
+    } else {
+      contextParts.push(`Amazon fee estimate not available for this ASIN.`);
+    }
+  } else {
+    contextParts.push(`=== FBA FEES (ESTIMATED) ===
+Amazon fee estimate not available for this ASIN.`);
   }
 
   return contextParts.join("\n\n");
