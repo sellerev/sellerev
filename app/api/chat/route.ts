@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { CHAT_SYSTEM_PROMPT } from "@/lib/ai/chatSystemPrompt";
 import { estimateCogsRange } from "@/lib/cogs/assumptions";
+import { normalizeCostOverrides } from "@/lib/margins/normalizeCostOverrides";
+import { MarginSnapshot } from "@/types/margin";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -184,23 +186,121 @@ ${isAmazonProvided ? "These fees are Amazon-provided (from SP-API)." : "These fe
   }
 
   // Section 6: Margin Snapshot (calculated from COGS assumptions and FBA fees)
+  // May include user-refined costs if cost_overrides exist
   if (marketSnapshot) {
     const marginSnapshot = (marketSnapshot.margin_snapshot as Record<string, unknown>) || null;
     if (marginSnapshot) {
+      const confidence = (marginSnapshot.confidence as string) || "estimated";
+      const costOverrides = (response.cost_overrides as Record<string, unknown>) || null;
+      
+      let overrideNote = "";
+      if (costOverrides && confidence === "refined") {
+        const overrides: string[] = [];
+        if (costOverrides.cogs !== null && costOverrides.cogs !== undefined) {
+          overrides.push(`COGS: $${(costOverrides.cogs as number).toFixed(2)}`);
+        }
+        if (costOverrides.fba_fees !== null && costOverrides.fba_fees !== undefined) {
+          overrides.push(`FBA fees: $${(costOverrides.fba_fees as number).toFixed(2)}`);
+        }
+        if (overrides.length > 0) {
+          overrideNote = `\n\nNOTE: This margin snapshot uses USER-REFINED costs (${overrides.join(", ")}). Confidence = "refined".`;
+        }
+      }
+      
       contextParts.push(`=== MARGIN SNAPSHOT ===
 Selling price: $${(marginSnapshot.selling_price as number).toFixed(2)}
 COGS range (assumed): $${(marginSnapshot.cogs_assumed_low as number).toFixed(2)}–$${(marginSnapshot.cogs_assumed_high as number).toFixed(2)}
 Amazon fees: ${marginSnapshot.fba_fees !== null ? `$${(marginSnapshot.fba_fees as number).toFixed(2)}` : "Not available"}
 Net margin range: ${(marginSnapshot.net_margin_low_pct as number).toFixed(1)}%–${(marginSnapshot.net_margin_high_pct as number).toFixed(1)}%
 Breakeven price range: $${(marginSnapshot.breakeven_price_low as number).toFixed(2)}–$${(marginSnapshot.breakeven_price_high as number).toFixed(2)}
-Confidence level: ${marginSnapshot.confidence || "estimated"}
-Source: ${marginSnapshot.source || "assumption_engine"}
+Confidence level: ${confidence}
+Source: ${marginSnapshot.source || "assumption_engine"}${overrideNote}
 
 This margin snapshot is pre-calculated. Always reference it first when answering margin questions.`);
     }
   }
 
   return contextParts.join("\n\n");
+}
+
+/**
+ * Detects cost override patterns in user message
+ * 
+ * Recognizes structured inputs like:
+ * - "My COGS is $22"
+ * - "FBA fees are $9.80"
+ * - "Use $20 cost and $8 fees"
+ * - "COGS: $15"
+ * - "fees: $10"
+ * 
+ * @param message - User message text
+ * @returns Cost overrides object with cogs and/or fba_fees, or null if not detected
+ */
+function detectCostOverrides(message: string): {
+  cogs: number | null;
+  fba_fees: number | null;
+} | null {
+  const normalized = message.toLowerCase().trim();
+  let cogs: number | null = null;
+  let fbaFees: number | null = null;
+
+  // Pattern 1: "My COGS is $X" or "COGS is $X" or "COGS: $X"
+  const cogsPatterns = [
+    /(?:my\s+)?cogs\s+(?:is|are|:)\s*\$?([\d,]+\.?\d*)/i,
+    /cost\s+(?:is|are|:)\s*\$?([\d,]+\.?\d*)/i,
+    /(?:use|set)\s+\$?([\d,]+\.?\d*)\s+(?:cost|cogs)/i,
+  ];
+
+  for (const pattern of cogsPatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      const value = parseFloat(match[1].replace(/,/g, ""));
+      if (!isNaN(value) && value > 0 && value < 10000) {
+        // Sanity check: COGS should be reasonable
+        cogs = value;
+        break;
+      }
+    }
+  }
+
+  // Pattern 2: "FBA fees are $X" or "fees are $X" or "fees: $X"
+  const feesPatterns = [
+    /(?:fba\s+)?fees?\s+(?:is|are|:)\s*\$?([\d,]+\.?\d*)/i,
+    /(?:use|set)\s+\$?([\d,]+\.?\d*)\s+(?:fees?|fba)/i,
+  ];
+
+  for (const pattern of feesPatterns) {
+    const match = normalized.match(pattern);
+    if (match) {
+      const value = parseFloat(match[1].replace(/,/g, ""));
+      if (!isNaN(value) && value > 0 && value < 100) {
+        // Sanity check: FBA fees should be reasonable
+        fbaFees = value;
+        break;
+      }
+    }
+  }
+
+  // Pattern 3: "Use $X cost and $Y fees" or "$X cost, $Y fees"
+  const combinedPattern = /(?:use|set)\s+\$?([\d,]+\.?\d*)\s+(?:cost|cogs)\s+(?:and|,)\s+\$?([\d,]+\.?\d*)\s+fees?/i;
+  const combinedMatch = normalized.match(combinedPattern);
+  if (combinedMatch) {
+    const costValue = parseFloat(combinedMatch[1].replace(/,/g, ""));
+    const feesValue = parseFloat(combinedMatch[2].replace(/,/g, ""));
+    if (!isNaN(costValue) && costValue > 0 && costValue < 10000) {
+      cogs = costValue;
+    }
+    if (!isNaN(feesValue) && feesValue > 0 && feesValue < 100) {
+      fbaFees = feesValue;
+    }
+  }
+
+  // Only return if at least one value was detected
+  if (cogs !== null || fbaFees !== null) {
+    return { cogs, fba_fees: fbaFees };
+  }
+
+  return null;
 }
 
 /**
@@ -387,7 +487,67 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 7. Build grounded context message
+    // 7. Detect and process cost overrides in user message (BEFORE building context)
+    // ────────────────────────────────────────────────────────────────────────
+    // Check if user message contains structured cost inputs like:
+    // - "My COGS is $22"
+    // - "FBA fees are $9.80"
+    // - "Use $20 cost and $8 fees"
+    // ────────────────────────────────────────────────────────────────────────
+    const costOverrides = detectCostOverrides(body.message);
+    
+    if (costOverrides) {
+      // Update analysis_run.response.cost_overrides
+      const currentResponse = analysisResponse as Record<string, unknown>;
+      const updatedResponse = {
+        ...currentResponse,
+        cost_overrides: {
+          cogs: costOverrides.cogs,
+          fba_fees: costOverrides.fba_fees,
+          last_updated: new Date().toISOString(),
+          source: "user" as const,
+        },
+      };
+
+      // Recalculate margin snapshot using overrides
+      const defaultMarginSnapshot = (
+        (currentResponse.market_snapshot as Record<string, unknown>)?.margin_snapshot as MarginSnapshot
+      ) || null;
+
+      if (defaultMarginSnapshot) {
+        const refinedMarginSnapshot = normalizeCostOverrides({
+          response: updatedResponse as any,
+          defaultMarginSnapshot,
+          sourcingModel: sellerProfile.sourcing_model as any,
+          categoryHint: (marketSnapshot?.category as string) || null,
+        });
+
+        // Update market_snapshot.margin_snapshot with refined values
+        if (!updatedResponse.market_snapshot) {
+          updatedResponse.market_snapshot = {};
+        }
+        (updatedResponse.market_snapshot as Record<string, unknown>).margin_snapshot = refinedMarginSnapshot;
+      }
+
+      // Save updated response to database
+      const { error: updateError } = await supabase
+        .from("analysis_runs")
+        .update({ response: updatedResponse })
+        .eq("id", body.analysisRunId)
+        .eq("user_id", user.id);
+
+      if (updateError) {
+        console.error("Failed to save cost overrides:", updateError);
+        // Continue anyway - don't block the chat response
+      } else {
+        // Update local analysisResponse for context building
+        Object.assign(analysisResponse, updatedResponse);
+        // Also update marketSnapshot reference
+        marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
+      }
+    }
+
+    // 8. Build grounded context message
     // ─────────────────────────────────────────────────────────────────────
     // WHY VERDICTS CANNOT SILENTLY CHANGE:
     // The original verdict is injected as "AUTHORITATIVE" in the context.
@@ -404,7 +564,7 @@ export async function POST(req: NextRequest) {
       analysisRun.input_value
     );
 
-    // 8. Build Market Snapshot Summary (from cached response.market_snapshot only)
+    // 9. Build Market Snapshot Summary (from cached response.market_snapshot only)
     const marketSnapshotSummary = buildMarketSnapshotSummary(
       (analysisResponse.market_snapshot as Record<string, unknown>) || null
     );
@@ -438,7 +598,7 @@ export async function POST(req: NextRequest) {
     // 12. Append the new user message
     messages.push({ role: "user", content: body.message });
 
-    // 13. Call OpenAI with streaming enabled
+    // 14. Call OpenAI with streaming enabled
     // ────────────────────────────────────────────────────────────────────────
     // IMPORTANT: This call does NOT trigger any external data fetching.
     // The AI can ONLY use data injected via the context message above.
