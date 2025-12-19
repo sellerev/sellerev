@@ -689,7 +689,8 @@ export default function AnalyzeForm({
                   </p>
                 </div>
 
-                {/* Check for keyword market snapshot first, then fall back to market_data */}
+                {/* Market Snapshot: Use ONLY cached data from analysis.market_snapshot (normalized from response.market_snapshot) */}
+                {/* No re-fetching, no recomputation - all values come from cached analysis data */}
                 {analysis.market_snapshot ? (
                   <>
                     <div className="grid grid-cols-2 gap-3">
@@ -746,17 +747,23 @@ export default function AnalyzeForm({
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Brand Control</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        Top brand: {analysis.market_snapshot.dominance_score}%
+                        {analysis.market_snapshot.dominance_score !== undefined && analysis.market_snapshot.dominance_score !== null
+                          ? `Top brand: ${analysis.market_snapshot.dominance_score}%`
+                          : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Share of Page 1 controlled by leading brand
+                        {analysis.market_snapshot.dominance_score !== undefined && analysis.market_snapshot.dominance_score !== null
+                          ? "Share of Page 1 controlled by leading brand"
+                          : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.dominance_score >= 40
-                          ? "Brand-dominated"
-                          : analysis.market_snapshot.dominance_score >= 20
-                          ? "Moderately concentrated"
-                          : "Fragmented"}
+                        {analysis.market_snapshot.dominance_score !== undefined && analysis.market_snapshot.dominance_score !== null
+                          ? (analysis.market_snapshot.dominance_score >= 40
+                              ? "Brand-dominated"
+                              : analysis.market_snapshot.dominance_score >= 20
+                              ? "Moderately concentrated"
+                              : "Fragmented")
+                          : ""}
                       </div>
                     </div>
                     {/* Card 6: Page 1 Competition */}
@@ -817,114 +824,18 @@ export default function AnalyzeForm({
                     )}
                   </div>
                     {/* Market Snapshot Verdict */}
+                    {/* Use ONLY cached values from market_snapshot - no recomputation, no fetching */}
                     <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
                       {(() => {
+                        // Defensive: use cached values only, with safe defaults
+                        const avgReviews = analysis.market_snapshot?.avg_reviews ?? null;
+                        const sponsoredCount = analysis.market_snapshot?.sponsored_count ?? 0;
+                        const dominanceScore = analysis.market_snapshot?.dominance_score ?? 0;
+                        
                         const pressure = calculateMarketPressure(
-                          analysis.market_snapshot.avg_reviews,
-                          analysis.market_snapshot.sponsored_count,
-                          analysis.market_snapshot.dominance_score
-                        );
-                        const dotColor =
-                          pressure === "Low"
-                            ? "bg-green-500"
-                            : pressure === "Moderate"
-                            ? "bg-yellow-500"
-                            : "bg-red-500";
-                        return (
-                          <>
-                            <div className={`w-2 h-2 rounded-full ${dotColor}`}></div>
-                            <span className="text-sm font-medium text-gray-900">
-                              Market pressure: {pressure}
-                            </span>
-                          </>
-                        );
-                      })()}
-                    </div>
-                  </>
-                ) : analysis.market_data &&
-                  Object.keys(analysis.market_data).length > 0 ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-3">
-                    {/* Card 1: Typical Price */}
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Typical Price</div>
-                      <div className="text-lg font-semibold mb-0.5">
-                        {analysis.market_data.average_price !== undefined
-                          ? formatCurrency(analysis.market_data.average_price)
-                          : "—"}
-                      </div>
-                      <div className="text-xs text-gray-600 mb-1">
-                        {analysis.market_data.average_price !== undefined
-                          ? "Most sellers cluster here on Page 1"
-                          : "Insufficient Page 1 data"}
-                      </div>
-                      <div className="text-[10px] text-gray-500 font-medium">
-                        {getPriceInterpretation(analysis.market_data.average_price ?? null)}
-                      </div>
-                    </div>
-                    {/* Card 2: Quality Expectation */}
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Quality Expectation</div>
-                      <div className="text-lg font-semibold mb-0.5">
-                        {analysis.market_data.average_rating !== undefined
-                          ? `${analysis.market_data.average_rating.toFixed(1)} ★`
-                          : "—"}
-                      </div>
-                      <div className="text-xs text-gray-600 mb-1">
-                        {analysis.market_data.average_rating !== undefined
-                          ? "Buyer standard on Page 1"
-                          : "Insufficient Page 1 data"}
-                      </div>
-                      <div className="text-[10px] text-gray-500 font-medium">
-                        {getQualityExpectationInterpretation(analysis.market_data.average_rating ?? null)}
-                      </div>
-                    </div>
-                    {/* Card 3: Review Barrier */}
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Review Barrier</div>
-                      <div className="text-lg font-semibold mb-0.5">
-                        {analysis.market_data.review_count_avg !== undefined
-                          ? analysis.market_data.review_count_avg.toLocaleString()
-                          : "—"}
-                      </div>
-                      <div className="text-xs text-gray-600 mb-1">
-                        {analysis.market_data.review_count_avg !== undefined
-                          ? "What you must compete against"
-                          : "Insufficient Page 1 data"}
-                      </div>
-                      <div className="text-[10px] text-gray-500 font-medium">
-                        {getReviewBarrierInterpretation(analysis.market_data.review_count_avg ?? null)}
-                      </div>
-                    </div>
-                    {/* Card 4: Page 1 Competition */}
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">Page 1 Competition</div>
-                      <div className="text-lg font-semibold mb-0.5">
-                        {analysis.market_data.competitor_count !== undefined
-                          ? analysis.market_data.competitor_count
-                          : "—"}
-                      </div>
-                      <div className="text-xs text-gray-600 mb-1">
-                        {analysis.market_data.competitor_count !== undefined
-                          ? "Listings you must beat"
-                          : "Insufficient Page 1 data"}
-                      </div>
-                      <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_data.competitor_count !== undefined
-                          ? getCompetitionInterpretation(analysis.market_data.competitor_count)
-                          : ""}
-                      </div>
-                    </div>
-                  </div>
-                    {/* Market Snapshot Verdict */}
-                    <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
-                      {(() => {
-                        const pressure = calculateMarketPressure(
-                          analysis.market_data.review_count_avg ?? null,
-                          // ASIN analysis doesn't have sponsored_count, use 0 as default
-                          0,
-                          // ASIN analysis doesn't have dominance_score, use 0 as default
-                          0
+                          avgReviews,
+                          sponsoredCount,
+                          dominanceScore
                         );
                         const dotColor =
                           pressure === "Low"
