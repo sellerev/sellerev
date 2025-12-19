@@ -495,9 +495,11 @@ export async function POST(req: NextRequest) {
     // - "Use $20 cost and $8 fees"
     // ────────────────────────────────────────────────────────────────────────
     const costOverrides = detectCostOverrides(body.message);
+    let refinedMarginSnapshot: MarginSnapshot | null = null; // Store for response
     
     if (costOverrides) {
       // Update analysis_run.response.cost_overrides
+      // IMPORTANT: Override applies ONLY to this analysis_run (via .eq("id", body.analysisRunId))
       const currentResponse = analysisResponse as Record<string, unknown>;
       const updatedResponse = {
         ...currentResponse,
@@ -515,7 +517,7 @@ export async function POST(req: NextRequest) {
       ) || null;
 
       if (defaultMarginSnapshot) {
-        const refinedMarginSnapshot = normalizeCostOverrides({
+        refinedMarginSnapshot = normalizeCostOverrides({
           response: updatedResponse as any,
           defaultMarginSnapshot,
           sourcingModel: sellerProfile.sourcing_model as any,
@@ -530,6 +532,7 @@ export async function POST(req: NextRequest) {
       }
 
       // Save updated response to database
+      // SECURITY: .eq("id", body.analysisRunId) ensures override applies ONLY to this analysis_run
       const { error: updateError } = await supabase
         .from("analysis_runs")
         .update({ response: updatedResponse })
@@ -650,6 +653,27 @@ export async function POST(req: NextRequest) {
 
     const stream = new ReadableStream({
       async start(controller) {
+        // If cost overrides were applied, send updated margin snapshot metadata first
+        // This allows the frontend to update the UI with refined margin data
+        if (refinedMarginSnapshot && costOverrides) {
+          const overrideValues: string[] = [];
+          if (costOverrides.cogs !== null) {
+            overrideValues.push(`$${costOverrides.cogs.toFixed(2)} COGS`);
+          }
+          if (costOverrides.fba_fees !== null) {
+            overrideValues.push(`$${costOverrides.fba_fees.toFixed(2)} Amazon fees`);
+          }
+          
+          const metadata = {
+            type: "cost_override_applied",
+            margin_snapshot: refinedMarginSnapshot,
+            override_values: overrideValues.join(" and "),
+            confidence: "refined",
+          };
+          
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata })}\n\n`));
+        }
+
         const reader = openaiResponse.body?.getReader();
         if (!reader) {
           controller.close();
