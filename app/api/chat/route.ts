@@ -124,10 +124,10 @@ Use avg_price as the selling price for margin calculations.`);
   }
 
   // Section 5: FBA Fees (new structure from resolveFbaFees or legacy structure)
+  contextParts.push(`=== FBA FEES (ESTIMATED) ===`);
+  
   if (marketSnapshot) {
     const fbaFees = marketSnapshot.fba_fees as any;
-    
-    contextParts.push(`=== FBA FEES (ESTIMATED) ===`);
     
     if (fbaFees && typeof fbaFees === 'object' && !Array.isArray(fbaFees) && fbaFees !== null) {
       // Check for new structure (from resolveFbaFees for ASIN inputs)
@@ -158,10 +158,11 @@ These fees are Amazon-provided (from SP-API) for ASIN analysis.`);
           : null;
         
         if (totalFee) {
+          const isAmazonProvided = fbaFees.source === "sp_api";
           contextParts.push(`Total Amazon fees: ${totalFee}
 Source: ${fbaFees.source || "estimated"}
 
-${fbaFees.source === "sp_api" ? "These fees are Amazon-provided (from SP-API)." : "These fees are estimated (not from Amazon SP-API)."}`);
+${isAmazonProvided ? "These fees are Amazon-provided (from SP-API)." : "These fees are estimated (not from Amazon SP-API). Keyword analyses use estimated ranges."}`);
         } else {
           contextParts.push(`Amazon fee estimate not available for this ASIN.`);
         }
@@ -172,8 +173,14 @@ ${fbaFees.source === "sp_api" ? "These fees are Amazon-provided (from SP-API)." 
       contextParts.push(`Amazon fee estimate not available for this ASIN.`);
     }
   } else {
-    contextParts.push(`=== FBA FEES (ESTIMATED) ===
-Amazon fee estimate not available for this ASIN.`);
+    contextParts.push(`Amazon fee estimate not available for this ASIN.`);
+  }
+  
+  // Add enforcement note
+  if (inputType === "asin") {
+    contextParts.push(`NOTE: This is an ASIN analysis. FBA fees should be Amazon-provided from SP-API if available.`);
+  } else {
+    contextParts.push(`NOTE: This is a keyword analysis. FBA fees must use estimated category-based ranges, not Amazon SP-API data.`);
   }
 
   return contextParts.join("\n\n");
