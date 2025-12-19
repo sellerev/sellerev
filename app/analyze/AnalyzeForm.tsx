@@ -83,15 +83,18 @@ interface AnalysisResponse {
     dominance_score: number; // 0-100, % of listings belonging to top brand
     representative_asin?: string | null; // Optional representative ASIN for fee estimation
     // Competitive Pressure Index (CPI) - seller-context aware, 0-100
-    competitive_pressure_index?: number;
-    cpi_components?: {
-      reviewDominanceScore: number; // 0-30 points
-      brandConcentrationScore: number; // 0-25 points
-      sponsoredSaturationScore: number; // 0-20 points
-      priceCompressionScore: number; // 0-15 points
-      sellerFitModifier: number; // -10 to +10 points
-    };
-    cpi_explanation?: string;
+    // Computed once per analysis, cached, immutable
+    cpi?: {
+      score: number; // 0-100
+      label: string; // "Low — structurally penetrable" | "Moderate — requires differentiation" | "High — strong incumbents" | "Extreme — brand-locked"
+      breakdown: {
+        review_dominance: number; // 0-30 points
+        brand_concentration: number; // 0-25 points
+        sponsored_saturation: number; // 0-20 points
+        price_compression: number; // 0-15 points
+        seller_fit_modifier: number; // -10 to +10 points
+      };
+    } | null;
     // FBA fee estimate (from SP-API or estimated)
     // New structure (from resolveFbaFees):
     fba_fees?: {
@@ -211,6 +214,21 @@ function getPaidCompetitionInterpretation(sponsoredCount: number, totalListings:
   if (sponsoredRatio < 0.2) return "Low PPC pressure";
   if (sponsoredRatio < 0.4) return "Moderate PPC dependence";
   return "Heavy paid visibility";
+}
+
+/**
+ * Get CPI description based on score
+ */
+function getCPIDescription(score: number): string {
+  if (score <= 30) {
+    return "Structurally penetrable market";
+  } else if (score <= 60) {
+    return "Requires differentiation to compete";
+  } else if (score <= 80) {
+    return "Strong incumbents dominate Page 1";
+  } else {
+    return "Brand-locked market";
+  }
 }
 
 /**
@@ -741,6 +759,7 @@ export default function AnalyzeForm({
               {/* BLOCK 3: MARKET SNAPSHOT                                    */}
               {/* - 4 compact stat cards (2x2 grid)                           */}
               {/* - Uses market_snapshot for keywords, market_data for ASINs */}
+              {/* - CPI displayed as decisive label (not descriptive)         */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <div className="mb-4">
@@ -751,6 +770,19 @@ export default function AnalyzeForm({
                     Aggregated signals from current Page 1 results
                   </p>
                 </div>
+                
+                {/* Competitive Pressure (CPI) - Decisive label */}
+                {analysis.market_snapshot?.cpi && (
+                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="text-xs text-gray-500 mb-1">Competitive Pressure</div>
+                    <div className="text-lg font-semibold text-gray-900">
+                      {analysis.market_snapshot.cpi.label}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      CPI {analysis.market_snapshot.cpi.score} — {getCPIDescription(analysis.market_snapshot.cpi.score)}
+                    </div>
+                  </div>
+                )}
 
                 {/* Market Snapshot: Use ONLY cached data from analysis.market_snapshot (normalized from response.market_snapshot) */}
                 {/* No re-fetching, no recomputation - all values come from cached analysis data */}
@@ -896,36 +928,7 @@ export default function AnalyzeForm({
                       </div>
                     )}
                   </div>
-                    {/* Market Snapshot Verdict */}
-                    {/* Use ONLY cached values from market_snapshot - no recomputation, no fetching */}
-                    <div className="mt-4 pt-4 border-t border-gray-200 flex items-center gap-2">
-                      {(() => {
-                        // Defensive: use cached values only, with safe defaults
-                        const avgReviews = analysis.market_snapshot?.avg_reviews ?? null;
-                        const sponsoredCount = analysis.market_snapshot?.sponsored_count ?? 0;
-                        const dominanceScore = analysis.market_snapshot?.dominance_score ?? 0;
-                        
-                        const pressure = calculateMarketPressure(
-                          avgReviews,
-                          sponsoredCount,
-                          dominanceScore
-                        );
-                        const dotColor =
-                          pressure === "Low"
-                            ? "bg-green-500"
-                            : pressure === "Moderate"
-                            ? "bg-yellow-500"
-                            : "bg-red-500";
-                        return (
-                          <>
-                            <div className={`w-2 h-2 rounded-full ${dotColor}`}></div>
-                            <span className="text-sm font-medium text-gray-900">
-                              Market pressure: {pressure}
-                            </span>
-                          </>
-                        );
-                      })()}
-                    </div>
+                    {/* CPI is displayed above - no separate verdict needed */}
                   </>
                 ) : (
                   <div className="bg-gray-50 rounded-lg p-4 text-center border border-gray-200">

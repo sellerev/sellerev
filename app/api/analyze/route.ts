@@ -699,6 +699,7 @@ export async function POST(req: NextRequest) {
       
       // Calculate Competitive Pressure Index (CPI) from Page 1 listings
       // CPI is seller-context aware and computed deterministically
+      // CPI is computed ONCE per analysis and cached - never recalculated
       if (keywordMarketData.listings && keywordMarketData.listings.length > 0) {
         const cpiResult = calculateCPI({
           listings: keywordMarketData.listings,
@@ -706,10 +707,15 @@ export async function POST(req: NextRequest) {
           sellerExperienceMonths: sellerProfile.experience_months,
         });
         
-        // Inject CPI into market snapshot
-        (marketSnapshot as any).competitive_pressure_index = cpiResult.cpi;
-        (marketSnapshot as any).cpi_components = cpiResult.components;
-        (marketSnapshot as any).cpi_explanation = cpiResult.explanation;
+        // Inject CPI into market snapshot with new structure
+        (marketSnapshot as any).cpi = {
+          score: cpiResult.score,
+          label: cpiResult.label,
+          breakdown: cpiResult.breakdown,
+        };
+      } else {
+        // No Page 1 data → CPI = null
+        (marketSnapshot as any).cpi = null;
       }
     }
 

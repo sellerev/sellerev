@@ -31,15 +31,18 @@ export interface KeywordMarketSnapshot {
   dominance_score: number; // 0-100, % of listings belonging to top brand
   representative_asin?: string | null; // Optional representative ASIN for fee estimation
   // Competitive Pressure Index (CPI) - seller-context aware, 0-100
-  competitive_pressure_index?: number;
-  cpi_components?: {
-    reviewDominanceScore: number; // 0-30 points
-    brandConcentrationScore: number; // 0-25 points
-    sponsoredSaturationScore: number; // 0-20 points
-    priceCompressionScore: number; // 0-15 points
-    sellerFitModifier: number; // -10 to +10 points
-  };
-  cpi_explanation?: string;
+  // Computed once per analysis, cached, immutable
+  cpi?: {
+    score: number; // 0-100
+    label: string; // "Low — structurally penetrable" | "Moderate — requires differentiation" | "High — strong incumbents" | "Extreme — brand-locked"
+    breakdown: {
+      review_dominance: number; // 0-30 points
+      brand_concentration: number; // 0-25 points
+      sponsored_saturation: number; // 0-20 points
+      price_compression: number; // 0-15 points
+      seller_fit_modifier: number; // -10 to +10 points
+    };
+  } | null;
 }
 
 export interface KeywordMarketData {

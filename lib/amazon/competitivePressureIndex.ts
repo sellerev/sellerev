@@ -37,13 +37,14 @@ interface CPIContext {
 }
 
 interface CPICalculation {
-  cpi: number; // 0-100
-  components: {
-    reviewDominanceScore: number; // 0-30 points
-    brandConcentrationScore: number; // 0-25 points
-    sponsoredSaturationScore: number; // 0-20 points
-    priceCompressionScore: number; // 0-15 points
-    sellerFitModifier: number; // -10 to +10 points
+  score: number; // 0-100
+  label: string; // "Low competitive pressure" | "Moderate competitive pressure" | "High competitive pressure" | "Extreme competitive pressure"
+  breakdown: {
+    review_dominance: number; // 0-30 points
+    brand_concentration: number; // 0-25 points
+    sponsored_saturation: number; // 0-20 points
+    price_compression: number; // 0-15 points
+    seller_fit_modifier: number; // -10 to +10 points
   };
   explanation: string;
 }
@@ -60,13 +61,14 @@ export function calculateCPI(context: CPIContext): CPICalculation {
   // Guard: Need listings to calculate
   if (!listings || listings.length === 0) {
     return {
-      cpi: 0,
-      components: {
-        reviewDominanceScore: 0,
-        brandConcentrationScore: 0,
-        sponsoredSaturationScore: 0,
-        priceCompressionScore: 0,
-        sellerFitModifier: 0,
+      score: 0,
+      label: "Low competitive pressure",
+      breakdown: {
+        review_dominance: 0,
+        brand_concentration: 0,
+        sponsored_saturation: 0,
+        price_compression: 0,
+        seller_fit_modifier: 0,
       },
       explanation: "No Page 1 listings available",
     };
@@ -204,11 +206,23 @@ export function calculateCPI(context: CPIContext): CPICalculation {
 
   // Calculate final CPI (0-100)
   const baseCPI = reviewDominanceScore + brandConcentrationScore + sponsoredSaturationScore + priceCompressionScore;
-  const finalCPI = Math.min(100, Math.max(0, Math.round(baseCPI + sellerFitModifier)));
+  const finalScore = Math.min(100, Math.max(0, Math.round(baseCPI + sellerFitModifier)));
+
+  // Generate CPI label based on score
+  let label: string;
+  if (finalScore <= 30) {
+    label = "Low — structurally penetrable";
+  } else if (finalScore <= 60) {
+    label = "Moderate — requires differentiation";
+  } else if (finalScore <= 80) {
+    label = "High — strong incumbents";
+  } else {
+    label = "Extreme — brand-locked";
+  }
 
   // Generate explanation
   const explanation = generateCPIExplanation(
-    finalCPI,
+    finalScore,
     {
       reviewDominanceScore,
       brandConcentrationScore,
@@ -224,13 +238,14 @@ export function calculateCPI(context: CPIContext): CPICalculation {
   );
 
   return {
-    cpi: finalCPI,
-    components: {
-      reviewDominanceScore,
-      brandConcentrationScore,
-      sponsoredSaturationScore,
-      priceCompressionScore,
-      sellerFitModifier,
+    score: finalScore,
+    label,
+    breakdown: {
+      review_dominance: reviewDominanceScore,
+      brand_concentration: brandConcentrationScore,
+      sponsored_saturation: sponsoredSaturationScore,
+      price_compression: priceCompressionScore,
+      seller_fit_modifier: sellerFitModifier,
     },
     explanation,
   };

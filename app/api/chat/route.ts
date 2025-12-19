@@ -115,6 +115,32 @@ For margin calculations, use the sourcing_model to infer COGS ranges automatical
 
   // Section 4: Market Snapshot (includes pricing data for margin calculations)
   const marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
+  
+  // Section 4a: Competitive Pressure Index (CPI) - MUST be cited in strategic answers
+  if (marketSnapshot) {
+    const cpi = (marketSnapshot.cpi as {
+      score: number;
+      label: string;
+      breakdown: Record<string, number>;
+    } | null) || null;
+    
+    if (cpi) {
+      contextParts.push(`=== COMPETITIVE PRESSURE INDEX (CPI) ===
+CPI Score: ${cpi.score} (${cpi.label})
+Breakdown:
+- Review dominance: ${cpi.breakdown.review_dominance} pts
+- Brand concentration: ${cpi.breakdown.brand_concentration} pts
+- Sponsored saturation: ${cpi.breakdown.sponsored_saturation} pts
+- Price compression: ${cpi.breakdown.price_compression} pts
+- Seller fit modifier: ${cpi.breakdown.seller_fit_modifier > 0 ? '+' : ''}${cpi.breakdown.seller_fit_modifier} pts
+
+CRITICAL: CPI must be cited in every strategic answer. CPI is computed once, cached, immutable. Never recalculate or override CPI.`);
+    } else {
+      contextParts.push(`=== COMPETITIVE PRESSURE INDEX (CPI) ===
+CPI: Not available (insufficient Page 1 data)`);
+    }
+  }
+  
   if (marketSnapshot) {
     const avgPrice = (marketSnapshot.avg_price as number) || null;
     
@@ -348,6 +374,23 @@ function canAnswerQuestion(
     }
   }
 
+  // Check for strategic questions about competition/viability - require CPI
+  const strategicPatterns = [
+    /\b(how hard|how difficult|viability|viable|competitive|competition|market entry|enter this market|break into)\b/i,
+    /\b(should I launch|can I compete|worth pursuing|worth it)\b/i,
+  ];
+  
+  if (strategicPatterns.some(p => p.test(normalized))) {
+    const cpi = (marketSnapshot?.cpi as { score: number; label: string } | null) || null;
+    if (!cpi) {
+      return {
+        canAnswer: false,
+        missingItems: ["Competitive Pressure Index (CPI) not available"],
+        options: ["Run an analysis to get CPI data", "Ask about specific metrics available in the market snapshot"],
+      };
+    }
+  }
+  
   // Check for data outside cached context
   const externalDataPatterns = [
     /\b(bsr|best seller rank|sales volume|units sold|revenue|sales rank)\b/i,
@@ -762,6 +805,15 @@ function buildMarketSnapshotSummary(
 
   const parts: string[] = [];
   
+  // Competitive Pressure (CPI) - MUST be first
+  const cpi = (marketSnapshot.cpi as {
+    score: number;
+    label: string;
+  } | null) || null;
+  if (cpi) {
+    parts.push(`- Competitive Pressure: ${cpi.label} (CPI ${cpi.score})`);
+  }
+  
   // Typical Price
   const avgPrice = (marketSnapshot.avg_price as number) || null;
   if (avgPrice !== null) {
@@ -790,25 +842,6 @@ function buildMarketSnapshotSummary(
   const sponsoredCount = (marketSnapshot.sponsored_count as number) || null;
   if (sponsoredCount !== null && sponsoredCount !== undefined) {
     parts.push(`- Paid Competition: ${sponsoredCount} sponsored`);
-  }
-  
-  // Market Pressure (calculate from cached values only)
-  if (avgReviews !== null && sponsoredCount !== null && totalListings !== null) {
-    const dominanceScore = (marketSnapshot.dominance_score as number) || 0;
-    
-    // Simple calculation using cached values (no recomputation, just transformation)
-    let pressureScore = 0;
-    if (avgReviews >= 5000) pressureScore += 2;
-    else if (avgReviews >= 1000) pressureScore += 1;
-    
-    if (sponsoredCount >= 8) pressureScore += 2;
-    else if (sponsoredCount >= 4) pressureScore += 1;
-    
-    if (dominanceScore >= 40) pressureScore += 2;
-    else if (dominanceScore >= 20) pressureScore += 1;
-    
-    const pressure = pressureScore <= 2 ? "Low" : pressureScore <= 4 ? "Moderate" : "High";
-    parts.push(`- Market Pressure: ${pressure}`);
   }
   
   if (parts.length === 0) {
