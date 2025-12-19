@@ -81,6 +81,14 @@ interface AnalysisResponse {
     avg_reviews: number | null;
     top_brands: Array<{ brand: string; count: number }>;
     dominance_score: number | null;
+    // FBA fee estimate (from SP-API or estimated)
+    fba_fees?: {
+      total_fee: number | null;
+      source: "sp_api" | "estimated";
+      asin_used: string;
+      price_used: number;
+    };
+    representative_asin?: string | null;
   } | null;
 }
 
@@ -676,6 +684,24 @@ export default function AnalyzeForm({
                           : "Open"}
                       </div>
                     </div>
+                    {/* Card 5: FBA Fees (est.) */}
+                    {analysis.market_snapshot?.fba_fees && (
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">FBA Fees (est.)</div>
+                        <div className="text-lg font-semibold text-gray-900 mb-0.5">
+                          {analysis.market_snapshot.fba_fees.total_fee !== null && analysis.market_snapshot.fba_fees.total_fee !== undefined
+                            ? formatCurrency(analysis.market_snapshot.fba_fees.total_fee)
+                            : "—"}
+                        </div>
+                        <div className="text-xs text-gray-600 mb-1">
+                          {analysis.market_snapshot.fba_fees.source === "sp_api"
+                            ? "Amazon estimate"
+                            : analysis.market_snapshot.fba_fees.source === "estimated"
+                            ? "Model estimate"
+                            : ""}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : analysis.market_data &&
                   Object.keys(analysis.market_data).length > 0 ? (
