@@ -358,6 +358,13 @@ interface DecisionContract {
     competitor_count: number | null;
     avg_rating: number | null;
   };
+  // User-refined costs (optional, added after initial analysis)
+  cost_overrides?: {
+    cogs: number | null;
+    fba_fees: number | null;
+    last_updated: string; // ISO timestamp
+    source: "user";
+  };
 }
 
 function validateRequestBody(body: any): body is AnalyzeRequestBody {

@@ -110,6 +110,13 @@ interface AnalysisResponse {
       source: "assumption_engine" | "amazon_fees";
     } | null;
   } | null;
+  // Optional: User-refined costs (added after initial analysis)
+  cost_overrides?: {
+    cogs: number | null;
+    fba_fees: number | null;
+    last_updated: string; // ISO timestamp
+    source: "user";
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
