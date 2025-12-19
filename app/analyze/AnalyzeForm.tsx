@@ -177,43 +177,43 @@ function getPriceInterpretation(avgPrice: number | null): string {
 }
 
 /**
- * Get review barrier interpretation
+ * Get review moat interpretation
  */
 function getReviewBarrierInterpretation(avgReviews: number | null): string {
   if (avgReviews === null || avgReviews === undefined) return "";
-  if (avgReviews < 1000) return "<1,000: Accessible";
-  if (avgReviews < 5000) return "1,000–5,000: Hard to crack";
-  return "5,000+: Entrenched leaders";
+  if (avgReviews < 1000) return "<1,000: Penetrable";
+  if (avgReviews < 5000) return "1,000–5,000: Significant barrier";
+  return "5,000+: High barrier";
 }
 
 /**
- * Get quality expectation interpretation
+ * Get quality threshold interpretation
  */
 function getQualityExpectationInterpretation(avgRating: number | null): string {
   if (avgRating === null || avgRating === undefined) return "";
-  if (avgRating < 4.2) return "<4.2: Opportunity to out-quality";
-  if (avgRating < 4.7) return "4.2–4.6: Table stakes";
-  return "4.7+: Perfection required";
+  if (avgRating < 4.2) return "<4.2: Quality gap exists";
+  if (avgRating < 4.7) return "4.2–4.6: Standard required";
+  return "4.7+: Excellence required";
 }
 
 /**
- * Get Page 1 competition interpretation
+ * Get competitive density interpretation
  */
 function getCompetitionInterpretation(totalListings: number): string {
-  if (totalListings < 20) return "<20: Manageable";
-  if (totalListings < 35) return "20–35: Competitive";
-  return "35+: Crowded";
+  if (totalListings < 20) return "<20: Low density";
+  if (totalListings < 35) return "20–35: Moderate density";
+  return "35+: High density";
 }
 
 /**
- * Get paid competition interpretation
+ * Get ad saturation interpretation
  */
 function getPaidCompetitionInterpretation(sponsoredCount: number, totalListings: number): string {
   if (totalListings === 0) return "";
   const sponsoredRatio = sponsoredCount / totalListings;
-  if (sponsoredRatio < 0.2) return "Low PPC pressure";
-  if (sponsoredRatio < 0.4) return "Moderate PPC dependence";
-  return "Heavy paid visibility";
+  if (sponsoredRatio < 0.2) return "Low ad saturation";
+  if (sponsoredRatio < 0.4) return "Moderate ad saturation";
+  return "High ad saturation";
 }
 
 /**
@@ -789,9 +789,9 @@ export default function AnalyzeForm({
                 {analysis.market_snapshot ? (
                   <>
                     <div className="grid grid-cols-2 gap-3">
-                    {/* Card 1: Typical Price */}
+                    {/* Card 1: Price Band */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Typical Price</div>
+                      <div className="text-xs text-gray-500 mb-1">Price Band</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
                           ? formatCurrency(analysis.market_snapshot.avg_price)
@@ -799,16 +799,16 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
-                          ? "Most sellers cluster here on Page 1"
+                          ? "Page 1 price anchor"
                           : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {getPriceInterpretation(analysis.market_snapshot.avg_price)}
                       </div>
                     </div>
-                    {/* Card 2: Review Barrier */}
+                    {/* Card 2: Review Moat */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Review Barrier</div>
+                      <div className="text-xs text-gray-500 mb-1">Review Moat</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
                           ? analysis.market_snapshot.avg_reviews.toLocaleString()
@@ -816,22 +816,22 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
-                          ? "What you must compete against"
+                          ? "Review count you must match"
                           : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {getReviewBarrierInterpretation(analysis.market_snapshot.avg_reviews)}
                       </div>
                     </div>
-                    {/* Card 3: Quality Expectation */}
+                    {/* Card 3: Quality Threshold */}
                     {analysis.market_snapshot.avg_rating !== null && analysis.market_snapshot.avg_rating !== undefined && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Quality Expectation</div>
+                        <div className="text-xs text-gray-500 mb-1">Quality Threshold</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
                           {analysis.market_snapshot.avg_rating.toFixed(1)} ★
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
-                          Buyer standard on Page 1
+                          Minimum rating to compete
                         </div>
                         <div className="text-[10px] text-gray-500 font-medium">
                           {getQualityExpectationInterpretation(analysis.market_snapshot.avg_rating)}
@@ -848,7 +848,7 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         {analysis.market_snapshot.dominance_score !== undefined && analysis.market_snapshot.dominance_score !== null
-                          ? "Share of Page 1 controlled by leading brand"
+                          ? "Leading brand's Page 1 share"
                           : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
@@ -861,9 +861,9 @@ export default function AnalyzeForm({
                           : ""}
                       </div>
                     </div>
-                    {/* Card 6: Page 1 Competition */}
+                    {/* Card 6: Competitive Density */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Page 1 Competition</div>
+                      <div className="text-xs text-gray-500 mb-1">Competitive Density</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot.total_page1_listings > 0
                           ? `${analysis.market_snapshot.total_page1_listings} listings`
@@ -871,7 +871,7 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         {analysis.market_snapshot.total_page1_listings > 0
-                          ? "Listings you must beat"
+                          ? "Competitors on Page 1"
                           : "Insufficient Page 1 data"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
@@ -880,10 +880,10 @@ export default function AnalyzeForm({
                           : ""}
                       </div>
                     </div>
-                    {/* Card 7: Paid Competition */}
+                    {/* Card 7: Ad Saturation */}
                     {analysis.market_snapshot.sponsored_count !== undefined && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Paid Competition</div>
+                        <div className="text-xs text-gray-500 mb-1">Ad Saturation</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
                           {analysis.market_snapshot.sponsored_count > 0
                             ? `${analysis.market_snapshot.sponsored_count} sponsored`
@@ -891,7 +891,7 @@ export default function AnalyzeForm({
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
                           {analysis.market_snapshot.sponsored_count > 0
-                            ? "Sponsored listings on Page 1"
+                            ? "Paid ads on Page 1"
                             : "Insufficient Page 1 data"}
                         </div>
                         <div className="text-[10px] text-gray-500 font-medium">
@@ -901,10 +901,10 @@ export default function AnalyzeForm({
                         </div>
                       </div>
                     )}
-                    {/* Card 8: Amazon Fees */}
+                    {/* Card 8: Fulfillment Cost */}
                     {analysis.market_snapshot?.fba_fees && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Amazon Fees</div>
+                        <div className="text-xs text-gray-500 mb-1">Fulfillment Cost</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
                           {(() => {
                             // Support both new and legacy structures
@@ -922,7 +922,7 @@ export default function AnalyzeForm({
                             const fees = analysis.market_snapshot.fba_fees;
                             const hasFee = ('total_fba_fees' in fees && fees.total_fba_fees !== null) ||
                                           ('total_fee' in fees && fees.total_fee !== null);
-                            return hasFee ? "Typical fulfillment cost" : "Insufficient Page 1 data";
+                            return hasFee ? "FBA fee per unit" : "Insufficient Page 1 data";
                           })()}
                         </div>
                       </div>
