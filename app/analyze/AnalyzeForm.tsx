@@ -96,6 +96,19 @@ interface AnalysisResponse {
       asin_used: string;
       price_used: number;
     } | null;
+    // Margin snapshot (calculated from COGS assumptions and FBA fees)
+    margin_snapshot?: {
+      selling_price: number;
+      cogs_assumed_low: number;
+      cogs_assumed_high: number;
+      fba_fees: number | null;
+      net_margin_low_pct: number;
+      net_margin_high_pct: number;
+      breakeven_price_low: number;
+      breakeven_price_high: number;
+      confidence: "estimated" | "refined";
+      source: "assumption_engine" | "amazon_fees";
+    } | null;
   } | null;
 }
 
@@ -880,6 +893,69 @@ export default function AnalyzeForm({
                   </div>
                 )}
               </div>
+
+              {/* ─────────────────────────────────────────────────────────── */}
+              {/* BLOCK 3.5: MARGIN SNAPSHOT                                 */}
+              {/* - Compact margin breakdown                                 */}
+              {/* - Decisive, no paragraphs                                  */}
+              {/* ─────────────────────────────────────────────────────────── */}
+              {analysis.market_snapshot?.margin_snapshot && (
+                <div className="bg-white border rounded-xl p-6 shadow-sm">
+                  <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                    Margin Snapshot (Estimated)
+                  </h2>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Assumed selling price */}
+                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div className="text-xs text-gray-500 mb-1">Assumed selling price</div>
+                      <div className="text-lg font-semibold text-gray-900">
+                        {formatCurrency(analysis.market_snapshot.margin_snapshot.selling_price)}
+                      </div>
+                    </div>
+
+                    {/* Estimated COGS range */}
+                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div className="text-xs text-gray-500 mb-1">Estimated COGS range</div>
+                      <div className="text-lg font-semibold text-gray-900">
+                        {formatCurrency(analysis.market_snapshot.margin_snapshot.cogs_assumed_low)}–{formatCurrency(analysis.market_snapshot.margin_snapshot.cogs_assumed_high)}
+                      </div>
+                    </div>
+
+                    {/* Estimated Amazon fees */}
+                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div className="text-xs text-gray-500 mb-1">Estimated Amazon fees</div>
+                      <div className="text-lg font-semibold text-gray-900">
+                        {analysis.market_snapshot.margin_snapshot.fba_fees !== null
+                          ? formatCurrency(analysis.market_snapshot.margin_snapshot.fba_fees)
+                          : "—"}
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-1">
+                        {analysis.market_snapshot.margin_snapshot.fba_fees === null
+                          ? "Amazon fee estimate used"
+                          : analysis.market_snapshot.margin_snapshot.source === "amazon_fees"
+                          ? "Amazon-provided"
+                          : "Estimated"}
+                      </div>
+                    </div>
+
+                    {/* Estimated net margin range */}
+                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div className="text-xs text-gray-500 mb-1">Estimated net margin range</div>
+                      <div className="text-lg font-semibold text-gray-900">
+                        {analysis.market_snapshot.margin_snapshot.net_margin_low_pct.toFixed(1)}%–{analysis.market_snapshot.margin_snapshot.net_margin_high_pct.toFixed(1)}%
+                      </div>
+                    </div>
+
+                    {/* Breakeven price range */}
+                    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 col-span-2">
+                      <div className="text-xs text-gray-500 mb-1">Breakeven price range</div>
+                      <div className="text-lg font-semibold text-gray-900">
+                        {formatCurrency(analysis.market_snapshot.margin_snapshot.breakeven_price_low)}–{formatCurrency(analysis.market_snapshot.margin_snapshot.breakeven_price_high)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 4: EXECUTIVE SUMMARY                                  */}

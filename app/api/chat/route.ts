@@ -183,6 +183,23 @@ ${isAmazonProvided ? "These fees are Amazon-provided (from SP-API)." : "These fe
     contextParts.push(`NOTE: This is a keyword analysis. FBA fees must use estimated category-based ranges, not Amazon SP-API data.`);
   }
 
+  // Section 6: Margin Snapshot (calculated from COGS assumptions and FBA fees)
+  if (marketSnapshot) {
+    const marginSnapshot = (marketSnapshot.margin_snapshot as Record<string, unknown>) || null;
+    if (marginSnapshot) {
+      contextParts.push(`=== MARGIN SNAPSHOT ===
+Selling price: $${(marginSnapshot.selling_price as number).toFixed(2)}
+COGS range (assumed): $${(marginSnapshot.cogs_assumed_low as number).toFixed(2)}–$${(marginSnapshot.cogs_assumed_high as number).toFixed(2)}
+Amazon fees: ${marginSnapshot.fba_fees !== null ? `$${(marginSnapshot.fba_fees as number).toFixed(2)}` : "Not available"}
+Net margin range: ${(marginSnapshot.net_margin_low_pct as number).toFixed(1)}%–${(marginSnapshot.net_margin_high_pct as number).toFixed(1)}%
+Breakeven price range: $${(marginSnapshot.breakeven_price_low as number).toFixed(2)}–$${(marginSnapshot.breakeven_price_high as number).toFixed(2)}
+Confidence level: ${marginSnapshot.confidence || "estimated"}
+Source: ${marginSnapshot.source || "assumption_engine"}
+
+This margin snapshot is pre-calculated. Always reference it first when answering margin questions.`);
+    }
+  }
+
   return contextParts.join("\n\n");
 }
 

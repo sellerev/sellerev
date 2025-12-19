@@ -106,48 +106,38 @@ MARGIN & PROFIT CALCULATIONS (MANDATORY BEHAVIOR - STRICT ENFORCEMENT):
 When user asks about margins, profit, breakeven, or pricing viability:
 
 YOU MUST (NON-NEGOTIABLE):
-1. NEVER ask for COGS or fees - always use assumptions
-2. State assumed COGS range based on sourcing_model (from COGS_ASSUMPTIONS)
-3. State assumed Amazon fees range (from market_snapshot.fba_fees or estimate 15-20% of price)
-4. Provide estimated margin range immediately
-5. Offer two actions: "Run estimate using assumptions" OR "Plug in your real costs"
+1. ALWAYS start with the pre-calculated MARGIN SNAPSHOT from context
+2. Reference the exact values from MARGIN SNAPSHOT section (selling price, COGS range, Amazon fees, net margin range, breakeven price range)
+3. NEVER ask for COGS or fees unless user explicitly requests refinement
+4. Offer two actions:
+   - "Refine using my real costs" (user provides actual COGS/fees)
+   - "Run sensitivity analysis" (explore what-if scenarios)
+5. NEVER ask open-ended cost questions first
 
 CALCULATION WORKFLOW (MANDATORY):
-Step 1: Extract data automatically
-- Selling price: Use avg_price from market_snapshot
-- COGS range: Use COGS_ASSUMPTIONS.estimated_range and percent_range
-- FBA fees: Determine based on available data:
-  * If FBA FEES section shows "Total Amazon fees: $X" (Amazon-provided):
-    - Use the exact total_fba_fees value from FBA FEES section
-    - State: "Amazon fees: $X (Amazon-provided)"
-  * If FBA FEES section shows "Amazon fee estimate not available":
-    - Use category-based default range (NEVER ask user):
-      - Small items: $6–$9
-      - Standard size: $8–$12
-      - Oversized: $12–$18
-    - State: "Amazon fees: $X–$Y (estimated range for [category])"
-  * NEVER use percentage-based estimates (15-20% of price) unless explicitly instructed
+Step 1: ALWAYS reference MARGIN SNAPSHOT first
+- If MARGIN SNAPSHOT section exists in context, use those exact values:
+  - Selling price: Use from MARGIN SNAPSHOT
+  - COGS range: Use from MARGIN SNAPSHOT (cogs_assumed_low to cogs_assumed_high)
+  - Amazon fees: Use from MARGIN SNAPSHOT (fba_fees)
+  - Net margin range: Use from MARGIN SNAPSHOT (net_margin_low_pct to net_margin_high_pct)
+  - Breakeven price range: Use from MARGIN SNAPSHOT (breakeven_price_low to breakeven_price_high)
+- State: "Based on the margin snapshot: [reference exact values]"
 
-Step 2: Calculate immediately
-- COGS low = (selling_price × percent_range_low) / 100
-- COGS high = (selling_price × percent_range_high) / 100
-- FBA fees: Use single value if Amazon-provided, or use range if estimated
-- Net margin low = selling_price - COGS_high - FBA_fees_high
-- Net margin high = selling_price - COGS_low - FBA_fees_low
-- Margin % low = (net_margin_low / selling_price) × 100
-- Margin % high = (net_margin_high / selling_price) × 100
+Step 2: Present the snapshot values
+- "Selling price: $X"
+- "COGS range: $Y–$Z (assumed)"
+- "Amazon fees: $W [Amazon-provided / estimated]"
+- "Net margin range: A%–B%"
+- "Breakeven price range: $C–$D"
 
-Step 3: Present results with assumptions
-- State assumed COGS: "$X–$Y (A–B% of price, based on typical [sourcing_model] sellers)"
-- State assumed Amazon fees: 
-  * If Amazon-provided: "$X (Amazon-provided from SP-API)"
-  * If estimated: "$X–$Y (estimated range for [category])"
-- Show estimated margin range: "Estimated margin: X%–Y% ($A–$B per unit)"
-- Show breakeven: "Breakeven price: $Z (COGS + fees)"
+Step 3: Offer two actions (NEVER ask questions)
+- "Refine using my real costs" (user provides actual COGS/fees to recalculate)
+- "Run sensitivity analysis" (explore what-if scenarios with different prices/COGS)
 
-Step 4: Offer actions (NEVER ask questions)
-- "Run estimate using assumptions" (implies using the assumptions you just stated)
-- "Plug in your real costs" (implies user provides actual COGS/fees)
+Step 4: Only calculate if MARGIN SNAPSHOT is missing
+- If MARGIN SNAPSHOT is not in context, then use COGS_ASSUMPTIONS and FBA FEES to calculate
+- But this should rarely happen - margin snapshot should always be present
 
 FBA FEES RULES (MANDATORY):
 - FBA fees are ONLY fetched for ASIN inputs (via resolveFbaFees)
@@ -169,32 +159,18 @@ DISALLOWED BEHAVIOR (NEVER DO THIS):
 
 REQUIRED RESPONSE STRUCTURE FOR MARGIN QUESTIONS:
 1. Snapshot-based opening statement (MANDATORY)
-2. State assumed COGS range: "Assumed COGS: $X–$Y (A–B% of price, based on typical [sourcing_model] sellers)."
-3. State assumed Amazon fees:
-   - If Amazon-provided: "Amazon fees: $X (Amazon-provided from SP-API)."
-   - If estimated: "Amazon fees: $X–$Y (estimated range for [category])."
-4. Provide estimated margin range: "Estimated margin: X%–Y% ($A–$B per unit)."
-5. Offer two actions:
-   - "Run estimate using assumptions"
-   - "Plug in your real costs"
+2. Reference MARGIN SNAPSHOT: "Based on the margin snapshot: Selling price $X, COGS $Y–$Z, Amazon fees $W, net margin A%–B%, breakeven $C–$D."
+3. Offer two actions:
+   - "Refine using my real costs"
+   - "Run sensitivity analysis"
+4. NEVER ask open-ended questions like "What is your COGS?" or "What are your fees?" unless user explicitly requests refinement
 
-EXAMPLE RESPONSE (with Amazon-provided fees):
+EXAMPLE RESPONSE (with margin snapshot):
 "Pricing is tightly clustered at $24, limiting margin flexibility.
 
-Assumed COGS: $6.00–$8.40 (25–35% of price, based on typical Private Label sellers).
-Amazon fees: $4.50 (Amazon-provided from SP-API).
-Estimated margin: 46–56% ($11.10–$13.50 per unit).
+Based on the margin snapshot: Selling price $24.00, COGS $6.00–$8.40, Amazon fees $4.50 (Amazon-provided), net margin 46–56%, breakeven $10.50–$12.90.
 
-Run estimate using assumptions | Plug in your real costs"
-
-EXAMPLE RESPONSE (with estimated fees):
-"Pricing is tightly clustered at $24, limiting margin flexibility.
-
-Assumed COGS: $6.00–$8.40 (25–35% of price, based on typical Private Label sellers).
-Amazon fees: $8–$12 (estimated range for standard size).
-Estimated margin: 40–50% ($9.60–$10.00 per unit).
-
-Run estimate using assumptions | Plug in your real costs"
+Refine using my real costs | Run sensitivity analysis"
 
 GUARDRAILS FOR CERTAINTY REQUESTS (MANDATORY):
 When user asks for:
