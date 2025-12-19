@@ -586,15 +586,13 @@ export default function AnalyzeForm({
               {/* - Uses market_snapshot for keywords, market_data for ASINs */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-gray-900">
-                    Market Snapshot
+                <div className="mb-4">
+                  <h2 className="text-lg font-semibold text-gray-900 mb-1">
+                    Page 1 Market Snapshot
                   </h2>
-                  {analysis.market_data?.data_fetched_at && (
-                    <span className="text-xs text-gray-400">
-                      Updated {formatTimeAgo(analysis.market_data.data_fetched_at)}
-                    </span>
-                  )}
+                  <p className="text-xs text-gray-500">
+                    Aggregated signals from current Page 1 results
+                  </p>
                 </div>
 
                 {/* Check for keyword market snapshot first, then fall back to market_data */}
@@ -610,13 +608,13 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
-                          ? `Avg: ${formatCurrency(analysis.market_snapshot.avg_price)}`
-                          : "Price data unavailable"}
+                          ? "Page 1 average selling price"
+                          : "Price data unavailable on Page 1"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
-                          ? analysis.market_snapshot.avg_price < 20 ? "Budget" : analysis.market_snapshot.avg_price < 50 ? "Mid-range" : "Premium"
-                          : "Unknown"}
+                          ? "Entry pricing reference"
+                          : ""}
                       </div>
                     </div>
                     {/* Card 2: Review Barrier */}
@@ -628,18 +626,16 @@ export default function AnalyzeForm({
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
-                          ? `Avg reviews: ${analysis.market_snapshot.avg_reviews.toLocaleString()}`
-                          : "Review data unavailable"}
+                        Average reviews on Page 1
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
-                          ? analysis.market_snapshot.avg_reviews > 2000
-                            ? "High barrier"
-                            : analysis.market_snapshot.avg_reviews > 500
-                            ? "Moderate"
-                            : "Low"
-                          : "Unknown"}
+                          ? analysis.market_snapshot.avg_reviews >= 300
+                            ? "High barrier to entry"
+                            : analysis.market_snapshot.avg_reviews >= 100
+                            ? "Moderate barrier"
+                            : "Low barrier"
+                          : "Insufficient review data"}
                       </div>
                     </div>
                     {/* Card 3: Brand Control */}
@@ -651,13 +647,16 @@ export default function AnalyzeForm({
                           : "—"}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        Competitors: {analysis.market_snapshot.total_listings} listings
-                        {analysis.market_snapshot.sponsored_count > 0 && ` • ${analysis.market_snapshot.sponsored_count} sponsored`}
+                        Share of Page 1 controlled by leading brand
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
                         {analysis.market_snapshot.dominance_score !== null && analysis.market_snapshot.dominance_score !== undefined
-                          ? analysis.market_snapshot.dominance_score >= 35 ? "Concentrated" : "Fragmented"
-                          : "Unknown"}
+                          ? analysis.market_snapshot.dominance_score >= 40
+                            ? "Brand-dominated"
+                            : analysis.market_snapshot.dominance_score >= 20
+                            ? "Moderately concentrated"
+                            : "Fragmented"
+                          : ""}
                       </div>
                     </div>
                     {/* Card 4: Market Size */}
@@ -667,16 +666,14 @@ export default function AnalyzeForm({
                         {analysis.market_snapshot.total_listings} listings
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        {analysis.market_snapshot.total_results_estimate !== null
-                          ? `~${analysis.market_snapshot.total_results_estimate.toLocaleString()} total results`
-                          : "Page 1 analysis"}
+                        Products competing on Page 1
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.total_listings >= 20
-                          ? "Large market"
-                          : analysis.market_snapshot.total_listings >= 10
-                          ? "Medium"
-                          : "Small"}
+                        {analysis.market_snapshot.total_listings >= 60
+                          ? "Crowded market"
+                          : analysis.market_snapshot.total_listings >= 30
+                          ? "Competitive"
+                          : "Open"}
                       </div>
                     </div>
                   </div>
@@ -721,11 +718,13 @@ export default function AnalyzeForm({
                     </div>
                   </div>
                 ) : (
-                  <div className="bg-gray-50 rounded-lg p-3 text-center border border-gray-200">
-                    <p className="text-gray-500 text-xs">
-                      {analysis.input_type === "keyword"
-                        ? "Insufficient market data for this keyword."
-                        : "No market data available for this analysis."}
+                  <div className="bg-gray-50 rounded-lg p-4 text-center border border-gray-200">
+                    <h3 className="text-sm font-semibold text-gray-900 mb-2">
+                      No Page 1 Market Data
+                    </h3>
+                    <p className="text-gray-600 text-xs leading-relaxed">
+                      This keyword does not return reliable Page 1 listing data.<br />
+                      Try a more specific keyword or analyze an individual ASIN.
                     </p>
                   </div>
                 )}
