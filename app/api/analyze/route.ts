@@ -672,8 +672,8 @@ export async function POST(req: NextRequest) {
       keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
       console.log("RAIN_DATA_RAW", keywordMarketData);
       
-      // Guard: 422 ONLY if search_results is empty or missing
-      if (!keywordMarketData || !keywordMarketData.snapshot || keywordMarketData.snapshot.total_listings === 0) {
+      // Guard: 422 ONLY if search_results is empty or missing (Page 1 only)
+      if (!keywordMarketData || !keywordMarketData.snapshot || keywordMarketData.snapshot.total_page1_listings === 0) {
         return NextResponse.json(
           {
             success: false,
@@ -700,49 +700,43 @@ export async function POST(req: NextRequest) {
       const avgReviewsText = marketSnapshot.avg_reviews !== null 
         ? marketSnapshot.avg_reviews.toLocaleString() 
         : "Not available";
-      const dominanceText = marketSnapshot.dominance_score !== null 
-        ? `${marketSnapshot.dominance_score}%` 
+      const avgRatingText = marketSnapshot.avg_rating !== null 
+        ? marketSnapshot.avg_rating.toFixed(1)
         : "Not available";
-      const topBrandsText = marketSnapshot.top_brands && marketSnapshot.top_brands.length > 0
-        ? marketSnapshot.top_brands.slice(0, 3).map((b: any) => `${b.brand} (${b.count})`).join(", ")
-        : "Not available";
-      const totalResultsText = marketSnapshot.total_results_estimate !== null
-        ? marketSnapshot.total_results_estimate.toLocaleString()
-        : "Not available";
+      const dominanceText = `${marketSnapshot.dominance_score}%`;
 
       const marketDataSection = `
 
 KEYWORD ANALYSIS CONTEXT:
 
-MARKET DATA (Amazon search results for "${keywordText}"):
-- Total listings analyzed: ${marketSnapshot.total_listings}
+MARKET DATA (Page 1 Amazon search results for "${keywordText}"):
+- Page 1 listings analyzed: ${marketSnapshot.total_page1_listings}
 - Sponsored listings: ${marketSnapshot.sponsored_count}
-- Total results estimate: ${totalResultsText}
 - Avg price: ${avgPriceText}
 - Avg reviews: ${avgReviewsText}
-- Top brands: ${topBrandsText}
-- Brand dominance score: ${dominanceText} (top brand share of page 1)
+- Avg rating: ${avgRatingText}
+- Brand dominance score: ${dominanceText} (top brand share of Page 1)
 
 KEYWORD ANALYSIS RULES (NON-NEGOTIABLE):
 - Treat keyword analysis as directional, not definitive
-- Reference aggregated signals, not individual ASIN performance
+- Reference aggregated signals from Page 1 only, not individual ASIN performance
 - If dominance_score > 50%, flag brand dominance as a risk
 - If avg_reviews > 2000, flag high review barrier as a risk
-- If total_listings >= 10, flag crowded page 1 as a risk
-- This is aggregated market context, not a specific product listing
+- If total_page1_listings >= 10, flag crowded Page 1 as a risk
+- This is aggregated Page 1 market context, not a specific product listing
 - Cite specific numbers from market data when available
 - If a metric is "Not available", explicitly state that in your analysis
+- DO NOT reference total_results_estimate or deep pagination metrics (Page 1 only)
 
 METRIC CITATION REQUIREMENTS:
 - Executive Summary MUST include at least TWO metrics from the market data above
 - Each Risk Breakdown explanation MUST reference at least ONE metric from the market data above
-- Fill numbers_used field with actual values from market_snapshot_json (use null if metric is not available):
+- Fill numbers_used field with actual values from market_snapshot (use null if metric is not available):
   - If you cite avg_price in your analysis, set numbers_used.avg_price to ${marketSnapshot.avg_price !== null ? marketSnapshot.avg_price : 'null'}
   - If you cite avg_reviews, set numbers_used.avg_reviews to ${marketSnapshot.avg_reviews !== null ? marketSnapshot.avg_reviews : 'null'}
-  - If you cite total_listings, set numbers_used.competitor_count to ${marketSnapshot.total_listings}
-  - If you cite dominance_score, set numbers_used.brand_concentration_pct to ${marketSnapshot.dominance_score !== null ? marketSnapshot.dominance_score : 'null'}
-  - For metrics you do NOT cite or that are not available, set to null
-  - Note: price_range, median_reviews, review_density_pct, and avg_rating are not available in this snapshot structure`;
+  - If you cite total_page1_listings, set numbers_used.competitor_count to ${marketSnapshot.total_page1_listings}
+  - If you cite dominance_score, set numbers_used.brand_concentration_pct to ${marketSnapshot.dominance_score}
+  - For metrics you do NOT cite or that are not available, set to null`;
 
       systemPrompt = SYSTEM_PROMPT + marketDataSection;
     } else if (body.input_type === "idea") {
@@ -1000,14 +994,14 @@ ${body.input_value}`;
       if (!decisionJson.numbers_used) {
         decisionJson.numbers_used = {};
       }
-      // Map new snapshot structure to numbers_used format
+      // Map snapshot structure to numbers_used format (Page 1 only)
       decisionJson.numbers_used.avg_price = marketSnapshot.avg_price;
-      decisionJson.numbers_used.price_range = null; // Not available in new structure
-      decisionJson.numbers_used.median_reviews = null; // Not available in new structure
-      decisionJson.numbers_used.review_density_pct = null; // Not available in new structure
+      decisionJson.numbers_used.price_range = null; // Not available in Page 1 structure
+      decisionJson.numbers_used.median_reviews = null; // Not available in Page 1 structure
+      decisionJson.numbers_used.review_density_pct = null; // Not available in Page 1 structure
       decisionJson.numbers_used.brand_concentration_pct = marketSnapshot.dominance_score;
-      decisionJson.numbers_used.competitor_count = marketSnapshot.total_listings;
-      decisionJson.numbers_used.avg_rating = null; // Not available in new structure
+      decisionJson.numbers_used.competitor_count = marketSnapshot.total_page1_listings;
+      decisionJson.numbers_used.avg_rating = marketSnapshot.avg_rating;
     } else if (body.input_type === "idea") {
       // Ensure numbers_used is all null if no market data
       if (!decisionJson.numbers_used) {
@@ -1028,12 +1022,14 @@ ${body.input_value}`;
     // Store market data in both response (for structured access) and rainforest_data (for consistency)
     
     // Prepare rainforest_data (omit null fields to avoid database issues)
+    // Note: This is Page 1 data only
     let rainforestData = null;
     if (body.input_type === "idea" && marketSnapshot) {
       rainforestData = {
         average_price: marketSnapshot.avg_price,
         review_count_avg: marketSnapshot.avg_reviews,
-        competitor_count: marketSnapshot.total_listings,
+        average_rating: marketSnapshot.avg_rating,
+        competitor_count: marketSnapshot.total_page1_listings,
         dominance_score: marketSnapshot.dominance_score,
         sponsored_count: marketSnapshot.sponsored_count,
         data_fetched_at: new Date().toISOString(),
@@ -1041,7 +1037,8 @@ ${body.input_value}`;
       // Only include fields that are not null
       if (rainforestData.average_price === null) delete rainforestData.average_price;
       if (rainforestData.review_count_avg === null) delete rainforestData.review_count_avg;
-      if (rainforestData.dominance_score === null) delete rainforestData.dominance_score;
+      if (rainforestData.average_rating === null) delete rainforestData.average_rating;
+      // dominance_score is always a number (0-100), so no need to delete
     }
 
     // 13. Save to analysis_runs

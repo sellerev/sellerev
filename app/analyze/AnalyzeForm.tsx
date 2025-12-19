@@ -72,15 +72,16 @@ interface AnalysisResponse {
   };
   // Optional: Aggregated keyword market snapshot (when input_type === "keyword")
   // Matches KeywordMarketSnapshot from lib/amazon/keywordMarket.ts
+  // Represents Page 1 results only
   market_snapshot?: {
     keyword: string;
-    total_results_estimate: number | null;
-    total_listings: number;
-    sponsored_count: number;
     avg_price: number | null;
     avg_reviews: number | null;
-    top_brands: Array<{ brand: string; count: number }>;
-    dominance_score: number | null;
+    avg_rating: number | null;
+    total_page1_listings: number; // Only Page 1 listings
+    sponsored_count: number;
+    dominance_score: number; // 0-100, % of listings belonging to top brand
+    representative_asin?: string | null; // Optional representative ASIN for fee estimation
     // FBA fee estimate (from SP-API or estimated)
     fba_fees?: {
       total_fee: number | null;
@@ -88,7 +89,6 @@ interface AnalysisResponse {
       asin_used: string;
       price_used: number;
     };
-    representative_asin?: string | null;
   } | null;
 }
 
@@ -650,36 +650,32 @@ export default function AnalyzeForm({
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Brand Control</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {analysis.market_snapshot.dominance_score !== null && analysis.market_snapshot.dominance_score !== undefined
-                          ? `Top brand: ${analysis.market_snapshot.dominance_score}%`
-                          : "—"}
+                        Top brand: {analysis.market_snapshot.dominance_score}%
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         Share of Page 1 controlled by leading brand
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.dominance_score !== null && analysis.market_snapshot.dominance_score !== undefined
-                          ? analysis.market_snapshot.dominance_score >= 40
-                            ? "Brand-dominated"
-                            : analysis.market_snapshot.dominance_score >= 20
-                            ? "Moderately concentrated"
-                            : "Fragmented"
-                          : ""}
+                        {analysis.market_snapshot.dominance_score >= 40
+                          ? "Brand-dominated"
+                          : analysis.market_snapshot.dominance_score >= 20
+                          ? "Moderately concentrated"
+                          : "Fragmented"}
                       </div>
                     </div>
                     {/* Card 4: Market Size */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <div className="text-xs text-gray-500 mb-1">Market Size</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                        {analysis.market_snapshot.total_listings} listings
+                        {analysis.market_snapshot.total_page1_listings} listings
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         Products competing on Page 1
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.total_listings >= 60
+                        {analysis.market_snapshot.total_page1_listings >= 60
                           ? "Crowded market"
-                          : analysis.market_snapshot.total_listings >= 30
+                          : analysis.market_snapshot.total_page1_listings >= 30
                           ? "Competitive"
                           : "Open"}
                       </div>

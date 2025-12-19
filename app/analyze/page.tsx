@@ -72,16 +72,23 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
         // Include market data if available (from rainforest_data column)
         market_data: analysisRun.rainforest_data as Record<string, unknown> | undefined,
         // Include keyword market snapshot if available (from response.market_snapshot)
+        // Represents Page 1 results only
         market_snapshot: (response.market_snapshot && typeof response.market_snapshot === 'object' && !Array.isArray(response.market_snapshot))
           ? response.market_snapshot as {
               keyword: string;
-              total_results_estimate: number | null;
-              total_listings: number;
-              sponsored_count: number;
               avg_price: number | null;
               avg_reviews: number | null;
-              top_brands: Array<{ brand: string; count: number }>;
-              dominance_score: number | null;
+              avg_rating: number | null;
+              total_page1_listings: number;
+              sponsored_count: number;
+              dominance_score: number; // 0-100
+              representative_asin?: string | null;
+              fba_fees?: {
+                total_fee: number | null;
+                source: "sp_api" | "estimated";
+                asin_used: string;
+                price_used: number;
+              };
             }
           : null,
       };

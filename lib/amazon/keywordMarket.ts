@@ -23,13 +23,13 @@ export interface ParsedListing {
 
 export interface KeywordMarketSnapshot {
   keyword: string;
-  total_results_estimate: number | null;
-  total_listings: number;
-  sponsored_count: number;
   avg_price: number | null;
   avg_reviews: number | null;
-  top_brands: Array<{ brand: string; count: number }>;
-  dominance_score: number | null; // % of listings belonging to top brand
+  avg_rating: number | null;
+  total_page1_listings: number; // Only Page 1 listings
+  sponsored_count: number;
+  dominance_score: number; // 0-100, % of listings belonging to top brand
+  representative_asin?: string | null; // Optional representative ASIN for fee estimation
 }
 
 export interface KeywordMarketData {
@@ -187,14 +187,14 @@ export async function fetchKeywordMarketSnapshot(
 
     console.log(`Extracted ${validListings.length} valid listings from ${parsedListings.length} total results`);
 
-    // If total_listings > 0, proceed with analysis (even if avg_price or avg_reviews are null)
+    // If total_page1_listings > 0, proceed with analysis (even if avg_price or avg_reviews are null)
     if (validListings.length === 0) {
       console.log("No valid listings (missing asin or title)");
       return null;
     }
 
-    // Aggregate metrics
-    const total_listings = validListings.length;
+    // Aggregate metrics from Page 1 listings only
+    const total_page1_listings = validListings.length;
     const sponsored_count = validListings.filter((l) => l.is_sponsored).length;
 
     // Average price (only over listings with price)
@@ -211,7 +211,14 @@ export async function fetchKeywordMarketSnapshot(
         ? listingsWithReviews.reduce((sum, l) => sum + (l.reviews ?? 0), 0) / listingsWithReviews.length
         : null;
 
-    // Top brands (count occurrences by brand if available)
+    // Average rating (only over listings with rating)
+    const listingsWithRating = validListings.filter((l) => l.rating !== null);
+    const avg_rating =
+      listingsWithRating.length > 0
+        ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length
+        : null;
+
+    // Top brands (count occurrences by brand if available) - Page 1 only
     const brandCounts: Record<string, number> = {};
     validListings.forEach((l) => {
       if (l.brand) {
@@ -223,23 +230,19 @@ export async function fetchKeywordMarketSnapshot(
       .map(([brand, count]) => ({ brand, count }))
       .sort((a, b) => b.count - a.count);
 
-    // Page dominance score: % of listings belonging to top brand
+    // Page 1 dominance score: % of Page 1 listings belonging to top brand (0-100)
     const dominance_score =
-      top_brands.length > 0
-        ? Math.round((top_brands[0].count / total_listings) * 100)
-        : null;
-
-    // Total results estimate from search_information
-    const total_results_estimate = raw.search_information?.total_results ?? null;
+      top_brands.length > 0 && total_page1_listings > 0
+        ? Math.round((top_brands[0].count / total_page1_listings) * 100)
+        : 0;
 
     const snapshot: KeywordMarketSnapshot = {
       keyword,
-      total_results_estimate,
-      total_listings,
-      sponsored_count,
       avg_price: avg_price !== null ? Math.round(avg_price * 100) / 100 : null,
       avg_reviews: avg_reviews !== null ? Math.round(avg_reviews) : null,
-      top_brands,
+      avg_rating: avg_rating !== null ? Math.round(avg_rating * 10) / 10 : null,
+      total_page1_listings,
+      sponsored_count,
       dominance_score,
     };
 
