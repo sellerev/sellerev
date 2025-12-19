@@ -224,6 +224,185 @@ This margin snapshot is pre-calculated. Always reference it first when answering
 }
 
 /**
+ * Determines if the AI can answer a question based on available data
+ * 
+ * @param message - User's question
+ * @param analysisResponse - Analysis response data
+ * @param marketSnapshot - Market snapshot data
+ * @param sellerProfile - Seller profile data
+ * @returns Object with canAnswer boolean, missingItems array, and options array
+ */
+function canAnswerQuestion(
+  message: string,
+  analysisResponse: Record<string, unknown>,
+  marketSnapshot: Record<string, unknown> | null,
+  sellerProfile: {
+    stage: string;
+    experience_months: number | null;
+    monthly_revenue_range: string | null;
+    sourcing_model: string;
+  }
+): {
+  canAnswer: boolean;
+  missingItems: string[];
+  options: string[];
+} {
+  const normalized = message.toLowerCase().trim();
+  const missingItems: string[] = [];
+  const options: string[] = [];
+
+  // Check for prediction/guarantee requests (always refuse)
+  const predictionPatterns = [
+    /\b(will|guarantee|guaranteed|predict|prediction|future|forecast|projected|expect|expectation)\b/i,
+    /\b(how much|how many|what will|when will|guaranteed profit|guaranteed sales)\b/i,
+  ];
+  
+  for (const pattern of predictionPatterns) {
+    if (pattern.test(normalized)) {
+      return {
+        canAnswer: false,
+        missingItems: ["Predictions and guarantees are not available"],
+        options: ["Ask about current market data instead", "Ask about margin calculations using provided costs"],
+      };
+    }
+  }
+
+  // Check for margin/profit questions
+  const marginPatterns = [
+    /\b(margin|profit|breakeven|break even|net margin|gross margin)\b/i,
+    /\b(how much profit|what's my margin|what margin|profitability)\b/i,
+  ];
+  
+  if (marginPatterns.some(p => p.test(normalized))) {
+    const marginSnapshot = (marketSnapshot?.margin_snapshot as Record<string, unknown>) || null;
+    const costOverrides = (analysisResponse.cost_overrides as Record<string, unknown>) || null;
+    
+    // Check for required data
+    if (!marginSnapshot) {
+      missingItems.push("Margin snapshot data");
+      options.push("Provide your COGS and FBA fees to calculate margins");
+    } else {
+      const sellingPrice = (marginSnapshot.selling_price as number) || null;
+      const cogsLow = (marginSnapshot.cogs_assumed_low as number) || null;
+      const fbaFees = (marginSnapshot.fba_fees as number) || null;
+      
+      if (!sellingPrice || sellingPrice <= 0) {
+        missingItems.push("Selling price");
+        options.push("Provide a selling price to calculate margins");
+      }
+      
+      // If no cost overrides, check if we have assumed COGS
+      if (!costOverrides || (costOverrides.cogs === null || costOverrides.cogs === undefined)) {
+        if (cogsLow === null || cogsLow <= 0) {
+          missingItems.push("COGS (cost of goods sold)");
+          options.push("Provide your COGS to calculate accurate margins");
+        }
+      }
+      
+      if (!costOverrides || (costOverrides.fba_fees === null || costOverrides.fba_fees === undefined)) {
+        if (fbaFees === null || fbaFees <= 0) {
+          missingItems.push("FBA fees");
+          options.push("Provide your FBA fees to calculate accurate margins");
+        }
+      }
+    }
+  }
+
+  // Check for fee questions
+  const feePatterns = [
+    /\b(fba fee|amazon fee|fulfillment fee|referral fee|what.*fee|how much.*fee)\b/i,
+  ];
+  
+  if (feePatterns.some(p => p.test(normalized))) {
+    const fbaFees = (marketSnapshot?.fba_fees as Record<string, unknown>) || null;
+    const marginSnapshot = (marketSnapshot?.margin_snapshot as Record<string, unknown>) || null;
+    
+    if (!fbaFees && !marginSnapshot) {
+      missingItems.push("FBA fee data");
+      options.push("Provide your FBA fees to get accurate calculations");
+    } else {
+      const feesValue = (fbaFees?.total_fba_fees as number) || 
+                        (fbaFees?.total_fee as number) ||
+                        (marginSnapshot?.fba_fees as number) || null;
+      
+      if (feesValue === null || feesValue <= 0) {
+        missingItems.push("FBA fees");
+        options.push("Provide your FBA fees to get accurate calculations");
+      }
+    }
+  }
+
+  // Check for price questions
+  const pricePatterns = [
+    /\b(what.*price|how much.*price|selling price|list price|price point)\b/i,
+  ];
+  
+  if (pricePatterns.some(p => p.test(normalized))) {
+    const avgPrice = (marketSnapshot?.avg_price as number) || null;
+    const marginSnapshot = (marketSnapshot?.margin_snapshot as Record<string, unknown>) || null;
+    const sellingPrice = (marginSnapshot?.selling_price as number) || null;
+    
+    if (!avgPrice && !sellingPrice) {
+      missingItems.push("Price data");
+      options.push("Run an analysis to get market price data");
+    }
+  }
+
+  // Check for data outside cached context
+  const externalDataPatterns = [
+    /\b(bsr|best seller rank|sales volume|units sold|revenue|sales rank)\b/i,
+    /\b(ppc cost|advertising cost|ad spend|sponsored ad cost)\b/i,
+    /\b(conversion rate|click through rate|ctr)\b/i,
+  ];
+  
+  if (externalDataPatterns.some(p => p.test(normalized))) {
+    return {
+      canAnswer: false,
+      missingItems: ["This data is not available in the cached analysis"],
+      options: ["Ask about data available in the market snapshot", "Ask about margin calculations using provided costs"],
+    };
+  }
+
+  // If missing items found, cannot answer
+  if (missingItems.length > 0) {
+    return {
+      canAnswer: false,
+      missingItems,
+      options: options.length > 0 ? options : ["Provide the missing data to proceed"],
+    };
+  }
+
+  return { canAnswer: true, missingItems: [], options: [] };
+}
+
+/**
+ * Formats a refusal response according to strict requirements
+ * 
+ * @param missingItems - Array of missing data items
+ * @param options - Array of options for user to proceed
+ * @returns Formatted refusal message
+ */
+function formatRefusalResponse(missingItems: string[], options: string[]): string {
+  let response = "I don't have enough verified data to answer that yet.\n\n";
+  
+  if (missingItems.length > 0) {
+    response += "Here's what's missing:\n";
+    missingItems.forEach(item => {
+      response += `• ${item}\n`;
+    });
+  }
+  
+  if (options.length > 0) {
+    response += "\nI can proceed if you:\n";
+    options.forEach(option => {
+      response += `• ${option}\n`;
+    });
+  }
+  
+  return response.trim();
+}
+
+/**
  * Detects cost override patterns in user message
  * 
  * Recognizes structured inputs like:
@@ -655,6 +834,61 @@ export async function POST(req: NextRequest) {
 
     // 12. Append the new user message
     messages.push({ role: "user", content: body.message });
+
+    // 13. Validate if AI can answer based on available data
+    // ────────────────────────────────────────────────────────────────────────
+    // Check if required data is missing for the user's question intent
+    // ────────────────────────────────────────────────────────────────────────
+    const canAnswerResult = canAnswerQuestion(
+      body.message,
+      analysisResponse,
+      marketSnapshot,
+      sellerProfile
+    );
+
+    if (!canAnswerResult.canAnswer) {
+      // Short-circuit: Return refusal response without calling OpenAI
+      const encoder = new TextEncoder();
+      const refusalMessage = formatRefusalResponse(canAnswerResult.missingItems, canAnswerResult.options);
+
+      const stream = new ReadableStream({
+        async start(controller) {
+          // Send refusal message as a single chunk
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: refusalMessage })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+
+      // Save refusal message to database
+      try {
+        await supabase.from("analysis_messages").insert([
+          {
+            analysis_run_id: body.analysisRunId,
+            user_id: user.id,
+            role: "user",
+            content: body.message,
+          },
+          {
+            analysis_run_id: body.analysisRunId,
+            user_id: user.id,
+            role: "assistant",
+            content: refusalMessage,
+          },
+        ]);
+      } catch (saveError) {
+        console.error("Failed to save refusal message:", saveError);
+      }
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
+    }
 
     // 14. Call OpenAI with streaming enabled
     // ────────────────────────────────────────────────────────────────────────
