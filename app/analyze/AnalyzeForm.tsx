@@ -83,12 +83,19 @@ interface AnalysisResponse {
     dominance_score: number; // 0-100, % of listings belonging to top brand
     representative_asin?: string | null; // Optional representative ASIN for fee estimation
     // FBA fee estimate (from SP-API or estimated)
+    // New structure (from resolveFbaFees):
     fba_fees?: {
+      fulfillment_fee: number | null;
+      referral_fee: number | null;
+      total_fba_fees: number | null;
+      source: "amazon";
+    } | {
+      // Legacy structure (for backward compatibility with keyword analysis)
       total_fee: number | null;
       source: "sp_api" | "estimated";
       asin_used: string;
       price_used: number;
-    };
+    } | null;
   } | null;
 }
 
@@ -811,14 +818,24 @@ export default function AnalyzeForm({
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Amazon Fees</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                          {analysis.market_snapshot.fba_fees.total_fee !== null && analysis.market_snapshot.fba_fees.total_fee !== undefined
-                            ? formatCurrency(analysis.market_snapshot.fba_fees.total_fee)
-                            : "—"}
+                          {(() => {
+                            // Support both new and legacy structures
+                            const fees = analysis.market_snapshot.fba_fees;
+                            const totalFee = 'total_fba_fees' in fees && fees.total_fba_fees !== null
+                              ? fees.total_fba_fees
+                              : 'total_fee' in fees && fees.total_fee !== null
+                              ? fees.total_fee
+                              : null;
+                            return totalFee !== null ? formatCurrency(totalFee) : "—";
+                          })()}
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
-                          {analysis.market_snapshot.fba_fees.total_fee !== null && analysis.market_snapshot.fba_fees.total_fee !== undefined
-                            ? "Typical fulfillment cost"
-                            : "Insufficient Page 1 data"}
+                          {(() => {
+                            const fees = analysis.market_snapshot.fba_fees;
+                            const hasFee = ('total_fba_fees' in fees && fees.total_fba_fees !== null) ||
+                                          ('total_fee' in fees && fees.total_fee !== null);
+                            return hasFee ? "Typical fulfillment cost" : "Insufficient Page 1 data";
+                          })()}
                         </div>
                       </div>
                     )}

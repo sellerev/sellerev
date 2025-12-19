@@ -5,6 +5,7 @@ import { pickRepresentativeAsin } from "@/lib/amazon/representativeAsin";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 import { getFbaFeesEstimateForAsin } from "@/lib/spapi/fees";
 import { getCachedFee, setCachedFee } from "@/lib/spapi/feeCache";
+import { resolveFbaFees } from "@/lib/spapi/resolveFbaFees";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -883,6 +884,7 @@ ${body.input_value}`;
     }
 
     // 12b. Fetch FBA fee estimates via SP-API (with caching)
+    // For ASIN analysis: use new resolveFbaFees resolver after market snapshot aggregation
     try {
       const marketplaceId = "ATVPDKIKX0DER"; // US marketplace (default)
       
@@ -890,8 +892,7 @@ ${body.input_value}`;
         // ASIN analysis: use the ASIN directly
         const asin = body.input_value.trim().toUpperCase();
         
-        // Determine price_used: listing price or avg snapshot price
-        // Check if market_snapshot has avg_price (unlikely for ASIN, but check anyway)
+        // Determine price_used: use avg_price from market snapshot if available
         let priceUsed = 25.0; // Default fallback
         if (decisionJson.market_snapshot && typeof decisionJson.market_snapshot === 'object' && 'avg_price' in decisionJson.market_snapshot) {
           const avgPrice = (decisionJson.market_snapshot as any).avg_price;
@@ -899,31 +900,28 @@ ${body.input_value}`;
             priceUsed = avgPrice;
           }
         }
-        // Note: For ASIN analysis, we don't currently fetch listing price from product data.
-        // This could be improved by fetching ASIN product data first to get actual listing price.
         
-        // Check cache first
-        let feeEstimate = await getCachedFee(marketplaceId, asin, priceUsed);
+        // Use new cache-first resolver
+        const fbaFeesResult = await resolveFbaFees(asin, priceUsed);
         
-        if (!feeEstimate) {
-          // Cache miss - call SP-API
-          feeEstimate = await getFbaFeesEstimateForAsin({
-            asin,
-            price: priceUsed,
-          });
-          
-          // Cache the result (best effort, don't wait)
-          setCachedFee(marketplaceId, asin, priceUsed, feeEstimate).catch(() => {
-            // Silently fail - caching is best effort
-          });
-        }
-
         // Initialize market_snapshot if it doesn't exist
         if (!decisionJson.market_snapshot) {
           decisionJson.market_snapshot = {};
         }
         
-        decisionJson.market_snapshot.fba_fees = feeEstimate;
+        // Inject into decision JSON with new structure
+        if (fbaFeesResult) {
+          decisionJson.market_snapshot.fba_fees = {
+            fulfillment_fee: fbaFeesResult.fulfillment_fee,
+            referral_fee: fbaFeesResult.referral_fee,
+            total_fba_fees: fbaFeesResult.total_fba_fees,
+            source: "amazon",
+          };
+        } else {
+          // Unavailable - set to null
+          decisionJson.market_snapshot.fba_fees = null;
+        }
+        
         decisionJson.market_snapshot.representative_asin = asin;
       } else if (body.input_type === "idea" && keywordMarketData && marketSnapshot) {
         // Keyword analysis: pick representative ASIN and use avg price
@@ -973,18 +971,19 @@ ${body.input_value}`;
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       console.error("FBA fee estimation error:", errorMessage);
       
-      // Set estimated fees if market_snapshot exists
+      // Set fba_fees to null if unavailable
       if (decisionJson.market_snapshot) {
-        decisionJson.market_snapshot.fba_fees = {
-          total_fee: null,
-          source: "estimated",
-          asin_used: body.input_type === "asin" ? body.input_value.trim().toUpperCase() : "",
-          price_used: body.input_type === "idea" && marketSnapshot?.avg_price 
-            ? marketSnapshot.avg_price 
-            : 25.0,
-        };
         if (body.input_type === "asin") {
+          decisionJson.market_snapshot.fba_fees = null;
           decisionJson.market_snapshot.representative_asin = body.input_value.trim().toUpperCase();
+        } else {
+          // For keyword analysis, keep existing fallback structure
+          decisionJson.market_snapshot.fba_fees = {
+            total_fee: null,
+            source: "estimated",
+            asin_used: "",
+            price_used: marketSnapshot?.avg_price || 25.0,
+          };
         }
       }
     }
