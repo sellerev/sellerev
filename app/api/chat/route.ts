@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { CHAT_SYSTEM_PROMPT } from "@/lib/ai/chatSystemPrompt";
+import { estimateCogsRange } from "@/lib/cogs/assumptions";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -215,7 +216,41 @@ export async function POST(req: NextRequest) {
       .eq("analysis_run_id", body.analysisRunId)
       .order("created_at", { ascending: true });
 
-    // 6. Build grounded context message
+    // 6. Compute COGS assumptions for margin calculations
+    // ─────────────────────────────────────────────────────────────────────
+    const analysisResponse = analysisRun.response as Record<string, unknown>;
+    const marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
+    const avgPrice = (marketSnapshot?.avg_price as number) || null;
+    const category = (marketSnapshot?.category as string) || null;
+    
+    let cogsAssumptions: string = "";
+    if (avgPrice !== null && avgPrice > 0 && sellerProfile.sourcing_model) {
+      try {
+        const cogsEstimate = estimateCogsRange({
+          sourcing_model: sellerProfile.sourcing_model as any,
+          category: category,
+          avg_price: avgPrice,
+        });
+        
+        const estimatedRange = `$${cogsEstimate.low.toFixed(2)}–$${cogsEstimate.high.toFixed(2)}`;
+        const percentRange = `${cogsEstimate.percent_range[0]}–${cogsEstimate.percent_range[1]}%`;
+        const confidenceLabel = cogsEstimate.confidence === "low" ? "Low confidence" 
+          : cogsEstimate.confidence === "medium" ? "Medium confidence" 
+          : "High confidence";
+        
+        cogsAssumptions = `\n\nCOGS_ASSUMPTIONS:\n{
+  estimated_range: "${estimatedRange}",
+  percent_range: "${percentRange}",
+  confidence: "${confidenceLabel}",
+  basis: "Typical sellers using ${sellerProfile.sourcing_model} sourcing model"
+}`;
+      } catch (error) {
+        // Fail silently - COGS assumptions are optional
+        console.error("Failed to compute COGS assumptions:", error);
+      }
+    }
+
+    // 7. Build grounded context message
     // ─────────────────────────────────────────────────────────────────────
     // WHY VERDICTS CANNOT SILENTLY CHANGE:
     // The original verdict is injected as "AUTHORITATIVE" in the context.
@@ -225,23 +260,23 @@ export async function POST(req: NextRequest) {
     // - "Explain what would need to change for verdict to change"
     // ─────────────────────────────────────────────────────────────────────
     const contextMessage = buildContextMessage(
-      analysisRun.response as Record<string, unknown>,
+      analysisResponse,
       analysisRun.rainforest_data as Record<string, unknown> | null,
       sellerProfile,
       analysisRun.input_type,
       analysisRun.input_value
     );
 
-    // 7. Build message array for OpenAI
+    // 8. Build message array for OpenAI
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-      // System prompt: Contains all rules and constraints
-      { role: "system", content: CHAT_SYSTEM_PROMPT },
+      // System prompt: Contains all rules and constraints + COGS assumptions
+      { role: "system", content: CHAT_SYSTEM_PROMPT + cogsAssumptions },
       // Context injection: Provides grounded data (no hallucination possible)
       { role: "user", content: `[CONTEXT FOR THIS CONVERSATION]\n\n${contextMessage}` },
       { role: "assistant", content: "I understand. I have the analysis context and will only reason over the provided data. I will not invent numbers, estimate sales or PPC, or reference data not provided. How can I help you explore this analysis?" },
     ];
 
-    // 8. Append conversation history from database
+    // 9. Append conversation history from database
     if (priorMessages && priorMessages.length > 0) {
       for (const msg of priorMessages) {
         if (msg.role === "user" || msg.role === "assistant") {
@@ -250,10 +285,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 9. Append the new user message
+    // 10. Append the new user message
     messages.push({ role: "user", content: body.message });
 
-    // 10. Call OpenAI with streaming enabled
+    // 11. Call OpenAI with streaming enabled
     // ────────────────────────────────────────────────────────────────────────
     // IMPORTANT: This call does NOT trigger any external data fetching.
     // The AI can ONLY use data injected via the context message above.
@@ -296,7 +331,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 11. Stream the response to the client
+    // 12. Stream the response to the client
     // ────────────────────────────────────────────────────────────────────────
     // We collect the full response while streaming to save it to the database
     // ────────────────────────────────────────────────────────────────────────
@@ -342,7 +377,7 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // 12. Save messages to database after streaming completes
+          // 13. Save messages to database after streaming completes
           // ────────────────────────────────────────────────────────────────
           // Persist both user and assistant messages for history restoration
           // ────────────────────────────────────────────────────────────────
