@@ -1074,6 +1074,16 @@ export async function POST(req: NextRequest) {
     );
 
     if (!canAnswerResult.canAnswer) {
+      // Log refusal event
+      console.error("CHAT_REFUSAL_TRIGGERED", {
+        analysisRunId: body.analysisRunId,
+        userId: user.id,
+        userMessage: body.message,
+        missingItems: canAnswerResult.missingItems,
+        options: canAnswerResult.options,
+        timestamp: new Date().toISOString(),
+      });
+      
       // Short-circuit: Return refusal response without calling OpenAI
       const encoder = new TextEncoder();
       const refusalMessage = formatRefusalResponse(canAnswerResult.missingItems, canAnswerResult.options);
@@ -1257,11 +1267,13 @@ export async function POST(req: NextRequest) {
               tripwireTriggered = true;
               tripwireReason = validation.reason;
               
-              // Log the event
+              // Log the event (REQUIRED)
               console.error("HALLUCINATION_TRIPWIRE_TRIGGERED", {
                 analysisRunId: body.analysisRunId,
+                userId: user.id,
                 reason: validation.reason,
                 messagePreview: finalMessage.substring(0, 200),
+                userMessage: body.message,
                 timestamp: new Date().toISOString(),
               });
               
@@ -1297,6 +1309,16 @@ export async function POST(req: NextRequest) {
             if (hasLowConfidence && hasNumericConclusions && isNotRefusal) {
               // Check if disclaimer already present
               if (!finalMessage.includes("directional only") && !finalMessage.includes("capital decisions")) {
+                // Log confidence downgrade event
+                console.warn("CONFIDENCE_DOWNGRADED", {
+                  analysisRunId: body.analysisRunId,
+                  userId: user.id,
+                  reason: "LOW confidence with numeric conclusions",
+                  hasNumericConclusions: true,
+                  hasLowConfidence: true,
+                  timestamp: new Date().toISOString(),
+                });
+                
                 const disclaimer = "\n\nThis estimate is directional only and should not be used for capital decisions.";
                 finalMessage += disclaimer;
                 disclaimerAppended = true;
