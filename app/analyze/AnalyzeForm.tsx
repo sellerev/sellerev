@@ -620,9 +620,7 @@ export default function AnalyzeForm({
                           : "Price data unavailable on Page 1"}
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
-                          ? "Entry pricing reference"
-                          : ""}
+                        {getPriceInterpretation(analysis.market_snapshot.avg_price)}
                       </div>
                     </div>
                     {/* Card 2: Review Barrier */}
@@ -637,13 +635,7 @@ export default function AnalyzeForm({
                         What you must compete against
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
-                          ? analysis.market_snapshot.avg_reviews >= 300
-                            ? "High barrier to entry"
-                            : analysis.market_snapshot.avg_reviews >= 100
-                            ? "Moderate barrier"
-                            : "Low barrier"
-                          : "Insufficient review data"}
+                        {getReviewBarrierInterpretation(analysis.market_snapshot.avg_reviews)}
                       </div>
                     </div>
                     {/* Card 3: Brand Control */}
@@ -673,11 +665,7 @@ export default function AnalyzeForm({
                         Listings you must beat
                       </div>
                       <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.total_page1_listings >= 60
-                          ? "Crowded market"
-                          : analysis.market_snapshot.total_page1_listings >= 30
-                          ? "Competitive"
-                          : "Open"}
+                        {getCompetitionInterpretation(analysis.market_snapshot.total_page1_listings)}
                       </div>
                     </div>
                     {/* Card 5: Amazon Fees (est.) */}
