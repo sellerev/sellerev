@@ -157,10 +157,10 @@ CPI: Not available (insufficient Page 1 data)`);
     const representativeAsin = (marketSnapshot.representative_asin as string) || "Not available";
     
     contextParts.push(`=== MARKET SNAPSHOT (FOR MARGIN CALCULATIONS) ===
-Average Page 1 Price: ${avgPrice !== null ? `$${avgPrice.toFixed(2)}` : "Not available"}
+Price Band: ${avgPrice !== null ? `$${avgPrice.toFixed(2)}` : "Not available"}
 Representative ASIN: ${representativeAsin}
 
-Use avg_price as the selling price for margin calculations.`);
+Use price band as the selling price for margin calculations.`);
   }
 
   // Section 5: FBA Fees (new structure from resolveFbaFees or legacy structure)
@@ -842,34 +842,34 @@ function buildMarketSnapshotSummary(
     console.error("Error accessing CPI in summary:", error);
   }
   
-  // Typical Price
+  // Price Band
   const avgPrice = (marketSnapshot.avg_price as number) || null;
   if (avgPrice !== null) {
-    parts.push(`- Typical Price: $${avgPrice.toFixed(2)}`);
+    parts.push(`- Price Band: $${avgPrice.toFixed(2)}`);
   }
   
-  // Review Barrier
+  // Review Moat
   const avgReviews = (marketSnapshot.avg_reviews as number) || null;
   if (avgReviews !== null) {
-    parts.push(`- Review Barrier: ${avgReviews.toLocaleString()} reviews`);
+    parts.push(`- Review Moat: ${avgReviews.toLocaleString()} reviews`);
   }
   
-  // Quality Expectation
+  // Quality Threshold
   const avgRating = (marketSnapshot.avg_rating as number) || null;
   if (avgRating !== null) {
-    parts.push(`- Quality Expectation: ${avgRating.toFixed(1)} rating`);
+    parts.push(`- Quality Threshold: ${avgRating.toFixed(1)} rating`);
   }
   
-  // Page 1 Competition
+  // Competitive Density
   const totalListings = (marketSnapshot.total_page1_listings as number) || null;
   if (totalListings !== null && totalListings !== undefined) {
-    parts.push(`- Page 1 Competition: ${totalListings} listings`);
+    parts.push(`- Competitive Density: ${totalListings} listings`);
   }
   
-  // Paid Competition
+  // Ad Saturation
   const sponsoredCount = (marketSnapshot.sponsored_count as number) || null;
   if (sponsoredCount !== null && sponsoredCount !== undefined) {
-    parts.push(`- Paid Competition: ${sponsoredCount} sponsored`);
+    parts.push(`- Ad Saturation: ${sponsoredCount} sponsored`);
   }
   
   if (parts.length === 0) {
