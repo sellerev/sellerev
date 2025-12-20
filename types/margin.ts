@@ -16,34 +16,33 @@ export interface MarginAssumptions {
 }
 
 /**
- * Margin Snapshot Type
+ * PART G: Margin Snapshot Type (First-Class Data Contract)
  * 
- * Represents a calculated margin snapshot with COGS assumptions and FBA fees.
- * Used for margin calculations in chat and analysis.
- * 
- * PART G: Extended contract with confidence_level, assumptions_used, and structured ranges.
+ * Deterministic margin snapshot for ASIN + KEYWORD modes.
+ * Single source of truth for all margin calculations.
+ * Stored at: analysis_runs.response.margin_snapshot
  */
-
 export interface MarginSnapshot {
-  // Legacy fields (maintained for backward compatibility)
-  selling_price: number;
-  cogs_assumed_low: number;
-  cogs_assumed_high: number;
-  fba_fees: number | null;
-  net_margin_low_pct: number;
-  net_margin_high_pct: number;
-  breakeven_price_low: number;
-  breakeven_price_high: number;
-  confidence: "estimated" | "refined";
-  source: "assumption_engine" | "amazon_fees";
+  mode: "ASIN" | "KEYWORD";
   
-  // PART G: New structured fields
-  confidence_level: "LOW" | "MEDIUM" | "HIGH";
-  assumed_price: number | null;
-  estimated_cogs_range: { low: number; high: number } | null;
-  estimated_fba_fees: number | null;
-  estimated_margin_pct_range: { low: number; high: number } | null;
-  breakeven_price_range: { low: number; high: number } | null;
-  sourcing_model: "private_label" | "wholesale_arbitrage" | "retail_arbitrage" | "dropshipping" | "not_sure";
-  assumptions_used: string[];
+  confidence_tier: "ESTIMATED" | "REFINED" | "EXACT";
+  confidence_reason: string;
+  
+  assumed_price: number;
+  price_source: "asin_price" | "page1_avg" | "fallback";
+  
+  estimated_cogs_min: number | null;
+  estimated_cogs_max: number | null;
+  cogs_source: "assumption_engine" | "user_override" | "exact";
+  
+  estimated_fba_fee: number | null;
+  fba_fee_source: "sp_api" | "category_estimate" | "unknown";
+  
+  net_margin_min_pct: number | null;
+  net_margin_max_pct: number | null;
+  
+  breakeven_price_min: number | null;
+  breakeven_price_max: number | null;
+  
+  assumptions: string[];
 }

@@ -74,6 +74,23 @@ interface AnalysisResponse {
   // Optional: Aggregated keyword market snapshot (when input_type === "keyword")
   // Matches KeywordMarketSnapshot from lib/amazon/keywordMarket.ts
   // Represents Page 1 results only
+  margin_snapshot?: {
+    mode: "ASIN" | "KEYWORD";
+    confidence_tier: "ESTIMATED" | "REFINED" | "EXACT";
+    confidence_reason: string;
+    assumed_price: number;
+    price_source: "asin_price" | "page1_avg" | "fallback";
+    estimated_cogs_min: number | null;
+    estimated_cogs_max: number | null;
+    cogs_source: "assumption_engine" | "user_override" | "exact";
+    estimated_fba_fee: number | null;
+    fba_fee_source: "sp_api" | "category_estimate" | "unknown";
+    net_margin_min_pct: number | null;
+    net_margin_max_pct: number | null;
+    breakeven_price_min: number | null;
+    breakeven_price_max: number | null;
+    assumptions: string[];
+  };
   market_snapshot?: {
     keyword: string;
     avg_price: number | null;
@@ -405,6 +422,8 @@ function normalizeAnalysis(analysisData: AnalysisResponse | null): AnalysisRespo
     }
   }
   
+  // PART G: margin_snapshot is already at top level, no normalization needed
+  
   return {
     ...analysisData,
     market_snapshot: normalizedSnapshot,
@@ -555,6 +574,9 @@ export default function AnalyzeForm({
       // Extract asin_snapshot from decision if present
       const asinSnapshot = data.decision.asin_snapshot || null;
       
+      // PART G: Extract margin_snapshot from decision (first-class feature)
+      const marginSnapshot = data.decision.margin_snapshot || null;
+      
       const analysisData: AnalysisResponse = {
         analysis_run_id: data.analysisRunId,
         created_at: new Date().toISOString(),
@@ -573,6 +595,9 @@ export default function AnalyzeForm({
         asin_snapshot: asinSnapshot && typeof asinSnapshot === 'object' && !Array.isArray(asinSnapshot) && asinSnapshot !== null
           ? asinSnapshot
           : null,
+        margin_snapshot: marginSnapshot && typeof marginSnapshot === 'object' && !Array.isArray(marginSnapshot) && marginSnapshot !== null
+          ? marginSnapshot
+          : undefined,
       };
 
       console.log("ANALYZE_SUCCESS", { 
@@ -1651,19 +1676,11 @@ export default function AnalyzeForm({
               {/* - Labeled as "Estimated"                                    */}
               {/* ─────────────────────────────────────────────────────────── */}
               {(() => {
-                // Get margin snapshot (use existing or calculate)
-                // ASIN mode: Always render (never block on missing data)
-                // KEYWORD mode: May show empty state if no market data
-                const marginSnapshot = analysis.market_snapshot?.margin_snapshot;
+                // PART G: Get margin snapshot from analysis.margin_snapshot (first-class feature)
+                const marginSnapshot = analysis.margin_snapshot;
                 const isAsinMode = analysisMode === 'ASIN';
                 
-                // For ASIN mode: margin snapshot should always be present (calculated with assumptions)
-                // For KEYWORD mode: check if price is available
-                const priceAvailable = isAsinMode 
-                  ? true // ASIN mode always has price (from ASIN or default)
-                  : (analysis.market_snapshot?.avg_price ?? null) !== null;
-                
-                // If no margin snapshot, show empty state (should not happen for ASIN mode)
+                // Margin snapshot should always exist (built deterministically)
                 if (!marginSnapshot) {
                   return (
                     <div className="bg-white border rounded-xl p-6 shadow-sm">
@@ -1691,50 +1708,42 @@ export default function AnalyzeForm({
                   );
                 }
                 
-                // PART G: Use confidence_level from margin snapshot if available, otherwise calculate
-                const confidenceLevel = (marginSnapshot as any).confidence_level || 
-                  (marginSnapshot.source === "amazon_fees" ? "MEDIUM" : "LOW");
+                // PART G: Use new data contract fields
+                const confidenceTier = marginSnapshot.confidence_tier;
+                const confidenceReason = marginSnapshot.confidence_reason;
                 
                 const confidenceBadgeStyles = {
-                  HIGH: "bg-green-100 text-green-800",
-                  MEDIUM: "bg-yellow-100 text-yellow-800",
-                  LOW: "bg-orange-100 text-orange-800",
+                  EXACT: "bg-green-100 text-green-800",
+                  REFINED: "bg-blue-100 text-blue-800",
+                  ESTIMATED: "bg-yellow-100 text-yellow-800",
                 };
                 
                 const confidenceLabels = {
-                  HIGH: "High",
-                  MEDIUM: "Medium",
-                  LOW: "Low",
+                  EXACT: "Exact",
+                  REFINED: "Refined",
+                  ESTIMATED: "Estimated",
                 };
                 
                 return (
                   <div className="bg-white border rounded-xl p-6 shadow-sm">
                     <div className="flex items-center justify-between mb-4">
                       <h2 className="text-lg font-semibold text-gray-900">
-                        Margin Snapshot (Estimated)
+                        Margin Snapshot
                       </h2>
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${confidenceBadgeStyles[confidenceLevel as keyof typeof confidenceBadgeStyles]}`}>
-                        {confidenceLabels[confidenceLevel as keyof typeof confidenceLabels]} Confidence
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${confidenceBadgeStyles[confidenceTier]}`}>
+                        {confidenceLabels[confidenceTier]}
                       </span>
                     </div>
-                    {/* PART G: Use new structured fields when available, fallback to legacy fields */}
                     {(() => {
-                      const snapshot = marginSnapshot as any;
-                      // Use PART G fields if available, otherwise fallback to legacy
-                      const assumedPrice = snapshot.assumed_price ?? snapshot.selling_price ?? null;
-                      const cogsRange = snapshot.estimated_cogs_range ?? 
-                        (snapshot.cogs_assumed_low !== undefined && snapshot.cogs_assumed_high !== undefined
-                          ? { low: snapshot.cogs_assumed_low, high: snapshot.cogs_assumed_high }
-                          : null);
-                      const fbaFees = snapshot.estimated_fba_fees ?? snapshot.fba_fees ?? null;
-                      const marginRange = snapshot.estimated_margin_pct_range ??
-                        (snapshot.net_margin_low_pct !== undefined && snapshot.net_margin_high_pct !== undefined
-                          ? { low: snapshot.net_margin_low_pct, high: snapshot.net_margin_high_pct }
-                          : null);
-                      const breakevenRange = snapshot.breakeven_price_range ??
-                        (snapshot.breakeven_price_low !== undefined && snapshot.breakeven_price_high !== undefined
-                          ? { low: snapshot.breakeven_price_low, high: snapshot.breakeven_price_high }
-                          : null);
+                      const snapshot = marginSnapshot;
+                      const assumedPrice = snapshot.assumed_price;
+                      const cogsMin = snapshot.estimated_cogs_min;
+                      const cogsMax = snapshot.estimated_cogs_max;
+                      const fbaFee = snapshot.estimated_fba_fee;
+                      const marginMin = snapshot.net_margin_min_pct;
+                      const marginMax = snapshot.net_margin_max_pct;
+                      const breakevenMin = snapshot.breakeven_price_min;
+                      const breakevenMax = snapshot.breakeven_price_max;
                       
                       return (
                         <>
@@ -1743,7 +1752,7 @@ export default function AnalyzeForm({
                             <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                               <div className="text-xs text-gray-500 mb-1">Selling Price</div>
                               <div className="text-lg font-semibold text-gray-900">
-                                {assumedPrice !== null && assumedPrice !== undefined && typeof assumedPrice === 'number' && !isNaN(assumedPrice) && assumedPrice > 0
+                                {assumedPrice !== null && assumedPrice > 0
                                   ? formatCurrency(assumedPrice)
                                   : "—"}
                               </div>
@@ -1753,10 +1762,8 @@ export default function AnalyzeForm({
                             <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                               <div className="text-xs text-gray-500 mb-1">Estimated COGS Range</div>
                               <div className="text-lg font-semibold text-gray-900">
-                                {cogsRange !== null && cogsRange.low !== undefined && cogsRange.high !== undefined &&
-                                 typeof cogsRange.low === 'number' && typeof cogsRange.high === 'number' &&
-                                 !isNaN(cogsRange.low) && !isNaN(cogsRange.high)
-                                  ? `${formatCurrency(cogsRange.low)}–${formatCurrency(cogsRange.high)}`
+                                {cogsMin !== null && cogsMax !== null
+                                  ? `${formatCurrency(cogsMin)}–${formatCurrency(cogsMax)}`
                                   : "—"}
                               </div>
                             </div>
@@ -1765,15 +1772,15 @@ export default function AnalyzeForm({
                             <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                               <div className="text-xs text-gray-500 mb-1">Estimated FBA Fees</div>
                               <div className="text-lg font-semibold text-gray-900">
-                                {fbaFees !== null && fbaFees !== undefined && typeof fbaFees === 'number' && !isNaN(fbaFees) && fbaFees > 0
-                                  ? formatCurrency(fbaFees)
+                                {fbaFee !== null && fbaFee > 0
+                                  ? formatCurrency(fbaFee)
                                   : "—"}
                               </div>
                               <div className="text-[10px] text-gray-500 mt-1">
-                                {fbaFees === null || fbaFees === undefined
+                                {fbaFee === null
                                   ? "Not available"
-                                  : snapshot.source === "amazon_fees" || snapshot.source === "sp_api"
-                                  ? "Amazon-provided"
+                                  : snapshot.fba_fee_source === "sp_api"
+                                  ? "Amazon SP-API"
                                   : "Estimated"}
                               </div>
                             </div>
@@ -1782,31 +1789,32 @@ export default function AnalyzeForm({
                             <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                               <div className="text-xs text-gray-500 mb-1">Net Margin Range</div>
                               <div className="text-lg font-semibold text-gray-900">
-                                {marginRange !== null && marginRange.low !== undefined && marginRange.high !== undefined &&
-                                 typeof marginRange.low === 'number' && typeof marginRange.high === 'number' &&
-                                 !isNaN(marginRange.low) && !isNaN(marginRange.high)
-                                  ? `${marginRange.low.toFixed(1)}%–${marginRange.high.toFixed(1)}%`
+                                {marginMin !== null && marginMax !== null
+                                  ? `${marginMin.toFixed(1)}%–${marginMax.toFixed(1)}%`
                                   : "—"}
                               </div>
                             </div>
 
-                            {/* Breakeven Price */}
+                            {/* Breakeven Price Range */}
                             <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 md:col-span-2">
-                              <div className="text-xs text-gray-500 mb-1">Breakeven Price</div>
+                              <div className="text-xs text-gray-500 mb-1">Breakeven Price Range</div>
                               <div className="text-lg font-semibold text-gray-900">
-                                {breakevenRange !== null && breakevenRange.low !== undefined && breakevenRange.high !== undefined &&
-                                 typeof breakevenRange.low === 'number' && typeof breakevenRange.high === 'number' &&
-                                 !isNaN(breakevenRange.low) && !isNaN(breakevenRange.high)
-                                  ? `${formatCurrency(breakevenRange.low)}–${formatCurrency(breakevenRange.high)}`
+                                {breakevenMin !== null && breakevenMax !== null
+                                  ? `${formatCurrency(breakevenMin)}–${formatCurrency(breakevenMax)}`
                                   : "—"}
                               </div>
                             </div>
                           </div>
-                          {/* PART G: Footer always visible */}
+                          {/* Assumptions Disclosure */}
                           <div className="mt-4 pt-4 border-t border-gray-200">
-                            <p className="text-xs text-gray-500">
-                              Estimate based on typical cost structures for your sourcing model. Actual margins depend on supplier and logistics.
-                            </p>
+                            <p className="text-xs text-gray-600 font-medium mb-2">Confidence: {confidenceReason}</p>
+                            {snapshot.assumptions && snapshot.assumptions.length > 0 && (
+                              <ul className="text-xs text-gray-500 space-y-1">
+                                {snapshot.assumptions.map((assumption, idx) => (
+                                  <li key={idx}>• {assumption}</li>
+                                ))}
+                              </ul>
+                            )}
                           </div>
                         </>
                       );

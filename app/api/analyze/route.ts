@@ -6,8 +6,7 @@ import { pickRepresentativeAsin } from "@/lib/amazon/representativeAsin";
 import { calculateCPI } from "@/lib/amazon/competitivePressureIndex";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 import { resolveFbaFees } from "@/lib/spapi/resolveFbaFees";
-import { calculateMarginSnapshot } from "@/lib/margins/calculateMarginSnapshot";
-import { computeMarginSnapshot } from "@/lib/margins/computeMarginSnapshot";
+import { buildMarginSnapshot } from "@/lib/margins/buildMarginSnapshot";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -1326,156 +1325,75 @@ ${body.input_value}`;
       // Extract selling price (required for margin calculation)
       // ASIN mode: use ASIN price from asin_snapshot or market_data
       // KEYWORD mode: use marketSnapshot.avg_price
-      let sellingPrice: number | null = null;
+      // PART G: Build margin snapshot (first-class feature, deterministic)
       const marginMode: 'ASIN' | 'KEYWORD' = body.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
       
-      if (body.input_type === "idea" && marketSnapshot?.avg_price) {
-        // KEYWORD mode: use Page-1 average price
-        sellingPrice = marketSnapshot.avg_price;
-      } else if (body.input_type === "asin" && asinData) {
-        // ASIN mode: use ASIN-specific price from fetched data (never Page-1 average)
-        // asinData is guaranteed to exist for ASIN mode (enforced earlier)
-        if (asinData.price !== null && asinData.price > 0) {
-          sellingPrice = asinData.price;
-        }
-      }
-
-      // Use default if no price found (should not happen for ASIN with validated data)
-      if (sellingPrice === null || sellingPrice <= 0) {
-        if (body.input_type === "asin") {
-          // For ASIN mode, this should not happen (we validate price/rating earlier)
-          console.warn("ASIN mode: No price found, using fallback");
-        }
-        sellingPrice = 25.0; // Default fallback (margin calculation will still work)
-      }
-
-      // Extract FBA fees (may be new structure or legacy structure)
+      // Extract FBA fees structure
       const fbaFeesData = (decisionJson.market_snapshot as any).fba_fees;
-      let fbaFeesValue: number | null = null;
-      let fbaFeeSource: "sp_api" | "estimated" = "estimated";
+      let fbaFees: {
+        total_fba_fees: number | null;
+        source: "sp_api" | "estimated" | "unknown";
+      } | null = null;
 
       if (fbaFeesData && typeof fbaFeesData === 'object' && !Array.isArray(fbaFeesData) && fbaFeesData !== null) {
-        // Check for new structure (from resolveFbaFees)
+        let totalFees: number | null = null;
+        let source: "sp_api" | "estimated" | "unknown" = "unknown";
+        
         if ('total_fba_fees' in fbaFeesData && fbaFeesData.total_fba_fees !== null) {
-          fbaFeesValue = parseFloat(fbaFeesData.total_fba_fees);
-          fbaFeeSource = fbaFeesData.source === "amazon" || fbaFeesData.source === "sp_api" ? "sp_api" : "estimated";
+          totalFees = parseFloat(fbaFeesData.total_fba_fees);
+          source = fbaFeesData.source === "amazon" || fbaFeesData.source === "sp_api" ? "sp_api" : "estimated";
         } else if ('total_fee' in fbaFeesData && fbaFeesData.total_fee !== null) {
-          // Legacy structure
-          fbaFeesValue = parseFloat(fbaFeesData.total_fee);
-          fbaFeeSource = fbaFeesData.source === "amazon" || fbaFeesData.source === "sp_api" ? "sp_api" : "estimated";
+          totalFees = parseFloat(fbaFeesData.total_fee);
+          source = fbaFeesData.source === "amazon" || fbaFeesData.source === "sp_api" ? "sp_api" : "estimated";
+        }
+        
+        if (totalFees !== null) {
+          fbaFees = { total_fba_fees: totalFees, source };
         }
       }
 
-      // Extract category hint (soft, optional for ASIN mode)
-      // TODO: Infer from ASIN data if available (currently null)
-      const categoryHint = null;
-
-      // PART G: Compute margin snapshot using new shared engine
-      // ASIN mode: uses ASIN price, never Page-1 averages
-      const marginSnapshot = computeMarginSnapshot({
+      // Build margin snapshot using new builder
+      const marginSnapshot = buildMarginSnapshot({
         analysisMode: marginMode,
-        price: sellingPrice,
-        categoryHint,
-        sourcingModel: sellerProfile.sourcing_model as any,
-        fbaFees: fbaFeesValue,
-        fbaFeeSource,
+        sellerProfile: {
+          sourcing_model: sellerProfile.sourcing_model as any,
+        },
+        asinSnapshot: asinData ? {
+          price: asinData.price,
+        } : null,
+        marketSnapshot: marketSnapshot ? {
+          avg_price: marketSnapshot.avg_price,
+          category: marketSnapshot.category,
+        } : null,
+        fbaFees,
+        userOverrides: null, // No user overrides at analysis time
       });
 
-      // Inject into decision JSON
-      (decisionJson.market_snapshot as any).margin_snapshot = marginSnapshot;
+      // Store at analysis_runs.response.margin_snapshot (not nested in market_snapshot)
+      decisionJson.margin_snapshot = marginSnapshot;
     } catch (error) {
       // Never throw - ensure margin_snapshot is always present
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       console.error("Margin snapshot calculation error:", errorMessage);
 
       // Create safe default margin snapshot (never block)
-      const defaultPrice = 25.0;
       const defaultMarginMode: 'ASIN' | 'KEYWORD' = body.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
-      const marginSnapshot = computeMarginSnapshot({
+      const marginSnapshot = buildMarginSnapshot({
         analysisMode: defaultMarginMode,
-        price: defaultPrice,
-        categoryHint: null,
-        sourcingModel: sellerProfile.sourcing_model as any,
+        sellerProfile: {
+          sourcing_model: sellerProfile.sourcing_model as any,
+        },
+        asinSnapshot: null,
+        marketSnapshot: null,
         fbaFees: null,
-        fbaFeeSource: "estimated",
+        userOverrides: null,
       });
       
-      if (!decisionJson.market_snapshot) {
-        decisionJson.market_snapshot = {};
-      }
-      (decisionJson.market_snapshot as any).margin_snapshot = marginSnapshot;
+      decisionJson.margin_snapshot = marginSnapshot;
     }
 
-    // 12c. Apply final confidence downgrades (after FBA fees and margin snapshot are calculated)
-    // ASIN MODE: Margin-specific confidence rules (separate from analysis confidence)
-    const marginSnapshotFinal = decisionJson.market_snapshot?.margin_snapshot;
-    
-    if (body.input_type === "asin" && marginSnapshotFinal && 
-        typeof marginSnapshotFinal === 'object' &&
-        marginSnapshotFinal !== null) {
-      // ASIN margin confidence rules:
-      // - Starts at 70% (baseline for margin calculations)
-      // - Downgrade -10% if both COGS and FBA are estimated
-      // - Downgrade -10% if sourcing_model === 'not_sure'
-      // - Floor at 40%, cap at 85%
-      
-      let marginConfidence = 70; // ASIN margin confidence baseline
-      const bothEstimated = marginSnapshotFinal.source === "assumption_engine" && 
-                            (marginSnapshotFinal.fba_fees === null || 
-                             (typeof (decisionJson.market_snapshot as any)?.fba_fees === 'object' && 
-                              (decisionJson.market_snapshot as any)?.fba_fees?.source !== "amazon"));
-      
-      if (bothEstimated) {
-        marginConfidence -= 10; // Both COGS and FBA estimated
-      }
-      
-      if (sellerProfile.sourcing_model === 'not_sure') {
-        marginConfidence -= 10; // Sourcing model uncertainty
-      }
-      
-      // Apply floor and cap
-      marginConfidence = Math.max(40, Math.min(85, marginConfidence));
-      
-      // Note: Margin confidence is separate from analysis confidence
-      // Analysis confidence is already calculated above for ASIN mode
-    }
-    
-    // Apply FBA fees downgrade to analysis confidence
-    const fbaFees = decisionJson.market_snapshot?.fba_fees;
-    let hasSpApiFees = false;
-    
-    if (fbaFees && typeof fbaFees === 'object' && fbaFees !== null) {
-      // Check for new structure with source field
-      if ('source' in fbaFees) {
-        hasSpApiFees = fbaFees.source === "amazon" || fbaFees.source === "sp_api";
-      }
-    }
-    
-    if (!hasSpApiFees && body.input_type === "asin") {
-      // For ASIN analyses, missing SP-API fees is a significant downgrade
-      confidence = Math.min(confidence, 70);
-      if (!confidenceDowngrades.some(d => d.includes("FBA fees"))) {
-        confidenceDowngrades.push("FBA fees estimated (SP-API data unavailable)");
-      }
-    } else if (!hasSpApiFees && body.input_type === "idea") {
-      // For keyword analyses, estimated fees are expected but still downgrade slightly
-      confidence = Math.min(confidence, Math.round(confidence * 0.95));
-      if (!confidenceDowngrades.some(d => d.includes("fees"))) {
-        confidenceDowngrades.push("FBA fees estimated (not from SP-API)");
-      }
-    }
-
-    // Rule 3: Estimated COGS → downgrade (for keyword mode only; ASIN margin confidence handled above)
-    if (body.input_type === "idea" && marginSnapshotFinal && 
-        typeof marginSnapshotFinal === 'object' &&
-        marginSnapshotFinal !== null &&
-        'source' in marginSnapshotFinal &&
-        marginSnapshotFinal.source === "assumption_engine") {
-      confidence = Math.min(confidence, 75);
-      if (!confidenceDowngrades.some(d => d.includes("COGS"))) {
-        confidenceDowngrades.push("COGS estimated from sourcing model assumptions");
-      }
-    }
+    // PART G: Margin snapshot confidence is handled by buildMarginSnapshot (confidence_tier field)
+    // Analysis confidence is separate from margin snapshot confidence
 
     // Apply final downgraded confidence
     decisionJson.decision.confidence = Math.round(confidence);
