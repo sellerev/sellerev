@@ -807,13 +807,22 @@ export default function AnalyzeForm({
               {/* ─────────────────────────────────────────────────────────── */}
               {/* 1. TOP METRICS BAR (H10-style cards)                        */}
               {/* ─────────────────────────────────────────────────────────── */}
-              {analysis.market_snapshot?.listings && analysis.market_snapshot.listings.length > 0 && (() => {
-                const listings = analysis.market_snapshot.listings!;
-                const total30DayRevenue = calculate30DayRevenue(listings);
-                const total30DayUnits = calculate30DayUnits(listings);
-                const avgBSR = calculateAvgBSR(listings);
-                const avgPrice = analysis.market_snapshot.avg_price;
-                const avgRating = analysis.market_snapshot.avg_rating;
+              {analysis.market_snapshot && (() => {
+                const snapshot = analysis.market_snapshot;
+                const listings = snapshot.listings || [];
+                
+                // Calculate metrics from listings if available, otherwise use snapshot aggregates
+                const total30DayRevenue = listings.length > 0 
+                  ? calculate30DayRevenue(listings)
+                  : null; // Revenue calculation requires individual product data
+                const total30DayUnits = listings.length > 0
+                  ? calculate30DayUnits(listings)
+                  : null; // Units calculation requires individual product data
+                const avgBSR = listings.length > 0
+                  ? calculateAvgBSR(listings)
+                  : null; // BSR not available in current structure
+                const avgPrice = snapshot.avg_price;
+                const avgRating = snapshot.avg_rating;
                 
                 return (
                   <div className="bg-white border rounded-xl p-6 shadow-sm">
@@ -1081,10 +1090,34 @@ export default function AnalyzeForm({
               </div>
 
               {/* ─────────────────────────────────────────────────────────── */}
+              {/* COMPETITIVE PRESSURE INDEX (CPI)                            */}
+              {/* - Decisive label showing competitive pressure               */}
+              {/* ─────────────────────────────────────────────────────────── */}
+              {analysis.market_snapshot?.cpi && (
+                <div className="bg-white border rounded-xl p-6 shadow-sm">
+                  <div className="mb-4">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-1">
+                      Competitive Pressure Index (CPI)
+                    </h2>
+                    <p className="text-xs text-gray-500">
+                      Market competitiveness assessment
+                    </p>
+                  </div>
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="text-lg font-semibold text-gray-900">
+                      {analysis.market_snapshot.cpi.label}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      CPI {analysis.market_snapshot.cpi.score} — {getCPIDescription(analysis.market_snapshot.cpi.score)}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 3: MARKET SNAPSHOT                                    */}
               {/* - 4 compact stat cards (2x2 grid)                           */}
               {/* - Uses market_snapshot for keywords, market_data for ASINs */}
-              {/* - CPI displayed as decisive label (not descriptive)         */}
               {/* ─────────────────────────────────────────────────────────── */}
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <div className="mb-4">
@@ -1095,19 +1128,6 @@ export default function AnalyzeForm({
                     Aggregated signals from current Page 1 results
                   </p>
                 </div>
-                
-                {/* Competitive Pressure (CPI) - Decisive label */}
-                {analysis.market_snapshot?.cpi && (
-                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <div className="text-xs text-gray-500 mb-1">Competitive Pressure</div>
-                    <div className="text-lg font-semibold text-gray-900">
-                      {analysis.market_snapshot.cpi.label}
-                    </div>
-                    <div className="text-xs text-gray-600 mt-1">
-                      CPI {analysis.market_snapshot.cpi.score} — {getCPIDescription(analysis.market_snapshot.cpi.score)}
-                    </div>
-                  </div>
-                )}
 
                 {/* Market Snapshot: Use ONLY cached data from analysis.market_snapshot (normalized from response.market_snapshot) */}
                 {/* No re-fetching, no recomputation - all values come from cached analysis data */}
@@ -1134,9 +1154,9 @@ export default function AnalyzeForm({
                         {getPriceInterpretation(analysis.market_snapshot.avg_price)}
                       </div>
                     </div>
-                    {/* Card 2: Review Moat */}
+                    {/* Card 2: Review Barrier */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Review Moat</div>
+                      <div className="text-xs text-gray-500 mb-1">Review Barrier</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot.avg_reviews !== null && 
                          analysis.market_snapshot.avg_reviews !== undefined &&
@@ -1173,9 +1193,9 @@ export default function AnalyzeForm({
                         </div>
                       </div>
                     )}
-                    {/* Card 4: Brand Control */}
+                    {/* Card 4: Brand Dominance */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Brand Control</div>
+                      <div className="text-xs text-gray-500 mb-1">Brand Dominance</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot.dominance_score !== undefined && 
                          analysis.market_snapshot.dominance_score !== null &&
@@ -1204,9 +1224,9 @@ export default function AnalyzeForm({
                           : ""}
                       </div>
                     </div>
-                    {/* Card 6: Competitive Density */}
+                    {/* Card 6: Page-1 Density */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Competitive Density</div>
+                      <div className="text-xs text-gray-500 mb-1">Page-1 Density</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot.total_page1_listings !== undefined &&
                          analysis.market_snapshot.total_page1_listings !== null &&
@@ -1232,11 +1252,11 @@ export default function AnalyzeForm({
                           : ""}
                       </div>
                     </div>
-                    {/* Card 7: Ad Saturation */}
+                    {/* Card 7: Paid Pressure */}
                     {analysis.market_snapshot.sponsored_count !== undefined && 
                      analysis.market_snapshot.sponsored_count !== null && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Ad Saturation</div>
+                        <div className="text-xs text-gray-500 mb-1">Paid Pressure</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
                           {typeof analysis.market_snapshot.sponsored_count === 'number' &&
                            analysis.market_snapshot.sponsored_count > 0
@@ -1261,10 +1281,10 @@ export default function AnalyzeForm({
                         </div>
                       </div>
                     )}
-                    {/* Card 8: Fulfillment Cost */}
+                    {/* Card 8: Fulfillment Cost (est.) */}
                     {analysis.market_snapshot?.fba_fees && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Fulfillment Cost</div>
+                        <div className="text-xs text-gray-500 mb-1">Fulfillment Cost (est.)</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
                           {(() => {
                             // Support both new and legacy structures
