@@ -1646,11 +1646,19 @@ export default function AnalyzeForm({
               {/* ─────────────────────────────────────────────────────────── */}
               {(() => {
                 // Get margin snapshot (use existing or calculate)
+                // ASIN mode: Always render (never block on missing data)
+                // KEYWORD mode: May show empty state if no market data
                 const marginSnapshot = analysis.market_snapshot?.margin_snapshot;
-                const avgPrice = analysis.market_snapshot?.avg_price ?? null;
+                const isAsinMode = analysisMode === 'ASIN';
                 
-                // If no margin snapshot or price, show empty state
-                if (!marginSnapshot || !avgPrice) {
+                // For ASIN mode: margin snapshot should always be present (calculated with assumptions)
+                // For KEYWORD mode: check if price is available
+                const priceAvailable = isAsinMode 
+                  ? true // ASIN mode always has price (from ASIN or default)
+                  : (analysis.market_snapshot?.avg_price ?? null) !== null;
+                
+                // If no margin snapshot, show empty state (should not happen for ASIN mode)
+                if (!marginSnapshot) {
                   return (
                     <div className="bg-white border rounded-xl p-6 shadow-sm">
                       <div className="flex items-center justify-between mb-4">
@@ -1662,9 +1670,15 @@ export default function AnalyzeForm({
                         </span>
                       </div>
                       <div className="text-sm text-gray-500 text-center py-4">
-                        <div className="mb-2">Insufficient data to estimate</div>
+                        <div className="mb-2">
+                          {isAsinMode 
+                            ? "Margin estimate will be available shortly" 
+                            : "Insufficient data to estimate"}
+                        </div>
                         <p className="text-xs text-gray-400 mt-2">
-                          This estimate is based on typical cost structures for your sourcing model. Actual margins depend on supplier and logistics.
+                          {isAsinMode
+                            ? "This ASIN margin estimate uses assumptions based on your sourcing model and the listing price."
+                            : "This estimate is based on typical cost structures for your sourcing model. Actual margins depend on supplier and logistics."}
                         </p>
                       </div>
                     </div>

@@ -16,52 +16,76 @@ type SourcingModel =
   | "not_sure";
 
 /**
- * Default FBA fee ranges by category (used when fba_fees is null)
+ * Estimate FBA fees by size/weight heuristic (ASIN mode fallback)
+ * Used when SP-API fees are unavailable
+ * 
+ * Categories:
+ * - Small standard: $5–7 (typically < 1 lb, < 18" longest side)
+ * - Large standard: $7–10 (typically 1–20 lbs, standard dimensions)
+ * - Oversize: $10–14 (typically > 20 lbs or > 18" longest side)
  */
-function getDefaultFbaFeeRange(categoryHint: string | null | undefined): {
+export function estimateFbaFeesByCategory(categoryHint: string | null | undefined): {
   low: number;
   high: number;
+  label: string;
 } {
   if (!categoryHint) {
-    // Default: standard size
-    return { low: 8, high: 12 };
+    // Default: large standard size
+    return { low: 7, high: 10, label: "Large standard (estimated)" };
   }
 
   const normalized = categoryHint.toLowerCase().trim();
 
-  // Small items (typically < 1 lb, < 18" longest side)
+  // Small standard items
   if (
     normalized.includes("small") ||
     normalized.includes("lightweight") ||
     normalized.includes("accessory") ||
     normalized.includes("jewelry") ||
-    normalized.includes("phone case")
+    normalized.includes("phone case") ||
+    normalized.includes("cable") ||
+    normalized.includes("charger")
   ) {
-    return { low: 6, high: 9 };
+    return { low: 5, high: 7, label: "Small standard (estimated)" };
   }
 
-  // Oversized items (typically > 20 lbs or > 18" longest side)
+  // Oversized items
   if (
     normalized.includes("oversized") ||
     normalized.includes("large") ||
     normalized.includes("furniture") ||
     normalized.includes("appliance") ||
-    normalized.includes("mattress")
+    normalized.includes("mattress") ||
+    normalized.includes("exercise equipment") ||
+    normalized.includes("bike")
   ) {
-    return { low: 12, high: 18 };
+    return { low: 10, high: 14, label: "Oversize (estimated)" };
   }
 
-  // Standard size (default)
-  return { low: 8, high: 12 };
+  // Large standard (default)
+  return { low: 7, high: 10, label: "Large standard (estimated)" };
+}
+
+/**
+ * Default FBA fee ranges by category (used when fba_fees is null)
+ * @deprecated Use estimateFbaFeesByCategory for ASIN mode
+ */
+function getDefaultFbaFeeRange(categoryHint: string | null | undefined): {
+  low: number;
+  high: number;
+} {
+  const estimate = estimateFbaFeesByCategory(categoryHint);
+  return { low: estimate.low, high: estimate.high };
 }
 
 /**
  * Calculate margin snapshot from inputs
  * 
- * @param params.avg_price - Average selling price
- * @param params.sourcing_model - Seller's sourcing model
- * @param params.category_hint - Product category hint (optional)
- * @param params.fba_fees - FBA fees from Amazon SP-API (nullable)
+ * @param params.avg_price - Selling price (for ASIN mode: ASIN price; for KEYWORD mode: avg_price)
+ * @param params.sourcing_model - Seller's sourcing model (required)
+ * @param params.category_hint - Product category hint (optional, used for FBA fee estimation)
+ * @param params.fba_fees - FBA fees from Amazon SP-API (nullable; if null, estimated by category)
+ * @param params.marginMode - 'ASIN' for single-listing analysis, 'KEYWORD' for market analysis (optional)
  * @returns MarginSnapshot with calculated margins and breakeven prices
  */
 export function calculateMarginSnapshot({
@@ -69,11 +93,13 @@ export function calculateMarginSnapshot({
   sourcing_model,
   category_hint,
   fba_fees,
+  marginMode,
 }: {
   avg_price: number;
   sourcing_model: SourcingModel;
   category_hint?: string | null;
   fba_fees?: number | null;
+  marginMode?: 'ASIN' | 'KEYWORD';
 }): MarginSnapshot {
   try {
     // Step 1: Derive COGS range based on sourcing_model
@@ -95,10 +121,10 @@ export function calculateMarginSnapshot({
       fbaFeesValue = fba_fees;
       source = "amazon_fees";
     } else {
-      // Use default range based on category
-      const defaultRange = getDefaultFbaFeeRange(category_hint);
+      // Estimate by category (ASIN mode fallback)
+      const feeEstimate = estimateFbaFeesByCategory(category_hint);
       // Use midpoint for single value calculation
-      fbaFeesValue = (defaultRange.low + defaultRange.high) / 2;
+      fbaFeesValue = (feeEstimate.low + feeEstimate.high) / 2;
       source = "assumption_engine";
     }
 

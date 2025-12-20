@@ -1263,30 +1263,33 @@ ${body.input_value}`;
         decisionJson.market_snapshot = {};
       }
 
-      // Extract avg_price (required for margin calculation)
-      // For keyword: use marketSnapshot.avg_price
-      // For ASIN: may not have avg_price, use default or try to extract from market_data
-      let avgPrice: number | null = null;
+      // Extract selling price (required for margin calculation)
+      // ASIN mode: use ASIN price from asin_snapshot or market_data
+      // KEYWORD mode: use marketSnapshot.avg_price
+      let sellingPrice: number | null = null;
+      const marginMode: 'ASIN' | 'KEYWORD' = body.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
       
       if (body.input_type === "idea" && marketSnapshot?.avg_price) {
-        avgPrice = marketSnapshot.avg_price;
+        // KEYWORD mode: use Page-1 average price
+        sellingPrice = marketSnapshot.avg_price;
       } else if (body.input_type === "asin") {
-        // For ASIN, check market_snapshot first, then market_data, then default
-        const snapshotPrice = (decisionJson.market_snapshot as any)?.avg_price;
-        if (snapshotPrice !== null && typeof snapshotPrice === 'number' && snapshotPrice > 0) {
-          avgPrice = snapshotPrice;
+        // ASIN mode: use ASIN-specific price (never Page-1 average)
+        // Try asin_snapshot first (from AI response)
+        const asinSnapshot = (decisionJson.asin_snapshot as any);
+        if (asinSnapshot?.price !== null && typeof asinSnapshot?.price === 'number' && asinSnapshot.price > 0) {
+          sellingPrice = asinSnapshot.price;
         } else {
-          // Check market_data (from ASIN analysis)
+          // Fallback: check market_data (from ASIN analysis)
           const marketDataPrice = (decisionJson.market_data as any)?.average_price;
           if (marketDataPrice !== null && typeof marketDataPrice === 'number' && marketDataPrice > 0) {
-            avgPrice = marketDataPrice;
+            sellingPrice = marketDataPrice;
           }
         }
       }
 
-      // Use default if no price found
-      if (avgPrice === null || avgPrice <= 0) {
-        avgPrice = 25.0; // Default fallback
+      // Use default if no price found (should never happen for ASIN, but ensure we don't block)
+      if (sellingPrice === null || sellingPrice <= 0) {
+        sellingPrice = 25.0; // Default fallback (margin calculation will still work)
       }
 
       // Extract FBA fees (may be new structure or legacy structure)
@@ -1303,12 +1306,18 @@ ${body.input_value}`;
         }
       }
 
+      // Extract category hint (soft, optional for ASIN mode)
+      // TODO: Infer from ASIN data if available (currently null)
+      const categoryHint = null;
+
       // Calculate margin snapshot
+      // ASIN mode: uses ASIN price, never Page-1 averages
       const marginSnapshot = calculateMarginSnapshot({
-        avg_price: avgPrice,
+        avg_price: sellingPrice, // For ASIN mode: ASIN price; for KEYWORD mode: avg_price
         sourcing_model: sellerProfile.sourcing_model as any,
-        category_hint: null, // Category hint not available in current data flow
+        category_hint: categoryHint,
         fba_fees: fbaFeesValue,
+        marginMode, // Pass margin mode for future use
       });
 
       // Inject into decision JSON
@@ -1318,13 +1327,15 @@ ${body.input_value}`;
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       console.error("Margin snapshot calculation error:", errorMessage);
 
-      // Create safe default margin snapshot
+      // Create safe default margin snapshot (never block)
       const defaultPrice = 25.0;
+      const defaultMarginMode: 'ASIN' | 'KEYWORD' = body.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
       const marginSnapshot = calculateMarginSnapshot({
         avg_price: defaultPrice,
         sourcing_model: sellerProfile.sourcing_model as any,
         category_hint: null,
         fba_fees: null,
+        marginMode: defaultMarginMode,
       });
       
       if (!decisionJson.market_snapshot) {
@@ -1334,7 +1345,40 @@ ${body.input_value}`;
     }
 
     // 12c. Apply final confidence downgrades (after FBA fees and margin snapshot are calculated)
-    // Rule 2: Missing SP-API fees → downgrade
+    // ASIN MODE: Margin-specific confidence rules (separate from analysis confidence)
+    const marginSnapshotFinal = decisionJson.market_snapshot?.margin_snapshot;
+    
+    if (body.input_type === "asin" && marginSnapshotFinal && 
+        typeof marginSnapshotFinal === 'object' &&
+        marginSnapshotFinal !== null) {
+      // ASIN margin confidence rules:
+      // - Starts at 70% (baseline for margin calculations)
+      // - Downgrade -10% if both COGS and FBA are estimated
+      // - Downgrade -10% if sourcing_model === 'not_sure'
+      // - Floor at 40%, cap at 85%
+      
+      let marginConfidence = 70; // ASIN margin confidence baseline
+      const bothEstimated = marginSnapshotFinal.source === "assumption_engine" && 
+                            (marginSnapshotFinal.fba_fees === null || 
+                             (typeof (decisionJson.market_snapshot as any)?.fba_fees === 'object' && 
+                              (decisionJson.market_snapshot as any)?.fba_fees?.source !== "amazon"));
+      
+      if (bothEstimated) {
+        marginConfidence -= 10; // Both COGS and FBA estimated
+      }
+      
+      if (sellerProfile.sourcing_model === 'not_sure') {
+        marginConfidence -= 10; // Sourcing model uncertainty
+      }
+      
+      // Apply floor and cap
+      marginConfidence = Math.max(40, Math.min(85, marginConfidence));
+      
+      // Note: Margin confidence is separate from analysis confidence
+      // Analysis confidence is already calculated above for ASIN mode
+    }
+    
+    // Apply FBA fees downgrade to analysis confidence
     const fbaFees = decisionJson.market_snapshot?.fba_fees;
     let hasSpApiFees = false;
     
@@ -1359,9 +1403,8 @@ ${body.input_value}`;
       }
     }
 
-    // Rule 3: Estimated COGS → downgrade
-    const marginSnapshotFinal = decisionJson.market_snapshot?.margin_snapshot;
-    if (marginSnapshotFinal && 
+    // Rule 3: Estimated COGS → downgrade (for keyword mode only; ASIN margin confidence handled above)
+    if (body.input_type === "idea" && marginSnapshotFinal && 
         typeof marginSnapshotFinal === 'object' &&
         marginSnapshotFinal !== null &&
         'source' in marginSnapshotFinal &&

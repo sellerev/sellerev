@@ -2,16 +2,17 @@
  * COGS Assumption Engine
  * 
  * Estimates Cost of Goods Sold (COGS) ranges based on sourcing model and category.
- * Used ONLY by the chat layer for margin calculations when exact COGS is not available.
+ * Used for margin calculations when exact COGS is not available.
  * 
- * Rules:
+ * ASIN MODE RULES (single-listing margin feasibility):
  * - Private Label:
- *   - Home goods: 20–30% of price
- *   - Electronics: 30–45%
- *   - Beauty: 25–40%
+ *   - Simple home goods: 20–30% of price
+ *   - Complex/electronics: 30–45%
+ *   - Beauty: 25–40% (default fallback)
  * - Wholesale / Arbitrage: 55–75% of price
+ * - Retail Arbitrage: 60–80% of price
  * - Dropshipping: 70–85% of price
- * - Not sure: 40–60% with LOW confidence
+ * - Not sure: widen range by +5% with LOW confidence
  */
 
 export interface CogsRangeEstimate {
@@ -85,12 +86,19 @@ export function estimateCogsRange({
       break;
 
     case "wholesale_arbitrage":
-    case "retail_arbitrage":
-      // Combined: Wholesale / Arbitrage
+      // Wholesale / Arbitrage
       percentLow = 55;
       percentHigh = 75;
       confidence = "medium";
       rationale = "Wholesale/Arbitrage products typically cost 55–75% of selling price due to middleman margins and sourcing costs.";
+      break;
+
+    case "retail_arbitrage":
+      // Retail Arbitrage (separate from wholesale)
+      percentLow = 60;
+      percentHigh = 80;
+      confidence = "medium";
+      rationale = "Retail Arbitrage products typically cost 60–80% of selling price due to retail markup and sourcing costs.";
       break;
 
     case "dropshipping":
@@ -102,10 +110,11 @@ export function estimateCogsRange({
 
     case "not_sure":
     default:
+      // Not sure: widen range by +5% (more conservative)
       percentLow = 40;
-      percentHigh = 60;
+      percentHigh = 65; // Widened from 60% to 65%
       confidence = "low";
-      rationale = "Estimated COGS range of 40–60% of selling price (sourcing model not specified, low confidence).";
+      rationale = "Estimated COGS range of 40–65% of selling price (sourcing model not specified, widened range for uncertainty).";
       break;
   }
 
