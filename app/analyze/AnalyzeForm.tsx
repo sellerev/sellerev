@@ -83,6 +83,17 @@ interface AnalysisResponse {
     sponsored_count: number;
     dominance_score: number; // 0-100, % of listings belonging to top brand
     representative_asin?: string | null; // Optional representative ASIN for fee estimation
+    // Page 1 product listings (for data-first display)
+    listings?: Array<{
+      asin: string | null;
+      title: string | null;
+      price: number | null;
+      rating: number | null;
+      reviews: number | null;
+      is_sponsored: boolean;
+      position: number;
+      brand: string | null;
+    }>;
     // Competitive Pressure Index (CPI) - seller-context aware, 0-100
     // Computed once per analysis, cached, immutable
     cpi?: {
@@ -265,6 +276,71 @@ function calculateMarketPressure(
   if (pressureScore <= 2) return "Low";
   if (pressureScore <= 4) return "Moderate";
   return "High";
+}
+
+/**
+ * Estimate monthly revenue for a product based on price and reviews
+ * Uses a conservative heuristic: reviews as proxy for demand
+ */
+function estimateMonthlyRevenue(price: number | null, reviews: number | null): number | null {
+  if (price === null || price <= 0) return null;
+  if (reviews === null || reviews <= 0) return null;
+  
+  // Conservative estimate: assume ~1-2% conversion rate from reviews to monthly sales
+  // Scale by review count (more reviews = more sales)
+  const estimatedMonthlyUnits = Math.max(10, Math.floor(reviews * 0.01));
+  return price * estimatedMonthlyUnits;
+}
+
+/**
+ * Calculate average BSR from listings (if available)
+ * Currently returns null as BSR not in ParsedListing interface
+ */
+function calculateAvgBSR(listings: Array<any>): number | null {
+  // BSR not available in current ParsedListing structure
+  // Return null as specified in requirements
+  return null;
+}
+
+/**
+ * Calculate 30-day revenue estimate (sum of all page-1 product revenues)
+ */
+function calculate30DayRevenue(listings: Array<{ price: number | null; reviews: number | null }>): number | null {
+  const revenues = listings
+    .map(l => estimateMonthlyRevenue(l.price, l.reviews))
+    .filter((r): r is number => r !== null);
+  
+  if (revenues.length === 0) return null;
+  return revenues.reduce((sum, r) => sum + r, 0);
+}
+
+/**
+ * Calculate 30-day units sold estimate (sum of all page-1 product units)
+ */
+function calculate30DayUnits(listings: Array<{ price: number | null; reviews: number | null }>): number | null {
+  const units = listings
+    .map(l => {
+      if (l.reviews === null || l.reviews <= 0) return null;
+      return Math.max(10, Math.floor(l.reviews * 0.01));
+    })
+    .filter((u): u is number => u !== null);
+  
+  if (units.length === 0) return null;
+  return units.reduce((sum, u) => sum + u, 0);
+}
+
+/**
+ * Calculate fulfillment mix (FBA / FBM / Amazon %)
+ * Currently simplified as fulfillment data not in ParsedListing
+ */
+function calculateFulfillmentMix(listings: Array<any>): {
+  fba: number;
+  fbm: number;
+  amazon: number;
+} {
+  // Placeholder - fulfillment data not available in current structure
+  // Return defaults for now (will show "—" in UI)
+  return { fba: 0, fbm: 0, amazon: 0 };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -718,14 +794,241 @@ export default function AnalyzeForm({
           ) : (
             <div className="p-6 space-y-6 max-w-4xl">
               {/* ═══════════════════════════════════════════════════════════════ */}
-              {/* POST-ANALYSIS STATE: LOCKED VISUAL HIERARCHY                  */}
-              {/* Order: Decision → Market → Summary → Risks → Actions → Limits */}
+              {/* POST-ANALYSIS STATE: DATA-FIRST LAYOUT                        */}
+              {/* Order: Page-1 Data → Decision → Summary → Risks → Actions → Limits */}
               {/* ═══════════════════════════════════════════════════════════════ */}
               {/* Defensive invariant: ensure analysis and decision exist */}
               {!analysis || !analysis.decision ? null : (
               <>
+              {/* ═══════════════════════════════════════════════════════════════ */}
+              {/* SECTION 1: PAGE-1 DATA SNAPSHOT (ALWAYS FIRST)                */}
+              {/* ═══════════════════════════════════════════════════════════════ */}
+              
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 2: DECISION HEADER (HIGHEST PRIORITY)                 */}
+              {/* 1. TOP METRICS BAR (H10-style cards)                        */}
+              {/* ─────────────────────────────────────────────────────────── */}
+              {analysis.market_snapshot?.listings && analysis.market_snapshot.listings.length > 0 && (() => {
+                const listings = analysis.market_snapshot.listings!;
+                const total30DayRevenue = calculate30DayRevenue(listings);
+                const total30DayUnits = calculate30DayUnits(listings);
+                const avgBSR = calculateAvgBSR(listings);
+                const avgPrice = analysis.market_snapshot.avg_price;
+                const avgRating = analysis.market_snapshot.avg_rating;
+                
+                return (
+                  <div className="bg-white border rounded-xl p-6 shadow-sm">
+                    <div className="grid grid-cols-5 gap-4">
+                      {/* 30-Day Revenue */}
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500 mb-1">30-Day Revenue (est.)</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {total30DayRevenue !== null ? formatCurrency(total30DayRevenue) : "—"}
+                        </div>
+                      </div>
+                      {/* 30-Day Units */}
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500 mb-1">30-Day Units Sold (est.)</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {total30DayUnits !== null ? total30DayUnits.toLocaleString() : "—"}
+                        </div>
+                      </div>
+                      {/* Avg BSR */}
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500 mb-1">Avg BSR</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {avgBSR !== null ? avgBSR.toLocaleString() : "—"}
+                        </div>
+                      </div>
+                      {/* Avg Price */}
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500 mb-1">Avg Price</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {avgPrice !== null ? formatCurrency(avgPrice) : "—"}
+                        </div>
+                      </div>
+                      {/* Avg Rating */}
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500 mb-1">Avg Rating</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {avgRating !== null ? `${avgRating.toFixed(1)} ★` : "—"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ─────────────────────────────────────────────────────────── */}
+              {/* 2. PAGE-1 PRODUCT TABLE                                     */}
+              {/* ─────────────────────────────────────────────────────────── */}
+              {analysis.market_snapshot?.listings && analysis.market_snapshot.listings.length > 0 && (() => {
+                const listings = analysis.market_snapshot.listings!
+                  .filter(l => l.asin && l.title) // Only valid listings
+                  .map(l => ({
+                    ...l,
+                    estMonthlyRevenue: estimateMonthlyRevenue(l.price, l.reviews),
+                  }))
+                  .sort((a, b) => {
+                    // Sort by revenue (desc)
+                    const revA = a.estMonthlyRevenue || 0;
+                    const revB = b.estMonthlyRevenue || 0;
+                    return revB - revA;
+                  });
+                
+                const totalPage1Revenue = listings
+                  .map(l => l.estMonthlyRevenue)
+                  .filter((r): r is number => r !== null)
+                  .reduce((sum, r) => sum + r, 0);
+                
+                return (
+                  <div className="bg-white border rounded-xl shadow-sm overflow-hidden">
+                    <div className="p-4 border-b bg-gray-50">
+                      <h2 className="text-lg font-semibold text-gray-900">Page-1 Products</h2>
+                      <p className="text-xs text-gray-500 mt-1">Sorted by estimated revenue</p>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Rating</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">BSR</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Est. Monthly Revenue</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Revenue Share</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {listings.slice(0, 48).map((listing, idx) => {
+                            const revenueShare = listing.estMonthlyRevenue && totalPage1Revenue > 0
+                              ? (listing.estMonthlyRevenue / totalPage1Revenue) * 100
+                              : 0;
+                            
+                            return (
+                              <tr key={listing.asin || idx} className="hover:bg-gray-50">
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-3 min-w-[300px]">
+                                    {/* Placeholder for image - using text icon since image URL not in current structure */}
+                                    <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center flex-shrink-0">
+                                      <span className="text-xs text-gray-400">IMG</span>
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-sm font-medium text-gray-900 truncate">
+                                        {listing.title || "—"}
+                                      </div>
+                                      <div className="text-xs text-gray-500 mt-0.5">
+                                        {listing.asin || "—"}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-right text-sm text-gray-900">
+                                  {listing.price !== null ? formatCurrency(listing.price) : "—"}
+                                </td>
+                                <td className="px-4 py-3 text-right text-sm text-gray-900">
+                                  {listing.rating !== null ? `${listing.rating.toFixed(1)} ★` : "—"}
+                                </td>
+                                <td className="px-4 py-3 text-right text-sm text-gray-900">
+                                  {/* BSR not available in current structure */}
+                                  —
+                                </td>
+                                <td className="px-4 py-3 text-right text-sm font-medium text-gray-900">
+                                  {listing.estMonthlyRevenue !== null ? formatCurrency(listing.estMonthlyRevenue) : "—"}
+                                </td>
+                                <td className="px-4 py-3 text-right text-sm text-gray-600">
+                                  {revenueShare > 0 ? `${revenueShare.toFixed(1)}%` : "—"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ─────────────────────────────────────────────────────────── */}
+              {/* 3. LIGHTWEIGHT MARKET BREAKDOWN                             */}
+              {/* ─────────────────────────────────────────────────────────── */}
+              {analysis.market_snapshot && (() => {
+                const snapshot = analysis.market_snapshot;
+                const listings = snapshot.listings || [];
+                const fulfillmentMix = calculateFulfillmentMix(listings);
+                
+                // Calculate brand dominance (top brand %)
+                const brandCounts: Record<string, number> = {};
+                listings.forEach(l => {
+                  if (l.brand) {
+                    brandCounts[l.brand] = (brandCounts[l.brand] || 0) + 1;
+                  }
+                });
+                const topBrands = Object.entries(brandCounts)
+                  .map(([brand, count]) => ({ brand, count }))
+                  .sort((a, b) => b.count - a.count);
+                const brandDominance = topBrands.length > 0 && listings.length > 0
+                  ? (topBrands[0].count / listings.length) * 100
+                  : snapshot.dominance_score || 0;
+                
+                return (
+                  <div className="bg-white border rounded-xl p-6 shadow-sm">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-4">Market Breakdown</h2>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {/* Brand Dominance */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Brand Dominance</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {brandDominance > 0 ? `${Math.round(brandDominance)}%` : "—"}
+                        </div>
+                        <div className="text-xs text-gray-600 mt-1">
+                          Top brand % share on Page-1
+                        </div>
+                      </div>
+                      {/* Fulfillment Mix */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Fulfillment Mix</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {fulfillmentMix.fba > 0 || fulfillmentMix.fbm > 0 
+                            ? `FBA ${fulfillmentMix.fba}% / FBM ${fulfillmentMix.fbm}%`
+                            : "—"}
+                        </div>
+                        <div className="text-xs text-gray-600 mt-1">
+                          FBA / FBM / Amazon %
+                        </div>
+                      </div>
+                      {/* Page-1 Density */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Page-1 Density</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {snapshot.total_page1_listings || 0}
+                        </div>
+                        <div className="text-xs text-gray-600 mt-1">
+                          Count of Page-1 listings
+                        </div>
+                      </div>
+                      {/* Sponsored Presence */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Sponsored Presence</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {snapshot.sponsored_count !== undefined && snapshot.sponsored_count !== null
+                            ? `${snapshot.sponsored_count}`
+                            : "—"}
+                        </div>
+                        <div className="text-xs text-gray-600 mt-1">
+                          Sponsored listings on Page-1
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ═══════════════════════════════════════════════════════════════ */}
+              {/* SECTION 2: DECISION & INTERPRETATION (AFTER DATA)              */}
+              {/* ═══════════════════════════════════════════════════════════════ */}
+              
+              {/* ─────────────────────────────────────────────────────────── */}
+              {/* DECISION HEADER (VERDICT + CONFIDENCE)                       */}
               {/* - Verdict badge (GO / CAUTION / NO_GO)                      */}
               {/* - Confidence percentage                                     */}
               {/* - One-line interpretation                                   */}

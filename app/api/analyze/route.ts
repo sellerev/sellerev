@@ -927,8 +927,11 @@ ${body.input_value}`;
 
     // 12. Store market data in response for keyword analyses
     if (body.input_type === "idea" && keywordMarketData) {
-      decisionJson.market_snapshot = marketSnapshot;
-      decisionJson.market_listings = keywordMarketData.listings;
+      decisionJson.market_snapshot = {
+        ...marketSnapshot,
+        listings: keywordMarketData.listings, // Include listings in market_snapshot for frontend display
+      };
+      decisionJson.market_listings = keywordMarketData.listings; // Keep for backward compatibility
     }
 
     // 12b. Fetch FBA fee estimates via SP-API (with caching)
