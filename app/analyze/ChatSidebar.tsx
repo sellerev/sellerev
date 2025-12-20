@@ -322,7 +322,7 @@ export default function ChatSidebar({
               const json = JSON.parse(line.slice(6));
               
               // Handle metadata (e.g., cost override updates)
-              if (json.metadata && json.metadata.type === "cost_override_applied") {
+              if (json.metadata && (json.metadata.type === "cost_override_applied" || json.metadata.type === "margin_snapshot_refined")) {
                 const { margin_snapshot } = json.metadata;
                 if (margin_snapshot && onMarginSnapshotUpdate) {
                   onMarginSnapshotUpdate(margin_snapshot);

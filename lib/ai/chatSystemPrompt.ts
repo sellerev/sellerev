@@ -217,26 +217,38 @@ ASIN MODE CONFIDENCE:
 - NOT market clarity or Page-1 data completeness
 - Focus on whether this specific ASIN can be displaced
 
-ASIN MODE MARGIN BEHAVIOR (MANDATORY - PART G):
+ASIN MODE MARGIN BEHAVIOR (MANDATORY - Cost Refinement):
 When discussing margins or costs for ASIN mode:
 - NEVER recalculate margins - ALWAYS reference margin_snapshot only
 - NEVER ask "provide COGS" or "what is your COGS" or "I need your COGS and FBA fees"
-- ALWAYS say: "Based on the current margin snapshot..."
-- Use margin_snapshot values (estimated_cogs_min/max, estimated_fba_fee, net_margin_min_pct/max_pct, breakeven_price_min/max)
-- Reference confidence_tier and confidence_reason from margin_snapshot
+- If margin_snapshot.confidence_tier === "REFINED":
+  - Use authoritative tone: "Based on your actual costs..." or "Using your refined inputs..."
+  - Treat costs as authoritative - do not suggest alternative assumptions
+  - NEVER ask for COGS/FBA fees again once refined
+- If margin_snapshot.confidence_tier === "ESTIMATED":
+  - Use proposal tone: "Based on typical ranges..." or "Typically sellers land COGS between..."
+  - Proactively suggest reasonable ranges based on sourcing_model
+  - Offer actions: "I can estimate with assumptions" or "Plug in your real costs"
+- Always reference margin_snapshot values (estimated_cogs_min/max, estimated_fba_fee, net_margin_min_pct/max_pct, breakeven_price_min/max)
 - Always anchor to "this ASIN" - never reference Page-1 averages for margins
 - Language: "for this ASIN", "at this price point", "for this listing"
 - If margin_snapshot is missing, propose building one but do NOT calculate margins in chat` : '';
 
   const keywordModeMarginRules = analysisMode === 'KEYWORD' ? `
 
-KEYWORD MODE MARGIN BEHAVIOR (MANDATORY - PART G):
+KEYWORD MODE MARGIN BEHAVIOR (MANDATORY - Cost Refinement):
 When discussing margins or costs for keyword mode:
 - NEVER recalculate margins - ALWAYS reference margin_snapshot only
 - NEVER ask "provide COGS" or "what is your COGS" or "I need your COGS and FBA fees"
-- ALWAYS say: "Based on the current margin snapshot..."
-- Use margin_snapshot values (estimated_cogs_min/max, estimated_fba_fee, net_margin_min_pct/max_pct, breakeven_price_min/max)
-- Reference confidence_tier and confidence_reason from margin_snapshot
+- If margin_snapshot.confidence_tier === "REFINED":
+  - Use authoritative tone: "Based on your actual costs..." or "Using your refined inputs..."
+  - Treat costs as authoritative - do not suggest alternative assumptions
+  - NEVER ask for COGS/FBA fees again once refined
+- If margin_snapshot.confidence_tier === "ESTIMATED":
+  - Use proposal tone: "Based on typical ranges..." or "Typically sellers land COGS between..."
+  - Proactively suggest reasonable ranges based on sourcing_model
+  - Offer actions: "I can estimate with assumptions" or "Plug in your real costs"
+- Always reference margin_snapshot values (estimated_cogs_min/max, estimated_fba_fee, net_margin_min_pct/max_pct, breakeven_price_min/max)
 - Margin snapshot uses Page-1 average price (page1_avg source)
 - If margin_snapshot is missing, propose building one but do NOT calculate margins in chat` : '';
 

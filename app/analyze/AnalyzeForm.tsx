@@ -459,28 +459,14 @@ export default function AnalyzeForm({
     normalizeAnalysis(initialAnalysis)
   );
 
-  // Handler for margin snapshot updates from chat
-  const handleMarginSnapshotUpdate = (updatedSnapshot: {
-    selling_price: number;
-    cogs_assumed_low: number;
-    cogs_assumed_high: number;
-    fba_fees: number | null;
-    net_margin_low_pct: number;
-    net_margin_high_pct: number;
-    breakeven_price_low: number;
-    breakeven_price_high: number;
-    confidence: "estimated" | "refined";
-    source: "assumption_engine" | "amazon_fees";
-  }) => {
+  // Handler for margin snapshot updates from chat (Part G structure)
+  const handleMarginSnapshotUpdate = (updatedSnapshot: AnalysisResponse['margin_snapshot']) => {
     setAnalysis((prev) => {
-      if (!prev || !prev.market_snapshot) return prev;
+      if (!prev) return prev;
       
       return {
         ...prev,
-        market_snapshot: {
-          ...prev.market_snapshot,
-          margin_snapshot: updatedSnapshot,
-        },
+        margin_snapshot: updatedSnapshot,
       };
     });
   };

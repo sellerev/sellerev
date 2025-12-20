@@ -4,10 +4,8 @@ import { buildChatSystemPrompt } from "@/lib/ai/chatSystemPrompt";
 import { estimateCogsRange } from "@/lib/cogs/assumptions";
 import { normalizeCostOverrides } from "@/lib/margins/normalizeCostOverrides";
 import { MarginSnapshot, MarginAssumptions } from "@/types/margin";
-import { buildMarginAssumptions } from "@/lib/margins/buildMarginAssumptions";
-import { parseCostOverrides } from "@/lib/margins/parseCostOverrides";
-import { detectMarginIntent } from "@/lib/margins/detectMarginIntent";
-import { calculateMarginSnapshotFromAssumptions } from "@/lib/margins/applyMarginAssumptions";
+import { detectCostRefinement } from "@/lib/margins/detectCostRefinement";
+import { refineMarginSnapshot } from "@/lib/margins/refineMarginSnapshot";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -232,56 +230,45 @@ ${isAmazonProvided ? "These fees are Amazon-provided (from SP-API)." : "These fe
     contextParts.push(`NOTE: This is a keyword analysis. FBA fees must use estimated category-based ranges, not Amazon SP-API data.`);
   }
 
-  // Section 6: Margin Snapshot (calculated from COGS assumptions and FBA fees)
-  // PART H: May include user-refined costs if margin_assumptions exist
-  if (marketSnapshot && typeof marketSnapshot === 'object') {
-    const marginSnapshot = (marketSnapshot.margin_snapshot as Record<string, unknown>) || null;
-    if (marginSnapshot) {
-      const confidenceTier = (marginSnapshot.confidence_level as string) || "MEDIUM";
-      const marginAssumptions = (analysisResponse.margin_assumptions as MarginAssumptions) || null;
-      
-      let overrideNote = "";
-      if (marginAssumptions && marginAssumptions.confidence_tier === "REFINED" && marginAssumptions.source === "user_override") {
-        const overrides: string[] = [];
-        if (marginAssumptions.cogs_low !== null && marginAssumptions.cogs_low !== undefined) {
-          if (marginAssumptions.cogs_low === marginAssumptions.cogs_high) {
-            overrides.push(`COGS: $${marginAssumptions.cogs_low.toFixed(2)}`);
-          } else {
-            overrides.push(`COGS: $${marginAssumptions.cogs_low.toFixed(2)}–$${marginAssumptions.cogs_high.toFixed(2)}`);
-          }
-        }
-        if (marginAssumptions.fba_fee !== null && marginAssumptions.fba_fee !== undefined) {
-          overrides.push(`FBA fees: $${marginAssumptions.fba_fee.toFixed(2)}`);
-        }
-        if (overrides.length > 0) {
-          overrideNote = `\n\nNOTE: This margin snapshot uses USER-REFINED costs (${overrides.join(", ")}). Confidence tier = "REFINED".`;
-        }
-      }
-      
-      // PART H: Include margin_assumptions information if available
-      const marginAssumptionsContext = (analysisResponse.margin_assumptions as MarginAssumptions) || null;
-      let assumptionsContextNote = "";
-      if (marginAssumptionsContext) {
-        const tierLabel = marginAssumptionsContext.confidence_tier === 'EXACT' ? 'EXACT (Amazon SP-API fees)'
-          : marginAssumptionsContext.confidence_tier === 'REFINED' ? 'REFINED (user-provided costs)'
-          : 'ESTIMATED (model-based)';
-        assumptionsContextNote = `\nConfidence tier: ${tierLabel}`;
-        if (marginAssumptionsContext.last_updated_at) {
-          assumptionsContextNote += ` (updated: ${new Date(marginAssumptionsContext.last_updated_at).toLocaleDateString()})`;
-        }
-      }
-      
-      contextParts.push(`=== MARGIN SNAPSHOT ===
-Selling price: $${(marginSnapshot.selling_price as number).toFixed(2)}
-COGS range (assumed): $${(marginSnapshot.cogs_assumed_low as number).toFixed(2)}–$${(marginSnapshot.cogs_assumed_high as number).toFixed(2)}
-Amazon fees: ${marginSnapshot.fba_fees !== null ? `$${(marginSnapshot.fba_fees as number).toFixed(2)}` : "Not available"}
-Net margin range: ${(marginSnapshot.net_margin_low_pct as number).toFixed(1)}%–${(marginSnapshot.net_margin_high_pct as number).toFixed(1)}%
-Breakeven price range: $${(marginSnapshot.breakeven_price_low as number).toFixed(2)}–$${(marginSnapshot.breakeven_price_high as number).toFixed(2)}
-Confidence level: ${confidence}
-Source: ${marginSnapshot.source || "assumption_engine"}${overrideNote}${assumptionsContextNote}
+  // Section 6: Margin Snapshot (Part G - first-class feature)
+  const marginSnapshot = (analysisResponse.margin_snapshot as MarginSnapshot) || null;
+  if (marginSnapshot) {
+    const cogsRange = marginSnapshot.estimated_cogs_min !== null && marginSnapshot.estimated_cogs_max !== null
+      ? `$${marginSnapshot.estimated_cogs_min.toFixed(2)}–$${marginSnapshot.estimated_cogs_max.toFixed(2)}`
+      : "Not available";
+    
+    const fbaFee = marginSnapshot.estimated_fba_fee !== null
+      ? `$${marginSnapshot.estimated_fba_fee.toFixed(2)}`
+      : "Not available";
+    
+    const marginRange = marginSnapshot.net_margin_min_pct !== null && marginSnapshot.net_margin_max_pct !== null
+      ? `${marginSnapshot.net_margin_min_pct.toFixed(1)}%–${marginSnapshot.net_margin_max_pct.toFixed(1)}%`
+      : "Not available";
+    
+    const breakevenRange = marginSnapshot.breakeven_price_min !== null && marginSnapshot.breakeven_price_max !== null
+      ? `$${marginSnapshot.breakeven_price_min.toFixed(2)}–$${marginSnapshot.breakeven_price_max.toFixed(2)}`
+      : "Not available";
+    
+    const refinementNote = marginSnapshot.confidence_tier === "REFINED"
+      ? `\n\nNOTE: This margin snapshot uses USER-REFINED costs. Confidence tier: REFINED.`
+      : marginSnapshot.confidence_tier === "EXACT"
+      ? `\n\nNOTE: This margin snapshot uses Amazon SP-API fees. Confidence tier: EXACT.`
+      : "";
+    
+    contextParts.push(`=== MARGIN SNAPSHOT ===
+Mode: ${marginSnapshot.mode}
+Confidence tier: ${marginSnapshot.confidence_tier}
+Confidence reason: ${marginSnapshot.confidence_reason}
+Selling price: $${marginSnapshot.assumed_price.toFixed(2)} (source: ${marginSnapshot.price_source})
+COGS range: ${cogsRange} (source: ${marginSnapshot.cogs_source})
+FBA fees: ${fbaFee} (source: ${marginSnapshot.fba_fee_source})
+Net margin range: ${marginRange}
+Breakeven price range: ${breakevenRange}${refinementNote}
 
-This margin snapshot is pre-calculated. Always reference it first when answering margin questions.`);
-    }
+Assumptions:
+${marginSnapshot.assumptions.map(a => `- ${a}`).join("\n")}
+
+This margin snapshot is the single source of truth. Always reference it when answering margin questions. Do NOT recalculate margins.`);
   }
 
   return contextParts.join("\n\n");
@@ -639,13 +626,15 @@ function extractAllowedNumbers(
     allowed.add(sellerProfile.experience_months);
   }
   
-  // PART H: Extract from margin_assumptions (user-refined costs)
-  const marginAssumptions = analysisResponse.margin_assumptions as MarginAssumptions | null;
-  if (marginAssumptions) {
-    if (typeof marginAssumptions.cogs_low === 'number') allowed.add(marginAssumptions.cogs_low);
-    if (typeof marginAssumptions.cogs_high === 'number') allowed.add(marginAssumptions.cogs_high);
-    if (typeof marginAssumptions.fba_fee === 'number') allowed.add(marginAssumptions.fba_fee);
-    if (typeof marginAssumptions.selling_price === 'number') allowed.add(marginAssumptions.selling_price);
+  // Extract from margin_snapshot (Part G - includes refined costs)
+  const marginSnapshot = analysisResponse.margin_snapshot as MarginSnapshot | null;
+  if (marginSnapshot) {
+    if (typeof marginSnapshot.assumed_price === 'number') allowed.add(marginSnapshot.assumed_price);
+    if (typeof marginSnapshot.estimated_cogs_min === 'number') allowed.add(marginSnapshot.estimated_cogs_min);
+    if (typeof marginSnapshot.estimated_cogs_max === 'number') allowed.add(marginSnapshot.estimated_cogs_max);
+    if (typeof marginSnapshot.estimated_fba_fee === 'number') allowed.add(marginSnapshot.estimated_fba_fee);
+    if (typeof marginSnapshot.breakeven_price_min === 'number') allowed.add(marginSnapshot.breakeven_price_min);
+    if (typeof marginSnapshot.breakeven_price_max === 'number') allowed.add(marginSnapshot.breakeven_price_max);
   }
   
   return allowed;
@@ -944,34 +933,34 @@ export async function POST(req: NextRequest) {
       .eq("analysis_run_id", body.analysisRunId)
       .order("created_at", { ascending: true });
 
-    // 6. PART H: Compute COGS assumptions for margin calculations (chat layer only)
+    // 6. COGS assumptions context (optional helper for chat)
     // ─────────────────────────────────────────────────────────────────────
-    // Use margin_assumptions if available, otherwise compute from seller profile
+    // Reference margin_snapshot for COGS - chat should use margin_snapshot directly
     const analysisResponse = analysisRun.response as Record<string, unknown>;
     let marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
-    const marginAssumptionsForCogs = (analysisResponse.margin_assumptions as MarginAssumptions) || null;
+    const marginSnapshotForCogs = (analysisResponse.margin_snapshot as MarginSnapshot) || null;
     
     let cogsAssumption: string = "";
     
-    // If margin_assumptions exist, use them
-    if (marginAssumptionsForCogs && marginAssumptionsForCogs.cogs_low !== null && marginAssumptionsForCogs.cogs_high !== null) {
-      const estimatedRange = marginAssumptionsForCogs.cogs_low === marginAssumptionsForCogs.cogs_high
-        ? `$${marginAssumptionsForCogs.cogs_low.toFixed(2)}`
-        : `$${marginAssumptionsForCogs.cogs_low.toFixed(2)}–$${marginAssumptionsForCogs.cogs_high.toFixed(2)}`;
+    // If margin_snapshot exists, extract COGS info from it
+    if (marginSnapshotForCogs && marginSnapshotForCogs.estimated_cogs_min !== null && marginSnapshotForCogs.estimated_cogs_max !== null) {
+      const estimatedRange = marginSnapshotForCogs.estimated_cogs_min === marginSnapshotForCogs.estimated_cogs_max
+        ? `$${marginSnapshotForCogs.estimated_cogs_min.toFixed(2)}`
+        : `$${marginSnapshotForCogs.estimated_cogs_min.toFixed(2)}–$${marginSnapshotForCogs.estimated_cogs_max.toFixed(2)}`;
       
-      const confidenceTierLabel = marginAssumptionsForCogs.confidence_tier === 'EXACT' ? "High confidence (exact)"
-        : marginAssumptionsForCogs.confidence_tier === 'REFINED' ? "Medium confidence (user-refined)"
+      const confidenceLabel = marginSnapshotForCogs.confidence_tier === 'EXACT' ? "High confidence (exact)"
+        : marginSnapshotForCogs.confidence_tier === 'REFINED' ? "Medium confidence (user-refined)"
         : "Medium confidence (estimated)";
       
-      cogsAssumption = `\n\nCOGS_ASSUMPTION:\n{
-  estimated_range: "${estimatedRange}",
-  confidence: "${confidenceTierLabel}",
-  source: "${marginAssumptionsForCogs.source}",
+      cogsAssumption = `\n\nCOGS_REFERENCE:\n{
+  range: "${estimatedRange}",
+  confidence: "${confidenceLabel}",
+  source: "${marginSnapshotForCogs.cogs_source}",
   sourcing_model: "${sellerProfile.sourcing_model}",
-  confidence_tier: "${marginAssumptionsForCogs.confidence_tier}"
+  confidence_tier: "${marginSnapshotForCogs.confidence_tier}"
 }`;
     } else {
-      // Compute from seller profile (fallback)
+      // Fallback: compute from seller profile (should not happen if margin_snapshot exists)
       const avgPrice = (marketSnapshot?.avg_price as number) || null;
       const category = (marketSnapshot?.category as string) || null;
       
@@ -988,7 +977,7 @@ export async function POST(req: NextRequest) {
             : cogsEstimate.confidence === "medium" ? "Medium confidence" 
             : "High confidence";
           
-          cogsAssumption = `\n\nCOGS_ASSUMPTION:\n{
+          cogsAssumption = `\n\nCOGS_REFERENCE:\n{
   estimated_range: "${estimatedRange}",
   confidence: "${confidenceLabel}",
   rationale: "${cogsEstimate.rationale}",
@@ -1002,131 +991,41 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 7. PART H: Margin Assumptions Management & Cost Refinement Loop
+    // 7. Cost Refinement Loop (Chat-Driven)
     // ────────────────────────────────────────────────────────────────────────
-    // Initialize margin_assumptions if missing, handle cost overrides, and recalculate margins
+    // Detect user refinements to COGS/FBA fees, update margin_snapshot, recalculate, persist
     // ────────────────────────────────────────────────────────────────────────
     
-    const analysisMode: 'ASIN' | 'KEYWORD' = analysisRun.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
     const currentResponse = analysisResponse as Record<string, unknown>;
     
-    // Get or initialize margin_assumptions
-    let marginAssumptions: MarginAssumptions | null = (currentResponse.margin_assumptions as MarginAssumptions) || null;
+    // Get current margin_snapshot (from Part G, stored at decisionJson.margin_snapshot)
+    let marginSnapshot: MarginSnapshot | null = (currentResponse.margin_snapshot as MarginSnapshot) || null;
     
-    // If margin_assumptions is missing, build initial assumptions
-    if (!marginAssumptions) {
-      // Extract ASIN snapshot for ASIN mode
-      const asinSnapshot = (currentResponse.asin_snapshot as {
-        price: number | null;
-        fulfillment: "FBA" | "FBM" | "Amazon" | null;
-      }) || null;
-      
-      // Extract FBA fee info from market_snapshot
-      const fbaFeesData = (marketSnapshot?.fba_fees as Record<string, unknown>) || null;
-      let fbaFeeFromSpApi: number | null = null;
-      let fbaFeeIsFromSpApi = false;
-      
-      if (fbaFeesData && typeof fbaFeesData === 'object' && !Array.isArray(fbaFeesData)) {
-        if ('total_fba_fees' in fbaFeesData && fbaFeesData.total_fba_fees !== null) {
-          fbaFeeFromSpApi = parseFloat(fbaFeesData.total_fba_fees as string);
-          fbaFeeIsFromSpApi = fbaFeesData.source === "amazon" || fbaFeesData.source === "sp_api";
-        }
-      }
-      
-      // Build initial assumptions
-      marginAssumptions = buildMarginAssumptions({
-        analysisMode,
-        sellerProfile: {
-          sourcing_model: sellerProfile.sourcing_model as any,
-        },
-        marketSnapshot: marketSnapshot ? {
-          avg_price: (marketSnapshot.avg_price as number) || null,
-        } : null,
-        asinSnapshot,
-        categoryHint: (marketSnapshot?.category as string) || null,
-        fbaFeeFromSpApi,
-        fbaFeeIsFromSpApi,
-      });
-      
-      // Recalculate margin snapshot with initial assumptions (if price available)
-      if (marginAssumptions.selling_price !== null && marginAssumptions.selling_price > 0) {
-        const initialMarginSnapshot = calculateMarginSnapshotFromAssumptions(
-          marginAssumptions,
-          sellerProfile.sourcing_model as any
-        );
-        if (!currentResponse.market_snapshot) {
-          currentResponse.market_snapshot = {};
-        }
-        (currentResponse.market_snapshot as Record<string, unknown>).margin_snapshot = initialMarginSnapshot;
+    // Detect cost refinements in user message
+    const sellingPrice = marginSnapshot?.assumed_price || null;
+    const costRefinement = detectCostRefinement(body.message, sellingPrice);
+    let refinementError: string | null = null;
+    let shouldSaveSnapshot = false;
+    
+    // Apply refinements if detected
+    if (costRefinement) {
+      if (costRefinement.validationError) {
+        refinementError = costRefinement.validationError;
+      } else if (marginSnapshot) {
+        // Apply refinements to margin snapshot
+        marginSnapshot = refineMarginSnapshot(marginSnapshot, {
+          cogs: costRefinement.cogs,
+          fbaFee: costRefinement.fbaFee,
+        });
+        shouldSaveSnapshot = true;
       }
     }
     
-    // Detect margin-related intents
-    const marginIntent = detectMarginIntent(body.message);
-    const parsedOverrides = marginAssumptions ? parseCostOverrides(body.message, marginAssumptions.selling_price) : null;
-    let refinedMarginSnapshot: MarginSnapshot | null = null;
-    let costOverrideError: string | null = null;
-    let shouldRecalculateMargin = false;
-    let shouldSaveAssumptions = !currentResponse.margin_assumptions; // Save if first time building assumptions
-    
-    // Handle cost overrides (Intent 2: USER OVERRIDES COSTS)
-    if (parsedOverrides && marginAssumptions) {
-      if (parsedOverrides.validationError) {
-        costOverrideError = parsedOverrides.validationError;
-      } else {
-        // Update margin_assumptions with user overrides
-        const updatedAssumptions: MarginAssumptions = {
-          ...marginAssumptions,
-          last_updated_at: new Date().toISOString(),
-          confidence_tier: 'REFINED',
-          source: 'user_override',
-        };
-        
-        // Apply overrides (only update fields that were provided)
-        if (parsedOverrides.cogs !== undefined && parsedOverrides.cogs !== null) {
-          updatedAssumptions.cogs_low = parsedOverrides.cogs;
-          updatedAssumptions.cogs_high = parsedOverrides.cogs; // Single value → use for both
-        }
-        if (parsedOverrides.fbaFee !== undefined && parsedOverrides.fbaFee !== null) {
-          updatedAssumptions.fba_fee = parsedOverrides.fbaFee;
-        }
-        if (parsedOverrides.fulfillmentModel) {
-          updatedAssumptions.fulfillment_model = parsedOverrides.fulfillmentModel;
-        }
-        
-        marginAssumptions = updatedAssumptions;
-        shouldRecalculateMargin = true;
-        shouldSaveAssumptions = true;
-      }
-    }
-    
-    // Handle estimate margins intent (Intent 1: ESTIMATE MARGINS)
-    // If user asks for margin estimate, ensure margin snapshot is calculated
-    if (marginIntent === 'estimate_margins' && marginAssumptions && marginAssumptions.selling_price !== null) {
-      // Recalculate to ensure snapshot is up-to-date
-      shouldRecalculateMargin = true;
-      shouldSaveAssumptions = true;
-    }
-    
-    // Recalculate margin snapshot if assumptions changed or estimate requested
-    if (shouldRecalculateMargin && marginAssumptions) {
-      refinedMarginSnapshot = calculateMarginSnapshotFromAssumptions(
-        marginAssumptions,
-        sellerProfile.sourcing_model as any
-      );
-      
-      // Update market_snapshot.margin_snapshot
-      if (!currentResponse.market_snapshot) {
-        currentResponse.market_snapshot = {};
-      }
-      (currentResponse.market_snapshot as Record<string, unknown>).margin_snapshot = refinedMarginSnapshot;
-    }
-    
-    // Save margin_assumptions and updated margin_snapshot to database
-    if (marginAssumptions && shouldSaveAssumptions) {
+    // Persist updated margin_snapshot if refinements were applied
+    if (shouldSaveSnapshot && marginSnapshot) {
       const updatedResponse = {
         ...currentResponse,
-        margin_assumptions: marginAssumptions,
+        margin_snapshot: marginSnapshot,
       };
       
       // SECURITY: .eq("id", body.analysisRunId) ensures update applies ONLY to this analysis_run
@@ -1137,13 +1036,11 @@ export async function POST(req: NextRequest) {
         .eq("user_id", user.id);
 
       if (updateError) {
-        console.error("Failed to save margin_assumptions:", updateError);
+        console.error("Failed to save refined margin_snapshot:", updateError);
         // Continue anyway - don't block the chat response
       } else {
         // Update local analysisResponse for context building
         Object.assign(analysisResponse, updatedResponse);
-        // Also update marketSnapshot reference
-        marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
       }
     }
 
@@ -1183,9 +1080,9 @@ export async function POST(req: NextRequest) {
     const systemPrompt = buildChatSystemPrompt(analysisMode);
 
     // 10. Build message array for OpenAI
-    // PART H: If cost override validation failed, inject error message for AI to explain
-    const validationContext = costOverrideError 
-      ? `\n\nIMPORTANT: The user attempted to provide cost overrides, but validation failed:\n${costOverrideError}\n\nYou must explain why the input is invalid and do NOT save or process the override. Be helpful and suggest valid ranges.`
+    // If refinement validation failed, inject error message for AI to explain
+    const validationContext = refinementError 
+      ? `\n\nIMPORTANT: The user attempted to refine costs, but validation failed:\n${refinementError}\n\nYou must explain why the input is invalid and do NOT save or process the refinement. Be helpful and suggest valid ranges.`
       : "";
 
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
@@ -1334,26 +1231,22 @@ export async function POST(req: NextRequest) {
 
     const stream = new ReadableStream({
       async start(controller) {
-        // PART H: If margin assumptions were refined, send updated margin snapshot metadata first
+        // If margin snapshot was refined, send updated snapshot metadata first
         // This allows the frontend to update the UI with refined margin data
-        if (refinedMarginSnapshot && marginAssumptions && marginAssumptions.source === 'user_override') {
-          const overrideValues: string[] = [];
-          if (marginAssumptions.cogs_low !== null && marginAssumptions.cogs_low !== undefined) {
-            if (marginAssumptions.cogs_low === marginAssumptions.cogs_high) {
-              overrideValues.push(`$${marginAssumptions.cogs_low.toFixed(2)} COGS`);
-            } else {
-              overrideValues.push(`$${marginAssumptions.cogs_low.toFixed(2)}–$${marginAssumptions.cogs_high.toFixed(2)} COGS`);
-            }
+        if (shouldSaveSnapshot && marginSnapshot) {
+          const refinedValues: string[] = [];
+          if (costRefinement?.cogs !== undefined && costRefinement.cogs !== null) {
+            refinedValues.push(`$${costRefinement.cogs.toFixed(2)} COGS`);
           }
-          if (marginAssumptions.fba_fee !== null && marginAssumptions.fba_fee !== undefined) {
-            overrideValues.push(`$${marginAssumptions.fba_fee.toFixed(2)} FBA fees`);
+          if (costRefinement?.fbaFee !== undefined && costRefinement.fbaFee !== null) {
+            refinedValues.push(`$${costRefinement.fbaFee.toFixed(2)} FBA fees`);
           }
           
           const metadata = {
-            type: "cost_override_applied",
-            margin_snapshot: refinedMarginSnapshot,
-            override_values: overrideValues.join(" and "),
-            confidence_tier: marginAssumptions.confidence_tier,
+            type: "margin_snapshot_refined",
+            margin_snapshot: marginSnapshot,
+            refined_values: refinedValues.join(" and "),
+            confidence_tier: marginSnapshot.confidence_tier,
           };
           
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata })}\n\n`));
