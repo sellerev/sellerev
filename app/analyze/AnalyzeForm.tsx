@@ -859,7 +859,9 @@ export default function AnalyzeForm({
                       <div className="text-center">
                         <div className="text-xs text-gray-500 mb-1">Avg Rating</div>
                         <div className="text-lg font-semibold text-gray-900">
-                          {avgRating !== null ? `${avgRating.toFixed(1)} ★` : "—"}
+                          {avgRating !== null && typeof avgRating === 'number' && !isNaN(avgRating)
+                            ? `${avgRating.toFixed(1)} ★`
+                            : "—"}
                         </div>
                       </div>
                     </div>
@@ -935,7 +937,9 @@ export default function AnalyzeForm({
                                   {listing.price !== null ? formatCurrency(listing.price) : "—"}
                                 </td>
                                 <td className="px-4 py-3 text-right text-sm text-gray-900">
-                                  {listing.rating !== null ? `${listing.rating.toFixed(1)} ★` : "—"}
+                                  {listing.rating !== null && typeof listing.rating === 'number' && !isNaN(listing.rating)
+                                    ? `${listing.rating.toFixed(1)} ★`
+                                    : "—"}
                                 </td>
                                 <td className="px-4 py-3 text-right text-sm text-gray-900">
                                   {/* BSR not available in current structure */}
@@ -1181,9 +1185,12 @@ export default function AnalyzeForm({
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Quality Threshold</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
-                          {typeof analysis.market_snapshot.avg_rating === 'number' 
-                            ? analysis.market_snapshot.avg_rating.toFixed(1) 
-                            : "—"} ★
+                          {analysis.market_snapshot.avg_rating !== null &&
+                           analysis.market_snapshot.avg_rating !== undefined &&
+                           typeof analysis.market_snapshot.avg_rating === 'number' &&
+                           !isNaN(analysis.market_snapshot.avg_rating)
+                            ? `${analysis.market_snapshot.avg_rating.toFixed(1)} ★`
+                            : "—"}
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
                           Minimum rating to compete
