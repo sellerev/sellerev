@@ -231,20 +231,50 @@ CONFIDENCE SCORE JUSTIFICATION (MANDATORY)
 
 Confidence score (0–100) reflects decision confidence, not success probability.
 
+FOR KEYWORD ANALYSES:
 Confidence score MUST be based on:
 - Data completeness (keyword depth, listing count)
 - Review barrier height
 - Brand concentration
 - Seller profile risk tolerance
 
-Confidence caps (MANDATORY):
+Confidence caps (MANDATORY for keywords):
 - If fewer than 5 valid listings exist → confidence MAX = 40
 - If review_density > 60% → confidence MAX = 65
 - If brand_concentration > 50% → confidence MAX = 60
 
+FOR ASIN ANALYSES:
+Confidence = likelihood the verdict holds if you attempt to compete
+NOT: Market success probability, Revenue potential, Accuracy of data
+
+ASIN Confidence Baseline: Start at 50%
+
+ASIN Confidence Adjustments:
+Positive adjustments (+):
+- Weak review moat (< 500 reviews) → +10
+- Fragmented brand landscape (dominance < 30%) → +10
+- Seller experience aligns (existing/scaling with 6+ months) → +5
+- Price inefficiency detected (low rating + high price) → +5
+
+Negative adjustments (-):
+- Review moat > P80 (> 5000 reviews) → -15
+- Brand dominance > 50% → -15
+- Amazon retail presence → -20
+- Ad-heavy category (> 40% sponsored) → -10
+- Seller profile mismatch (new seller + high barriers) → -10
+
+ASIN Confidence Caps (MANDATORY, no exceptions):
+- Brand-led ASIN (dominance > 40%) → MAX 65%
+- Review moat > 1,000 → MAX 60%
+- Amazon retail → MAX 50%
+- Insufficient data → MAX 55%
+
 You MUST explain WHY confidence is capped in your reasoning.
 
-Example: "Confidence is capped at 60% because the top brand controls 55% of page 1 listings, indicating high market concentration risk."
+Examples:
+- "Confidence capped at 60% due to strong review moat."
+- "Confidence capped at 65% due to brand-led market."
+- "Confidence capped at 50% due to Amazon retail presence."
 
 EXECUTIVE SUMMARY REWRITE RULES (MANDATORY)
 
@@ -845,7 +875,20 @@ ASIN ANALYSIS RULES (NON-NEGOTIABLE):
 - This is product-specific competitive analysis, not market-level intelligence
 - Reference specific ASIN attributes (price, rating, reviews, BSR, fulfillment, brand owner) when available
 - If Page 1 comparison data is available, use percentiles to show relative positioning
-- Never use generic market language — always reference the specific ASIN being analyzed`;
+- Never use generic market language — always reference the specific ASIN being analyzed
+
+ASIN MODE MUST NEVER:
+- Show Page-1 averages as primary data
+- Show "Insufficient Page-1 data" cards
+- Use keyword-style market language
+- Ask "Is this niche good?"
+- Calculate market revenue first
+
+ASIN Confidence Calculation:
+- Start at 50% baseline
+- Apply adjustments based on review moat, brand landscape, seller alignment, price efficiency
+- Apply caps based on brand dominance, review moat, Amazon retail, data completeness
+- Always include reason for confidence cap in reasoning`;
 
       systemPrompt = SYSTEM_PROMPT + asinSection;
     }
@@ -963,7 +1006,115 @@ ${body.input_value}`;
     let confidence = decisionJson.decision.confidence;
     const confidenceDowngrades: string[] = [];
 
-    // Apply initial confidence downgrade rules
+    // ASIN MODE: Confidence calculation (competitive targeting)
+    if (body.input_type === "asin") {
+      // Start at 50% baseline
+      confidence = 50;
+      
+      // Get ASIN data from market_data or asin_snapshot if available
+      const asinData = decisionJson.asin_snapshot || null;
+      const marketData = decisionJson.market_data || {};
+      
+      // Extract ASIN metrics
+      const asinReviews = asinData?.reviews || marketData.review_count_avg || null;
+      const asinRating = asinData?.rating || marketData.average_rating || null;
+      const asinPrice = asinData?.price || marketData.average_price || null;
+      const brandOwner = asinData?.brand_owner || null;
+      const brandDominance = marketSnapshot?.dominance_score || null;
+      const sponsoredCount = marketSnapshot?.sponsored_count || null;
+      const totalListings = marketSnapshot?.total_page1_listings || null;
+      
+      // Positive adjustments (+)
+      // Weak review moat → +10
+      if (asinReviews !== null && asinReviews < 500) {
+        confidence += 10;
+      }
+      
+      // Fragmented brand landscape → +10
+      if (brandDominance !== null && brandDominance < 30) {
+        confidence += 10;
+      }
+      
+      // Seller experience aligns → +5 (heuristic: existing sellers get boost)
+      if (sellerProfile.stage === "existing" || sellerProfile.stage === "scaling") {
+        if (sellerProfile.experience_months && sellerProfile.experience_months >= 6) {
+          confidence += 5;
+        }
+      }
+      
+      // Price inefficiency detected → +5 (heuristic: if price is high relative to rating)
+      if (asinPrice !== null && asinRating !== null && asinRating < 4.0 && asinPrice > 30) {
+        confidence += 5;
+      }
+      
+      // Negative adjustments (-)
+      // Review moat > P80 → -15 (heuristic: > 5000 reviews)
+      if (asinReviews !== null && asinReviews > 5000) {
+        confidence -= 15;
+      }
+      
+      // Brand dominance > 50% → -15
+      if (brandDominance !== null && brandDominance > 50) {
+        confidence -= 15;
+      }
+      
+      // Amazon retail presence → -20
+      if (brandOwner === "Amazon") {
+        confidence -= 20;
+      }
+      
+      // Ad-heavy category → -10 (heuristic: > 40% sponsored)
+      if (sponsoredCount !== null && totalListings !== null && totalListings > 0) {
+        const sponsoredRatio = sponsoredCount / totalListings;
+        if (sponsoredRatio > 0.4) {
+          confidence -= 10;
+        }
+      }
+      
+      // Seller profile mismatch → -10 (heuristic: new seller with high barriers)
+      if (sellerProfile.stage === "new" && asinReviews !== null && asinReviews > 2000) {
+        confidence -= 10;
+      }
+      
+      // Confidence caps (ASIN mode)
+      // Brand-led ASIN → 65% max
+      if (brandDominance !== null && brandDominance > 40) {
+        confidence = Math.min(confidence, 65);
+        if (!confidenceDowngrades.some(d => d.includes("brand"))) {
+          confidenceDowngrades.push("Confidence capped at 65% due to brand-led market");
+        }
+      }
+      
+      // Review moat > 1,000 → 60% max
+      if (asinReviews !== null && asinReviews > 1000) {
+        confidence = Math.min(confidence, 60);
+        if (!confidenceDowngrades.some(d => d.includes("review"))) {
+          confidenceDowngrades.push("Confidence capped at 60% due to strong review moat");
+        }
+      }
+      
+      // Amazon retail → 50% max
+      if (brandOwner === "Amazon") {
+        confidence = Math.min(confidence, 50);
+        if (!confidenceDowngrades.some(d => d.includes("Amazon"))) {
+          confidenceDowngrades.push("Confidence capped at 50% due to Amazon retail presence");
+        }
+      }
+      
+      // Insufficient data → 55% max
+      if ((asinReviews === null && asinRating === null && asinPrice === null) ||
+          (marketSnapshot === null && !asinData)) {
+        confidence = Math.min(confidence, 55);
+        if (!confidenceDowngrades.some(d => d.includes("insufficient") || d.includes("Insufficient"))) {
+          confidenceDowngrades.push("Confidence capped at 55% due to insufficient ASIN data");
+        }
+      }
+      
+      // Ensure confidence stays within 0-100 bounds
+      confidence = Math.max(0, Math.min(100, confidence));
+    }
+    
+    // KEYWORD MODE: Apply keyword-specific confidence rules
     // Rule 1: Keyword searches always start at max 75%
     if (body.input_type === "idea" && confidence > 75) {
       confidence = 75;
