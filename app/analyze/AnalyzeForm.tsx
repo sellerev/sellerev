@@ -1691,28 +1691,20 @@ export default function AnalyzeForm({
                   );
                 }
                 
-                // Determine confidence level for badge (MVP: never show "High")
-                const getConfidenceLevel = (): "medium" | "low" => {
-                  // Medium: Amazon-provided fees + estimated COGS, or user-refined costs
-                  if (marginSnapshot.fba_fees !== null && 
-                      marginSnapshot.fba_fees !== undefined &&
-                      marginSnapshot.cogs_assumed_low !== null &&
-                      marginSnapshot.cogs_assumed_high !== null) {
-                    return "medium";
-                  }
-                  // Low: Missing critical data or low confidence assumptions
-                  return "low";
-                };
+                // PART G: Use confidence_level from margin snapshot if available, otherwise calculate
+                const confidenceLevel = (marginSnapshot as any).confidence_level || 
+                  (marginSnapshot.source === "amazon_fees" ? "MEDIUM" : "LOW");
                 
-                const confidenceLevel = getConfidenceLevel();
                 const confidenceBadgeStyles = {
-                  medium: "bg-yellow-100 text-yellow-800",
-                  low: "bg-orange-100 text-orange-800",
+                  HIGH: "bg-green-100 text-green-800",
+                  MEDIUM: "bg-yellow-100 text-yellow-800",
+                  LOW: "bg-orange-100 text-orange-800",
                 };
                 
                 const confidenceLabels = {
-                  medium: "Medium",
-                  low: "Low",
+                  HIGH: "High",
+                  MEDIUM: "Medium",
+                  LOW: "Low",
                 };
                 
                 return (
@@ -1721,100 +1713,104 @@ export default function AnalyzeForm({
                       <h2 className="text-lg font-semibold text-gray-900">
                         Margin Snapshot (Estimated)
                       </h2>
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${confidenceBadgeStyles[confidenceLevel]}`}>
-                        {confidenceLabels[confidenceLevel]} Confidence
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${confidenceBadgeStyles[confidenceLevel as keyof typeof confidenceBadgeStyles]}`}>
+                        {confidenceLabels[confidenceLevel as keyof typeof confidenceLabels]} Confidence
                       </span>
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      {/* Selling price */}
-                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Selling price</div>
-                        <div className="text-lg font-semibold text-gray-900">
-                          {marginSnapshot.selling_price !== null && 
-                           marginSnapshot.selling_price !== undefined &&
-                           typeof marginSnapshot.selling_price === 'number' &&
-                           !isNaN(marginSnapshot.selling_price) &&
-                           marginSnapshot.selling_price > 0
-                            ? formatCurrency(marginSnapshot.selling_price)
-                            : "—"}
-                        </div>
-                      </div>
+                    {/* PART G: Use new structured fields when available, fallback to legacy fields */}
+                    {(() => {
+                      const snapshot = marginSnapshot as any;
+                      // Use PART G fields if available, otherwise fallback to legacy
+                      const assumedPrice = snapshot.assumed_price ?? snapshot.selling_price ?? null;
+                      const cogsRange = snapshot.estimated_cogs_range ?? 
+                        (snapshot.cogs_assumed_low !== undefined && snapshot.cogs_assumed_high !== undefined
+                          ? { low: snapshot.cogs_assumed_low, high: snapshot.cogs_assumed_high }
+                          : null);
+                      const fbaFees = snapshot.estimated_fba_fees ?? snapshot.fba_fees ?? null;
+                      const marginRange = snapshot.estimated_margin_pct_range ??
+                        (snapshot.net_margin_low_pct !== undefined && snapshot.net_margin_high_pct !== undefined
+                          ? { low: snapshot.net_margin_low_pct, high: snapshot.net_margin_high_pct }
+                          : null);
+                      const breakevenRange = snapshot.breakeven_price_range ??
+                        (snapshot.breakeven_price_low !== undefined && snapshot.breakeven_price_high !== undefined
+                          ? { low: snapshot.breakeven_price_low, high: snapshot.breakeven_price_high }
+                          : null);
+                      
+                      return (
+                        <>
+                          <div className="grid grid-cols-2 gap-4">
+                            {/* Selling Price */}
+                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                              <div className="text-xs text-gray-500 mb-1">Selling Price</div>
+                              <div className="text-lg font-semibold text-gray-900">
+                                {assumedPrice !== null && assumedPrice !== undefined && typeof assumedPrice === 'number' && !isNaN(assumedPrice) && assumedPrice > 0
+                                  ? formatCurrency(assumedPrice)
+                                  : "—"}
+                              </div>
+                            </div>
 
-                      {/* Estimated COGS range */}
-                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Estimated COGS range</div>
-                        <div className="text-lg font-semibold text-gray-900">
-                          {marginSnapshot.cogs_assumed_low !== null && marginSnapshot.cogs_assumed_low !== undefined &&
-                           marginSnapshot.cogs_assumed_high !== null && marginSnapshot.cogs_assumed_high !== undefined &&
-                           typeof marginSnapshot.cogs_assumed_low === 'number' &&
-                           typeof marginSnapshot.cogs_assumed_high === 'number' &&
-                           !isNaN(marginSnapshot.cogs_assumed_low) &&
-                           !isNaN(marginSnapshot.cogs_assumed_high)
-                            ? `${formatCurrency(marginSnapshot.cogs_assumed_low)}–${formatCurrency(marginSnapshot.cogs_assumed_high)}`
-                            : "—"}
-                        </div>
-                      </div>
+                            {/* Estimated COGS Range */}
+                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                              <div className="text-xs text-gray-500 mb-1">Estimated COGS Range</div>
+                              <div className="text-lg font-semibold text-gray-900">
+                                {cogsRange !== null && cogsRange.low !== undefined && cogsRange.high !== undefined &&
+                                 typeof cogsRange.low === 'number' && typeof cogsRange.high === 'number' &&
+                                 !isNaN(cogsRange.low) && !isNaN(cogsRange.high)
+                                  ? `${formatCurrency(cogsRange.low)}–${formatCurrency(cogsRange.high)}`
+                                  : "—"}
+                              </div>
+                            </div>
 
-                      {/* Estimated FBA fees */}
-                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Estimated FBA fees</div>
-                        <div className="text-lg font-semibold text-gray-900">
-                          {marginSnapshot.fba_fees !== null && 
-                           marginSnapshot.fba_fees !== undefined &&
-                           typeof marginSnapshot.fba_fees === 'number' &&
-                           !isNaN(marginSnapshot.fba_fees) &&
-                           marginSnapshot.fba_fees > 0
-                            ? formatCurrency(marginSnapshot.fba_fees)
-                            : "—"}
-                        </div>
-                        <div className="text-[10px] text-gray-500 mt-1">
-                          {marginSnapshot.fba_fees === null || marginSnapshot.fba_fees === undefined
-                            ? "Not available"
-                            : marginSnapshot.source === "amazon_fees" &&
-                              marginSnapshot.fba_fees !== null &&
-                              marginSnapshot.fba_fees !== undefined &&
-                              typeof marginSnapshot.fba_fees === 'number'
-                            ? "Amazon-provided"
-                            : "Estimated"}
-                        </div>
-                      </div>
+                            {/* Estimated FBA Fees */}
+                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                              <div className="text-xs text-gray-500 mb-1">Estimated FBA Fees</div>
+                              <div className="text-lg font-semibold text-gray-900">
+                                {fbaFees !== null && fbaFees !== undefined && typeof fbaFees === 'number' && !isNaN(fbaFees) && fbaFees > 0
+                                  ? formatCurrency(fbaFees)
+                                  : "—"}
+                              </div>
+                              <div className="text-[10px] text-gray-500 mt-1">
+                                {fbaFees === null || fbaFees === undefined
+                                  ? "Not available"
+                                  : snapshot.source === "amazon_fees" || snapshot.source === "sp_api"
+                                  ? "Amazon-provided"
+                                  : "Estimated"}
+                              </div>
+                            </div>
 
-                      {/* Net margin range (%) */}
-                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Net margin range</div>
-                        <div className="text-lg font-semibold text-gray-900">
-                          {marginSnapshot.net_margin_low_pct !== null && marginSnapshot.net_margin_low_pct !== undefined &&
-                           marginSnapshot.net_margin_high_pct !== null && marginSnapshot.net_margin_high_pct !== undefined &&
-                           typeof marginSnapshot.net_margin_low_pct === 'number' &&
-                           typeof marginSnapshot.net_margin_high_pct === 'number' &&
-                           !isNaN(marginSnapshot.net_margin_low_pct) &&
-                           !isNaN(marginSnapshot.net_margin_high_pct)
-                            ? `${marginSnapshot.net_margin_low_pct.toFixed(1)}%–${marginSnapshot.net_margin_high_pct.toFixed(1)}%`
-                            : "—"}
-                        </div>
-                      </div>
+                            {/* Net Margin Range */}
+                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                              <div className="text-xs text-gray-500 mb-1">Net Margin Range</div>
+                              <div className="text-lg font-semibold text-gray-900">
+                                {marginRange !== null && marginRange.low !== undefined && marginRange.high !== undefined &&
+                                 typeof marginRange.low === 'number' && typeof marginRange.high === 'number' &&
+                                 !isNaN(marginRange.low) && !isNaN(marginRange.high)
+                                  ? `${marginRange.low.toFixed(1)}%–${marginRange.high.toFixed(1)}%`
+                                  : "—"}
+                              </div>
+                            </div>
 
-                      {/* Breakeven price */}
-                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 col-span-2">
-                        <div className="text-xs text-gray-500 mb-1">Breakeven price</div>
-                        <div className="text-lg font-semibold text-gray-900">
-                          {marginSnapshot.breakeven_price_low !== null && marginSnapshot.breakeven_price_low !== undefined &&
-                           marginSnapshot.breakeven_price_high !== null && marginSnapshot.breakeven_price_high !== undefined &&
-                           typeof marginSnapshot.breakeven_price_low === 'number' &&
-                           typeof marginSnapshot.breakeven_price_high === 'number' &&
-                           !isNaN(marginSnapshot.breakeven_price_low) &&
-                           !isNaN(marginSnapshot.breakeven_price_high)
-                            ? `${formatCurrency(marginSnapshot.breakeven_price_low)}–${formatCurrency(marginSnapshot.breakeven_price_high)}`
-                            : "—"}
-                        </div>
-                      </div>
-                    </div>
-                    {/* Footer */}
-                    <div className="mt-4 pt-4 border-t border-gray-200">
-                      <p className="text-xs text-gray-500">
-                        This estimate is based on typical cost structures for your sourcing model. Actual margins depend on supplier and logistics.
-                      </p>
-                    </div>
+                            {/* Breakeven Price */}
+                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 md:col-span-2">
+                              <div className="text-xs text-gray-500 mb-1">Breakeven Price</div>
+                              <div className="text-lg font-semibold text-gray-900">
+                                {breakevenRange !== null && breakevenRange.low !== undefined && breakevenRange.high !== undefined &&
+                                 typeof breakevenRange.low === 'number' && typeof breakevenRange.high === 'number' &&
+                                 !isNaN(breakevenRange.low) && !isNaN(breakevenRange.high)
+                                  ? `${formatCurrency(breakevenRange.low)}–${formatCurrency(breakevenRange.high)}`
+                                  : "—"}
+                              </div>
+                            </div>
+                          </div>
+                          {/* PART G: Footer always visible */}
+                          <div className="mt-4 pt-4 border-t border-gray-200">
+                            <p className="text-xs text-gray-500">
+                              Estimate based on typical cost structures for your sourcing model. Actual margins depend on supplier and logistics.
+                            </p>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
                 );
               })()}

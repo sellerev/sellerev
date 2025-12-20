@@ -7,6 +7,7 @@ import { calculateCPI } from "@/lib/amazon/competitivePressureIndex";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 import { resolveFbaFees } from "@/lib/spapi/resolveFbaFees";
 import { calculateMarginSnapshot } from "@/lib/margins/calculateMarginSnapshot";
+import { computeMarginSnapshot } from "@/lib/margins/computeMarginSnapshot";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -1351,14 +1352,17 @@ ${body.input_value}`;
       // Extract FBA fees (may be new structure or legacy structure)
       const fbaFeesData = (decisionJson.market_snapshot as any).fba_fees;
       let fbaFeesValue: number | null = null;
+      let fbaFeeSource: "sp_api" | "estimated" = "estimated";
 
       if (fbaFeesData && typeof fbaFeesData === 'object' && !Array.isArray(fbaFeesData) && fbaFeesData !== null) {
         // Check for new structure (from resolveFbaFees)
         if ('total_fba_fees' in fbaFeesData && fbaFeesData.total_fba_fees !== null) {
           fbaFeesValue = parseFloat(fbaFeesData.total_fba_fees);
+          fbaFeeSource = fbaFeesData.source === "amazon" || fbaFeesData.source === "sp_api" ? "sp_api" : "estimated";
         } else if ('total_fee' in fbaFeesData && fbaFeesData.total_fee !== null) {
           // Legacy structure
           fbaFeesValue = parseFloat(fbaFeesData.total_fee);
+          fbaFeeSource = fbaFeesData.source === "amazon" || fbaFeesData.source === "sp_api" ? "sp_api" : "estimated";
         }
       }
 
@@ -1366,14 +1370,15 @@ ${body.input_value}`;
       // TODO: Infer from ASIN data if available (currently null)
       const categoryHint = null;
 
-      // Calculate margin snapshot
+      // PART G: Compute margin snapshot using new shared engine
       // ASIN mode: uses ASIN price, never Page-1 averages
-      const marginSnapshot = calculateMarginSnapshot({
-        avg_price: sellingPrice, // For ASIN mode: ASIN price; for KEYWORD mode: avg_price
-        sourcing_model: sellerProfile.sourcing_model as any,
-        category_hint: categoryHint,
-        fba_fees: fbaFeesValue,
-        marginMode, // Pass margin mode for future use
+      const marginSnapshot = computeMarginSnapshot({
+        analysisMode: marginMode,
+        price: sellingPrice,
+        categoryHint,
+        sourcingModel: sellerProfile.sourcing_model as any,
+        fbaFees: fbaFeesValue,
+        fbaFeeSource,
       });
 
       // Inject into decision JSON
@@ -1386,12 +1391,13 @@ ${body.input_value}`;
       // Create safe default margin snapshot (never block)
       const defaultPrice = 25.0;
       const defaultMarginMode: 'ASIN' | 'KEYWORD' = body.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
-      const marginSnapshot = calculateMarginSnapshot({
-        avg_price: defaultPrice,
-        sourcing_model: sellerProfile.sourcing_model as any,
-        category_hint: null,
-        fba_fees: null,
-        marginMode: defaultMarginMode,
+      const marginSnapshot = computeMarginSnapshot({
+        analysisMode: defaultMarginMode,
+        price: defaultPrice,
+        categoryHint: null,
+        sourcingModel: sellerProfile.sourcing_model as any,
+        fbaFees: null,
+        fbaFeeSource: "estimated",
       });
       
       if (!decisionJson.market_snapshot) {

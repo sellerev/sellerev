@@ -19,10 +19,10 @@ type SourcingModel =
  * Estimate FBA fees by size/weight heuristic (ASIN mode fallback)
  * Used when SP-API fees are unavailable
  * 
- * Categories:
- * - Small standard: $5–7 (typically < 1 lb, < 18" longest side)
- * - Large standard: $7–10 (typically 1–20 lbs, standard dimensions)
- * - Oversize: $10–14 (typically > 20 lbs or > 18" longest side)
+ * Categories (PART G: Updated ranges):
+ * - Small/standard: $6–9 (typically < 1 lb, < 18" longest side)
+ * - Oversize/home goods: $8–12 (typically > 20 lbs or > 18" longest side, furniture, appliances)
+ * - Default: $7–10 (large standard, 1–20 lbs)
  */
 export function estimateFbaFeesByCategory(categoryHint: string | null | undefined): {
   low: number;
@@ -36,7 +36,7 @@ export function estimateFbaFeesByCategory(categoryHint: string | null | undefine
 
   const normalized = categoryHint.toLowerCase().trim();
 
-  // Small standard items
+  // Small/standard items (PART G: $6–9)
   if (
     normalized.includes("small") ||
     normalized.includes("lightweight") ||
@@ -46,20 +46,21 @@ export function estimateFbaFeesByCategory(categoryHint: string | null | undefine
     normalized.includes("cable") ||
     normalized.includes("charger")
   ) {
-    return { low: 5, high: 7, label: "Small standard (estimated)" };
+    return { low: 6, high: 9, label: "Small/standard (estimated)" };
   }
 
-  // Oversized items
+  // Oversize/home goods (PART G: $8–12)
   if (
     normalized.includes("oversized") ||
-    normalized.includes("large") ||
     normalized.includes("furniture") ||
     normalized.includes("appliance") ||
     normalized.includes("mattress") ||
     normalized.includes("exercise equipment") ||
-    normalized.includes("bike")
+    normalized.includes("bike") ||
+    normalized.includes("home") ||
+    normalized.includes("kitchen")
   ) {
-    return { low: 10, high: 14, label: "Oversize (estimated)" };
+    return { low: 8, high: 12, label: "Oversize/home goods (estimated)" };
   }
 
   // Large standard (default)

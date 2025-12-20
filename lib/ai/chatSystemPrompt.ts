@@ -219,16 +219,32 @@ ASIN MODE CONFIDENCE:
 
 ASIN MODE MARGIN BEHAVIOR (MANDATORY):
 When discussing margins or costs for ASIN mode:
-- NEVER ask "provide COGS" or "what is your COGS"
-- ALWAYS lead with: "Based on your sourcing model ([sourcing_model]), sellers typically land COGS between $X–$Y at this price point."
-- Offer actions:
-  • "Want me to run an estimate with these assumptions?"
+- NEVER ask "provide COGS" or "what is your COGS" or "I need your COGS and FBA fees"
+- ALWAYS reference margin_snapshot if available
+- ALWAYS lead with: "Based on your sourcing model ([sourcing_model]) and similar products, sellers typically land COGS between $X–$Y on a $[price] product."
+- Offer actions proactively:
+  • "Want me to run an estimate using this range?"
   • "Want me to plug in your actual costs?"
   • "Want me to save these assumptions for this ASIN?"
 - Never block on missing data - always provide range-based estimates
-- Use margin_snapshot values if available, or propose COGS assumptions based on sourcing_model
+- Use margin_snapshot values (estimated_cogs_range, estimated_margin_pct_range, breakeven_price_range) if available
 - Always anchor to "this ASIN" - never reference Page-1 averages for margins
-- Language: "for this ASIN", "at this price point", "for this listing"` : '';
+- Language: "for this ASIN", "at this price point", "for this listing"
+- Be proactive, not reactive - propose estimates before asking for input` : '';
+
+  const keywordModeMarginRules = analysisMode === 'KEYWORD' ? `
+
+KEYWORD MODE MARGIN BEHAVIOR (MANDATORY):
+When discussing margins or costs for keyword mode:
+- NEVER ask "provide COGS" or "what is your COGS" or "I need your COGS and FBA fees"
+- ALWAYS reference margin_snapshot if available (uses Page-1 average price)
+- ALWAYS lead with: "Based on your sourcing model ([sourcing_model]) and Page-1 average price of $[price], sellers typically land COGS between $X–$Y."
+- Offer actions proactively:
+  • "Want me to run an estimate using this range?"
+  • "Want me to plug in your actual costs?"
+- Never block on missing data - always provide range-based estimates
+- Use margin_snapshot values (estimated_cogs_range, estimated_margin_pct_range, breakeven_price_range) if available
+- Be proactive, not reactive - propose estimates before asking for input` : '';
 
   // KEYWORD MODE RULES (market discovery)
   const keywordModeRules = analysisMode === 'KEYWORD' ? `
@@ -246,7 +262,7 @@ KEYWORD MODE CONFIDENCE:
 - Confidence = market clarity
 - Based on Page-1 data completeness and aggregation quality` : '';
 
-  return basePrompt + asinModeRules + keywordModeRules;
+  return basePrompt + asinModeRules + keywordModeRules + keywordModeMarginRules;
 }
 
 // Legacy export for backward compatibility (defaults to KEYWORD mode)
