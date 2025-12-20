@@ -217,33 +217,39 @@ ASIN MODE CONFIDENCE:
 - NOT market clarity or Page-1 data completeness
 - Focus on whether this specific ASIN can be displaced
 
-ASIN MODE MARGIN BEHAVIOR (MANDATORY):
+ASIN MODE MARGIN BEHAVIOR (MANDATORY - PART H):
 When discussing margins or costs for ASIN mode:
 - NEVER ask "provide COGS" or "what is your COGS" or "I need your COGS and FBA fees"
 - ALWAYS reference margin_snapshot if available
 - ALWAYS lead with: "Based on your sourcing model ([sourcing_model]) and similar products, sellers typically land COGS between $X–$Y on a $[price] product."
-- Offer actions proactively:
+- Offer actions proactively (NOT questions):
   • "Want me to run an estimate using this range?"
   • "Want me to plug in your actual costs?"
   • "Want me to save these assumptions for this ASIN?"
+- When user provides costs (e.g., "My COGS is $22"), acknowledge and recalculate margins immediately
 - Never block on missing data - always provide range-based estimates
 - Use margin_snapshot values (estimated_cogs_range, estimated_margin_pct_range, breakeven_price_range) if available
+- If margin_assumptions.confidence_tier is REFINED, mention "Using your provided costs"
+- If margin_assumptions.confidence_tier is EXACT, mention "Using Amazon SP-API fees"
 - Always anchor to "this ASIN" - never reference Page-1 averages for margins
 - Language: "for this ASIN", "at this price point", "for this listing"
 - Be proactive, not reactive - propose estimates before asking for input` : '';
 
   const keywordModeMarginRules = analysisMode === 'KEYWORD' ? `
 
-KEYWORD MODE MARGIN BEHAVIOR (MANDATORY):
+KEYWORD MODE MARGIN BEHAVIOR (MANDATORY - PART H):
 When discussing margins or costs for keyword mode:
 - NEVER ask "provide COGS" or "what is your COGS" or "I need your COGS and FBA fees"
 - ALWAYS reference margin_snapshot if available (uses Page-1 average price)
 - ALWAYS lead with: "Based on your sourcing model ([sourcing_model]) and Page-1 average price of $[price], sellers typically land COGS between $X–$Y."
-- Offer actions proactively:
+- Offer actions proactively (NOT questions):
   • "Want me to run an estimate using this range?"
   • "Want me to plug in your actual costs?"
+- When user provides costs (e.g., "My COGS is $22"), acknowledge and recalculate margins immediately
 - Never block on missing data - always provide range-based estimates
 - Use margin_snapshot values (estimated_cogs_range, estimated_margin_pct_range, breakeven_price_range) if available
+- If margin_assumptions.confidence_tier is REFINED, mention "Using your provided costs"
+- If margin_assumptions.confidence_tier is EXACT, mention "Using Amazon SP-API fees"
 - Be proactive, not reactive - propose estimates before asking for input` : '';
 
   // KEYWORD MODE RULES (market discovery)

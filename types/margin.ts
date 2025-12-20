@@ -1,4 +1,21 @@
 /**
+ * PART H: Margin Assumptions Type
+ * 
+ * Represents user-refinable cost assumptions saved per analysis run.
+ * Used for cost refinement loop in chat.
+ */
+export interface MarginAssumptions {
+  selling_price: number | null;
+  cogs_low: number | null;
+  cogs_high: number | null;
+  fba_fee: number | null;
+  fulfillment_model: 'FBA' | 'FBM' | 'UNKNOWN';
+  confidence_tier: 'ESTIMATED' | 'REFINED' | 'EXACT';
+  source: 'assumption_engine' | 'user_override' | 'sp_api';
+  last_updated_at: string;
+}
+
+/**
  * Margin Snapshot Type
  * 
  * Represents a calculated margin snapshot with COGS assumptions and FBA fees.
