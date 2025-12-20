@@ -1319,10 +1319,10 @@ export default function AnalyzeForm({
               )}
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 3: MARKET SNAPSHOT                                    */}
+              {/* BLOCK 3: MARKET SNAPSHOT (KEYWORD ONLY)                     */}
               {/* - 4 compact stat cards (2x2 grid)                           */}
-              {/* - Uses market_snapshot for keywords, market_data for ASINs */}
               {/* ─────────────────────────────────────────────────────────── */}
+              {analysis.input_type === "keyword" && analysis.market_snapshot && (
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <div className="mb-4">
                   <h2 className="text-lg font-semibold text-gray-900 mb-1">
@@ -1621,47 +1621,35 @@ export default function AnalyzeForm({
                         </span>
                       </div>
                       <div className="text-sm text-gray-500 text-center py-4">
-                        Margin data not available for this analysis.
+                        <div className="mb-2">Insufficient data to estimate</div>
+                        <p className="text-xs text-gray-400 mt-2">
+                          This estimate is based on typical cost structures for your sourcing model. Actual margins depend on supplier and logistics.
+                        </p>
                       </div>
                     </div>
                   );
                 }
                 
-                // Determine confidence level for badge (must match data quality)
-                const getConfidenceLevel = (): "high" | "medium" | "low" => {
-                  // High: User-refined costs + Amazon-provided fees
-                  if (marginSnapshot.confidence === "refined" && 
-                      marginSnapshot.source === "amazon_fees" &&
-                      marginSnapshot.fba_fees !== null && 
-                      marginSnapshot.fba_fees !== undefined) {
-                    return "high";
-                  }
-                  // High: Amazon-provided fees + estimated COGS (still high confidence on fees)
-                  if (marginSnapshot.source === "amazon_fees" && 
-                      marginSnapshot.fba_fees !== null && 
-                      marginSnapshot.fba_fees !== undefined) {
-                    return "high";
-                  }
-                  // Medium: Estimated fees but valid data
+                // Determine confidence level for badge (MVP: never show "High")
+                const getConfidenceLevel = (): "medium" | "low" => {
+                  // Medium: Amazon-provided fees + estimated COGS, or user-refined costs
                   if (marginSnapshot.fba_fees !== null && 
                       marginSnapshot.fba_fees !== undefined &&
                       marginSnapshot.cogs_assumed_low !== null &&
                       marginSnapshot.cogs_assumed_high !== null) {
                     return "medium";
                   }
-                  // Low: Missing critical data
+                  // Low: Missing critical data or low confidence assumptions
                   return "low";
                 };
                 
                 const confidenceLevel = getConfidenceLevel();
                 const confidenceBadgeStyles = {
-                  high: "bg-green-100 text-green-800",
                   medium: "bg-yellow-100 text-yellow-800",
                   low: "bg-orange-100 text-orange-800",
                 };
                 
                 const confidenceLabels = {
-                  high: "High",
                   medium: "Medium",
                   low: "Low",
                 };
@@ -1759,6 +1747,12 @@ export default function AnalyzeForm({
                             : "—"}
                         </div>
                       </div>
+                    </div>
+                    {/* Footer */}
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <p className="text-xs text-gray-500">
+                        This estimate is based on typical cost structures for your sourcing model. Actual margins depend on supplier and logistics.
+                      </p>
                     </div>
                   </div>
                 );
