@@ -109,10 +109,49 @@ IF input_type === "keyword":
 - This is directional market intelligence, not product-specific advice
 
 IF input_type === "asin":
-- Treat analysis as product-specific
-- You MAY reference pricing, reviews, positioning
-- You MAY compare directly to competitors
-- You MAY reference specific product attributes if provided
+- ASIN mode is NOT market discovery. It is competitive targeting.
+- Answer ONE question only: "Should I compete with this specific product, given who I am as a seller?"
+- This is an attack decision, not a market decision.
+- Focus on: "Is this ASIN a realistic competitive target for this seller?"
+- NOT: "Is this market good?" or "Is this niche attractive?"
+
+ASIN VERDICT RUBRIC (MANDATORY):
+
+🟢 GO — Beatable
+Use when:
+- Review moat is weak or moderate
+- Brand control < 40%
+- Price is defensible or inflated
+- Seller profile supports entry
+
+Copy template: "This ASIN is beatable with a differentiated offer."
+
+🟡 CAUTION — Beatable with constraints
+Use when:
+- Reviews are high but not dominant
+- Brand has leverage but not monopoly
+- Entry requires capital, patience, or innovation
+
+Copy template: "This ASIN is strong but has identifiable weaknesses."
+
+🔴 NO_GO — Not a rational target
+Use when:
+- Review moat is extreme
+- Brand dominance is high
+- Price compression + ad saturation
+- Seller profile mismatched
+
+Copy template: "This ASIN is not a realistic competitive target for your seller profile."
+
+ASIN VERDICT REQUIREMENTS (MANDATORY):
+- Every verdict explanation MUST cite at least TWO of:
+  • Review moat
+  • Brand leverage
+  • Price defensibility
+  • Seller profile alignment
+- No generic summaries allowed
+- Reference specific ASIN metrics (price, rating, reviews, BSR, fulfillment, brand owner)
+- Compare ASIN strength vs Page 1 competitors when available
 
 REQUIRED OUTPUT FORMAT (STRICT JSON ONLY)
 
@@ -786,6 +825,29 @@ KEYWORD ANALYSIS RULES:
 - Fill numbers_used field with all null values`;
 
       systemPrompt = SYSTEM_PROMPT + warningSection;
+    } else if (body.input_type === "asin") {
+      // ASIN analysis: Add competitive targeting context
+      const asinSection = `
+
+ASIN ANALYSIS CONTEXT:
+
+You are analyzing a specific ASIN for competitive targeting.
+This is NOT market discovery — it is an attack decision.
+
+CORE QUESTION: "Is this ASIN a realistic competitive target for this seller?"
+
+ASIN ANALYSIS RULES (NON-NEGOTIABLE):
+- Focus on the specific ASIN's competitive strength and vulnerabilities
+- Compare ASIN metrics (price, rating, reviews, BSR) to Page 1 competitors when available
+- Assess review moat, brand leverage, price defensibility, and seller profile alignment
+- Every verdict MUST cite at least TWO of: review moat, brand leverage, price defensibility, seller profile alignment
+- Use ASIN-specific verdict copy templates (see ASIN VERDICT RUBRIC above)
+- This is product-specific competitive analysis, not market-level intelligence
+- Reference specific ASIN attributes (price, rating, reviews, BSR, fulfillment, brand owner) when available
+- If Page 1 comparison data is available, use percentiles to show relative positioning
+- Never use generic market language — always reference the specific ASIN being analyzed`;
+
+      systemPrompt = SYSTEM_PROMPT + asinSection;
     }
 
     // Guard: Ensure required data before AI call

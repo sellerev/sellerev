@@ -1269,12 +1269,27 @@ export default function AnalyzeForm({
                 )}
                 {/* One-line interpretation */}
                 <p className={`text-sm font-medium ${getVerdictStyles(analysis.decision.verdict).text}`}>
-                  {analysis.decision.verdict === "GO" &&
-                    "This product shows potential for your seller profile."}
-                  {analysis.decision.verdict === "CAUTION" &&
-                    "Proceed carefully — review risks before committing."}
-                  {analysis.decision.verdict === "NO_GO" &&
-                    "Not recommended for your current seller stage."}
+                  {analysis.input_type === "asin" ? (
+                    // ASIN-specific verdict copy (competitive targeting)
+                    <>
+                      {analysis.decision.verdict === "GO" &&
+                        "This ASIN is beatable with a differentiated offer."}
+                      {analysis.decision.verdict === "CAUTION" &&
+                        "This ASIN is strong but has identifiable weaknesses."}
+                      {analysis.decision.verdict === "NO_GO" &&
+                        "This ASIN is not a realistic competitive target for your seller profile."}
+                    </>
+                  ) : (
+                    // Keyword-specific verdict copy (market decision)
+                    <>
+                      {analysis.decision.verdict === "GO" &&
+                        "This product shows potential for your seller profile."}
+                      {analysis.decision.verdict === "CAUTION" &&
+                        "Proceed carefully — review risks before committing."}
+                      {analysis.decision.verdict === "NO_GO" &&
+                        "Not recommended for your current seller stage."}
+                    </>
+                  )}
                 </p>
               </div>
 
