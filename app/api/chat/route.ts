@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
-import { CHAT_SYSTEM_PROMPT } from "@/lib/ai/chatSystemPrompt";
+import { buildChatSystemPrompt } from "@/lib/ai/chatSystemPrompt";
 import { estimateCogsRange } from "@/lib/cogs/assumptions";
 import { normalizeCostOverrides } from "@/lib/margins/normalizeCostOverrides";
 import { MarginSnapshot } from "@/types/margin";
@@ -1052,15 +1052,21 @@ export async function POST(req: NextRequest) {
       marketSnapshotSummary = "";
     }
 
-    // 9. Build message array for OpenAI
+    // 9. Determine analysis mode from input_type
+    const analysisMode: 'ASIN' | 'KEYWORD' = analysisRun.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
+    
+    // Build system prompt with analysis mode
+    const systemPrompt = buildChatSystemPrompt(analysisMode);
+
+    // 10. Build message array for OpenAI
     // If cost override validation failed, inject error message for AI to explain
     const validationContext = costOverrideError 
       ? `\n\nIMPORTANT: The user attempted to provide cost overrides, but validation failed:\n${costOverrideError}\n\nYou must explain why the input is invalid and do NOT save or process the override. Be helpful and suggest valid ranges.`
       : "";
 
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-      // System prompt: Contains all rules and constraints + COGS assumption
-      { role: "system", content: CHAT_SYSTEM_PROMPT + cogsAssumption },
+      // System prompt: Contains all rules and constraints + COGS assumption + analysis mode
+      { role: "system", content: systemPrompt + cogsAssumption },
       // Context injection: Provides grounded data (no hallucination possible)
       { role: "user", content: `[CONTEXT FOR THIS CONVERSATION]\n\n${contextMessage}${validationContext}` },
       { role: "assistant", content: "I understand. I have the analysis context and will only reason over the provided data. I will not invent numbers, estimate sales or PPC, or reference data not provided. How can I help you explore this analysis?" },

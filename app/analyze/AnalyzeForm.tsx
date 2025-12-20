@@ -587,6 +587,31 @@ export default function AnalyzeForm({
   };
 
   // ─────────────────────────────────────────────────────────────────────────
+  // ANALYSIS MODE DERIVATION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Derive analysis mode from input_type
+   * - input_type === 'asin' → analysisMode = 'ASIN'
+   * - input_type === 'keyword' → analysisMode = 'KEYWORD'
+   */
+  const analysisMode: 'ASIN' | 'KEYWORD' | null = analysis 
+    ? (analysis.input_type === 'asin' ? 'ASIN' : 'KEYWORD')
+    : null;
+
+  // Defensive assertion: Ensure analysisMode matches input_type
+  if (analysis && process.env.NODE_ENV === 'development') {
+    const expectedMode = analysis.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
+    if (analysisMode !== expectedMode) {
+      console.error('Analysis mode mismatch:', { 
+        input_type: analysis.input_type, 
+        analysisMode, 
+        expectedMode 
+      });
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // UI HELPERS
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -825,13 +850,14 @@ export default function AnalyzeForm({
               <>
               {/* ═══════════════════════════════════════════════════════════════ */}
               {/* SECTION 1: DATA SNAPSHOT (ALWAYS FIRST)                         */}
-              {/* Keyword: Page-1 Data | ASIN: ASIN Snapshot                      */}
+              {/* KEYWORD: Market Snapshot (Page-1 aggregation)                  */}
+              {/* ASIN: ASIN Snapshot (single-product competitive analysis)      */}
               {/* ═══════════════════════════════════════════════════════════════ */}
               
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* KEYWORD MODE: PAGE-1 DATA SNAPSHOT                          */}
+              {/* KEYWORD MODE: MARKET SNAPSHOT (PAGE-1 AGGREGATION)          */}
               {/* ─────────────────────────────────────────────────────────── */}
-              {analysis.input_type === "keyword" && analysis.market_snapshot && (() => {
+              {analysisMode === 'KEYWORD' && analysis.market_snapshot && (() => {
                 const snapshot = analysis.market_snapshot;
                 const listings = snapshot.listings || [];
                 
@@ -894,9 +920,9 @@ export default function AnalyzeForm({
               })()}
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* 2. PAGE-1 PRODUCT TABLE                                     */}
+              {/* KEYWORD MODE: PAGE-1 PRODUCT TABLE                          */}
               {/* ─────────────────────────────────────────────────────────── */}
-              {analysis.market_snapshot?.listings && analysis.market_snapshot.listings.length > 0 && (() => {
+              {analysisMode === 'KEYWORD' && analysis.market_snapshot?.listings && analysis.market_snapshot.listings.length > 0 && (() => {
                 const listings = analysis.market_snapshot.listings!
                   .filter(l => l.asin && l.title) // Only valid listings
                   .map(l => ({
@@ -986,9 +1012,9 @@ export default function AnalyzeForm({
               })()}
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* 3. LIGHTWEIGHT MARKET BREAKDOWN                             */}
+              {/* KEYWORD MODE: MARKET BREAKDOWN                              */}
               {/* ─────────────────────────────────────────────────────────── */}
-              {analysis.market_snapshot && (() => {
+              {analysisMode === 'KEYWORD' && analysis.market_snapshot && (() => {
                 const snapshot = analysis.market_snapshot;
                 const listings = snapshot.listings || [];
                 const fulfillmentMix = calculateFulfillmentMix(listings);
@@ -1061,165 +1087,180 @@ export default function AnalyzeForm({
               })()}
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* ASIN MODE: ASIN SNAPSHOT                                      */}
+              {/* ASIN MODE: ASIN SNAPSHOT (SINGLE-PRODUCT COMPETITIVE ANALYSIS) */}
               {/* ─────────────────────────────────────────────────────────── */}
-              {analysis.input_type === "asin" && analysis.asin_snapshot && (() => {
+              {analysisMode === 'ASIN' && analysis.asin_snapshot && (() => {
+                // Defensive assert: ASIN mode must never reference Page-1 averages for display
+                // (Note: margin_snapshot may use avg_price for calculations, but ASIN snapshot display should use ASIN-specific data)
+                if (process.env.NODE_ENV === 'development') {
+                  if (analysis.market_snapshot && 
+                      (analysis.market_snapshot.avg_price !== null || 
+                       analysis.market_snapshot.avg_reviews !== null ||
+                       analysis.market_snapshot.dominance_score !== undefined)) {
+                    // This is acceptable for margin calculations, but ASIN snapshot display should not reference these
+                    // Only warn if we're trying to display Page-1 averages in ASIN mode
+                  }
+                }
+                
                 const asinData = analysis.asin_snapshot;
-                const position = asinData.position_vs_page1;
                 const pressure = asinData.pressure_score;
                 
+                // Calculate Review Moat classification
+                const getReviewMoatClassification = (reviews: number | null): string => {
+                  if (reviews === null) return "Unknown";
+                  if (reviews < 100) return "Weak";
+                  if (reviews < 1000) return "Moderate";
+                  if (reviews < 5000) return "Strong";
+                  return "Extreme";
+                };
+                
+                // Calculate Rating Strength classification
+                const getRatingStrength = (rating: number | null): string => {
+                  if (rating === null) return "Unknown";
+                  if (rating >= 4.5) return "Excellent";
+                  if (rating >= 4.0) return "Good";
+                  if (rating >= 3.5) return "Fair";
+                  return "Weak";
+                };
+                
+                // Calculate Price Anchor (absolute price, not vs Page-1)
+                const getPriceAnchor = (price: number | null): string => {
+                  if (price === null) return "Unknown";
+                  if (price < 15) return "Budget";
+                  if (price < 30) return "Mid-range";
+                  if (price < 50) return "Premium";
+                  return "Luxury";
+                };
+                
+                // Calculate Brand Power (from brand_owner)
+                const getBrandPower = (brandOwner: string | null): string => {
+                  if (brandOwner === "Amazon") return "Amazon Retail";
+                  if (brandOwner === "Brand") return "Brand-Owned";
+                  return "Third-Party";
+                };
+                
+                // Calculate Displacement Difficulty (from pressure score)
+                const getDisplacementDifficulty = (pressure: typeof asinData.pressure_score): string => {
+                  if (!pressure) return "Unknown";
+                  if (pressure.score <= 3) return "Low";
+                  if (pressure.score <= 6) return "Moderate";
+                  return "High";
+                };
+                
                 return (
-                  <>
-                    {/* Block A: Product Core Metrics */}
-                    <div className="bg-white border rounded-xl p-6 shadow-sm">
-                      <div className="mb-4">
-                        <h2 className="text-lg font-semibold text-gray-900 mb-1">
-                          ASIN Snapshot
-                        </h2>
-                        <p className="text-xs text-gray-500">
-                          Product Core Metrics
-                        </p>
+                  <div className="bg-white border rounded-xl p-6 shadow-sm">
+                    <div className="mb-4">
+                      <h2 className="text-lg font-semibold text-gray-900 mb-1">
+                        ASIN Snapshot
+                      </h2>
+                      <p className="text-xs text-gray-500">
+                        Single-product competitive analysis for displacement targeting
+                      </p>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Review Moat */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Review Moat</div>
+                        <div className="text-lg font-semibold text-gray-900 mb-1">
+                          {asinData.reviews !== null && typeof asinData.reviews === 'number'
+                            ? asinData.reviews.toLocaleString()
+                            : "—"}
+                        </div>
+                        <div className="text-xs text-gray-600">
+                          {getReviewMoatClassification(asinData.reviews)} moat
+                        </div>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                        {/* Price */}
-                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                          <div className="text-xs text-gray-500 mb-1">Price</div>
-                          <div className="text-lg font-semibold text-gray-900">
-                            {asinData.price !== null && typeof asinData.price === 'number'
-                              ? formatCurrency(asinData.price)
-                              : "—"}
+                      
+                      {/* Rating Strength */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Rating Strength</div>
+                        <div className="text-lg font-semibold text-gray-900 mb-1">
+                          {asinData.rating !== null && typeof asinData.rating === 'number' && !isNaN(asinData.rating)
+                            ? `${asinData.rating.toFixed(1)} ★`
+                            : "—"}
+                        </div>
+                        <div className="text-xs text-gray-600">
+                          {getRatingStrength(asinData.rating)} rating
+                        </div>
+                      </div>
+                      
+                      {/* Price Anchor */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Price Anchor</div>
+                        <div className="text-lg font-semibold text-gray-900 mb-1">
+                          {asinData.price !== null && typeof asinData.price === 'number'
+                            ? formatCurrency(asinData.price)
+                            : "—"}
+                        </div>
+                        <div className="text-xs text-gray-600">
+                          {getPriceAnchor(asinData.price)} positioning
+                        </div>
+                      </div>
+                      
+                      {/* Brand Power */}
+                      <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs text-gray-500 mb-1">Brand Power</div>
+                        <div className="text-lg font-semibold text-gray-900 mb-1">
+                          {asinData.brand_owner || "—"}
+                        </div>
+                        <div className="text-xs text-gray-600">
+                          {getBrandPower(asinData.brand_owner)}
+                        </div>
+                      </div>
+                      
+                      {/* Displacement Difficulty */}
+                      {pressure && (
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 md:col-span-2">
+                          <div className="text-xs text-gray-500 mb-1">Displacement Difficulty</div>
+                          <div className="text-lg font-semibold text-gray-900 mb-1">
+                            {getDisplacementDifficulty(pressure)} — Score {pressure.score}/10
+                          </div>
+                          <div className="text-xs text-gray-600 mt-1">
+                            {pressure.explanation}
                           </div>
                         </div>
-                        {/* Rating */}
-                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                          <div className="text-xs text-gray-500 mb-1">Rating</div>
-                          <div className="text-lg font-semibold text-gray-900">
-                            {asinData.rating !== null && typeof asinData.rating === 'number' && !isNaN(asinData.rating)
-                              ? `${asinData.rating.toFixed(1)} ★`
-                              : "—"}
-                          </div>
-                        </div>
-                        {/* Reviews */}
-                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                          <div className="text-xs text-gray-500 mb-1">Reviews</div>
-                          <div className="text-lg font-semibold text-gray-900">
-                            {asinData.reviews !== null && typeof asinData.reviews === 'number'
-                              ? asinData.reviews.toLocaleString()
-                              : "—"}
-                          </div>
-                        </div>
-                        {/* BSR */}
+                      )}
+                      
+                      {/* Additional Core Metrics */}
+                      {asinData.bsr !== null && (
                         <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                           <div className="text-xs text-gray-500 mb-1">BSR</div>
                           <div className="text-lg font-semibold text-gray-900">
-                            {asinData.bsr !== null && typeof asinData.bsr === 'number'
-                              ? `#${asinData.bsr.toLocaleString()}`
-                              : "—"}
+                            #{asinData.bsr.toLocaleString()}
                           </div>
                         </div>
-                        {/* Fulfillment */}
+                      )}
+                      
+                      {asinData.fulfillment && (
                         <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                           <div className="text-xs text-gray-500 mb-1">Fulfillment</div>
                           <div className="text-lg font-semibold text-gray-900">
-                            {asinData.fulfillment || "—"}
+                            {asinData.fulfillment}
                           </div>
                         </div>
-                        {/* Brand Owner */}
-                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                          <div className="text-xs text-gray-500 mb-1">Brand Owner</div>
-                          <div className="text-lg font-semibold text-gray-900">
-                            {asinData.brand_owner || "—"}
-                          </div>
-                        </div>
-                      </div>
+                      )}
                     </div>
-
-                    {/* Block B: Relative Positioning vs Page 1 */}
-                    {position && (
-                      <div className="bg-white border rounded-xl p-6 shadow-sm">
-                        <div className="mb-4">
-                          <h2 className="text-lg font-semibold text-gray-900 mb-1">
-                            Position vs Page 1
-                          </h2>
-                          <p className="text-xs text-gray-500">
-                            Percentile ranking relative to Page 1 competitors
-                          </p>
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                          {/* Price Percentile */}
-                          {position.price_percentile !== null && (
-                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">Price percentile</div>
-                              <div className="text-lg font-semibold text-gray-900">
-                                Cheaper than {100 - Math.round(position.price_percentile)}% of Page 1
-                              </div>
-                            </div>
-                          )}
-                          {/* Review Percentile */}
-                          {position.review_percentile !== null && (
-                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">Review percentile</div>
-                              <div className="text-lg font-semibold text-gray-900">
-                                More reviews than {Math.round(position.review_percentile)}% of Page 1
-                              </div>
-                            </div>
-                          )}
-                          {/* Rating Percentile */}
-                          {position.rating_percentile !== null && (
-                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">Rating percentile</div>
-                              <div className="text-lg font-semibold text-gray-900">
-                                Top {Math.round(100 - position.rating_percentile)}% by rating
-                              </div>
-                            </div>
-                          )}
-                          {/* Brand Context */}
-                          {position.brand_context && (
-                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">Brand context</div>
-                              <div className="text-lg font-semibold text-gray-900">
-                                {position.brand_context}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Block C: ASIN Competitive Pressure Score */}
-                    {pressure && (
-                      <div className="bg-white border rounded-xl p-6 shadow-sm">
-                        <div className="mb-4">
-                          <h2 className="text-lg font-semibold text-gray-900 mb-1">
-                            Pressure on This ASIN
-                          </h2>
-                          <p className="text-xs text-gray-500">
-                            Competitive pressure assessment (1-10 scale)
-                          </p>
-                        </div>
-                        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                          <div className="flex items-center gap-4 mb-2">
-                            <div className="text-3xl font-bold text-gray-900">
-                              {pressure.score}
-                            </div>
-                            <div>
-                              <div className="text-lg font-semibold text-gray-900">
-                                {pressure.label} Pressure
-                              </div>
-                              <div className="text-xs text-gray-600">
-                                Score: {pressure.score}/10
-                              </div>
-                            </div>
-                          </div>
-                          <p className="text-sm text-gray-700 mt-2">
-                            {pressure.explanation}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </>
+                  </div>
                 );
               })()}
+              
+              {/* ASIN mode fallback: render even if asin_snapshot is missing */}
+              {analysisMode === 'ASIN' && !analysis.asin_snapshot && (
+                <div className="bg-white border rounded-xl p-6 shadow-sm">
+                  <div className="mb-4">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-1">
+                      ASIN Snapshot
+                    </h2>
+                    <p className="text-xs text-gray-500">
+                      Single-product competitive analysis for displacement targeting
+                    </p>
+                  </div>
+                  <div className="text-sm text-gray-500 text-center py-4">
+                    ASIN data unavailable — analysis proceeding with available information
+                  </div>
+                </div>
+              )}
 
               {/* ═══════════════════════════════════════════════════════════════ */}
               {/* SECTION 2: DECISION & INTERPRETATION (AFTER DATA)              */}
@@ -1269,7 +1310,7 @@ export default function AnalyzeForm({
                 )}
                 {/* One-line interpretation */}
                 <p className={`text-sm font-medium ${getVerdictStyles(analysis.decision.verdict).text}`}>
-                  {analysis.input_type === "asin" ? (
+                  {analysisMode === "ASIN" ? (
                     // ASIN-specific verdict copy (competitive targeting)
                     <>
                       {analysis.decision.verdict === "GO" &&
@@ -1280,7 +1321,7 @@ export default function AnalyzeForm({
                         "This ASIN is not a realistic competitive target for your seller profile."}
                     </>
                   ) : (
-                    // Keyword-specific verdict copy (market decision)
+                    // KEYWORD-specific verdict copy (market decision)
                     <>
                       {analysis.decision.verdict === "GO" &&
                         "This product shows potential for your seller profile."}
@@ -1297,7 +1338,7 @@ export default function AnalyzeForm({
               {/* COMPETITIVE PRESSURE INDEX (CPI) - KEYWORD ONLY             */}
               {/* - Decisive label showing competitive pressure               */}
               {/* ─────────────────────────────────────────────────────────── */}
-              {analysis.input_type === "keyword" && analysis.market_snapshot?.cpi && (
+              {analysisMode === "KEYWORD" && analysis.market_snapshot?.cpi && (
                 <div className="bg-white border rounded-xl p-6 shadow-sm">
                   <div className="mb-4">
                     <h2 className="text-lg font-semibold text-gray-900 mb-1">
@@ -1322,7 +1363,7 @@ export default function AnalyzeForm({
               {/* BLOCK 3: MARKET SNAPSHOT (KEYWORD ONLY)                     */}
               {/* - 4 compact stat cards (2x2 grid)                           */}
               {/* ─────────────────────────────────────────────────────────── */}
-              {analysis.input_type === "keyword" && analysis.market_snapshot && (
+              {analysisMode === "KEYWORD" && analysis.market_snapshot && (
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <div className="mb-4">
                   <h2 className="text-lg font-semibold text-gray-900 mb-1">
@@ -1912,6 +1953,7 @@ export default function AnalyzeForm({
           initialMessages={chatMessages}
           onMessagesChange={setChatMessages}
           marketSnapshot={analysis?.market_snapshot || null}
+          analysisMode={analysisMode}
         />
       </div>
     </div>

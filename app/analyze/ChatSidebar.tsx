@@ -60,6 +60,8 @@ interface ChatSidebarProps {
   marketSnapshot?: MarketSnapshot | null;
   /** Callback when margin snapshot is updated from chat */
   onMarginSnapshotUpdate?: (snapshot: MarginSnapshot) => void;
+  /** Analysis mode: 'ASIN' for competitive targeting, 'KEYWORD' for market discovery */
+  analysisMode?: 'ASIN' | 'KEYWORD' | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,45 +95,71 @@ function calculateMarketPressure(
 }
 
 /**
- * Get suggested questions based on Market Pressure
+ * Get suggested questions based on analysis mode and market snapshot
  */
-function getSuggestedQuestions(marketSnapshot: MarketSnapshot | null): string[] {
-  if (!marketSnapshot) {
-    // Default questions if no snapshot
+function getSuggestedQuestions(
+  analysisMode: 'ASIN' | 'KEYWORD' | null | undefined,
+  marketSnapshot: MarketSnapshot | null
+): string[] {
+  // ASIN mode: Competitive targeting questions
+  if (analysisMode === 'ASIN') {
     return [
-      "Can I beat this review barrier?",
-      "Where do margins break here?",
-      "Is PPC required in this market?",
-      "What would differentiation need to look like?",
-      "What price do I need to win?",
+      "How can I beat this ASIN?",
+      "What's the displacement strategy for this listing?",
+      "What price point should I target?",
+      "How do margins work for this product?",
+      "What differentiation is needed to compete?",
     ];
   }
+  
+  // KEYWORD mode: Market discovery questions
+  if (analysisMode === 'KEYWORD') {
+    if (!marketSnapshot) {
+      // Default questions if no snapshot
+      return [
+        "Can I beat this review barrier?",
+        "Where do margins break here?",
+        "Is PPC required in this market?",
+        "What would differentiation need to look like?",
+        "What price do I need to win?",
+      ];
+    }
 
-  const pressure = calculateMarketPressure(
-    marketSnapshot.avg_reviews,
-    marketSnapshot.sponsored_count,
-    marketSnapshot.dominance_score
-  );
+    const pressure = calculateMarketPressure(
+      marketSnapshot.avg_reviews,
+      marketSnapshot.sponsored_count,
+      marketSnapshot.dominance_score
+    );
 
-  if (pressure === "High") {
-    // High pressure → risk & margin chips
-    return [
-      "Can I beat this review barrier?",
-      "Where do margins break here?",
-      "Is PPC required in this market?",
-      "What would differentiation need to look like?",
-      "What price do I need to win?",
-    ];
-  } else {
-    // Low/Moderate pressure → opportunity chips
-    return [
-      "Where do margins break here?",
-      "What price do I need to win?",
-      "What would differentiation need to look like?",
-      "Can I beat this review barrier?",
-      "Is PPC required in this market?",
-    ];
+    if (pressure === "High") {
+      // High pressure → risk & margin chips
+      return [
+        "Can I beat this review barrier?",
+        "Where do margins break here?",
+        "Is PPC required in this market?",
+        "What would differentiation need to look like?",
+        "What price do I need to win?",
+      ];
+    } else {
+      // Low/Moderate pressure → opportunity chips
+      return [
+        "Where do margins break here?",
+        "What price do I need to win?",
+        "What would differentiation need to look like?",
+        "Can I beat this review barrier?",
+        "Is PPC required in this market?",
+      ];
+    }
   }
+  
+  // Fallback (no mode detected)
+  return [
+    "Where do margins break here?",
+    "What price do I need to win?",
+    "What would differentiation need to look like?",
+    "Can I beat this review barrier?",
+    "Is PPC required?",
+  ];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +213,7 @@ export default function ChatSidebar({
   onMessagesChange,
   marketSnapshot = null,
   onMarginSnapshotUpdate,
+  analysisMode = null,
 }: ChatSidebarProps) {
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
@@ -407,7 +436,7 @@ export default function ChatSidebar({
             <p className="text-xs text-gray-500 text-center mb-4">
               Suggested questions:
             </p>
-            {getSuggestedQuestions(marketSnapshot).map((question, idx) => (
+            {getSuggestedQuestions(analysisMode, marketSnapshot).map((question, idx) => (
               <button
                 key={idx}
                 className="w-full text-left text-sm p-3 bg-white border rounded-lg hover:bg-gray-50 hover:border-gray-300 transition-colors text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
