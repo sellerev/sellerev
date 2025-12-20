@@ -284,7 +284,8 @@ function canAnswerQuestion(
     experience_months: number | null;
     monthly_revenue_range: string | null;
     sourcing_model: string;
-  }
+  },
+  analysisMode: 'ASIN' | 'KEYWORD' | null = null
 ): {
   canAnswer: boolean;
   missingItems: string[];
@@ -339,31 +340,38 @@ function canAnswerQuestion(
   // Price questions can always be answered from market snapshot or margin snapshot
   // Never block - system prompt will cite available data
 
-  // Check for strategic questions about competition/viability - require CPI
+  // Check for strategic questions about competition/viability
+  // CPI requirement applies ONLY to KEYWORD mode (CPI is market-level metric)
+  // ASIN mode can answer strategic questions using ASIN-specific data (review moat, price, brand owner)
   const strategicPatterns = [
     /\b(how hard|how difficult|viability|viable|competitive|competition|market entry|enter this market|break into)\b/i,
     /\b(should I launch|can I compete|worth pursuing|worth it)\b/i,
   ];
   
   if (strategicPatterns.some(p => p.test(normalized))) {
-    try {
-      const cpi = (marketSnapshot?.cpi as { score?: number; label?: string } | null) || null;
-      if (!cpi || typeof cpi !== 'object' || cpi === null || 
-          typeof cpi.score !== 'number' || typeof cpi.label !== 'string') {
+    // KEYWORD mode: Require CPI for strategic questions (market-level metric)
+    if (analysisMode === 'KEYWORD') {
+      try {
+        const cpi = (marketSnapshot?.cpi as { score?: number; label?: string } | null) || null;
+        if (!cpi || typeof cpi !== 'object' || cpi === null || 
+            typeof cpi.score !== 'number' || typeof cpi.label !== 'string') {
+          return {
+            canAnswer: false,
+            missingItems: ["Competitive Pressure Index (CPI) not available"],
+            options: ["Run an analysis to get CPI data", "Ask about specific metrics available in the market snapshot"],
+          };
+        }
+      } catch (error) {
+        // If CPI access fails, refuse to answer (KEYWORD mode only)
         return {
           canAnswer: false,
           missingItems: ["Competitive Pressure Index (CPI) not available"],
           options: ["Run an analysis to get CPI data", "Ask about specific metrics available in the market snapshot"],
         };
       }
-    } catch (error) {
-      // If CPI access fails, refuse to answer
-      return {
-        canAnswer: false,
-        missingItems: ["Competitive Pressure Index (CPI) not available"],
-        options: ["Run an analysis to get CPI data", "Ask about specific metrics available in the market snapshot"],
-      };
     }
+    // ASIN mode: Can answer strategic questions using ASIN snapshot data (review moat, price, brand owner)
+    // No CPI required - ASIN mode uses displacement feasibility, not market-level CPI
   }
   
   // Check for data outside cached context
@@ -1100,7 +1108,8 @@ export async function POST(req: NextRequest) {
       body.message,
       analysisResponse,
       marketSnapshot,
-      sellerProfile
+      sellerProfile,
+      analysisMode
     );
 
     if (!canAnswerResult.canAnswer) {

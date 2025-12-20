@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { fetchKeywordMarketSnapshot, KeywordMarketData } from "@/lib/amazon/keywordMarket";
+import { fetchAsinData, AsinSnapshot } from "@/lib/amazon/asinData";
 import { pickRepresentativeAsin } from "@/lib/amazon/representativeAsin";
 import { calculateCPI } from "@/lib/amazon/competitivePressureIndex";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
@@ -741,12 +742,47 @@ export async function POST(req: NextRequest) {
 
     console.log("SELLER_PROFILE", sellerProfile);
 
-    // 7. Fetch keyword market data if input_type is "idea"
+    // 7. Fetch data based on input type
     let keywordMarketData = null;
     let marketSnapshot = null;
     let marketSnapshotJson = null;
+    let asinData: AsinSnapshot | null = null;
     
-    if (body.input_type === "idea") {
+    if (body.input_type === "asin") {
+      // ASIN mode: Fetch ASIN product data (required)
+      console.log("FETCHING_ASIN_DATA", body.input_value);
+      asinData = await fetchAsinData(body.input_value);
+      
+      if (!asinData) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Unable to fetch ASIN product data. The ASIN may be invalid or unavailable.",
+          },
+          { status: 422, headers: res.headers }
+        );
+      }
+      
+      // Validate required fields for ASIN snapshot
+      // Price OR rating must exist (at least one is required for analysis)
+      if (asinData.price === null && asinData.rating === null) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "ASIN data missing required fields (price or rating required)",
+          },
+          { status: 422, headers: res.headers }
+        );
+      }
+      
+      console.log("ASIN_DATA_FETCHED", {
+        asin: asinData.asin,
+        hasPrice: asinData.price !== null,
+        hasRating: asinData.rating !== null,
+        hasReviews: asinData.reviews !== null,
+        brand_owner: asinData.brand_owner,
+      });
+    } else if (body.input_type === "idea") {
       keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
       console.log("RAIN_DATA_RAW", keywordMarketData);
       
@@ -855,8 +891,16 @@ KEYWORD ANALYSIS RULES:
 - Fill numbers_used field with all null values`;
 
       systemPrompt = SYSTEM_PROMPT + warningSection;
-    } else if (body.input_type === "asin") {
-      // ASIN analysis: Add competitive targeting context
+    } else if (body.input_type === "asin" && asinData) {
+      // ASIN analysis: Add competitive targeting context with actual ASIN data
+      const priceText = asinData.price !== null ? `$${asinData.price.toFixed(2)}` : "Not available";
+      const ratingText = asinData.rating !== null ? asinData.rating.toFixed(1) : "Not available";
+      const reviewsText = asinData.reviews !== null ? asinData.reviews.toLocaleString() : "Not available";
+      const bsrText = asinData.bsr !== null ? `#${asinData.bsr.toLocaleString()}` : "Not available";
+      const fulfillmentText = asinData.fulfillment || "Not available";
+      const brandOwnerText = asinData.brand_owner || "Not available";
+      const brandText = asinData.brand || "Not available";
+      
       const asinSection = `
 
 ASIN ANALYSIS CONTEXT:
@@ -866,29 +910,37 @@ This is NOT market discovery — it is an attack decision.
 
 CORE QUESTION: "Is this ASIN a realistic competitive target for this seller?"
 
+ASIN DATA (Amazon product data for ${asinData.asin}):
+- Price: ${priceText}
+- Rating: ${ratingText} ${asinData.rating !== null ? '★' : ''}
+- Reviews: ${reviewsText}
+- BSR: ${bsrText}
+- Fulfillment: ${fulfillmentText}
+- Brand Owner: ${brandOwnerText}
+- Brand: ${brandText}
+${asinData.seller_count !== null ? `- Seller Count: ${asinData.seller_count}` : ''}
+
 ASIN ANALYSIS RULES (NON-NEGOTIABLE):
 - Focus on the specific ASIN's competitive strength and vulnerabilities
-- Compare ASIN metrics (price, rating, reviews, BSR) to Page 1 competitors when available
-- Assess review moat, brand leverage, price defensibility, and seller profile alignment
+- Use the ASIN data provided above (DO NOT invent or guess metrics)
+- Assess review moat (absolute reviews: ${reviewsText}), brand leverage (${brandOwnerText}), price defensibility (${priceText}), and seller profile alignment
 - Every verdict MUST cite at least TWO of: review moat, brand leverage, price defensibility, seller profile alignment
 - Use ASIN-specific verdict copy templates (see ASIN VERDICT RUBRIC above)
 - This is product-specific competitive analysis, not market-level intelligence
-- Reference specific ASIN attributes (price, rating, reviews, BSR, fulfillment, brand owner) when available
-- If Page 1 comparison data is available, use percentiles to show relative positioning
-- Never use generic market language — always reference the specific ASIN being analyzed
+- Reference specific ASIN attributes from the data above
+- NEVER reference Page-1 averages or market aggregation in your analysis
 
 ASIN MODE MUST NEVER:
 - Show Page-1 averages as primary data
 - Show "Insufficient Page-1 data" cards
-- Use keyword-style market language
+- Use keyword-style market language ("market density", "keyword competition")
 - Ask "Is this niche good?"
 - Calculate market revenue first
+- Reference Page-1 competitor data unless explicitly comparing
 
-ASIN Confidence Calculation:
-- Start at 50% baseline
-- Apply adjustments based on review moat, brand landscape, seller alignment, price efficiency
-- Apply caps based on brand dominance, review moat, Amazon retail, data completeness
-- Always include reason for confidence cap in reasoning`;
+ASIN Confidence Calculation (server-side, you don't need to calculate):
+- Confidence is calculated server-side based on review moat, brand strength, price position, and seller type
+- You should focus on qualitative analysis, not confidence math`;
 
       systemPrompt = SYSTEM_PROMPT + asinSection;
     }
@@ -899,6 +951,9 @@ ASIN Confidence Calculation:
     }
     if (body.input_type === "idea" && !marketSnapshot) {
       throw new Error("Missing market snapshot");
+    }
+    if (body.input_type === "asin" && !asinData) {
+      throw new Error("Missing ASIN data");
     }
 
     console.log("AI_PROMPT_READY");
@@ -1001,37 +1056,50 @@ ${body.input_value}`;
 
     console.log("AI_VALIDATED");
 
+    // 10a. Inject ASIN data into decision JSON (ASIN mode only - never AI-generated)
+    if (body.input_type === "asin" && asinData) {
+      // Store fetched ASIN data as asin_snapshot (overwrite any AI-generated version)
+      decisionJson.asin_snapshot = {
+        asin: asinData.asin,
+        price: asinData.price,
+        rating: asinData.rating,
+        reviews: asinData.reviews,
+        bsr: asinData.bsr,
+        fulfillment: asinData.fulfillment,
+        brand_owner: asinData.brand_owner,
+        brand: asinData.brand,
+      };
+      
+      // Add pressure_score if needed (can be AI-generated from asin_snapshot data)
+      // But keep it separate - pressure_score is analysis, not raw data
+      // For now, let AI generate it if needed, but we have the raw data
+    }
+
     // 11. Extract verdict and confidence for analytics
     const verdict = decisionJson.decision.verdict;
     let confidence = decisionJson.decision.confidence;
     const confidenceDowngrades: string[] = [];
 
-    // ASIN MODE: Confidence calculation (competitive targeting)
-    if (body.input_type === "asin") {
+    // ASIN MODE: Confidence calculation (competitive targeting) - NO Page-1 dependencies
+    if (body.input_type === "asin" && asinData) {
       // Start at 50% baseline
       confidence = 50;
       
-      // Get ASIN data from market_data or asin_snapshot if available
-      const asinData = decisionJson.asin_snapshot || null;
-      const marketData = decisionJson.market_data || {};
-      
-      // Extract ASIN metrics
-      const asinReviews = asinData?.reviews || marketData.review_count_avg || null;
-      const asinRating = asinData?.rating || marketData.average_rating || null;
-      const asinPrice = asinData?.price || marketData.average_price || null;
-      const brandOwner = asinData?.brand_owner || null;
-      const brandDominance = marketSnapshot?.dominance_score || null;
-      const sponsoredCount = marketSnapshot?.sponsored_count || null;
-      const totalListings = marketSnapshot?.total_page1_listings || null;
+      // Use fetched ASIN data (guaranteed to exist for ASIN mode)
+      const asinReviews = asinData.reviews;
+      const asinRating = asinData.rating;
+      const asinPrice = asinData.price;
+      const brandOwner = asinData.brand_owner;
+      const brandName = asinData.brand; // Can use brand name for additional context
       
       // Positive adjustments (+)
-      // Weak review moat → +10
+      // Weak review moat → +10 (reviews < 500)
       if (asinReviews !== null && asinReviews < 500) {
         confidence += 10;
       }
       
-      // Fragmented brand landscape → +10
-      if (brandDominance !== null && brandDominance < 30) {
+      // Third-party brand (not Amazon, not brand-owned) → +10 (more fragmented/beatable)
+      if (brandOwner === "Third-Party") {
         confidence += 10;
       }
       
@@ -1048,27 +1116,19 @@ ${body.input_value}`;
       }
       
       // Negative adjustments (-)
-      // Review moat > P80 → -15 (heuristic: > 5000 reviews)
+      // Review moat > 5,000 → -15 (strong review barrier)
       if (asinReviews !== null && asinReviews > 5000) {
         confidence -= 15;
       }
       
-      // Brand dominance > 50% → -15
-      if (brandDominance !== null && brandDominance > 50) {
-        confidence -= 15;
+      // Brand-owned (not Amazon, but brand controls) → -10 (brand leverage)
+      if (brandOwner === "Brand") {
+        confidence -= 10;
       }
       
-      // Amazon retail presence → -20
+      // Amazon retail presence → -20 (hardest to compete with)
       if (brandOwner === "Amazon") {
         confidence -= 20;
-      }
-      
-      // Ad-heavy category → -10 (heuristic: > 40% sponsored)
-      if (sponsoredCount !== null && totalListings !== null && totalListings > 0) {
-        const sponsoredRatio = sponsoredCount / totalListings;
-        if (sponsoredRatio > 0.4) {
-          confidence -= 10;
-        }
       }
       
       // Seller profile mismatch → -10 (heuristic: new seller with high barriers)
@@ -1076,24 +1136,8 @@ ${body.input_value}`;
         confidence -= 10;
       }
       
-      // Confidence caps (ASIN mode)
-      // Brand-led ASIN → 65% max
-      if (brandDominance !== null && brandDominance > 40) {
-        confidence = Math.min(confidence, 65);
-        if (!confidenceDowngrades.some(d => d.includes("brand"))) {
-          confidenceDowngrades.push("Confidence capped at 65% due to brand-led market");
-        }
-      }
-      
-      // Review moat > 1,000 → 60% max
-      if (asinReviews !== null && asinReviews > 1000) {
-        confidence = Math.min(confidence, 60);
-        if (!confidenceDowngrades.some(d => d.includes("review"))) {
-          confidenceDowngrades.push("Confidence capped at 60% due to strong review moat");
-        }
-      }
-      
-      // Amazon retail → 50% max
+      // Confidence caps (ASIN mode) - based on ASIN data only, NO Page-1
+      // Amazon retail → 50% max (hardest competitive barrier)
       if (brandOwner === "Amazon") {
         confidence = Math.min(confidence, 50);
         if (!confidenceDowngrades.some(d => d.includes("Amazon"))) {
@@ -1101,9 +1145,24 @@ ${body.input_value}`;
         }
       }
       
-      // Insufficient data → 55% max
-      if ((asinReviews === null && asinRating === null && asinPrice === null) ||
-          (marketSnapshot === null && !asinData)) {
+      // Review moat > 1,000 → 60% max (strong review barrier)
+      if (asinReviews !== null && asinReviews > 1000) {
+        confidence = Math.min(confidence, 60);
+        if (!confidenceDowngrades.some(d => d.includes("review"))) {
+          confidenceDowngrades.push("Confidence capped at 60% due to strong review moat");
+        }
+      }
+      
+      // Brand-owned → 65% max (brand leverage reduces displacement feasibility)
+      if (brandOwner === "Brand") {
+        confidence = Math.min(confidence, 65);
+        if (!confidenceDowngrades.some(d => d.includes("brand"))) {
+          confidenceDowngrades.push("Confidence capped at 65% due to brand ownership");
+        }
+      }
+      
+      // Insufficient data → 55% max (if critical fields missing)
+      if ((asinReviews === null && asinRating === null && asinPrice === null)) {
         confidence = Math.min(confidence, 55);
         if (!confidenceDowngrades.some(d => d.includes("insufficient") || d.includes("Insufficient"))) {
           confidenceDowngrades.push("Confidence capped at 55% due to insufficient ASIN data");
@@ -1272,23 +1331,20 @@ ${body.input_value}`;
       if (body.input_type === "idea" && marketSnapshot?.avg_price) {
         // KEYWORD mode: use Page-1 average price
         sellingPrice = marketSnapshot.avg_price;
-      } else if (body.input_type === "asin") {
-        // ASIN mode: use ASIN-specific price (never Page-1 average)
-        // Try asin_snapshot first (from AI response)
-        const asinSnapshot = (decisionJson.asin_snapshot as any);
-        if (asinSnapshot?.price !== null && typeof asinSnapshot?.price === 'number' && asinSnapshot.price > 0) {
-          sellingPrice = asinSnapshot.price;
-        } else {
-          // Fallback: check market_data (from ASIN analysis)
-          const marketDataPrice = (decisionJson.market_data as any)?.average_price;
-          if (marketDataPrice !== null && typeof marketDataPrice === 'number' && marketDataPrice > 0) {
-            sellingPrice = marketDataPrice;
-          }
+      } else if (body.input_type === "asin" && asinData) {
+        // ASIN mode: use ASIN-specific price from fetched data (never Page-1 average)
+        // asinData is guaranteed to exist for ASIN mode (enforced earlier)
+        if (asinData.price !== null && asinData.price > 0) {
+          sellingPrice = asinData.price;
         }
       }
 
-      // Use default if no price found (should never happen for ASIN, but ensure we don't block)
+      // Use default if no price found (should not happen for ASIN with validated data)
       if (sellingPrice === null || sellingPrice <= 0) {
+        if (body.input_type === "asin") {
+          // For ASIN mode, this should not happen (we validate price/rating earlier)
+          console.warn("ASIN mode: No price found, using fallback");
+        }
         sellingPrice = 25.0; // Default fallback (margin calculation will still work)
       }
 

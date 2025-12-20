@@ -552,6 +552,9 @@ export default function AnalyzeForm({
       // Never assume arrays - snapshot is always an object with the new structure
       const marketSnapshot = data.decision.market_snapshot || null;
       
+      // Extract asin_snapshot from decision if present
+      const asinSnapshot = data.decision.asin_snapshot || null;
+      
       const analysisData: AnalysisResponse = {
         analysis_run_id: data.analysisRunId,
         created_at: new Date().toISOString(),
@@ -567,6 +570,9 @@ export default function AnalyzeForm({
           ? marketSnapshot 
           : null,
         market_data: data.decision.market_data,
+        asin_snapshot: asinSnapshot && typeof asinSnapshot === 'object' && !Array.isArray(asinSnapshot) && asinSnapshot !== null
+          ? asinSnapshot
+          : null,
       };
 
       console.log("ANALYZE_SUCCESS", { 
