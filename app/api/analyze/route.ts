@@ -7,6 +7,7 @@ import { calculateCPI } from "@/lib/amazon/competitivePressureIndex";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 import { resolveFbaFees } from "@/lib/spapi/resolveFbaFees";
 import { buildMarginSnapshot } from "@/lib/margins/buildMarginSnapshot";
+import { buildKeywordAnalyzeResponse, buildAsinAnalyzeResponse } from "@/lib/analyze/dataContract";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -823,126 +824,114 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 8. Build system prompt (with keyword-specific rules if applicable)
+    // 8. Build data contract response BEFORE AI call
+    // This ensures we have the structured data to pass to AI via ai_context
+    let contractResponse: any = null;
+    let marginSnapshot: any = null;
+    
+    // First, calculate margin snapshot (needed for contract response)
+    try {
+      const marginMode: 'ASIN' | 'KEYWORD' = body.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
+      
+      // For ASIN mode: use ASIN price directly
+      // For KEYWORD mode: will use avg_price after market snapshot is built
+      let priceForMargin = body.input_type === 'asin' && asinData?.price 
+        ? asinData.price 
+        : marketSnapshot?.avg_price || 25.0;
+      
+      // Fetch FBA fees first (needed for margin calculation)
+      let fbaFees: { total_fba_fees: number | null; source: "sp_api" | "estimated" | "unknown" } | null = null;
+      
+      if (body.input_type === "asin" && asinData) {
+        const asin = body.input_value.trim().toUpperCase();
+        priceForMargin = asinData.price || 25.0;
+        const fbaFeesResult = await resolveFbaFees(asin, priceForMargin);
+        if (fbaFeesResult) {
+          fbaFees = {
+            total_fba_fees: fbaFeesResult.total_fba_fees,
+            source: "sp_api",
+          };
+        }
+      } else if (body.input_type === "idea" && keywordMarketData && marketSnapshot) {
+        const representativeAsin = pickRepresentativeAsin(keywordMarketData.listings);
+        priceForMargin = marketSnapshot.avg_price || 25.0;
+        if (representativeAsin) {
+          const fbaFeesResult = await resolveFbaFees(representativeAsin, priceForMargin);
+          if (fbaFeesResult) {
+            fbaFees = {
+              total_fba_fees: fbaFeesResult.total_fba_fees,
+              source: "sp_api",
+            };
+          }
+        }
+      }
+      
+      // Build margin snapshot
+      marginSnapshot = buildMarginSnapshot({
+        analysisMode: marginMode,
+        sellerProfile: {
+          sourcing_model: sellerProfile.sourcing_model as any,
+        },
+        asinSnapshot: asinData ? { price: asinData.price } : null,
+        marketSnapshot: marketSnapshot ? {
+          avg_price: marketSnapshot.avg_price,
+          category: marketSnapshot.category,
+        } : null,
+        fbaFees,
+        userOverrides: null,
+      });
+    } catch (error) {
+      console.error("Margin snapshot calculation error:", error);
+      // Create default margin snapshot
+      const defaultMarginMode: 'ASIN' | 'KEYWORD' = body.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
+      marginSnapshot = buildMarginSnapshot({
+        analysisMode: defaultMarginMode,
+        sellerProfile: {
+          sourcing_model: sellerProfile.sourcing_model as any,
+        },
+        asinSnapshot: null,
+        marketSnapshot: null,
+        fbaFees: null,
+        userOverrides: null,
+      });
+    }
+    
+    // Build contract-compliant response
+    if (body.input_type === "idea" && keywordMarketData) {
+      contractResponse = buildKeywordAnalyzeResponse(
+        body.input_value,
+        keywordMarketData,
+        marginSnapshot
+      );
+    } else if (body.input_type === "asin" && asinData) {
+      contractResponse = buildAsinAnalyzeResponse(
+        body.input_value.trim().toUpperCase(),
+        asinData,
+        marginSnapshot
+      );
+    }
+    
+    // 8. Build system prompt with ai_context ONLY
     let systemPrompt = SYSTEM_PROMPT;
     
-    if (body.input_type === "idea" && marketSnapshot) {
-      // Add keyword-specific market data section
-      const keywordText = (marketSnapshot as any).keyword || body.input_value;
-      const avgPriceText = marketSnapshot.avg_price !== null 
-        ? `$${marketSnapshot.avg_price.toFixed(2)}` 
-        : "Not available";
-      const avgReviewsText = marketSnapshot.avg_reviews !== null 
-        ? marketSnapshot.avg_reviews.toLocaleString() 
-        : "Not available";
-      const avgRatingText = marketSnapshot.avg_rating !== null 
-        ? marketSnapshot.avg_rating.toFixed(1)
-        : "Not available";
-      const dominanceText = `${marketSnapshot.dominance_score}%`;
+    if (contractResponse && contractResponse.ai_context) {
+      const aiContextSection = `
 
-      const marketDataSection = `
+DATA CONTRACT CONTEXT (READ-ONLY):
 
-KEYWORD ANALYSIS CONTEXT:
+You MUST use ONLY the following ai_context object. This is the single source of truth.
+Do NOT reference data outside this context. Do NOT invent metrics.
 
-MARKET DATA (Page 1 Amazon search results for "${keywordText}"):
-- Page 1 listings analyzed: ${marketSnapshot.total_page1_listings}
-- Sponsored listings: ${marketSnapshot.sponsored_count}
-- Avg price: ${avgPriceText}
-- Avg reviews: ${avgReviewsText}
-- Avg rating: ${avgRatingText}
-- Brand dominance score: ${dominanceText} (top brand share of Page 1)
+${JSON.stringify(contractResponse.ai_context, null, 2)}
 
-KEYWORD ANALYSIS RULES (NON-NEGOTIABLE):
-- Treat keyword analysis as directional, not definitive
-- Reference aggregated signals from Page 1 only, not individual ASIN performance
-- If dominance_score > 50%, flag brand dominance as a risk
-- If avg_reviews > 2000, flag high review barrier as a risk
-- If total_page1_listings >= 10, flag crowded Page 1 as a risk
-- This is aggregated Page 1 market context, not a specific product listing
-- Cite specific numbers from market data when available
-- If a metric is "Not available", explicitly state that in your analysis
-- DO NOT reference total_results_estimate or deep pagination metrics (Page 1 only)
+CRITICAL RULES:
+- All reasoning MUST be based on the ai_context object above
+- If a metric is null in ai_context, explicitly state it's unavailable
+- Do NOT fabricate or estimate values not present in ai_context
+- For keyword mode: Use summary, products, market_structure, margin_snapshot, signals
+- For ASIN mode: Use asin_snapshot, listing_quality, page1_benchmarks, margin_snapshot, signals`;
 
-METRIC CITATION REQUIREMENTS:
-- Executive Summary MUST include at least TWO metrics from the market data above
-- Each Risk Breakdown explanation MUST reference at least ONE metric from the market data above
-- Fill numbers_used field with actual values from market_snapshot (use null if metric is not available):
-  - If you cite avg_price in your analysis, set numbers_used.avg_price to ${marketSnapshot.avg_price !== null ? marketSnapshot.avg_price : 'null'}
-  - If you cite avg_reviews, set numbers_used.avg_reviews to ${marketSnapshot.avg_reviews !== null ? marketSnapshot.avg_reviews : 'null'}
-  - If you cite total_page1_listings, set numbers_used.competitor_count to ${marketSnapshot.total_page1_listings}
-  - If you cite dominance_score, set numbers_used.brand_concentration_pct to ${marketSnapshot.dominance_score}
-  - For metrics you do NOT cite or that are not available, set to null`;
-
-      systemPrompt = SYSTEM_PROMPT + marketDataSection;
-    } else if (body.input_type === "idea") {
-      // No market data available - add warning
-      const warningSection = `
-
-KEYWORD ANALYSIS CONTEXT:
-
-MARKET DATA: Not available (insufficient search results or API error)
-
-KEYWORD ANALYSIS RULES:
-- Treat keyword analysis as directional, not definitive
-- Without market data, analysis is based on general market knowledge only
-- Confidence must be capped at <= 55% maximum
-- Explicitly state "Insufficient Amazon market data for numeric citation" in Executive Summary
-- Each Risk Breakdown explanation must state "Insufficient Amazon market data for numeric citation"
-- Fill numbers_used field with all null values`;
-
-      systemPrompt = SYSTEM_PROMPT + warningSection;
-    } else if (body.input_type === "asin" && asinData) {
-      // ASIN analysis: Add competitive targeting context with actual ASIN data
-      const priceText = asinData.price !== null ? `$${asinData.price.toFixed(2)}` : "Not available";
-      const ratingText = asinData.rating !== null ? asinData.rating.toFixed(1) : "Not available";
-      const reviewsText = asinData.reviews !== null ? asinData.reviews.toLocaleString() : "Not available";
-      const bsrText = asinData.bsr !== null ? `#${asinData.bsr.toLocaleString()}` : "Not available";
-      const fulfillmentText = asinData.fulfillment || "Not available";
-      const brandOwnerText = asinData.brand_owner || "Not available";
-      const brandText = asinData.brand || "Not available";
-      
-      const asinSection = `
-
-ASIN ANALYSIS CONTEXT:
-
-You are analyzing a specific ASIN for competitive targeting.
-This is NOT market discovery — it is an attack decision.
-
-CORE QUESTION: "Is this ASIN a realistic competitive target for this seller?"
-
-ASIN DATA (Amazon product data for ${asinData.asin}):
-- Price: ${priceText}
-- Rating: ${ratingText} ${asinData.rating !== null ? '★' : ''}
-- Reviews: ${reviewsText}
-- BSR: ${bsrText}
-- Fulfillment: ${fulfillmentText}
-- Brand Owner: ${brandOwnerText}
-- Brand: ${brandText}
-${asinData.seller_count !== null ? `- Seller Count: ${asinData.seller_count}` : ''}
-
-ASIN ANALYSIS RULES (NON-NEGOTIABLE):
-- Focus on the specific ASIN's competitive strength and vulnerabilities
-- Use the ASIN data provided above (DO NOT invent or guess metrics)
-- Assess review moat (absolute reviews: ${reviewsText}), brand leverage (${brandOwnerText}), price defensibility (${priceText}), and seller profile alignment
-- Every verdict MUST cite at least TWO of: review moat, brand leverage, price defensibility, seller profile alignment
-- Use ASIN-specific verdict copy templates (see ASIN VERDICT RUBRIC above)
-- This is product-specific competitive analysis, not market-level intelligence
-- Reference specific ASIN attributes from the data above
-- NEVER reference Page-1 averages or market aggregation in your analysis
-
-ASIN MODE MUST NEVER:
-- Show Page-1 averages as primary data
-- Show "Insufficient Page-1 data" cards
-- Use keyword-style market language ("market density", "keyword competition")
-- Ask "Is this niche good?"
-- Calculate market revenue first
-- Reference Page-1 competitor data unless explicitly comparing
-
-ASIN Confidence Calculation (server-side, you don't need to calculate):
-- Confidence is calculated server-side based on review moat, brand strength, price position, and seller type
-- You should focus on qualitative analysis, not confidence math`;
-
-      systemPrompt = SYSTEM_PROMPT + asinSection;
+      systemPrompt = SYSTEM_PROMPT + aiContextSection;
     }
 
     // Guard: Ensure required data before AI call
@@ -1194,207 +1183,6 @@ ${body.input_value}`;
       }
     }
 
-    // Store initial downgrades (will be updated after FBA fees and margin snapshot are calculated)
-    decisionJson.decision.confidence = Math.round(confidence);
-
-    // 12. Store market data in response for keyword analyses
-    if (body.input_type === "idea" && keywordMarketData) {
-      decisionJson.market_snapshot = {
-        ...marketSnapshot,
-        listings: keywordMarketData.listings, // Include listings in market_snapshot for frontend display
-      };
-      decisionJson.market_listings = keywordMarketData.listings; // Keep for backward compatibility
-    }
-
-    // 12b. Fetch FBA fee estimates via SP-API (with caching)
-    // For ASIN analysis: use new resolveFbaFees resolver after market snapshot aggregation
-    try {
-      const marketplaceId = "ATVPDKIKX0DER"; // US marketplace (default)
-      
-      if (body.input_type === "asin") {
-        // ASIN analysis: use the ASIN directly
-        const asin = body.input_value.trim().toUpperCase();
-        
-        // Determine price_used: use avg_price from market snapshot if available
-        let priceUsed = 25.0; // Default fallback
-        if (decisionJson.market_snapshot && typeof decisionJson.market_snapshot === 'object' && 'avg_price' in decisionJson.market_snapshot) {
-          const avgPrice = (decisionJson.market_snapshot as any).avg_price;
-          if (avgPrice !== null && typeof avgPrice === 'number' && avgPrice > 0) {
-            priceUsed = avgPrice;
-          }
-        }
-        
-        // Use new cache-first resolver
-        const fbaFeesResult = await resolveFbaFees(asin, priceUsed);
-        
-        // Initialize market_snapshot if it doesn't exist
-        if (!decisionJson.market_snapshot) {
-          decisionJson.market_snapshot = {};
-        }
-        
-        // Inject into decision JSON with new structure
-        if (fbaFeesResult) {
-          decisionJson.market_snapshot.fba_fees = {
-            fulfillment_fee: fbaFeesResult.fulfillment_fee,
-            referral_fee: fbaFeesResult.referral_fee,
-            total_fba_fees: fbaFeesResult.total_fba_fees,
-            source: "amazon",
-          };
-        } else {
-          // Unavailable - set to null
-          decisionJson.market_snapshot.fba_fees = null;
-        }
-        
-        decisionJson.market_snapshot.representative_asin = asin;
-      } else if (body.input_type === "idea" && keywordMarketData && marketSnapshot) {
-        // Keyword analysis: pick representative ASIN and use avg price
-        const representativeAsin = pickRepresentativeAsin(keywordMarketData.listings);
-        const priceUsed = marketSnapshot.avg_price || 25.0; // Use avg price or fallback
-
-        if (representativeAsin) {
-          // Use cache-first resolver (same as ASIN analysis)
-          const fbaFeesResult = await resolveFbaFees(representativeAsin, priceUsed);
-
-          // Ensure market_snapshot exists (should already exist from step 12)
-          if (!decisionJson.market_snapshot) {
-            decisionJson.market_snapshot = marketSnapshot;
-          }
-          
-          // Inject into decision JSON with new structure (same as ASIN analysis)
-          if (fbaFeesResult) {
-            decisionJson.market_snapshot.fba_fees = {
-              fulfillment_fee: fbaFeesResult.fulfillment_fee,
-              referral_fee: fbaFeesResult.referral_fee,
-              total_fba_fees: fbaFeesResult.total_fba_fees,
-              source: "amazon",
-            };
-          } else {
-            // Fallback: set estimated fees structure
-            decisionJson.market_snapshot.fba_fees = {
-              fulfillment_fee: null,
-              referral_fee: null,
-              total_fba_fees: null,
-              source: "estimated",
-            };
-          }
-          
-          decisionJson.market_snapshot.representative_asin = representativeAsin;
-        } else {
-          // No representative ASIN found - set estimated fees
-          if (!decisionJson.market_snapshot) {
-            decisionJson.market_snapshot = marketSnapshot;
-          }
-          decisionJson.market_snapshot.fba_fees = {
-            fulfillment_fee: null,
-            referral_fee: null,
-            total_fba_fees: null,
-            source: "estimated",
-          };
-          decisionJson.market_snapshot.representative_asin = null;
-        }
-      }
-    } catch (error) {
-      // Fail gracefully - don't break the analysis
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      console.error("FBA fee estimation error:", errorMessage);
-      
-      // Set fba_fees to null if unavailable
-      if (decisionJson.market_snapshot) {
-        if (body.input_type === "asin") {
-          decisionJson.market_snapshot.fba_fees = null;
-          decisionJson.market_snapshot.representative_asin = body.input_value.trim().toUpperCase();
-        } else {
-          // For keyword analysis, keep existing fallback structure
-          decisionJson.market_snapshot.fba_fees = {
-            total_fee: null,
-            source: "estimated",
-            asin_used: "",
-            price_used: marketSnapshot?.avg_price || 25.0,
-          };
-        }
-      }
-    }
-
-    // 12c. Calculate and inject margin snapshot (always present for ASIN and keyword)
-    try {
-      // Ensure market_snapshot exists
-      if (!decisionJson.market_snapshot) {
-        decisionJson.market_snapshot = {};
-      }
-
-      // Extract selling price (required for margin calculation)
-      // ASIN mode: use ASIN price from asin_snapshot or market_data
-      // KEYWORD mode: use marketSnapshot.avg_price
-      // PART G: Build margin snapshot (first-class feature, deterministic)
-      const marginMode: 'ASIN' | 'KEYWORD' = body.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
-      
-      // Extract FBA fees structure
-      const fbaFeesData = (decisionJson.market_snapshot as any).fba_fees;
-      let fbaFees: {
-        total_fba_fees: number | null;
-        source: "sp_api" | "estimated" | "unknown";
-      } | null = null;
-
-      if (fbaFeesData && typeof fbaFeesData === 'object' && !Array.isArray(fbaFeesData) && fbaFeesData !== null) {
-        let totalFees: number | null = null;
-        let source: "sp_api" | "estimated" | "unknown" = "unknown";
-        
-        if ('total_fba_fees' in fbaFeesData && fbaFeesData.total_fba_fees !== null) {
-          totalFees = parseFloat(fbaFeesData.total_fba_fees);
-          source = fbaFeesData.source === "amazon" || fbaFeesData.source === "sp_api" ? "sp_api" : "estimated";
-        } else if ('total_fee' in fbaFeesData && fbaFeesData.total_fee !== null) {
-          totalFees = parseFloat(fbaFeesData.total_fee);
-          source = fbaFeesData.source === "amazon" || fbaFeesData.source === "sp_api" ? "sp_api" : "estimated";
-        }
-        
-        if (totalFees !== null) {
-          fbaFees = { total_fba_fees: totalFees, source };
-        }
-      }
-
-      // Build margin snapshot using new builder
-      const marginSnapshot = buildMarginSnapshot({
-        analysisMode: marginMode,
-        sellerProfile: {
-          sourcing_model: sellerProfile.sourcing_model as any,
-        },
-        asinSnapshot: asinData ? {
-          price: asinData.price,
-        } : null,
-        marketSnapshot: marketSnapshot ? {
-          avg_price: marketSnapshot.avg_price,
-          category: marketSnapshot.category,
-        } : null,
-        fbaFees,
-        userOverrides: null, // No user overrides at analysis time
-      });
-
-      // Store at analysis_runs.response.margin_snapshot (not nested in market_snapshot)
-      decisionJson.margin_snapshot = marginSnapshot;
-    } catch (error) {
-      // Never throw - ensure margin_snapshot is always present
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      console.error("Margin snapshot calculation error:", errorMessage);
-
-      // Create safe default margin snapshot (never block)
-      const defaultMarginMode: 'ASIN' | 'KEYWORD' = body.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
-      const marginSnapshot = buildMarginSnapshot({
-        analysisMode: defaultMarginMode,
-        sellerProfile: {
-          sourcing_model: sellerProfile.sourcing_model as any,
-        },
-        asinSnapshot: null,
-        marketSnapshot: null,
-        fbaFees: null,
-        userOverrides: null,
-      });
-      
-      decisionJson.margin_snapshot = marginSnapshot;
-    }
-
-    // PART G: Margin snapshot confidence is handled by buildMarginSnapshot (confidence_tier field)
-    // Analysis confidence is separate from margin snapshot confidence
-
     // Apply final downgraded confidence
     decisionJson.decision.confidence = Math.round(confidence);
     
@@ -1403,21 +1191,36 @@ ${body.input_value}`;
       decisionJson.confidence_downgrades = confidenceDowngrades;
     }
 
-    // 12a. Ensure numbers_used is populated from market snapshot if available
-    if (body.input_type === "idea" && marketSnapshot) {
+    // 12a. Ensure numbers_used is populated from contract response if available
+    if (body.input_type === "idea" && contractResponse) {
       if (!decisionJson.numbers_used) {
         decisionJson.numbers_used = {};
       }
-      // Map snapshot structure to numbers_used format (Page 1 only)
-      decisionJson.numbers_used.avg_price = marketSnapshot.avg_price;
-      decisionJson.numbers_used.price_range = null; // Not available in Page 1 structure
-      decisionJson.numbers_used.median_reviews = null; // Not available in Page 1 structure
-      decisionJson.numbers_used.review_density_pct = null; // Not available in Page 1 structure
-      decisionJson.numbers_used.brand_concentration_pct = marketSnapshot.dominance_score;
-      decisionJson.numbers_used.competitor_count = marketSnapshot.total_page1_listings;
-      decisionJson.numbers_used.avg_rating = marketSnapshot.avg_rating;
-    } else if (body.input_type === "idea") {
-      // Ensure numbers_used is all null if no market data
+      // Map contract response to numbers_used format
+      decisionJson.numbers_used.avg_price = contractResponse.summary.avg_price;
+      decisionJson.numbers_used.price_range = [
+        contractResponse.market_structure.price_band.min,
+        contractResponse.market_structure.price_band.max,
+      ];
+      decisionJson.numbers_used.median_reviews = contractResponse.market_structure.review_barrier.median_reviews;
+      decisionJson.numbers_used.review_density_pct = null; // Not in contract
+      decisionJson.numbers_used.brand_concentration_pct = contractResponse.market_structure.brand_dominance_pct;
+      decisionJson.numbers_used.competitor_count = contractResponse.summary.page1_product_count;
+      decisionJson.numbers_used.avg_rating = contractResponse.summary.avg_rating;
+    } else if (body.input_type === "asin" && contractResponse) {
+      if (!decisionJson.numbers_used) {
+        decisionJson.numbers_used = {};
+      }
+      // Map ASIN contract response to numbers_used
+      decisionJson.numbers_used.avg_price = contractResponse.asin_snapshot.price;
+      decisionJson.numbers_used.price_range = null;
+      decisionJson.numbers_used.median_reviews = contractResponse.asin_snapshot.review_count;
+      decisionJson.numbers_used.review_density_pct = null;
+      decisionJson.numbers_used.brand_concentration_pct = null;
+      decisionJson.numbers_used.competitor_count = null;
+      decisionJson.numbers_used.avg_rating = contractResponse.asin_snapshot.rating;
+    } else {
+      // Ensure numbers_used is all null if no contract data
       if (!decisionJson.numbers_used) {
         decisionJson.numbers_used = {
           avg_price: null,
@@ -1430,6 +1233,25 @@ ${body.input_value}`;
         };
       }
     }
+    
+    // 12b. Build final response structure with contract-compliant data
+    // Store AI decision separately from raw data contract
+    // Note: contractResponse was built earlier (before AI call) with margin snapshot
+    const finalResponse = {
+      // AI Decision (verdict, summary, reasoning, risks, actions)
+      decision: decisionJson.decision,
+      executive_summary: decisionJson.executive_summary,
+      reasoning: decisionJson.reasoning,
+      risks: decisionJson.risks,
+      recommended_actions: decisionJson.recommended_actions,
+      assumptions_and_limits: decisionJson.assumptions_and_limits,
+      numbers_used: decisionJson.numbers_used,
+      confidence_downgrades: decisionJson.confidence_downgrades || [],
+      
+      // Data Contract (raw data layer - no scores/verdicts)
+      // Merge contract response if it exists
+      ...(contractResponse ? contractResponse : {}),
+    };
 
     // 13. Save to analysis_runs with verdict, confidence, and seller context snapshot
     // Returns the created row to get the analysis_run_id (required for chat integration)
@@ -1468,12 +1290,12 @@ ${body.input_value}`;
         user_id: user.id,
         input_type: body.input_type,
         input_value: body.input_value,
-        ai_verdict: decisionJson.decision.verdict,
-        ai_confidence: decisionJson.decision.confidence,
+        ai_verdict: finalResponse.decision.verdict,
+        ai_confidence: finalResponse.decision.confidence,
         seller_stage: sellerProfile.stage,
         seller_experience_months: sellerProfile.experience_months,
         seller_monthly_revenue_range: sellerProfile.monthly_revenue_range,
-        response: decisionJson,
+        response: finalResponse, // Store contract-compliant response
       })
       .select("id")
       .single();
@@ -1520,7 +1342,7 @@ ${body.input_value}`;
       {
         success: true,
         analysisRunId: insertedRun.id,
-        decision: decisionJson,
+        decision: finalResponse, // Return contract-compliant response
       },
       { status: 200, headers: res.headers }
     );
