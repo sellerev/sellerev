@@ -25,7 +25,7 @@ export function refineMarginSnapshot(
 ): MarginSnapshot {
   const updated: MarginSnapshot = {
     ...snapshot,
-    assumptions: [...snapshot.assumptions],
+    assumptions: Array.isArray(snapshot.assumptions) ? [...snapshot.assumptions] : [],
   };
 
   // Apply COGS refinement

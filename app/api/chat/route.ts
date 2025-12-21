@@ -232,43 +232,55 @@ ${isAmazonProvided ? "These fees are Amazon-provided (from SP-API)." : "These fe
 
   // Section 6: Margin Snapshot (Part G - first-class feature)
   const marginSnapshot = (analysisResponse.margin_snapshot as MarginSnapshot) || null;
-  if (marginSnapshot) {
-    const cogsRange = marginSnapshot.estimated_cogs_min !== null && marginSnapshot.estimated_cogs_max !== null
-      ? `$${marginSnapshot.estimated_cogs_min.toFixed(2)}–$${marginSnapshot.estimated_cogs_max.toFixed(2)}`
-      : "Not available";
-    
-    const fbaFee = marginSnapshot.estimated_fba_fee !== null
-      ? `$${marginSnapshot.estimated_fba_fee.toFixed(2)}`
-      : "Not available";
-    
-    const marginRange = marginSnapshot.net_margin_min_pct !== null && marginSnapshot.net_margin_max_pct !== null
-      ? `${marginSnapshot.net_margin_min_pct.toFixed(1)}%–${marginSnapshot.net_margin_max_pct.toFixed(1)}%`
-      : "Not available";
-    
-    const breakevenRange = marginSnapshot.breakeven_price_min !== null && marginSnapshot.breakeven_price_max !== null
-      ? `$${marginSnapshot.breakeven_price_min.toFixed(2)}–$${marginSnapshot.breakeven_price_max.toFixed(2)}`
-      : "Not available";
-    
-    const refinementNote = marginSnapshot.confidence_tier === "REFINED"
-      ? `\n\nNOTE: This margin snapshot uses USER-REFINED costs. Confidence tier: REFINED.`
-      : marginSnapshot.confidence_tier === "EXACT"
-      ? `\n\nNOTE: This margin snapshot uses Amazon SP-API fees. Confidence tier: EXACT.`
-      : "";
-    
-    contextParts.push(`=== MARGIN SNAPSHOT ===
-Mode: ${marginSnapshot.mode}
-Confidence tier: ${marginSnapshot.confidence_tier}
-Confidence reason: ${marginSnapshot.confidence_reason}
-Selling price: $${marginSnapshot.assumed_price.toFixed(2)} (source: ${marginSnapshot.price_source})
-COGS range: ${cogsRange} (source: ${marginSnapshot.cogs_source})
-FBA fees: ${fbaFee} (source: ${marginSnapshot.fba_fee_source})
+  if (marginSnapshot && typeof marginSnapshot === 'object') {
+    try {
+      const cogsRange = marginSnapshot.estimated_cogs_min !== null && marginSnapshot.estimated_cogs_min !== undefined &&
+                        marginSnapshot.estimated_cogs_max !== null && marginSnapshot.estimated_cogs_max !== undefined
+        ? `$${marginSnapshot.estimated_cogs_min.toFixed(2)}–$${marginSnapshot.estimated_cogs_max.toFixed(2)}`
+        : "Not available";
+      
+      const fbaFee = marginSnapshot.estimated_fba_fee !== null && marginSnapshot.estimated_fba_fee !== undefined
+        ? `$${marginSnapshot.estimated_fba_fee.toFixed(2)}`
+        : "Not available";
+      
+      const marginRange = marginSnapshot.net_margin_min_pct !== null && marginSnapshot.net_margin_min_pct !== undefined &&
+                          marginSnapshot.net_margin_max_pct !== null && marginSnapshot.net_margin_max_pct !== undefined
+        ? `${marginSnapshot.net_margin_min_pct.toFixed(1)}%–${marginSnapshot.net_margin_max_pct.toFixed(1)}%`
+        : "Not available";
+      
+      const breakevenRange = marginSnapshot.breakeven_price_min !== null && marginSnapshot.breakeven_price_min !== undefined &&
+                            marginSnapshot.breakeven_price_max !== null && marginSnapshot.breakeven_price_max !== undefined
+        ? `$${marginSnapshot.breakeven_price_min.toFixed(2)}–$${marginSnapshot.breakeven_price_max.toFixed(2)}`
+        : "Not available";
+      
+      const refinementNote = marginSnapshot.confidence_tier === "REFINED"
+        ? `\n\nNOTE: This margin snapshot uses USER-REFINED costs. Confidence tier: REFINED.`
+        : marginSnapshot.confidence_tier === "EXACT"
+        ? `\n\nNOTE: This margin snapshot uses Amazon SP-API fees. Confidence tier: EXACT.`
+        : "";
+      
+      const assumptionsList = Array.isArray(marginSnapshot.assumptions) && marginSnapshot.assumptions.length > 0
+        ? marginSnapshot.assumptions.map(a => `- ${a}`).join("\n")
+        : "No assumptions documented";
+      
+      contextParts.push(`=== MARGIN SNAPSHOT ===
+Mode: ${marginSnapshot.mode || "UNKNOWN"}
+Confidence tier: ${marginSnapshot.confidence_tier || "ESTIMATED"}
+Confidence reason: ${marginSnapshot.confidence_reason || "Established from assumptions"}
+Selling price: $${(marginSnapshot.assumed_price || 0).toFixed(2)} (source: ${marginSnapshot.price_source || "unknown"})
+COGS range: ${cogsRange} (source: ${marginSnapshot.cogs_source || "assumption_engine"})
+FBA fees: ${fbaFee} (source: ${marginSnapshot.fba_fee_source || "unknown"})
 Net margin range: ${marginRange}
 Breakeven price range: ${breakevenRange}${refinementNote}
 
 Assumptions:
-${marginSnapshot.assumptions.map(a => `- ${a}`).join("\n")}
+${assumptionsList}
 
 This margin snapshot is the single source of truth. Always reference it when answering margin questions. Do NOT recalculate margins.`);
+    } catch (error) {
+      console.error("Error building margin snapshot context:", error);
+      // Don't fail - just skip margin snapshot section
+    }
   }
 
   return contextParts.join("\n\n");
@@ -299,6 +311,7 @@ function canAnswerQuestion(
   missingItems: string[];
   options: string[];
 } {
+  // Note: margin_snapshot is available at analysisResponse.margin_snapshot (Part G)
   const normalized = message.toLowerCase().trim();
   const missingItems: string[] = [];
   const options: string[] = [];
@@ -329,15 +342,8 @@ function canAnswerQuestion(
   // The system prompt handles proposing COGS_ASSUMPTION and offering actions
   // We only refuse if we have absolutely no data to work with
   if (marginPatterns.some(p => p.test(normalized))) {
-    const marginSnapshot = (marketSnapshot?.margin_snapshot as Record<string, unknown>) || null;
-    
-    // Only block if we have NO margin snapshot at all
-    if (!marginSnapshot) {
-      // Even then, we can propose assumptions based on price band
-      // Don't block - let the system prompt handle it with COGS_ASSUMPTION
-    }
-    // If margin snapshot exists, we can always work with assumptions
-    // System prompt will propose COGS_ASSUMPTION and offer actions
+    // Note: margin_snapshot is now at analysisResponse.margin_snapshot (Part G), not nested in marketSnapshot
+    // Margin snapshot check removed - handled in buildContextMessage
   }
 
   // Check for fee questions
@@ -582,17 +588,8 @@ function extractAllowedNumbers(
     if (typeof marketSnapshot.dominance_score === 'number') allowed.add(marketSnapshot.dominance_score);
     
     // Extract from margin snapshot
-    const marginSnapshot = marketSnapshot.margin_snapshot as Record<string, unknown> | null;
-    if (marginSnapshot) {
-      if (typeof marginSnapshot.selling_price === 'number') allowed.add(marginSnapshot.selling_price);
-      if (typeof marginSnapshot.cogs_assumed_low === 'number') allowed.add(marginSnapshot.cogs_assumed_low);
-      if (typeof marginSnapshot.cogs_assumed_high === 'number') allowed.add(marginSnapshot.cogs_assumed_high);
-      if (typeof marginSnapshot.fba_fees === 'number') allowed.add(marginSnapshot.fba_fees);
-      if (typeof marginSnapshot.net_margin_low_pct === 'number') allowed.add(marginSnapshot.net_margin_low_pct);
-      if (typeof marginSnapshot.net_margin_high_pct === 'number') allowed.add(marginSnapshot.net_margin_high_pct);
-      if (typeof marginSnapshot.breakeven_price_low === 'number') allowed.add(marginSnapshot.breakeven_price_low);
-      if (typeof marginSnapshot.breakeven_price_high === 'number') allowed.add(marginSnapshot.breakeven_price_high);
-    }
+    // Note: margin_snapshot is now at analysisResponse.margin_snapshot (Part G), not nested in marketSnapshot
+    // Legacy code removed - margin_snapshot extraction handled separately
     
     // Extract from FBA fees
     const fbaFees = marketSnapshot.fba_fees as Record<string, unknown> | null;
@@ -1008,16 +1005,21 @@ export async function POST(req: NextRequest) {
     let shouldSaveSnapshot = false;
     
     // Apply refinements if detected
-    if (costRefinement) {
+    if (costRefinement && marginSnapshot) {
       if (costRefinement.validationError) {
         refinementError = costRefinement.validationError;
-      } else if (marginSnapshot) {
-        // Apply refinements to margin snapshot
-        marginSnapshot = refineMarginSnapshot(marginSnapshot, {
-          cogs: costRefinement.cogs,
-          fbaFee: costRefinement.fbaFee,
-        });
-        shouldSaveSnapshot = true;
+      } else {
+        try {
+          // Apply refinements to margin snapshot
+          marginSnapshot = refineMarginSnapshot(marginSnapshot, {
+            cogs: costRefinement.cogs,
+            fbaFee: costRefinement.fbaFee,
+          });
+          shouldSaveSnapshot = true;
+        } catch (error) {
+          console.error("Error refining margin snapshot:", error);
+          refinementError = "Failed to apply cost refinements. Please try again.";
+        }
       }
     }
     
@@ -1076,7 +1078,10 @@ export async function POST(req: NextRequest) {
       marketSnapshotSummary = "";
     }
 
-    // Build system prompt with analysis mode (already determined above)
+    // Determine analysis mode from input_type
+    const analysisMode: 'ASIN' | 'KEYWORD' = analysisRun.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
+    
+    // Build system prompt with analysis mode
     const systemPrompt = buildChatSystemPrompt(analysisMode);
 
     // 10. Build message array for OpenAI
@@ -1117,6 +1122,7 @@ export async function POST(req: NextRequest) {
     // ────────────────────────────────────────────────────────────────────────
     // Check if required data is missing for the user's question intent
     // ────────────────────────────────────────────────────────────────────────
+    // Note: margin_snapshot is passed via analysisResponse (Part G structure)
     const canAnswerResult = canAnswerQuestion(
       body.message,
       analysisResponse,
