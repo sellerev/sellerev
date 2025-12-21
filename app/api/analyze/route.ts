@@ -1234,23 +1234,98 @@ ${body.input_value}`;
       }
     }
     
-    // 12b. Build final response structure with contract-compliant data
+    // 12b. LOCK KEYWORD ANALYZE DATA CONTRACT (runtime validation)
+    // Build keywordMarket object with required structure for UI
+    let keywordMarket: any = null;
+    
+    if (body.input_type === "idea" && keywordMarketData) {
+      const listings = keywordMarketData.listings || [];
+      const snapshot = keywordMarketData.snapshot;
+      
+      // Validate listings exist - log structured error if empty
+      if (!listings || listings.length === 0) {
+        const search_term = body.input_value;
+        const domain = "amazon.com";
+        const raw_counts = {
+          total_results: listings.length,
+          snapshot_listings: snapshot?.total_page1_listings || 0,
+        };
+        const first_result_keys = listings.length > 0 && listings[0]
+          ? Object.keys(listings[0])
+          : [];
+        
+        console.error("KEYWORD_SNAPSHOT_EMPTY", {
+          search_term,
+          domain,
+          raw_counts,
+          first_result_keys,
+        });
+      }
+      
+      // Build keywordMarket with required structure
+      // Always include market_snapshot even if listings is empty (UI needs to show empty state)
+      keywordMarket = {
+        market_snapshot: {
+          marketplace: "US", // TODO: Extract from request if available
+          search_term: body.input_value,
+          page: 1,
+          total_results_estimate: null, // Not available in current structure
+          total_page1_listings: snapshot.total_page1_listings || 0,
+          sponsored_count: snapshot.sponsored_count || 0,
+          avg_price: snapshot.avg_price,
+          avg_rating: snapshot.avg_rating,
+          avg_reviews: snapshot.avg_reviews,
+          dominance_score: snapshot.dominance_score || null,
+          listings: listings.map((listing) => ({
+            asin: listing.asin || "",
+            title: listing.title || "",
+            brand: listing.brand || null,
+            price: listing.price || null,
+            rating: listing.rating || null,
+            reviews: listing.reviews || null,
+            bsr: null, // BSR not available in listings structure
+            image: listing.image_url || null,
+            is_sponsored: listing.is_sponsored || false,
+            revenue_est: listing.est_monthly_revenue || null,
+            units_est: listing.est_monthly_units || null,
+            revenue_share: null, // Will be calculated in frontend if needed
+          })),
+        },
+      };
+    }
+    
+    // 12c. Build final response structure with contract-compliant data
     // Store AI decision separately from raw data contract
     // Note: contractResponse was built earlier (before AI call) with margin snapshot
-    const finalResponse = {
+    const finalResponse: any = {
       // AI Decision (verdict, summary, reasoning, risks, actions)
-      decision: decisionJson.decision,
-      executive_summary: decisionJson.executive_summary,
-      reasoning: decisionJson.reasoning,
-      risks: decisionJson.risks,
-      recommended_actions: decisionJson.recommended_actions,
-      assumptions_and_limits: decisionJson.assumptions_and_limits,
-      numbers_used: decisionJson.numbers_used,
-      confidence_downgrades: decisionJson.confidence_downgrades || [],
+      decision: {
+        ...decisionJson.decision,
+        executive_summary: decisionJson.executive_summary,
+        reasoning: decisionJson.reasoning,
+        risks: decisionJson.risks,
+        recommended_actions: decisionJson.recommended_actions,
+        assumptions_and_limits: decisionJson.assumptions_and_limits,
+        numbers_used: decisionJson.numbers_used,
+        confidence_downgrades: decisionJson.confidence_downgrades || [],
+        
+        // Include market_snapshot in decision for frontend access
+        // Use keywordMarket if available (new structure), otherwise use legacy
+        market_snapshot: keywordMarket?.market_snapshot || (contractResponse?.market_snapshot ? {
+          ...contractResponse.market_snapshot,
+          listings: contractResponse.products || [], // Map products to listings for UI
+        } : null),
+        
+        // Include margin_snapshot in decision
+        margin_snapshot: decisionJson.margin_snapshot || contractResponse?.margin_snapshot || null,
+      },
       
       // Data Contract (raw data layer - no scores/verdicts)
       // Merge contract response if it exists
       ...(contractResponse ? contractResponse : {}),
+      
+      // Keyword Market (for UI - data-first display)
+      ...(keywordMarket ? keywordMarket : {}),
     };
 
     // 13. Save to analysis_runs with verdict, confidence, and seller context snapshot

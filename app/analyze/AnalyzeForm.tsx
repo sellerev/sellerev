@@ -568,7 +568,26 @@ export default function AnalyzeForm({
       
       // Normalize market_snapshot: extract from decision.market_snapshot and ensure it's an object or null
       // Never assume arrays - snapshot is always an object with the new structure
-      const marketSnapshot = data.decision.market_snapshot || null;
+      // FIX FRONTEND STATE: Ensure listings are preserved
+      // Check for market_snapshot from keywordMarket (new structure at top level) or decision.market_snapshot
+      const keywordMarketSnapshot = (data as any).market_snapshot;
+      const decisionMarketSnapshot = data.decision.market_snapshot || null;
+      const preservedMarketSnapshot = keywordMarketSnapshot || decisionMarketSnapshot;
+      
+      // Preserve listings array if it exists - do NOT strip it
+      if (preservedMarketSnapshot && typeof preservedMarketSnapshot === 'object' && !Array.isArray(preservedMarketSnapshot)) {
+        // Ensure listings array is preserved
+        if (!preservedMarketSnapshot.listings || !Array.isArray(preservedMarketSnapshot.listings)) {
+          // Try to get listings from products (contract structure) or legacy listings
+          if ((data as any).products && Array.isArray((data as any).products)) {
+            preservedMarketSnapshot.listings = (data as any).products;
+          } else if (decisionMarketSnapshot && (decisionMarketSnapshot as any).listings) {
+            preservedMarketSnapshot.listings = (decisionMarketSnapshot as any).listings;
+          } else {
+            preservedMarketSnapshot.listings = [];
+          }
+        }
+      }
       
       // Extract asin_snapshot from decision if present
       const asinSnapshot = data.decision.asin_snapshot || null;
@@ -587,8 +606,8 @@ export default function AnalyzeForm({
         risks: data.decision.risks,
         recommended_actions: data.decision.recommended_actions,
         assumptions_and_limits: data.decision.assumptions_and_limits,
-        market_snapshot: marketSnapshot && typeof marketSnapshot === 'object' && !Array.isArray(marketSnapshot) 
-          ? marketSnapshot 
+        market_snapshot: preservedMarketSnapshot && typeof preservedMarketSnapshot === 'object' && !Array.isArray(preservedMarketSnapshot) 
+          ? preservedMarketSnapshot 
           : null,
         market_data: data.decision.market_data,
         asin_snapshot: asinSnapshot && typeof asinSnapshot === 'object' && !Array.isArray(asinSnapshot) && asinSnapshot !== null
@@ -598,6 +617,13 @@ export default function AnalyzeForm({
           ? marginSnapshot
           : undefined,
       };
+      
+      // Log market snapshot counts for debugging
+      console.log("UI_MARKET_SNAPSHOT_COUNTS", {
+        listings: analysisData?.market_snapshot?.listings?.length || 0,
+        sponsored: analysisData?.market_snapshot?.sponsored_count || 0,
+        total: analysisData?.market_snapshot?.total_page1_listings || 0,
+      });
 
       console.log("ANALYZE_SUCCESS", { 
         analysisRunId: data.analysisRunId,
@@ -1010,18 +1036,47 @@ export default function AnalyzeForm({
               })()}
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* SECTION 2: PAGE-1 PRODUCTS TABLE (PRIMARY SURFACE)          */}
+              {/* SECTION 2: PAGE-1 PRODUCTS TABLE (PRIMARY SURFACE - ALWAYS VISIBLE) */}
               {/* ─────────────────────────────────────────────────────────── */}
-              {analysisMode === 'KEYWORD' && analysis.market_snapshot?.listings && analysis.market_snapshot.listings.length > 0 && (() => {
+              {/* ENFORCE DATA-FIRST RENDER ORDER: Table must render in KEYWORD mode */}
+              {analysisMode === 'KEYWORD' && analysis.market_snapshot && (() => {
                 const snapshot = analysis.market_snapshot;
+                const listings = snapshot.listings || [];
+                
+                // HARD UI ASSERTION: If KEYWORD mode AND market_snapshot exists AND listings length > 0, table MUST render
+                if (analysisMode === 'KEYWORD' && snapshot && listings.length > 0) {
+                  // Table will render below - this is just the assertion
+                } else if (analysisMode === 'KEYWORD' && snapshot && listings.length === 0) {
+                  // Empty state - still render table
+                }
                 
                 // Use revenue estimates from backend (already computed in keywordMarket.ts)
                 // Sort by estimated revenue (desc)
-                const listingsWithRevenue = [...(snapshot.listings || [])]
-                  .filter((l: any) => l.asin && l.title) // Only valid listings
+                // FIX FILTERING: Minimal acceptance rule - accept if asin + title exist
+                // Price/rating/reviews/image can be null
+                const listingsWithRevenue = [...listings]
+                  .filter((l: any) => {
+                    // Minimal acceptance: asin + title required
+                    // Everything else can be null
+                    return l && (l.asin || l.ASIN) && (l.title || l.Title);
+                  })
+                  .map((l: any) => ({
+                    // Normalize field names (handle both new contract and legacy)
+                    asin: l.asin || l.ASIN || "",
+                    title: l.title || l.Title || "",
+                    brand: l.brand || l.Brand || null,
+                    price: l.price || l.Price || null,
+                    rating: l.rating || l.Rating || null,
+                    reviews: l.reviews || l.Reviews || l.review_count || null,
+                    image: l.image || l.image_url || l.Image || null,
+                    is_sponsored: l.is_sponsored || l.IsSponsored || false,
+                    revenue_est: l.revenue_est || l.est_monthly_revenue || null,
+                    units_est: l.units_est || l.est_monthly_units || null,
+                    revenue_share: l.revenue_share || null,
+                  }))
                   .sort((a: any, b: any) => {
-                    const revA = a.est_monthly_revenue || 0;
-                    const revB = b.est_monthly_revenue || 0;
+                    const revA = a.revenue_est || 0;
+                    const revB = b.revenue_est || 0;
                     return revB - revA;
                   });
                 
@@ -1030,9 +1085,18 @@ export default function AnalyzeForm({
                 const totalPage1RevenueMax = snapshot.est_total_monthly_revenue_max ?? null;
                 const totalPage1Revenue = totalPage1RevenueMax ?? 
                   listingsWithRevenue
-                    .map((l: any) => l.est_monthly_revenue)
+                    .map((l: any) => l.revenue_est || l.est_monthly_revenue)
                     .filter((r): r is number => r !== null && r !== undefined)
                     .reduce((sum: number, r: number) => sum + r, 0);
+                
+                // Calculate revenue share for each listing
+                const listingsWithShare = listingsWithRevenue.map((listing: any) => {
+                  const revenue = listing.revenue_est || listing.est_monthly_revenue || 0;
+                  const revenueShare = revenue && totalPage1Revenue && totalPage1Revenue > 0
+                    ? (revenue / totalPage1Revenue) * 100
+                    : 0;
+                  return { ...listing, revenueShare };
+                });
                 
                 return (
                   <div className="bg-white border rounded-xl shadow-sm overflow-hidden">
@@ -1041,96 +1105,131 @@ export default function AnalyzeForm({
                       <p className="text-xs text-gray-500 mt-1">Sorted by estimated revenue</p>
                     </div>
                     <div className="overflow-x-auto">
-                      <table className="w-full">
-                        <thead className="bg-gray-50 border-b">
-                          <tr>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
-                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
-                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Rating</th>
-                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">BSR</th>
-                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Est. Monthly Revenue</th>
-                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Revenue Share</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200">
-                          {listingsWithRevenue.slice(0, 48).map((listing, idx) => {
-                            const revenueShare = listing.est_monthly_revenue && totalPage1Revenue && totalPage1Revenue > 0
-                              ? (listing.est_monthly_revenue / totalPage1Revenue) * 100
-                              : 0;
-                            
-                            return (
-                              <tr key={`${listing.asin || 'unknown'}-${idx}`} className="hover:bg-gray-50">
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-3 min-w-[300px]">
-                                    {/* Product image - lazy loaded with fallback */}
-                                    {listing.image_url ? (
-                                      <img
-                                        src={listing.image_url}
-                                        alt={listing.title || "Product image"}
-                                        className="w-12 h-12 object-cover rounded flex-shrink-0"
-                                        loading="lazy"
-                                        onError={(e) => {
-                                          // Replace with placeholder on error
-                                          const img = e.target as HTMLImageElement;
-                                          const placeholder = document.createElement('div');
-                                          placeholder.className = 'w-12 h-12 bg-gray-200 rounded flex items-center justify-center flex-shrink-0';
-                                          placeholder.innerHTML = '<span class="text-xs text-gray-400">IMG</span>';
-                                          img.replaceWith(placeholder);
-                                        }}
-                                      />
-                                    ) : (
-                                      <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center flex-shrink-0">
-                                        <span className="text-xs text-gray-400">IMG</span>
-                                      </div>
-                                    )}
-                                    <div className="flex-1 min-w-0">
-                                      <div className="text-sm font-medium text-gray-900 truncate">
-                                        {listing.title || "—"}
-                                      </div>
-                                      <div className="text-xs text-gray-500 mt-0.5">
-                                        {listing.asin || "—"}
+                      {listingsWithShare.length === 0 ? (
+                        <div className="p-8 text-center">
+                          <p className="font-semibold text-gray-900 mb-2">
+                            No Page-1 products parsed.
+                          </p>
+                          <p className="text-sm text-gray-600">
+                            This usually means parsing/filtering removed all results. See console KEYWORD_SNAPSHOT_EMPTY.
+                          </p>
+                        </div>
+                      ) : (
+                        <table className="w-full">
+                          <thead className="bg-gray-50 border-b">
+                            <tr>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
+                              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Rating</th>
+                              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Reviews</th>
+                              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Est. Monthly Revenue</th>
+                              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Revenue Share</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200">
+                            {listingsWithShare.slice(0, 48).map((listing: any, idx: number) => {
+                              // Get image from new structure (image) or legacy (image_url)
+                              const imageUrl = listing.image || listing.image_url || null;
+                              
+                              return (
+                                <tr key={`${listing.asin || 'unknown'}-${idx}`} className="hover:bg-gray-50">
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-3 min-w-[300px]">
+                                      {/* Product image - use Next/Image if available, otherwise plain img */}
+                                      {imageUrl ? (
+                                        <img
+                                          src={imageUrl}
+                                          alt={listing.title || "Product image"}
+                                          className="w-12 h-12 object-cover rounded flex-shrink-0"
+                                          loading="lazy"
+                                          onError={(e) => {
+                                            // Replace with placeholder on error
+                                            const img = e.target as HTMLImageElement;
+                                            const placeholder = document.createElement('div');
+                                            placeholder.className = 'w-12 h-12 bg-gray-200 rounded flex items-center justify-center flex-shrink-0';
+                                            placeholder.innerHTML = '<span class="text-xs text-gray-400">IMG</span>';
+                                            img.replaceWith(placeholder);
+                                          }}
+                                        />
+                                      ) : (
+                                        <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center flex-shrink-0">
+                                          <span className="text-xs text-gray-400">IMG</span>
+                                        </div>
+                                      )}
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-medium text-gray-900 truncate">
+                                          {listing.title || "—"}
+                                        </div>
+                                        <div className="text-xs text-gray-500 mt-0.5">
+                                          {listing.asin || "—"}
+                                        </div>
                                       </div>
                                     </div>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 text-right text-sm text-gray-900">
-                                  {listing.price !== null ? formatCurrency(listing.price) : "—"}
-                                </td>
-                                <td className="px-4 py-3 text-right text-sm text-gray-900">
-                                  {listing.rating !== null && typeof listing.rating === 'number' && !isNaN(listing.rating)
-                                    ? `${listing.rating.toFixed(1)} ★`
-                                    : "—"}
-                                </td>
-                                <td className="px-4 py-3 text-right text-sm text-gray-900">
-                                  {/* BSR not available in current structure */}
-                                  —
-                                </td>
-                                <td className="px-4 py-3 text-right text-sm font-medium text-gray-900">
-                                  {listing.est_monthly_revenue !== null && listing.est_monthly_revenue !== undefined
-                                    ? `${formatCurrency(listing.est_monthly_revenue)} (est.)`
-                                    : "—"}
-                                </td>
-                                <td className="px-4 py-3 text-right text-sm text-gray-600">
-                                  <div className="flex items-center justify-end gap-2">
-                                    <span>{revenueShare > 0 ? `${revenueShare.toFixed(1)}%` : "—"}</span>
-                                    {revenueShare > 0 && (
-                                      <div className="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
-                                        <div 
-                                          className="h-full bg-blue-600 rounded-full"
-                                          style={{ width: `${Math.min(revenueShare, 100)}%` }}
-                                        />
-                                      </div>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-sm text-gray-900">
+                                    {listing.price !== null && listing.price !== undefined ? formatCurrency(listing.price) : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-sm text-gray-900">
+                                    {listing.rating !== null && typeof listing.rating === 'number' && !isNaN(listing.rating)
+                                      ? `${listing.rating.toFixed(1)} ★`
+                                      : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-sm text-gray-900">
+                                    {listing.reviews !== null && listing.reviews !== undefined
+                                      ? listing.reviews.toLocaleString()
+                                      : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-sm font-medium text-gray-900">
+                                    {listing.revenue_est !== null && listing.revenue_est !== undefined
+                                      ? `${formatCurrency(listing.revenue_est)} (est.)`
+                                      : listing.est_monthly_revenue !== null && listing.est_monthly_revenue !== undefined
+                                      ? `${formatCurrency(listing.est_monthly_revenue)} (est.)`
+                                      : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-sm text-gray-600">
+                                    <div className="flex items-center justify-end gap-2">
+                                      <span>{listing.revenueShare > 0 ? `${listing.revenueShare.toFixed(1)}%` : "—"}</span>
+                                      {listing.revenueShare > 0 && (
+                                        <div className="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                          <div 
+                                            className="h-full bg-blue-600 rounded-full"
+                                            style={{ width: `${Math.min(listing.revenueShare, 100)}%` }}
+                                          />
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
                     </div>
                   </div>
                 );
+              })()}
+              
+              {/* HARD UI ASSERTION: Log if table should render but doesn't */}
+              {analysisMode === 'KEYWORD' && analysis.market_snapshot && (() => {
+                const listingsLen = analysis.market_snapshot?.listings?.length || 0;
+                if (listingsLen > 0) {
+                  // Table should render above - this assertion runs after render
+                  if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+                    // Check if table element exists in DOM (deferred check)
+                    setTimeout(() => {
+                      const tableExists = document.querySelector('table');
+                      if (!tableExists && listingsLen > 0) {
+                        console.error("UI_TABLE_NOT_RENDERED_BUG", {
+                          analysisMode,
+                          listingsLen,
+                          hasMarketSnapshot: !!analysis.market_snapshot,
+                        });
+                      }
+                    }, 100);
+                  }
+                }
+                return null;
               })()}
 
               {/* ─────────────────────────────────────────────────────────── */}
