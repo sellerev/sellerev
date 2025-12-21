@@ -1768,10 +1768,44 @@ export default function AnalyzeForm({
                       const cogsMin = snapshot.estimated_cogs_min;
                       const cogsMax = snapshot.estimated_cogs_max;
                       const fbaFee = snapshot.estimated_fba_fee;
-                      const marginMin = snapshot.net_margin_min_pct;
-                      const marginMax = snapshot.net_margin_max_pct;
-                      const breakevenMin = snapshot.breakeven_price_min;
-                      const breakevenMax = snapshot.breakeven_price_max;
+                      
+                      // Handle both old structure (net_margin_min_pct/max_pct) and new contract (estimated_net_margin_pct_range)
+                      let marginMin: number | null | undefined = null;
+                      let marginMax: number | null | undefined = null;
+                      
+                      const snapshotAny = snapshot as any;
+                      
+                      if ('estimated_net_margin_pct_range' in snapshotAny && Array.isArray(snapshotAny.estimated_net_margin_pct_range)) {
+                        // New contract structure (keyword mode)
+                        marginMin = snapshotAny.estimated_net_margin_pct_range[0];
+                        marginMax = snapshotAny.estimated_net_margin_pct_range[1];
+                      } else if ('net_margin_min_pct' in snapshotAny && 'net_margin_max_pct' in snapshotAny) {
+                        // Old structure (backward compatibility)
+                        marginMin = snapshotAny.net_margin_min_pct;
+                        marginMax = snapshotAny.net_margin_max_pct;
+                      } else if ('net_margin_pct' in snapshotAny && typeof snapshotAny.net_margin_pct === 'number') {
+                        // ASIN mode (single value)
+                        marginMin = snapshotAny.net_margin_pct;
+                        marginMax = snapshotAny.net_margin_pct;
+                      }
+                      
+                      // Handle both old structure (breakeven_price_min/max) and new contract (breakeven_price_range)
+                      let breakevenMin: number | null | undefined = null;
+                      let breakevenMax: number | null | undefined = null;
+                      
+                      if ('breakeven_price_range' in snapshotAny && Array.isArray(snapshotAny.breakeven_price_range)) {
+                        // New contract structure (keyword mode)
+                        breakevenMin = snapshotAny.breakeven_price_range[0];
+                        breakevenMax = snapshotAny.breakeven_price_range[1];
+                      } else if ('breakeven_price_min' in snapshotAny && 'breakeven_price_max' in snapshotAny) {
+                        // Old structure (backward compatibility)
+                        breakevenMin = snapshotAny.breakeven_price_min;
+                        breakevenMax = snapshotAny.breakeven_price_max;
+                      } else if ('breakeven_price' in snapshotAny && typeof snapshotAny.breakeven_price === 'number') {
+                        // ASIN mode (single value)
+                        breakevenMin = snapshotAny.breakeven_price;
+                        breakevenMax = snapshotAny.breakeven_price;
+                      }
                       
                       return (
                         <>
@@ -1817,7 +1851,8 @@ export default function AnalyzeForm({
                             <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                               <div className="text-xs text-gray-500 mb-1">Net Margin Range</div>
                               <div className="text-lg font-semibold text-gray-900">
-                                {marginMin !== null && marginMax !== null
+                                {marginMin != null && marginMax != null && 
+                                 typeof marginMin === 'number' && typeof marginMax === 'number'
                                   ? `${marginMin.toFixed(1)}%–${marginMax.toFixed(1)}%`
                                   : "—"}
                               </div>
@@ -1827,7 +1862,8 @@ export default function AnalyzeForm({
                             <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 md:col-span-2">
                               <div className="text-xs text-gray-500 mb-1">Breakeven Price Range</div>
                               <div className="text-lg font-semibold text-gray-900">
-                                {breakevenMin !== null && breakevenMax !== null
+                                {breakevenMin != null && breakevenMax != null &&
+                                 typeof breakevenMin === 'number' && typeof breakevenMax === 'number'
                                   ? `${formatCurrency(breakevenMin)}–${formatCurrency(breakevenMax)}`
                                   : "—"}
                               </div>
