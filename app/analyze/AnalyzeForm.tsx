@@ -983,7 +983,7 @@ export default function AnalyzeForm({
                               : 0;
                             
                             return (
-                              <tr key={listing.asin || idx} className="hover:bg-gray-50">
+                              <tr key={`${listing.asin || 'unknown'}-${idx}`} className="hover:bg-gray-50">
                                 <td className="px-4 py-3">
                                   <div className="flex items-center gap-3 min-w-[300px]">
                                     {/* Placeholder for image - using text icon since image URL not in current structure */}
