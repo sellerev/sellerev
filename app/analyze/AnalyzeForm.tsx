@@ -234,102 +234,6 @@ function formatTimeAgo(dateString: string): string {
 // MARKET SNAPSHOT INTERPRETATIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Get price interpretation (opinionated, deterministic)
- */
-function getPriceInterpretation(avgPrice: number | null): string {
-  if (avgPrice === null || avgPrice === undefined) return "";
-  if (avgPrice < 15) return "Race-to-the-bottom pricing";
-  if (avgPrice < 30) return "Tightly clustered price band";
-  return "Room for premium positioning";
-}
-
-/**
- * Get review moat interpretation
- */
-function getReviewBarrierInterpretation(avgReviews: number | null): string {
-  if (avgReviews === null || avgReviews === undefined) return "";
-  if (avgReviews < 1000) return "<1,000: Penetrable";
-  if (avgReviews < 5000) return "1,000–5,000: Significant barrier";
-  return "5,000+: High barrier";
-}
-
-/**
- * Get quality threshold interpretation
- */
-function getQualityExpectationInterpretation(avgRating: number | null): string {
-  if (avgRating === null || avgRating === undefined) return "";
-  if (avgRating < 4.2) return "<4.2: Quality gap exists";
-  if (avgRating < 4.7) return "4.2–4.6: Standard required";
-  return "4.7+: Excellence required";
-}
-
-/**
- * Get competitive density interpretation
- */
-function getCompetitionInterpretation(totalListings: number): string {
-  if (totalListings < 20) return "<20: Low density";
-  if (totalListings < 35) return "20–35: Moderate density";
-  return "35+: High density";
-}
-
-/**
- * Get ad saturation interpretation
- */
-function getPaidCompetitionInterpretation(sponsoredCount: number, totalListings: number): string {
-  if (totalListings === 0) return "";
-  const sponsoredRatio = sponsoredCount / totalListings;
-  if (sponsoredRatio < 0.2) return "Low ad saturation";
-  if (sponsoredRatio < 0.4) return "Moderate ad saturation";
-  return "High ad saturation";
-}
-
-/**
- * Get CPI description based on score
- */
-function getCPIDescription(score: number): string {
-  if (score <= 30) {
-    return "Structurally penetrable market";
-  } else if (score <= 60) {
-    return "Requires differentiation to compete";
-  } else if (score <= 80) {
-    return "Strong incumbents dominate Page 1";
-  } else {
-    return "Brand-locked market";
-  }
-}
-
-/**
- * Calculate market pressure from avg_reviews, sponsored_count, and dominance_score
- * Returns: "Low" | "Moderate" | "High"
- */
-function calculateMarketPressure(
-  avgReviews: number | null,
-  sponsoredCount: number,
-  dominanceScore: number
-): "Low" | "Moderate" | "High" {
-  let pressureScore = 0;
-
-  // Review barrier contribution (0-2 points)
-  if (avgReviews !== null && avgReviews !== undefined) {
-    if (avgReviews >= 5000) pressureScore += 2;
-    else if (avgReviews >= 1000) pressureScore += 1;
-  }
-
-  // Sponsored competition contribution (0-2 points)
-  // High sponsored count indicates paid competition pressure
-  if (sponsoredCount >= 8) pressureScore += 2;
-  else if (sponsoredCount >= 4) pressureScore += 1;
-
-  // Brand dominance contribution (0-2 points)
-  if (dominanceScore >= 40) pressureScore += 2;
-  else if (dominanceScore >= 20) pressureScore += 1;
-
-  // Map total score (0-6) to pressure level
-  if (pressureScore <= 2) return "Low";
-  if (pressureScore <= 4) return "Moderate";
-  return "High";
-}
 
 /**
  * Estimate monthly revenue for a product based on price and reviews
@@ -671,43 +575,6 @@ export default function AnalyzeForm({
   // UI HELPERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  const getVerdictStyles = (verdict: string) => {
-    switch (verdict) {
-      case "GO":
-        return {
-          badge: "bg-green-100 text-green-800 border-green-300",
-          text: "text-green-700",
-        };
-      case "CAUTION":
-        return {
-          badge: "bg-yellow-100 text-yellow-800 border-yellow-300",
-          text: "text-yellow-700",
-        };
-      case "NO_GO":
-        return {
-          badge: "bg-red-100 text-red-800 border-red-300",
-          text: "text-red-700",
-        };
-      default:
-        return {
-          badge: "bg-gray-100 text-gray-800 border-gray-300",
-          text: "text-gray-700",
-        };
-    }
-  };
-
-  const getRiskLevelStyles = (level: string) => {
-    switch (level) {
-      case "Low":
-        return "bg-green-50 border-green-200 text-green-700";
-      case "Medium":
-        return "bg-yellow-50 border-yellow-200 text-yellow-700";
-      case "High":
-        return "bg-red-50 border-red-200 text-red-700";
-      default:
-        return "bg-gray-50 border-gray-200 text-gray-700";
-    }
-  };
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -907,16 +774,12 @@ export default function AnalyzeForm({
               {/* ═══════════════════════════════════════════════════════════════ */}
               {/* KEYWORD MODE UI STRUCTURE (DATA-FIRST)                         */}
               {/* ────────────────────────────────────────────────────────────── */}
-              {/* PART A — FINAL KEYWORD ANALYZE UI ORDER:                      */}
-              {/* 1. TOP SUMMARY BAR (Market, Search Volume, Revenue, Units,    */}
-              {/*    Avg Price, Avg Rating, Confidence %)                       */}
-              {/* 2. PAGE-1 PRODUCTS TABLE (Image, Title, ASIN, Price, Rating,  */}
-              {/*    Est. Monthly Revenue, Revenue Share bar)                   */}
-              {/* 3. COMPETITIVE PRESSURE INDEX (CPI)                           */}
-              {/* 4. PAGE-1 MARKET SNAPSHOT (Price Band, Review Barrier, Brand  */}
-              {/*    Dominance, Page-1 Density, Paid Pressure, Fulfillment Cost)*/}
-              {/* 5. MARGIN SNAPSHOT (ESTIMATED)                                */}
-              {/* 6. EXECUTIVE SUMMARY + RISKS + ACTIONS                        */}
+              {/* DATA-FIRST UI ORDER (NO OPINIONS):                           */}
+              {/* 1. MARKET SCOPE HEADER (Marketplace, Search Type, Input)     */}
+              {/* 2. TOP METRICS BAR (Revenue, Units, Price, Rating, etc.)     */}
+              {/* 3. PAGE-1 PRODUCTS TABLE (Always visible, immutable)         */}
+              {/* 4. MARKET BREAKDOWN (Descriptive only - no interpretations) */}
+              {/* 5. MARGIN SNAPSHOT (Clearly labeled as estimated)          */}
               {/* ────────────────────────────────────────────────────────────── */}
               {/* PART B — SQP INTEGRATION ROADMAP (DOCUMENTED, NOT BUILT YET): */}
               {/* ────────────────────────────────────────────────────────────── */}
@@ -1326,47 +1189,7 @@ export default function AnalyzeForm({
                 const asinData = analysis.asin_snapshot;
                 const pressure = asinData.pressure_score;
                 
-                // Calculate Review Moat classification
-                const getReviewMoatClassification = (reviews: number | null): string => {
-                  if (reviews === null) return "Unknown";
-                  if (reviews < 100) return "Weak";
-                  if (reviews < 1000) return "Moderate";
-                  if (reviews < 5000) return "Strong";
-                  return "Extreme";
-                };
                 
-                // Calculate Rating Strength classification
-                const getRatingStrength = (rating: number | null): string => {
-                  if (rating === null) return "Unknown";
-                  if (rating >= 4.5) return "Excellent";
-                  if (rating >= 4.0) return "Good";
-                  if (rating >= 3.5) return "Fair";
-                  return "Weak";
-                };
-                
-                // Calculate Price Anchor (absolute price, not vs Page-1)
-                const getPriceAnchor = (price: number | null): string => {
-                  if (price === null) return "Unknown";
-                  if (price < 15) return "Budget";
-                  if (price < 30) return "Mid-range";
-                  if (price < 50) return "Premium";
-                  return "Luxury";
-                };
-                
-                // Calculate Brand Power (from brand_owner)
-                const getBrandPower = (brandOwner: string | null): string => {
-                  if (brandOwner === "Amazon") return "Amazon Retail";
-                  if (brandOwner === "Brand") return "Brand-Owned";
-                  return "Third-Party";
-                };
-                
-                // Calculate Displacement Difficulty (from pressure score)
-                const getDisplacementDifficulty = (pressure: typeof asinData.pressure_score): string => {
-                  if (!pressure) return "Unknown";
-                  if (pressure.score <= 3) return "Low";
-                  if (pressure.score <= 6) return "Moderate";
-                  return "High";
-                };
                 
                 return (
                   <div className="bg-white border rounded-xl p-6 shadow-sm">
@@ -1375,21 +1198,21 @@ export default function AnalyzeForm({
                         ASIN Snapshot
                       </h2>
                       <p className="text-xs text-gray-500">
-                        Single-product competitive analysis for displacement targeting
+                        Product data for this ASIN
                       </p>
                     </div>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Review Moat */}
+                      {/* Review Count */}
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Review Moat</div>
+                        <div className="text-xs text-gray-500 mb-1">Review Count</div>
                         <div className="text-lg font-semibold text-gray-900 mb-1">
                           {asinData.reviews !== null && typeof asinData.reviews === 'number'
                             ? asinData.reviews.toLocaleString()
                             : "—"}
                         </div>
                         <div className="text-xs text-gray-600">
-                          {getReviewMoatClassification(asinData.reviews)} moat
+                          Total reviews for this ASIN
                         </div>
                       </div>
                       
@@ -1402,46 +1225,33 @@ export default function AnalyzeForm({
                             : "—"}
                         </div>
                         <div className="text-xs text-gray-600">
-                          {getRatingStrength(asinData.rating)} rating
+                          Average rating for this ASIN
                         </div>
                       </div>
                       
-                      {/* Price Anchor */}
+                      {/* Price */}
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Price Anchor</div>
+                        <div className="text-xs text-gray-500 mb-1">Price</div>
                         <div className="text-lg font-semibold text-gray-900 mb-1">
                           {asinData.price !== null && typeof asinData.price === 'number'
                             ? formatCurrency(asinData.price)
                             : "—"}
                         </div>
                         <div className="text-xs text-gray-600">
-                          {getPriceAnchor(asinData.price)} positioning
+                          Current selling price
                         </div>
                       </div>
                       
-                      {/* Brand Power */}
+                      {/* Brand Owner */}
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Brand Power</div>
+                        <div className="text-xs text-gray-500 mb-1">Brand Owner</div>
                         <div className="text-lg font-semibold text-gray-900 mb-1">
                           {asinData.brand_owner || "—"}
                         </div>
                         <div className="text-xs text-gray-600">
-                          {getBrandPower(asinData.brand_owner)}
+                          Seller type for this ASIN
                         </div>
                       </div>
-                      
-                      {/* Displacement Difficulty */}
-                      {pressure && (
-                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 md:col-span-2">
-                          <div className="text-xs text-gray-500 mb-1">Displacement Difficulty</div>
-                          <div className="text-lg font-semibold text-gray-900 mb-1">
-                            {getDisplacementDifficulty(pressure)} — Score {pressure.score}/10
-                          </div>
-                          <div className="text-xs text-gray-600 mt-1">
-                            {pressure.explanation}
-                          </div>
-                        </div>
-                      )}
                       
                       {/* Additional Core Metrics */}
                       {asinData.bsr !== null && (
@@ -1488,111 +1298,43 @@ export default function AnalyzeForm({
               {/* ═══════════════════════════════════════════════════════════════ */}
               
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* DECISION HEADER (VERDICT + CONFIDENCE)                       */}
-              {/* - Verdict badge (GO / CAUTION / NO_GO)                      */}
-              {/* - Confidence percentage                                     */}
-              {/* - One-line interpretation                                   */}
+              {/* MARKET SCOPE HEADER (Data Only - No Opinions)              */}
               {/* ─────────────────────────────────────────────────────────── */}
-              <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <div className="flex items-center gap-4 mb-3">
-                  <span
-                    className={`px-5 py-2 rounded-lg border-2 font-bold text-lg ${
-                      getVerdictStyles(analysis.decision.verdict).badge
-                    }`}
-                  >
-                    {analysis.decision.verdict === "NO_GO"
-                      ? "NO GO"
-                      : analysis.decision.verdict}
-                  </span>
+              <div className="bg-white border rounded-xl p-4 shadow-sm">
+                <div className="flex items-center justify-between">
                   <div>
-                    <span className="text-2xl font-bold">
-                      {analysis.decision.confidence}%
-                    </span>
-                    <span className="text-gray-500 ml-2">confidence</span>
-                    {analysis.confidence_downgrades && analysis.confidence_downgrades.length > 0 && (
-                      <div className="mt-1">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                          Reduced confidence
-                        </span>
-                      </div>
-                    )}
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      {analysisMode === "KEYWORD" ? "Keyword Analysis" : "ASIN Analysis"}
+                    </h2>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Marketplace: Amazon.com – United States
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-gray-500">Search Type</div>
+                    <div className="text-sm font-medium text-gray-900 mt-0.5">
+                      {analysisMode === "KEYWORD" ? "Keyword" : "ASIN"}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">Input</div>
+                    <div className="text-sm font-medium text-gray-900 mt-0.5">
+                      {analysis.input_value}
+                    </div>
                   </div>
                 </div>
-                {/* Confidence downgrade explanations */}
-                {analysis.confidence_downgrades && analysis.confidence_downgrades.length > 0 && (
-                  <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                    <div className="font-medium mb-1">Confidence reduced due to:</div>
-                    <ul className="list-disc list-inside space-y-0.5">
-                      {analysis.confidence_downgrades.map((reason, idx) => (
-                        <li key={idx}>{reason}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {/* One-line interpretation */}
-                <p className={`text-sm font-medium ${getVerdictStyles(analysis.decision.verdict).text}`}>
-                  {analysisMode === "ASIN" ? (
-                    // ASIN-specific verdict copy (competitive targeting)
-                    <>
-                      {analysis.decision.verdict === "GO" &&
-                        "This ASIN is beatable with a differentiated offer."}
-                      {analysis.decision.verdict === "CAUTION" &&
-                        "This ASIN is strong but has identifiable weaknesses."}
-                      {analysis.decision.verdict === "NO_GO" &&
-                        "This ASIN is not a realistic competitive target for your seller profile."}
-                    </>
-                  ) : (
-                    // KEYWORD-specific verdict copy (market decision)
-                    <>
-                      {analysis.decision.verdict === "GO" &&
-                        "This product shows potential for your seller profile."}
-                      {analysis.decision.verdict === "CAUTION" &&
-                        "Proceed carefully — review risks before committing."}
-                      {analysis.decision.verdict === "NO_GO" &&
-                        "Not recommended for your current seller stage."}
-                    </>
-                  )}
-                </p>
               </div>
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* SECTION 3: COMPETITIVE PRESSURE INDEX (CPI) - KEYWORD ONLY  */}
-              {/* - Decisive label showing competitive pressure               */}
-              {/* ─────────────────────────────────────────────────────────── */}
-              {analysisMode === "KEYWORD" && analysis.market_snapshot?.cpi && (
-                <div className="bg-white border rounded-xl p-6 shadow-sm">
-                  <div className="mb-4">
-                    <h2 className="text-lg font-semibold text-gray-900 mb-1">
-                      Competitive Pressure Index (CPI)
-                    </h2>
-                    <p className="text-xs text-gray-500">
-                      Market competitiveness assessment
-                    </p>
-                  </div>
-                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <div className="text-lg font-semibold text-gray-900">
-                      {analysis.market_snapshot.cpi.label}
-                    </div>
-                    <div className="text-xs text-gray-600 mt-1">
-                      CPI {analysis.market_snapshot.cpi.score} — {getCPIDescription(analysis.market_snapshot.cpi.score)}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ─────────────────────────────────────────────────────────── */}
-              {/* SECTION 4: PAGE-1 MARKET SNAPSHOT (KEYWORD ONLY)            */}
-              {/* - Price Band, Review Barrier, Brand Dominance,              */}
-              {/*   Page-1 Density, Paid Pressure, Fulfillment Cost           */}
+              {/* SECTION 4: MARKET BREAKDOWN (Descriptive Only - No Opinions) */}
+              {/* - Brand dominance %, Page-1 density, Fulfillment mix, Price band */}
               {/* ─────────────────────────────────────────────────────────── */}
               {analysisMode === "KEYWORD" && analysis.market_snapshot && (
               <div className="bg-white border rounded-xl p-6 shadow-sm">
                 <div className="mb-4">
                   <h2 className="text-lg font-semibold text-gray-900 mb-1">
-                    Page 1 Market Snapshot
+                    Market Breakdown
                   </h2>
                   <p className="text-xs text-gray-500">
-                    Aggregated signals from current Page 1 results
+                    Descriptive metrics from Page 1 results
                   </p>
                 </div>
 
@@ -1614,16 +1356,13 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         {analysis.market_snapshot.avg_price !== null && analysis.market_snapshot.avg_price !== undefined
-                          ? "Page 1 price anchor"
+                          ? "Average price on Page 1"
                           : "Insufficient Page 1 data"}
                       </div>
-                      <div className="text-[10px] text-gray-500 font-medium">
-                        {getPriceInterpretation(analysis.market_snapshot.avg_price)}
-                      </div>
                     </div>
-                    {/* Card 2: Review Barrier */}
+                    {/* Card 2: Average Reviews */}
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">Review Barrier</div>
+                      <div className="text-xs text-gray-500 mb-1">Average Reviews</div>
                       <div className="text-lg font-semibold text-gray-900 mb-0.5">
                         {analysis.market_snapshot.avg_reviews !== null && 
                          analysis.market_snapshot.avg_reviews !== undefined &&
@@ -1634,19 +1373,16 @@ export default function AnalyzeForm({
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
                         {analysis.market_snapshot.avg_reviews !== null && analysis.market_snapshot.avg_reviews !== undefined
-                          ? "Review count you must match"
+                          ? "Average review count on Page 1"
                           : "Insufficient Page 1 data"}
                       </div>
-                      <div className="text-[10px] text-gray-500 font-medium">
-                        {getReviewBarrierInterpretation(analysis.market_snapshot.avg_reviews)}
-                      </div>
                     </div>
-                    {/* Card 3: Quality Threshold */}
-                    {analysis.market_snapshot.avg_rating !== null && 
-                     analysis.market_snapshot.avg_rating !== undefined && 
+                    {/* Card 3: Average Rating */}
+                    {analysis.market_snapshot.avg_rating !== null &&
+                     analysis.market_snapshot.avg_rating !== undefined &&
                      !isNaN(analysis.market_snapshot.avg_rating) && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Quality Threshold</div>
+                        <div className="text-xs text-gray-500 mb-1">Average Rating</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
                           {analysis.market_snapshot.avg_rating !== null &&
                            analysis.market_snapshot.avg_rating !== undefined &&
@@ -1657,9 +1393,6 @@ export default function AnalyzeForm({
                         </div>
                         <div className="text-xs text-gray-600 mb-1">
                           Minimum rating to compete
-                        </div>
-                        <div className="text-[10px] text-gray-500 font-medium">
-                          {getQualityExpectationInterpretation(analysis.market_snapshot.avg_rating)}
                         </div>
                       </div>
                     )}
@@ -1678,20 +1411,8 @@ export default function AnalyzeForm({
                         {analysis.market_snapshot.dominance_score !== undefined && 
                          analysis.market_snapshot.dominance_score !== null &&
                          typeof analysis.market_snapshot.dominance_score === 'number'
-                          ? "Leading brand's Page 1 share"
+                          ? `Top brand holds ${Math.round(analysis.market_snapshot.dominance_score)}% of Page-1 listings`
                           : "Insufficient Page 1 data"}
-                      </div>
-                      <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.dominance_score !== undefined && 
-                         analysis.market_snapshot.dominance_score !== null &&
-                         typeof analysis.market_snapshot.dominance_score === 'number' &&
-                         !isNaN(analysis.market_snapshot.dominance_score)
-                          ? (analysis.market_snapshot.dominance_score >= 40
-                              ? "Brand-dominated"
-                              : analysis.market_snapshot.dominance_score >= 20
-                              ? "Moderately concentrated"
-                              : "Fragmented")
-                          : ""}
                       </div>
                     </div>
                     {/* Card 6: Page-1 Density */}
@@ -1710,23 +1431,15 @@ export default function AnalyzeForm({
                          analysis.market_snapshot.total_page1_listings !== null &&
                          typeof analysis.market_snapshot.total_page1_listings === 'number' &&
                          analysis.market_snapshot.total_page1_listings > 0
-                          ? "Competitors on Page 1"
+                          ? "Total listings on Page 1"
                           : "Insufficient Page 1 data"}
                       </div>
-                      <div className="text-[10px] text-gray-500 font-medium">
-                        {analysis.market_snapshot.total_page1_listings !== undefined &&
-                         analysis.market_snapshot.total_page1_listings !== null &&
-                         typeof analysis.market_snapshot.total_page1_listings === 'number' &&
-                         analysis.market_snapshot.total_page1_listings > 0
-                          ? getCompetitionInterpretation(analysis.market_snapshot.total_page1_listings)
-                          : ""}
-                      </div>
                     </div>
-                    {/* Card 7: Paid Pressure */}
+                    {/* Card 7: Sponsored Listings */}
                     {analysis.market_snapshot.sponsored_count !== undefined && 
                      analysis.market_snapshot.sponsored_count !== null && (
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="text-xs text-gray-500 mb-1">Paid Pressure</div>
+                        <div className="text-xs text-gray-500 mb-1">Sponsored Listings</div>
                         <div className="text-lg font-semibold text-gray-900 mb-0.5">
                           {typeof analysis.market_snapshot.sponsored_count === 'number' &&
                            analysis.market_snapshot.sponsored_count > 0
@@ -1736,18 +1449,8 @@ export default function AnalyzeForm({
                         <div className="text-xs text-gray-600 mb-1">
                           {typeof analysis.market_snapshot.sponsored_count === 'number' &&
                            analysis.market_snapshot.sponsored_count > 0
-                            ? "Paid ads on Page 1"
+                            ? `${analysis.market_snapshot.sponsored_count} sponsored listings on Page 1`
                             : "Insufficient Page 1 data"}
-                        </div>
-                        <div className="text-[10px] text-gray-500 font-medium">
-                          {typeof analysis.market_snapshot.sponsored_count === 'number' &&
-                           analysis.market_snapshot.sponsored_count > 0 &&
-                           analysis.market_snapshot.total_page1_listings !== undefined &&
-                           analysis.market_snapshot.total_page1_listings !== null &&
-                           typeof analysis.market_snapshot.total_page1_listings === 'number' &&
-                           analysis.market_snapshot.total_page1_listings > 0
-                            ? getPaidCompetitionInterpretation(analysis.market_snapshot.sponsored_count, analysis.market_snapshot.total_page1_listings)
-                            : ""}
                         </div>
                       </div>
                     )}
@@ -1970,7 +1673,9 @@ export default function AnalyzeForm({
                           </div>
                           {/* Assumptions Disclosure */}
                           <div className="mt-4 pt-4 border-t border-gray-200">
-                            <p className="text-xs text-gray-600 font-medium mb-2">Confidence: {confidenceReason}</p>
+                            <p className="text-xs text-gray-500 mb-2">
+                              Estimates only. Based on typical cost assumptions.
+                            </p>
                             {snapshot.assumptions && snapshot.assumptions.length > 0 && (
                               <ul className="text-xs text-gray-500 space-y-1">
                                 {snapshot.assumptions.map((assumption, idx) => (
@@ -1986,163 +1691,6 @@ export default function AnalyzeForm({
                 );
               })()}
 
-              {/* ─────────────────────────────────────────────────────────── */}
-              {/* SECTION 6: EXECUTIVE SUMMARY + RISKS + ACTIONS              */}
-              {/* - 1-2 paragraphs                                            */}
-              {/* - Natural language explanation                              */}
-              {/* ─────────────────────────────────────────────────────────── */}
-              <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-gray-900 mb-3">
-                  Executive Summary
-                </h2>
-                <p className="text-gray-700 leading-relaxed">
-                  {analysis.executive_summary}
-                </p>
-                {/* Seller context impact as secondary paragraph */}
-                {analysis.reasoning?.seller_context_impact && (
-                  <p className="text-gray-600 text-sm mt-3 pt-3 border-t">
-                    <span className="font-medium">For your seller profile: </span>
-                    {analysis.reasoning.seller_context_impact}
-                  </p>
-                )}
-              </div>
-
-              {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 5: RISK BREAKDOWN                                     */}
-              {/* - 2x2 grid                                                  */}
-              {/* - Competition, Pricing, Differentiation, Operations         */}
-              {/* ─────────────────────────────────────────────────────────── */}
-              <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                  Risk Breakdown
-                </h2>
-
-                <div className="grid grid-cols-2 gap-3">
-                  {(
-                    Object.entries(analysis.risks) as [
-                      string,
-                      RiskLevel
-                    ][]
-                  ).map(([category, risk]) => (
-                    <div
-                      key={category}
-                      className={`border rounded-lg p-3 ${getRiskLevelStyles(
-                        risk.level
-                      )}`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <h3 className="font-medium capitalize text-sm">{category}</h3>
-                        <span
-                          className={`text-xs font-bold px-2 py-0.5 rounded ${
-                            risk.level === "Low"
-                              ? "bg-green-100"
-                              : risk.level === "Medium"
-                              ? "bg-yellow-100"
-                              : "bg-red-100"
-                          }`}
-                        >
-                          {risk.level}
-                        </span>
-                      </div>
-                      <p className="text-xs opacity-90">{risk.explanation}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* ─────────────────────────────────────────────────────────── */}
-              {/* RECOMMENDED ACTIONS (part of SECTION 6)                     */}
-              {/* - Must do / Should do / Avoid                               */}
-              {/* - Bullet lists                                              */}
-              {/* ─────────────────────────────────────────────────────────── */}
-              <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                  Recommended Actions
-                </h2>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Must Do */}
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <h3 className="font-semibold text-green-800 mb-3 flex items-center gap-2">
-                      <span className="w-2 h-2 bg-green-500 rounded-full" />
-                      Must Do
-                    </h3>
-                    {analysis.recommended_actions.must_do.length > 0 ? (
-                      <ul className="space-y-2">
-                        {analysis.recommended_actions.must_do.map(
-                          (action, idx) => (
-                            <li
-                              key={idx}
-                              className="text-sm text-green-700 flex items-start gap-2"
-                            >
-                              <span className="text-green-400 mt-0.5">✓</span>
-                              {action}
-                            </li>
-                          )
-                        )}
-                      </ul>
-                    ) : (
-                      <p className="text-sm text-green-600 italic">
-                        No critical actions required
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Should Do */}
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <h3 className="font-semibold text-blue-800 mb-3 flex items-center gap-2">
-                      <span className="w-2 h-2 bg-blue-500 rounded-full" />
-                      Should Do
-                    </h3>
-                    {analysis.recommended_actions.should_do.length > 0 ? (
-                      <ul className="space-y-2">
-                        {analysis.recommended_actions.should_do.map(
-                          (action, idx) => (
-                            <li
-                              key={idx}
-                              className="text-sm text-blue-700 flex items-start gap-2"
-                            >
-                              <span className="text-blue-400 mt-0.5">→</span>
-                              {action}
-                            </li>
-                          )
-                        )}
-                      </ul>
-                    ) : (
-                      <p className="text-sm text-blue-600 italic">
-                        No additional recommendations
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Avoid */}
-                  <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                    <h3 className="font-semibold text-red-800 mb-3 flex items-center gap-2">
-                      <span className="w-2 h-2 bg-red-500 rounded-full" />
-                      Avoid
-                    </h3>
-                    {analysis.recommended_actions.avoid.length > 0 ? (
-                      <ul className="space-y-2">
-                        {analysis.recommended_actions.avoid.map(
-                          (action, idx) => (
-                            <li
-                              key={idx}
-                              className="text-sm text-red-700 flex items-start gap-2"
-                            >
-                              <span className="text-red-400 mt-0.5">✕</span>
-                              {action}
-                            </li>
-                          )
-                        )}
-                      </ul>
-                    ) : (
-                      <p className="text-sm text-red-600 italic">
-                        No specific warnings
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
 
               {/* ─────────────────────────────────────────────────────────── */}
               {/* BLOCK 7: ASSUMPTIONS & LIMITS (COLLAPSIBLE)                 */}
@@ -2196,8 +1744,8 @@ export default function AnalyzeForm({
         </div>
 
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* RIGHT COLUMN: AI CHAT SIDEBAR (~30%)                            */}
-        {/* BLOCK 10: This is the PRODUCT, not a helper                     */}
+        {/* RIGHT COLUMN: AI CHAT SIDEBAR (ALWAYS VISIBLE - SPELLBOOK STYLE) */}
+        {/* AI Copilot is always available - no expand/collapse, no special sections */}
         {/* ─────────────────────────────────────────────────────────────── */}
         <ChatSidebar
           analysisRunId={analysis?.analysis_run_id || null}
