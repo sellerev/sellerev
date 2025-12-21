@@ -879,13 +879,40 @@ export default function AnalyzeForm({
               {!analysis || !analysis.decision ? null : (
               <>
               {/* ═══════════════════════════════════════════════════════════════ */}
-              {/* SECTION 1: DATA SNAPSHOT (ALWAYS FIRST)                         */}
-              {/* KEYWORD: Market Snapshot (Page-1 aggregation)                  */}
-              {/* ASIN: ASIN Snapshot (single-product competitive analysis)      */}
+              {/* KEYWORD MODE UI STRUCTURE (DATA-FIRST)                         */}
+              {/* ────────────────────────────────────────────────────────────── */}
+              {/* PART A — FINAL KEYWORD ANALYZE UI ORDER:                      */}
+              {/* 1. TOP SUMMARY BAR (Market, Search Volume, Revenue, Units,    */}
+              {/*    Avg Price, Avg Rating, Confidence %)                       */}
+              {/* 2. PAGE-1 PRODUCTS TABLE (Image, Title, ASIN, Price, Rating,  */}
+              {/*    Est. Monthly Revenue, Revenue Share bar)                   */}
+              {/* 3. COMPETITIVE PRESSURE INDEX (CPI)                           */}
+              {/* 4. PAGE-1 MARKET SNAPSHOT (Price Band, Review Barrier, Brand  */}
+              {/*    Dominance, Page-1 Density, Paid Pressure, Fulfillment Cost)*/}
+              {/* 5. MARGIN SNAPSHOT (ESTIMATED)                                */}
+              {/* 6. EXECUTIVE SUMMARY + RISKS + ACTIONS                        */}
+              {/* ────────────────────────────────────────────────────────────── */}
+              {/* PART B — SQP INTEGRATION ROADMAP (DOCUMENTED, NOT BUILT YET): */}
+              {/* ────────────────────────────────────────────────────────────── */}
+              {/* SQP (Search Query Performance) will integrate when:           */}
+              {/* - Seller connects SP-API                                      */}
+              {/* - Amazon approves Search Query Performance scope              */}
+              {/*                                                               */}
+              {/* SQP will REPLACE (data source swap, UI stays identical):      */}
+              {/* - search_volume_range (from searchVolumeEstimator)            */}
+              {/* - search_volume_confidence (demand confidence)                */}
+              {/*                                                               */}
+              {/* SQP will NOT replace (these remain unchanged):                */}
+              {/* - CPI (Competitive Pressure Index)                            */}
+              {/* - Brand dominance                                             */}
+              {/* - Review moat                                                 */}
+              {/*                                                               */}
+              {/* RULE: Do not block keyword analysis if SQP is unavailable.    */}
+              {/*       Fallback to current searchVolumeEstimator logic.        */}
               {/* ═══════════════════════════════════════════════════════════════ */}
               
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* KEYWORD MODE: MARKET SNAPSHOT (PAGE-1 AGGREGATION)          */}
+              {/* SECTION 1: TOP SUMMARY BAR (KEYWORD MODE)                    */}
               {/* ─────────────────────────────────────────────────────────── */}
               {analysisMode === 'KEYWORD' && analysis.market_snapshot && (() => {
                 const snapshot = analysis.market_snapshot;
@@ -904,7 +931,14 @@ export default function AnalyzeForm({
                 
                 return (
                   <div className="bg-white border rounded-xl p-6 shadow-sm">
-                    <div className="grid grid-cols-6 gap-4">
+                    <div className="grid grid-cols-7 gap-4">
+                      {/* Market Label */}
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500 mb-1">Market</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          Amazon.com (US)
+                        </div>
+                      </div>
                       {/* Search Volume (est.) */}
                       <div className="text-center">
                         <div className="text-xs text-gray-500 mb-1 flex items-center justify-center gap-1">
@@ -961,11 +995,13 @@ export default function AnalyzeForm({
                             : "—"}
                         </div>
                       </div>
-                      {/* Market Label */}
+                      {/* Confidence % */}
                       <div className="text-center">
-                        <div className="text-xs text-gray-500 mb-1">Market</div>
+                        <div className="text-xs text-gray-500 mb-1">Confidence</div>
                         <div className="text-lg font-semibold text-gray-900">
-                          Amazon.com (US)
+                          {analysis?.decision?.confidence !== undefined && analysis.decision.confidence !== null
+                            ? `${analysis.decision.confidence}%`
+                            : "—"}
                         </div>
                       </div>
                     </div>
@@ -974,7 +1010,7 @@ export default function AnalyzeForm({
               })()}
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* KEYWORD MODE: PAGE-1 PRODUCT TABLE                          */}
+              {/* SECTION 2: PAGE-1 PRODUCTS TABLE (PRIMARY SURFACE)          */}
               {/* ─────────────────────────────────────────────────────────── */}
               {analysisMode === 'KEYWORD' && analysis.market_snapshot?.listings && analysis.market_snapshot.listings.length > 0 && (() => {
                 const snapshot = analysis.market_snapshot;
@@ -1075,7 +1111,17 @@ export default function AnalyzeForm({
                                     : "—"}
                                 </td>
                                 <td className="px-4 py-3 text-right text-sm text-gray-600">
-                                  {revenueShare > 0 ? `${revenueShare.toFixed(1)}%` : "—"}
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span>{revenueShare > 0 ? `${revenueShare.toFixed(1)}%` : "—"}</span>
+                                    {revenueShare > 0 && (
+                                      <div className="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                        <div 
+                                          className="h-full bg-blue-600 rounded-full"
+                                          style={{ width: `${Math.min(revenueShare, 100)}%` }}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
                                 </td>
                               </tr>
                             );
@@ -1411,7 +1457,7 @@ export default function AnalyzeForm({
               </div>
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* COMPETITIVE PRESSURE INDEX (CPI) - KEYWORD ONLY             */}
+              {/* SECTION 3: COMPETITIVE PRESSURE INDEX (CPI) - KEYWORD ONLY  */}
               {/* - Decisive label showing competitive pressure               */}
               {/* ─────────────────────────────────────────────────────────── */}
               {analysisMode === "KEYWORD" && analysis.market_snapshot?.cpi && (
@@ -1436,8 +1482,9 @@ export default function AnalyzeForm({
               )}
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 3: MARKET SNAPSHOT (KEYWORD ONLY)                     */}
-              {/* - 4 compact stat cards (2x2 grid)                           */}
+              {/* SECTION 4: PAGE-1 MARKET SNAPSHOT (KEYWORD ONLY)            */}
+              {/* - Price Band, Review Barrier, Brand Dominance,              */}
+              {/*   Page-1 Density, Paid Pressure, Fulfillment Cost           */}
               {/* ─────────────────────────────────────────────────────────── */}
               {analysisMode === "KEYWORD" && analysis.market_snapshot && (
               <div className="bg-white border rounded-xl p-6 shadow-sm">
@@ -1651,71 +1698,7 @@ export default function AnalyzeForm({
               )}
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 4: EXECUTIVE SUMMARY                                  */}
-              {/* - 1-2 paragraphs                                            */}
-              {/* - Natural language explanation                              */}
-              {/* ─────────────────────────────────────────────────────────── */}
-              <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-gray-900 mb-3">
-                  Executive Summary
-                </h2>
-                <p className="text-gray-700 leading-relaxed">
-                  {analysis.executive_summary}
-                </p>
-                {/* Seller context impact as secondary paragraph */}
-                {analysis.reasoning?.seller_context_impact && (
-                  <p className="text-gray-600 text-sm mt-3 pt-3 border-t">
-                    <span className="font-medium">For your seller profile: </span>
-                    {analysis.reasoning.seller_context_impact}
-                  </p>
-                )}
-              </div>
-
-              {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 5: RISK BREAKDOWN                                     */}
-              {/* - 2x2 grid                                                  */}
-              {/* - Competition, Pricing, Differentiation, Operations         */}
-              {/* ─────────────────────────────────────────────────────────── */}
-              <div className="bg-white border rounded-xl p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                  Risk Breakdown
-                </h2>
-
-                <div className="grid grid-cols-2 gap-3">
-                  {(
-                    Object.entries(analysis.risks) as [
-                      string,
-                      RiskLevel
-                    ][]
-                  ).map(([category, risk]) => (
-                    <div
-                      key={category}
-                      className={`border rounded-lg p-3 ${getRiskLevelStyles(
-                        risk.level
-                      )}`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <h3 className="font-medium capitalize text-sm">{category}</h3>
-                        <span
-                          className={`text-xs font-bold px-2 py-0.5 rounded ${
-                            risk.level === "Low"
-                              ? "bg-green-100"
-                              : risk.level === "Medium"
-                              ? "bg-yellow-100"
-                              : "bg-red-100"
-                          }`}
-                        >
-                          {risk.level}
-                        </span>
-                      </div>
-                      <p className="text-xs opacity-90">{risk.explanation}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 5.5: MARGIN SNAPSHOT                                  */}
+              {/* SECTION 5: MARGIN SNAPSHOT (ESTIMATED)                      */}
               {/* - Always displayed (calculated if missing)                   */}
               {/* - Shows confidence badge (High/Medium/Low)                  */}
               {/* - Labeled as "Estimated"                                    */}
@@ -1869,7 +1852,71 @@ export default function AnalyzeForm({
               })()}
 
               {/* ─────────────────────────────────────────────────────────── */}
-              {/* BLOCK 6: RECOMMENDED ACTIONS                                */}
+              {/* SECTION 6: EXECUTIVE SUMMARY + RISKS + ACTIONS              */}
+              {/* - 1-2 paragraphs                                            */}
+              {/* - Natural language explanation                              */}
+              {/* ─────────────────────────────────────────────────────────── */}
+              <div className="bg-white border rounded-xl p-6 shadow-sm">
+                <h2 className="text-lg font-semibold text-gray-900 mb-3">
+                  Executive Summary
+                </h2>
+                <p className="text-gray-700 leading-relaxed">
+                  {analysis.executive_summary}
+                </p>
+                {/* Seller context impact as secondary paragraph */}
+                {analysis.reasoning?.seller_context_impact && (
+                  <p className="text-gray-600 text-sm mt-3 pt-3 border-t">
+                    <span className="font-medium">For your seller profile: </span>
+                    {analysis.reasoning.seller_context_impact}
+                  </p>
+                )}
+              </div>
+
+              {/* ─────────────────────────────────────────────────────────── */}
+              {/* BLOCK 5: RISK BREAKDOWN                                     */}
+              {/* - 2x2 grid                                                  */}
+              {/* - Competition, Pricing, Differentiation, Operations         */}
+              {/* ─────────────────────────────────────────────────────────── */}
+              <div className="bg-white border rounded-xl p-6 shadow-sm">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                  Risk Breakdown
+                </h2>
+
+                <div className="grid grid-cols-2 gap-3">
+                  {(
+                    Object.entries(analysis.risks) as [
+                      string,
+                      RiskLevel
+                    ][]
+                  ).map(([category, risk]) => (
+                    <div
+                      key={category}
+                      className={`border rounded-lg p-3 ${getRiskLevelStyles(
+                        risk.level
+                      )}`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <h3 className="font-medium capitalize text-sm">{category}</h3>
+                        <span
+                          className={`text-xs font-bold px-2 py-0.5 rounded ${
+                            risk.level === "Low"
+                              ? "bg-green-100"
+                              : risk.level === "Medium"
+                              ? "bg-yellow-100"
+                              : "bg-red-100"
+                          }`}
+                        >
+                          {risk.level}
+                        </span>
+                      </div>
+                      <p className="text-xs opacity-90">{risk.explanation}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ─────────────────────────────────────────────────────────── */}
+              {/* RECOMMENDED ACTIONS (part of SECTION 6)                     */}
               {/* - Must do / Should do / Avoid                               */}
               {/* - Bullet lists                                              */}
               {/* ─────────────────────────────────────────────────────────── */}

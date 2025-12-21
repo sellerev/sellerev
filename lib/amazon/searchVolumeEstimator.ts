@@ -12,6 +12,28 @@
  * - Always output a RANGE (never single number)
  * - Never imply this is Amazon-reported data
  * - Confidence caps based on data availability
+ * 
+ * ───────────────────────────────────────────────────────────────────────────
+ * SQP INTEGRATION ROADMAP (FUTURE):
+ * ───────────────────────────────────────────────────────────────────────────
+ * This estimator will be replaced by SQP (Search Query Performance) data
+ * when available. SQP integration requires:
+ * - Seller connects SP-API
+ * - Amazon approves Search Query Performance scope
+ * 
+ * When SQP is available:
+ * - search_volume_range → Use SQP monthly_search_volume (exact Amazon data)
+ * - search_volume_confidence → Always "high" (reliable Amazon source)
+ * 
+ * When SQP is NOT available:
+ * - Fallback to this estimator (current behavior)
+ * - UI remains identical (data source swap only)
+ * 
+ * SQP will NOT replace:
+ * - CPI calculations
+ * - Brand dominance metrics
+ * - Review moat analysis
+ * ───────────────────────────────────────────────────────────────────────────
  */
 
 export interface SearchVolumeEstimate {
