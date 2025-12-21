@@ -1,11 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { buildChatSystemPrompt } from "@/lib/ai/chatSystemPrompt";
+import { buildCopilotSystemPrompt } from "@/lib/ai/copilotSystemPrompt";
 import { estimateCogsRange } from "@/lib/cogs/assumptions";
 import { normalizeCostOverrides } from "@/lib/margins/normalizeCostOverrides";
 import { MarginSnapshot, MarginAssumptions } from "@/types/margin";
 import { detectCostRefinement } from "@/lib/margins/detectCostRefinement";
 import { refineMarginSnapshot } from "@/lib/margins/refineMarginSnapshot";
+import {
+  SellerMemory,
+  createDefaultSellerMemory,
+  validateSellerMemory,
+  mapSellerProfileToMemory,
+} from "@/lib/ai/sellerMemory";
+import {
+  recordAnalyzedKeyword,
+  recordAnalyzedAsin,
+} from "@/lib/ai/memoryUpdates";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -921,6 +932,70 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 4a. Load or create seller_memory (AI Copilot persistent memory)
+    let sellerMemory: SellerMemory;
+    const { data: memoryRow, error: memoryError } = await supabase
+      .from("seller_memory")
+      .select("memory")
+      .eq("user_id", user.id)
+      .single();
+
+    if (memoryError || !memoryRow || !memoryRow.memory) {
+      // Create default memory
+      sellerMemory = createDefaultSellerMemory();
+      // Merge with seller profile data
+      const profileData = mapSellerProfileToMemory(sellerProfile);
+      sellerMemory.seller_profile = {
+        ...sellerMemory.seller_profile,
+        ...profileData,
+      };
+      
+      // Save to database
+      await supabase
+        .from("seller_memory")
+        .insert({
+          user_id: user.id,
+          memory: sellerMemory,
+        });
+    } else {
+      // Validate and use existing memory
+      const memory = memoryRow.memory as unknown;
+      if (validateSellerMemory(memory)) {
+        sellerMemory = memory;
+        // Update profile data if it changed
+        const profileData = mapSellerProfileToMemory(sellerProfile);
+        sellerMemory.seller_profile = {
+          ...sellerMemory.seller_profile,
+          ...profileData,
+        };
+      } else {
+        // Invalid memory, reset to default
+        sellerMemory = createDefaultSellerMemory();
+        const profileData = mapSellerProfileToMemory(sellerProfile);
+        sellerMemory.seller_profile = {
+          ...sellerMemory.seller_profile,
+          ...profileData,
+        };
+      }
+    }
+    
+    // Record analyzed keyword/ASIN in memory (append-only, no confirmation needed)
+    if (analysisRun.input_type === "idea") {
+      sellerMemory = recordAnalyzedKeyword(sellerMemory, analysisRun.input_value);
+    } else if (analysisRun.input_type === "asin") {
+      sellerMemory = recordAnalyzedAsin(sellerMemory, analysisRun.input_value);
+    }
+    
+    // Save updated memory (if changed)
+    await supabase
+      .from("seller_memory")
+      .upsert({
+        user_id: user.id,
+        memory: sellerMemory,
+      }, {
+        onConflict: "user_id",
+      });
+
     // 5. Fetch all prior analysis_messages for this run (conversation history)
     // ────────────────────────────────────────────────────────────────────────
     // Load from database to ensure continuity across sessions
@@ -1081,8 +1156,36 @@ export async function POST(req: NextRequest) {
     // Determine analysis mode from input_type
     const analysisMode: 'ASIN' | 'KEYWORD' = analysisRun.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
     
-    // Build system prompt with analysis mode
-    const systemPrompt = buildChatSystemPrompt(analysisMode);
+    // 8a. Extract ai_context from analyze contract (if available)
+    // The analyze contract stores ai_context in the response
+    const aiContext = (analysisResponse.ai_context as Record<string, unknown>) || null;
+    
+    // If ai_context is not available, fall back to legacy context building
+    // But prefer the locked contract structure
+    const copilotContext = {
+      ai_context: aiContext || analysisResponse, // Fallback to full response if ai_context missing
+      seller_memory: sellerMemory,
+      session_context: {
+        current_feature: "analyze" as const,
+        user_question: body.message,
+      },
+    };
+    
+    // Build AI Copilot system prompt (locked behavior contract)
+    const systemPrompt = buildCopilotSystemPrompt(
+      copilotContext,
+      analysisRun.input_type === 'asin' ? 'asin' : 'keyword'
+    );
+    
+    // Log AI reasoning inputs for audit/debugging
+    console.log("AI_COPILOT_INPUT", {
+      analysisRunId: body.analysisRunId,
+      userId: user.id,
+      analysisMode,
+      hasAiContext: !!aiContext,
+      memoryVersion: sellerMemory.version,
+      timestamp: new Date().toISOString(),
+    });
 
     // 10. Build message array for OpenAI
     // If refinement validation failed, inject error message for AI to explain
@@ -1090,19 +1193,21 @@ export async function POST(req: NextRequest) {
       ? `\n\nIMPORTANT: The user attempted to refine costs, but validation failed:\n${refinementError}\n\nYou must explain why the input is invalid and do NOT save or process the refinement. Be helpful and suggest valid ranges.`
       : "";
 
+    // 10. Build message array for OpenAI
+    // AI Copilot prompt is self-contained with ai_context and seller_memory
+    // No need for separate context injection - everything is in the system prompt
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-      // System prompt: Contains all rules and constraints + COGS assumption + analysis mode
-      { role: "system", content: systemPrompt + cogsAssumption },
-      // Context injection: Provides grounded data (no hallucination possible)
-      { role: "user", content: `[CONTEXT FOR THIS CONVERSATION]\n\n${contextMessage}${validationContext}` },
-      { role: "assistant", content: "I understand. I have the analysis context and will only reason over the provided data. I will not invent numbers, estimate sales or PPC, or reference data not provided. How can I help you explore this analysis?" },
+      // System prompt: Contains locked behavior contract + ai_context + seller_memory
+      { role: "system", content: systemPrompt },
+      // Initial assistant greeting (optional, but helps set tone)
+      { role: "assistant", content: "I understand. I have the analysis context and seller memory. I will only reason over the provided data and use your preferences to tailor my responses. How can I help you explore this analysis?" },
     ];
-
-    // 10. Inject Market Snapshot Summary ABOVE conversation history (if available)
-    if (marketSnapshotSummary) {
+    
+    // Add validation context if cost refinement failed
+    if (validationContext) {
       messages.push({
         role: "user",
-        content: marketSnapshotSummary,
+        content: validationContext,
       });
     }
 
@@ -1325,13 +1430,15 @@ export async function POST(req: NextRequest) {
               tripwireTriggered = true;
               tripwireReason = validation.reason;
               
-              // Log the event (REQUIRED)
-              console.error("HALLUCINATION_TRIPWIRE_TRIGGERED", {
+              // Log the event (REQUIRED for audit/debugging)
+              console.error("AI_COPILOT_HALLUCINATION_TRIPWIRE", {
                 analysisRunId: body.analysisRunId,
                 userId: user.id,
                 reason: validation.reason,
                 messagePreview: finalMessage.substring(0, 200),
                 userMessage: body.message,
+                aiContextKeys: aiContext ? Object.keys(aiContext) : [],
+                memoryVersion: sellerMemory.version,
                 timestamp: new Date().toISOString(),
               });
               
@@ -1344,6 +1451,16 @@ export async function POST(req: NextRequest) {
               
               // Replace final message with fallback for database storage
               finalMessage = fallbackMessage;
+            } else {
+              // Log successful AI response for audit/debugging
+              console.log("AI_COPILOT_RESPONSE", {
+                analysisRunId: body.analysisRunId,
+                userId: user.id,
+                messageLength: finalMessage.length,
+                hasAiContext: !!aiContext,
+                memoryVersion: sellerMemory.version,
+                timestamp: new Date().toISOString(),
+              });
             }
           }
 
