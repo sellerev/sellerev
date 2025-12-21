@@ -119,6 +119,11 @@ interface AnalysisResponse {
     est_total_monthly_revenue_max?: number | null;
     est_total_monthly_units_min?: number | null;
     est_total_monthly_units_max?: number | null;
+    // Search volume estimation (modeled, not exact)
+    search_demand?: {
+      search_volume_range: string; // e.g., "10k–20k"
+      search_volume_confidence: "low" | "medium";
+    } | null;
     // Competitive Pressure Index (CPI) - seller-context aware, 0-100
     // Computed once per analysis, cached, immutable
     cpi?: {
@@ -894,10 +899,34 @@ export default function AnalyzeForm({
                 
                 const avgPrice = snapshot.avg_price;
                 const avgRating = snapshot.avg_rating;
+                const searchVolume = snapshot.search_demand?.search_volume_range ?? null;
+                const searchVolumeConfidence = snapshot.search_demand?.search_volume_confidence ?? null;
                 
                 return (
                   <div className="bg-white border rounded-xl p-6 shadow-sm">
-                    <div className="grid grid-cols-5 gap-4">
+                    <div className="grid grid-cols-6 gap-4">
+                      {/* Search Volume (est.) */}
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500 mb-1 flex items-center justify-center gap-1">
+                          Search Volume (est.)
+                          <div className="relative group">
+                            <svg 
+                              className="w-3 h-3 text-gray-400 cursor-help" 
+                              fill="none" 
+                              stroke="currentColor" 
+                              viewBox="0 0 24 24"
+                            >
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 w-64 text-center">
+                              Estimated using Page-1 saturation and category benchmarks. Not Amazon-reported.
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          {searchVolume || "—"}
+                        </div>
+                      </div>
                       {/* 30-Day Revenue (est.) - Range */}
                       <div className="text-center">
                         <div className="text-xs text-gray-500 mb-1">30-Day Revenue (est.)</div>

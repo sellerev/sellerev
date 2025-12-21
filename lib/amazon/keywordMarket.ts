@@ -39,6 +39,11 @@ export interface KeywordMarketSnapshot {
   est_total_monthly_revenue_max?: number | null;
   est_total_monthly_units_min?: number | null;
   est_total_monthly_units_max?: number | null;
+  // Search volume estimation (modeled, not exact)
+  search_demand?: {
+    search_volume_range: string; // e.g., "10k–20k"
+    search_volume_confidence: "low" | "medium";
+  } | null;
   // Competitive Pressure Index (CPI) - seller-context aware, 0-100
   // Computed once per analysis, cached, immutable
   cpi?: {
@@ -153,6 +158,19 @@ export async function fetchKeywordMarketSnapshot(
 
     // Log raw payload for debugging
     console.log("RAW_KEYWORD_RESULTS", JSON.stringify(raw, null, 2));
+    
+    // Extract search_information.total_results for search volume estimation
+    // total_results is typically a string like "50,000 results" or number
+    const searchInformation = raw.search_information || {};
+    let totalResults: number | null = null;
+    if (searchInformation.total_results) {
+      const totalResultsStr = searchInformation.total_results.toString();
+      const match = totalResultsStr.match(/([\d,]+)/);
+      if (match) {
+        totalResults = parseInt(match[1].replace(/,/g, ''), 10);
+        if (isNaN(totalResults)) totalResults = null;
+      }
+    }
 
     // Extract search_results array
     if (!raw || typeof raw !== "object") {
@@ -312,12 +330,26 @@ export async function fetchKeywordMarketSnapshot(
     
     const aggregated = aggregateRevenueEstimates(revenueEstimates);
     
+    // Estimate search volume
+    const searchVolumeEstimator = await import("./searchVolumeEstimator");
+    const searchVolume = searchVolumeEstimator.estimateSearchVolume(
+      totalResults,
+      total_page1_listings,
+      avg_reviews,
+      sponsored_count,
+      keyword
+    );
+    
     const snapshotWithEstimates: KeywordMarketSnapshot = {
       ...snapshot,
       est_total_monthly_revenue_min: aggregated.total_revenue_min,
       est_total_monthly_revenue_max: aggregated.total_revenue_max,
       est_total_monthly_units_min: aggregated.total_units_min,
       est_total_monthly_units_max: aggregated.total_units_max,
+      search_demand: {
+        search_volume_range: searchVolume.search_volume_range,
+        search_volume_confidence: searchVolume.search_volume_confidence,
+      },
     };
 
     return {
