@@ -19,6 +19,10 @@ export interface ParsedListing {
   is_sponsored: boolean;
   position: number;
   brand: string | null;
+  image_url: string | null; // Rainforest search_results[].image
+  est_monthly_revenue?: number | null; // 30-day revenue estimate (modeled)
+  est_monthly_units?: number | null; // 30-day units estimate (modeled)
+  revenue_confidence?: "low" | "medium"; // Confidence level for revenue estimate
 }
 
 export interface KeywordMarketSnapshot {
@@ -30,6 +34,11 @@ export interface KeywordMarketSnapshot {
   sponsored_count: number;
   dominance_score: number; // 0-100, % of listings belonging to top brand
   representative_asin?: string | null; // Optional representative ASIN for fee estimation
+  // 30-Day Revenue Estimates (modeled, not exact)
+  est_total_monthly_revenue_min?: number | null;
+  est_total_monthly_revenue_max?: number | null;
+  est_total_monthly_units_min?: number | null;
+  est_total_monthly_units_max?: number | null;
   // Competitive Pressure Index (CPI) - seller-context aware, 0-100
   // Computed once per analysis, cached, immutable
   cpi?: {
@@ -177,6 +186,9 @@ export async function fetchKeywordMarketSnapshot(
         brand = inferBrandFromTitle(title);
       }
 
+      // Extract image URL from Rainforest search_results[].image
+      const image_url = item.image ?? null;
+
       return {
         asin,
         title,
@@ -186,6 +198,7 @@ export async function fetchKeywordMarketSnapshot(
         is_sponsored,
         position,
         brand,
+        image_url,
       };
     });
     } catch (parseError) {
@@ -259,9 +272,57 @@ export async function fetchKeywordMarketSnapshot(
       dominance_score,
     };
 
+    // Estimate revenue and units for each listing (30-day estimates)
+    const revenueEstimator = await import("./revenueEstimator");
+    const { estimateListingRevenueWithUnits, aggregateRevenueEstimates } = revenueEstimator;
+    
+    const listingsWithEstimates: ParsedListing[] = validListings.map((listing) => {
+      if (listing.price === null || listing.price <= 0) {
+        return {
+          ...listing,
+          est_monthly_revenue: null,
+          est_monthly_units: null,
+          revenue_confidence: "low",
+        };
+      }
+      
+      const estimate = estimateListingRevenueWithUnits(
+        listing.price,
+        listing.position,
+        avg_price,
+        keyword
+      );
+      
+      return {
+        ...listing,
+        est_monthly_revenue: estimate.est_monthly_revenue,
+        est_monthly_units: estimate.est_monthly_units,
+        revenue_confidence: estimate.revenue_confidence,
+      };
+    });
+
+    // Aggregate total revenue and units estimates
+    const revenueEstimates = listingsWithEstimates
+      .filter(l => l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined)
+      .map(l => ({
+        est_monthly_revenue: l.est_monthly_revenue!,
+        est_monthly_units: l.est_monthly_units || 0,
+        revenue_confidence: l.revenue_confidence || "low",
+      }));
+    
+    const aggregated = aggregateRevenueEstimates(revenueEstimates);
+    
+    const snapshotWithEstimates: KeywordMarketSnapshot = {
+      ...snapshot,
+      est_total_monthly_revenue_min: aggregated.total_revenue_min,
+      est_total_monthly_revenue_max: aggregated.total_revenue_max,
+      est_total_monthly_units_min: aggregated.total_units_min,
+      est_total_monthly_units_max: aggregated.total_units_max,
+    };
+
     return {
-      snapshot,
-      listings: validListings,
+      snapshot: snapshotWithEstimates,
+      listings: listingsWithEstimates,
     };
   } catch (error) {
     console.error("Error fetching keyword market snapshot:", error);

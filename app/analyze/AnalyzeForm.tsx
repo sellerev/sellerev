@@ -110,7 +110,15 @@ interface AnalysisResponse {
       is_sponsored: boolean;
       position: number;
       brand: string | null;
+      image_url?: string | null;
+      est_monthly_revenue?: number | null;
+      est_monthly_units?: number | null;
+      revenue_confidence?: "low" | "medium";
     }>;
+    est_total_monthly_revenue_min?: number | null;
+    est_total_monthly_revenue_max?: number | null;
+    est_total_monthly_units_min?: number | null;
+    est_total_monthly_units_max?: number | null;
     // Competitive Pressure Index (CPI) - seller-context aware, 0-100
     // Computed once per analysis, cached, immutable
     cpi?: {
@@ -878,41 +886,34 @@ export default function AnalyzeForm({
                 const snapshot = analysis.market_snapshot;
                 const listings = snapshot.listings || [];
                 
-                // Calculate metrics from listings if available, otherwise use snapshot aggregates
-                const total30DayRevenue = listings.length > 0 
-                  ? calculate30DayRevenue(listings)
-                  : null; // Revenue calculation requires individual product data
-                const total30DayUnits = listings.length > 0
-                  ? calculate30DayUnits(listings)
-                  : null; // Units calculation requires individual product data
-                const avgBSR = listings.length > 0
-                  ? calculateAvgBSR(listings)
-                  : null; // BSR not available in current structure
+                // Use aggregated revenue/units estimates from snapshot (computed in backend)
+                const total30DayRevenueMin = snapshot.est_total_monthly_revenue_min ?? null;
+                const total30DayRevenueMax = snapshot.est_total_monthly_revenue_max ?? null;
+                const total30DayUnitsMin = snapshot.est_total_monthly_units_min ?? null;
+                const total30DayUnitsMax = snapshot.est_total_monthly_units_max ?? null;
+                
                 const avgPrice = snapshot.avg_price;
                 const avgRating = snapshot.avg_rating;
                 
                 return (
                   <div className="bg-white border rounded-xl p-6 shadow-sm">
                     <div className="grid grid-cols-5 gap-4">
-                      {/* 30-Day Revenue */}
+                      {/* 30-Day Revenue (est.) - Range */}
                       <div className="text-center">
                         <div className="text-xs text-gray-500 mb-1">30-Day Revenue (est.)</div>
                         <div className="text-lg font-semibold text-gray-900">
-                          {total30DayRevenue !== null ? formatCurrency(total30DayRevenue) : "—"}
+                          {total30DayRevenueMin !== null && total30DayRevenueMax !== null
+                            ? `${formatCurrency(total30DayRevenueMin)}–${formatCurrency(total30DayRevenueMax)}`
+                            : "—"}
                         </div>
                       </div>
-                      {/* 30-Day Units */}
+                      {/* 30-Day Units Sold (est.) - Range */}
                       <div className="text-center">
                         <div className="text-xs text-gray-500 mb-1">30-Day Units Sold (est.)</div>
                         <div className="text-lg font-semibold text-gray-900">
-                          {total30DayUnits !== null ? total30DayUnits.toLocaleString() : "—"}
-                        </div>
-                      </div>
-                      {/* Avg BSR */}
-                      <div className="text-center">
-                        <div className="text-xs text-gray-500 mb-1">Avg BSR</div>
-                        <div className="text-lg font-semibold text-gray-900">
-                          {avgBSR !== null ? avgBSR.toLocaleString() : "—"}
+                          {total30DayUnitsMin !== null && total30DayUnitsMax !== null
+                            ? `${total30DayUnitsMin.toLocaleString()}–${total30DayUnitsMax.toLocaleString()}`
+                            : "—"}
                         </div>
                       </div>
                       {/* Avg Price */}
@@ -931,6 +932,13 @@ export default function AnalyzeForm({
                             : "—"}
                         </div>
                       </div>
+                      {/* Market Label */}
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500 mb-1">Market</div>
+                        <div className="text-lg font-semibold text-gray-900">
+                          Amazon.com (US)
+                        </div>
+                      </div>
                     </div>
                   </div>
                 );
@@ -940,23 +948,26 @@ export default function AnalyzeForm({
               {/* KEYWORD MODE: PAGE-1 PRODUCT TABLE                          */}
               {/* ─────────────────────────────────────────────────────────── */}
               {analysisMode === 'KEYWORD' && analysis.market_snapshot?.listings && analysis.market_snapshot.listings.length > 0 && (() => {
-                const listings = analysis.market_snapshot.listings!
-                  .filter(l => l.asin && l.title) // Only valid listings
-                  .map(l => ({
-                    ...l,
-                    estMonthlyRevenue: estimateMonthlyRevenue(l.price, l.reviews),
-                  }))
-                  .sort((a, b) => {
-                    // Sort by revenue (desc)
-                    const revA = a.estMonthlyRevenue || 0;
-                    const revB = b.estMonthlyRevenue || 0;
+                const snapshot = analysis.market_snapshot;
+                
+                // Use revenue estimates from backend (already computed in keywordMarket.ts)
+                // Sort by estimated revenue (desc)
+                const listingsWithRevenue = [...(snapshot.listings || [])]
+                  .filter((l: any) => l.asin && l.title) // Only valid listings
+                  .sort((a: any, b: any) => {
+                    const revA = a.est_monthly_revenue || 0;
+                    const revB = b.est_monthly_revenue || 0;
                     return revB - revA;
                   });
                 
-                const totalPage1Revenue = listings
-                  .map(l => l.estMonthlyRevenue)
-                  .filter((r): r is number => r !== null)
-                  .reduce((sum, r) => sum + r, 0);
+                // Use aggregated totals from snapshot, or calculate from listings as fallback
+                const totalPage1RevenueMin = snapshot.est_total_monthly_revenue_min ?? null;
+                const totalPage1RevenueMax = snapshot.est_total_monthly_revenue_max ?? null;
+                const totalPage1Revenue = totalPage1RevenueMax ?? 
+                  listingsWithRevenue
+                    .map((l: any) => l.est_monthly_revenue)
+                    .filter((r): r is number => r !== null && r !== undefined)
+                    .reduce((sum: number, r: number) => sum + r, 0);
                 
                 return (
                   <div className="bg-white border rounded-xl shadow-sm overflow-hidden">
@@ -977,19 +988,36 @@ export default function AnalyzeForm({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
-                          {listings.slice(0, 48).map((listing, idx) => {
-                            const revenueShare = listing.estMonthlyRevenue && totalPage1Revenue > 0
-                              ? (listing.estMonthlyRevenue / totalPage1Revenue) * 100
+                          {listingsWithRevenue.slice(0, 48).map((listing, idx) => {
+                            const revenueShare = listing.est_monthly_revenue && totalPage1Revenue && totalPage1Revenue > 0
+                              ? (listing.est_monthly_revenue / totalPage1Revenue) * 100
                               : 0;
                             
                             return (
                               <tr key={`${listing.asin || 'unknown'}-${idx}`} className="hover:bg-gray-50">
                                 <td className="px-4 py-3">
                                   <div className="flex items-center gap-3 min-w-[300px]">
-                                    {/* Placeholder for image - using text icon since image URL not in current structure */}
-                                    <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center flex-shrink-0">
-                                      <span className="text-xs text-gray-400">IMG</span>
-                                    </div>
+                                    {/* Product image - lazy loaded with fallback */}
+                                    {listing.image_url ? (
+                                      <img
+                                        src={listing.image_url}
+                                        alt={listing.title || "Product image"}
+                                        className="w-12 h-12 object-cover rounded flex-shrink-0"
+                                        loading="lazy"
+                                        onError={(e) => {
+                                          // Replace with placeholder on error
+                                          const img = e.target as HTMLImageElement;
+                                          const placeholder = document.createElement('div');
+                                          placeholder.className = 'w-12 h-12 bg-gray-200 rounded flex items-center justify-center flex-shrink-0';
+                                          placeholder.innerHTML = '<span class="text-xs text-gray-400">IMG</span>';
+                                          img.replaceWith(placeholder);
+                                        }}
+                                      />
+                                    ) : (
+                                      <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center flex-shrink-0">
+                                        <span className="text-xs text-gray-400">IMG</span>
+                                      </div>
+                                    )}
                                     <div className="flex-1 min-w-0">
                                       <div className="text-sm font-medium text-gray-900 truncate">
                                         {listing.title || "—"}
@@ -1013,7 +1041,9 @@ export default function AnalyzeForm({
                                   —
                                 </td>
                                 <td className="px-4 py-3 text-right text-sm font-medium text-gray-900">
-                                  {listing.estMonthlyRevenue !== null ? formatCurrency(listing.estMonthlyRevenue) : "—"}
+                                  {listing.est_monthly_revenue !== null && listing.est_monthly_revenue !== undefined
+                                    ? `${formatCurrency(listing.est_monthly_revenue)} (est.)`
+                                    : "—"}
                                 </td>
                                 <td className="px-4 py-3 text-right text-sm text-gray-600">
                                   {revenueShare > 0 ? `${revenueShare.toFixed(1)}%` : "—"}
