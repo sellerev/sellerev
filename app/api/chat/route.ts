@@ -92,7 +92,7 @@ function buildContextMessage(
     : "";
   
   // For keyword mode, de-emphasize verdicts (they're not shown in UI)
-  if (inputType === "idea") {
+  if (inputType === "keyword") {
     contextParts.push(`=== ANALYSIS CONTEXT (AVAILABLE IF ASKED) ===
 This analysis data is available for reference if the user asks about it.
 
@@ -110,7 +110,20 @@ Available analysis data:
 - Assumptions & Limits: Available if asked`);
   } else {
     // ASIN mode: Keep full context (ASIN mode still uses verdicts)
-    contextParts.push(`=== ORIGINAL ANALYSIS (AUTHORITATIVE) ===
+    try {
+      const risks = analysisResponse.risks 
+        ? (typeof analysisResponse.risks === 'object' ? JSON.stringify(analysisResponse.risks, null, 2) : String(analysisResponse.risks))
+        : "Not available";
+      const recommendedActions = analysisResponse.recommended_actions
+        ? (typeof analysisResponse.recommended_actions === 'object' ? JSON.stringify(analysisResponse.recommended_actions, null, 2) : String(analysisResponse.recommended_actions))
+        : "Not available";
+      const assumptionsAndLimits = analysisResponse.assumptions_and_limits
+        ? (Array.isArray(analysisResponse.assumptions_and_limits) 
+            ? JSON.stringify(analysisResponse.assumptions_and_limits, null, 2)
+            : String(analysisResponse.assumptions_and_limits))
+        : "Not available";
+      
+      contextParts.push(`=== ORIGINAL ANALYSIS (AUTHORITATIVE) ===
 This analysis anchors this conversation. Do not contradict without explicit explanation.
 
 Input: ${inputType.toUpperCase()} - ${inputValue}
@@ -122,13 +135,21 @@ Executive Summary:
 ${analysisResponse.executive_summary || "Not available"}
 
 Risks:
-${JSON.stringify(analysisResponse.risks, null, 2)}
+${risks}
 
 Recommended Actions:
-${JSON.stringify(analysisResponse.recommended_actions, null, 2)}
+${recommendedActions}
 
 Assumptions & Limits:
-${JSON.stringify(analysisResponse.assumptions_and_limits, null, 2)}`);
+${assumptionsAndLimits}`);
+    } catch (error) {
+      console.error("Error formatting ASIN mode context:", error);
+      // Fallback to minimal context
+      contextParts.push(`=== ORIGINAL ANALYSIS (AUTHORITATIVE) ===
+Input: ${inputType.toUpperCase()} - ${inputValue}
+Verdict: ${(analysisResponse.decision as { verdict: string })?.verdict || "UNKNOWN"}
+Confidence: ${(analysisResponse.decision as { confidence: number })?.confidence || "N/A"}%`);
+    }
   }
 
   // Section 2: Market Data (explicitly labeled as CACHED to prevent fresh data assumptions)
@@ -318,21 +339,39 @@ This margin snapshot is the single source of truth. Always reference it when ans
 
   // Section 7: Selected Listing Context (if provided)
   if (selectedListing && typeof selectedListing === 'object' && selectedListing !== null) {
-    contextParts.push(`=== SELECTED LISTING (USER CONTEXT) ===
+    try {
+      const price = typeof selectedListing.price === 'number' && !isNaN(selectedListing.price)
+        ? `$${selectedListing.price.toFixed(2)}`
+        : 'Not available';
+      const rating = typeof selectedListing.rating === 'number' && !isNaN(selectedListing.rating)
+        ? selectedListing.rating.toFixed(1)
+        : 'Not available';
+      const reviews = typeof selectedListing.reviews === 'number' && !isNaN(selectedListing.reviews)
+        ? selectedListing.reviews.toLocaleString()
+        : 'Not available';
+      const bsr = typeof selectedListing.bsr === 'number' && !isNaN(selectedListing.bsr)
+        ? `#${selectedListing.bsr.toLocaleString()}`
+        : 'Not available';
+      
+      contextParts.push(`=== SELECTED LISTING (USER CONTEXT) ===
 The user has selected this listing from Page 1. Reference it when answering questions.
 
 ASIN: ${selectedListing.asin || 'Not available'}
 Title: ${selectedListing.title || 'Not available'}
-Price: ${selectedListing.price !== null && selectedListing.price !== undefined ? `$${selectedListing.price.toFixed(2)}` : 'Not available'}
-Rating: ${selectedListing.rating !== null && selectedListing.rating !== undefined ? selectedListing.rating.toFixed(1) : 'Not available'}
-Reviews: ${selectedListing.reviews !== null && selectedListing.reviews !== undefined ? selectedListing.reviews.toLocaleString() : 'Not available'}
-BSR: ${selectedListing.bsr !== null && selectedListing.bsr !== undefined ? `#${selectedListing.bsr.toLocaleString()}` : 'Not available'}
+Price: ${price}
+Rating: ${rating}
+Reviews: ${reviews}
+BSR: ${bsr}
 Organic Rank: ${selectedListing.organic_rank !== null && selectedListing.organic_rank !== undefined ? `#${selectedListing.organic_rank}` : 'Not available'}
 Fulfillment: ${selectedListing.fulfillment || 'Not available'}
 Brand: ${selectedListing.brand || 'Not available'}
 Sponsored: ${selectedListing.is_sponsored ? 'Yes' : 'No'}
 
 When the user asks about a specific product or compares products, reference this selected listing's data.`);
+    } catch (error) {
+      console.error("Error formatting selected listing context:", error);
+      // Continue without selected listing context if there's an error
+    }
   }
 
   return contextParts.join("\n\n");
