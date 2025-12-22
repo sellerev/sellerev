@@ -45,7 +45,8 @@ import {
 interface ChatRequestBody {
   analysisRunId: string;
   message: string;
-  selectedListing?: any | null; // Optional selected listing for AI context
+  selectedListing?: any | null; // Optional selected listing for AI context (KEYWORD mode)
+  selectedCompetitor?: any | null; // Optional selected competitor for AI context (ASIN mode)
 }
 
 function validateRequestBody(body: unknown): body is ChatRequestBody {
@@ -81,7 +82,8 @@ function buildContextMessage(
   },
   inputType: string,
   inputValue: string,
-  selectedListing?: any | null
+  selectedListing?: any | null,
+  selectedCompetitor?: any | null
 ): string {
   const contextParts: string[] = [];
 
@@ -337,7 +339,7 @@ This margin snapshot is the single source of truth. Always reference it when ans
     }
   }
 
-  // Section 7: Selected Listing Context (if provided)
+  // Section 7: Selected Listing/Competitor Context (if provided)
   if (selectedListing && typeof selectedListing === 'object' && selectedListing !== null) {
     try {
       const price = typeof selectedListing.price === 'number' && !isNaN(selectedListing.price)
@@ -370,7 +372,56 @@ Sponsored: ${selectedListing.is_sponsored ? 'Yes' : 'No'}
 When the user asks about a specific product or compares products, reference this selected listing's data.`);
     } catch (error) {
       console.error("Error formatting selected listing context:", error);
-      // Continue without selected listing context if there's an error
+    }
+  }
+  
+  // Section 8: Selected Competitor Context (ASIN mode)
+  if (selectedCompetitor && typeof selectedCompetitor === 'object' && selectedCompetitor !== null) {
+    try {
+      const competitorAsin = selectedCompetitor.asin || selectedCompetitor.ASIN || 'Not available';
+      const competitorPrice = (selectedCompetitor.price || selectedCompetitor.Price) !== null && 
+                              (selectedCompetitor.price || selectedCompetitor.Price) !== undefined
+        ? (typeof (selectedCompetitor.price || selectedCompetitor.Price) === 'number'
+            ? `$${(selectedCompetitor.price || selectedCompetitor.Price).toFixed(2)}`
+            : String(selectedCompetitor.price || selectedCompetitor.Price))
+        : 'Not available';
+      const competitorRating = (selectedCompetitor.rating || selectedCompetitor.Rating) !== null &&
+                               (selectedCompetitor.rating || selectedCompetitor.Rating) !== undefined
+        ? (typeof (selectedCompetitor.rating || selectedCompetitor.Rating) === 'number'
+            ? (selectedCompetitor.rating || selectedCompetitor.Rating).toFixed(1)
+            : String(selectedCompetitor.rating || selectedCompetitor.Rating))
+        : 'Not available';
+      const competitorReviews = (selectedCompetitor.reviews || selectedCompetitor.Reviews) !== null &&
+                                (selectedCompetitor.reviews || selectedCompetitor.Reviews) !== undefined
+        ? (typeof (selectedCompetitor.reviews || selectedCompetitor.Reviews) === 'number'
+            ? (selectedCompetitor.reviews || selectedCompetitor.Reviews).toLocaleString()
+            : String(selectedCompetitor.reviews || selectedCompetitor.Reviews))
+        : 'Not available';
+      
+      contextParts.push(`=== SELECTED COMPETITOR (USER CONTEXT) ===
+The user has selected this competitor from Page 1. Reference it when answering questions about competitive positioning.
+
+ASIN: ${competitorAsin}
+Title: ${selectedCompetitor.title || selectedCompetitor.Title || 'Not available'}
+Price: ${competitorPrice}
+Rating: ${competitorRating}
+Reviews: ${competitorReviews}
+BSR: ${(selectedCompetitor.bsr || selectedCompetitor.BSR) !== null && (selectedCompetitor.bsr || selectedCompetitor.BSR) !== undefined
+  ? `#${typeof (selectedCompetitor.bsr || selectedCompetitor.BSR) === 'number'
+      ? (selectedCompetitor.bsr || selectedCompetitor.BSR).toLocaleString()
+      : String(selectedCompetitor.bsr || selectedCompetitor.BSR)}`
+  : 'Not available'}
+Organic Rank: ${(selectedCompetitor.organic_rank || selectedCompetitor.position || selectedCompetitor.Position) !== null &&
+                (selectedCompetitor.organic_rank || selectedCompetitor.position || selectedCompetitor.Position) !== undefined
+  ? `#${selectedCompetitor.organic_rank || selectedCompetitor.position || selectedCompetitor.Position}`
+  : 'Not available'}
+Fulfillment: ${selectedCompetitor.fulfillment || selectedCompetitor.Fulfillment || 'Not available'}
+Brand: ${selectedCompetitor.brand || selectedCompetitor.Brand || 'Not available'}
+Sponsored: ${selectedCompetitor.is_sponsored || selectedCompetitor.IsSponsored ? 'Yes' : 'No'}
+
+When the user asks about competitive positioning, pricing strategy, or comparisons, reference this selected competitor's data relative to the target ASIN.`);
+    } catch (error) {
+      console.error("Error formatting selected competitor context:", error);
     }
   }
 
@@ -1220,7 +1271,8 @@ export async function POST(req: NextRequest) {
         sellerProfile,
         analysisRun.input_type,
         analysisRun.input_value,
-        body.selectedListing || null
+        body.selectedListing || null,
+        body.selectedCompetitor || null
       );
 
       // 9. Build Market Snapshot Summary (from cached response.market_snapshot only)

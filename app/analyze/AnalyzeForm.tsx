@@ -424,6 +424,9 @@ export default function AnalyzeForm({
   
   // Selected listing state (for AI context)
   const [selectedListing, setSelectedListing] = useState<any | null>(null);
+  
+  // Selected competitor state (for ASIN mode)
+  const [selectedCompetitor, setSelectedCompetitor] = useState<any | null>(null);
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -1032,92 +1035,273 @@ export default function AnalyzeForm({
                 })()}
                 </>
               ) : analysisMode === 'ASIN' ? (
-                /* ASIN MODE: Keep existing ASIN-specific UI */
+                /* ASIN MODE: Product-Centric Competitive Analysis */
                 <>
                   {analysisMode === 'ASIN' && analysis.asin_snapshot && (() => {
                     const asinData = analysis.asin_snapshot;
+                    const marketSnapshot = analysis.market_snapshot;
+                    const page1Listings = marketSnapshot?.listings || [];
+                    const inputAsin = analysis.input_value;
+                    
+                    // Find the ASIN in Page-1 listings to get image/title
+                    const asinListing = page1Listings.find((l: any) => 
+                      (l.asin || l.ASIN || l.asin) === inputAsin
+                    ) as any;
+                    
+                    // Calculate percentiles if available
+                    const pricePercentile = asinData.position_vs_page1?.price_percentile ?? null;
+                    const reviewPercentile = asinData.position_vs_page1?.review_percentile ?? null;
+                    
                     return (
-                      <div className="bg-white border rounded-xl p-6 shadow-sm">
-                        <div className="mb-4">
-                          <h2 className="text-lg font-semibold text-gray-900 mb-1">
-                            ASIN Snapshot
-                          </h2>
-                          <p className="text-xs text-gray-500">
-                            Product data for this ASIN
-                          </p>
+                      <>
+                        {/* ─────────────────────────────────────────────────────────── */}
+                        {/* PINNED ASIN CARD - Always Visible                        */}
+                        {/* ─────────────────────────────────────────────────────────── */}
+                        <div className="bg-white border-2 border-blue-500 rounded-xl p-6 shadow-lg mb-6">
+                          <div className="flex items-start gap-6">
+                            {/* Product Image */}
+                            <div className="flex-shrink-0">
+                              {((asinListing as any)?.image || (asinListing as any)?.image_url) ? (
+                                <img
+                                  src={(asinListing as any).image || (asinListing as any).image_url}
+                                  alt={(asinListing as any)?.title || (asinListing as any)?.Title || inputAsin}
+                                  className="w-48 h-48 object-contain rounded-lg border border-gray-200"
+                                />
+                              ) : (
+                                <div className="w-48 h-48 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center">
+                                  <span className="text-sm text-gray-400">No image</span>
+                                </div>
+                              )}
+                            </div>
+                            
+                            {/* Product Details */}
+                            <div className="flex-1">
+                              <div className="mb-2">
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                  Target ASIN
+                                </span>
+                              </div>
+                              
+                              <h1 className="text-2xl font-bold text-gray-900 mb-3">
+                                {(asinListing as any)?.title || (asinListing as any)?.Title || inputAsin}
+                              </h1>
+                              
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                {/* Price */}
+                                <div>
+                                  <div className="text-xs text-gray-500 mb-1">Price</div>
+                                  <div className="text-xl font-semibold text-gray-900">
+                                    {asinData.price !== null && typeof asinData.price === 'number'
+                                      ? formatCurrency(asinData.price)
+                                      : "Not available"}
+                                  </div>
+                                  {pricePercentile !== null && (
+                                    <div className="text-xs text-gray-500 mt-1">
+                                      {pricePercentile <= 25 ? "Lower 25%" : pricePercentile <= 50 ? "Lower 50%" : pricePercentile <= 75 ? "Upper 50%" : "Upper 25%"} vs Page-1
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                {/* Rating */}
+                                <div>
+                                  <div className="text-xs text-gray-500 mb-1">Rating</div>
+                                  <div className="text-xl font-semibold text-gray-900">
+                                    {asinData.rating !== null && typeof asinData.rating === 'number' && !isNaN(asinData.rating)
+                                      ? `${asinData.rating.toFixed(1)} ★`
+                                      : "Not available"}
+                                  </div>
+                                </div>
+                                
+                                {/* Reviews */}
+                                <div>
+                                  <div className="text-xs text-gray-500 mb-1">Reviews</div>
+                                  <div className="text-xl font-semibold text-gray-900">
+                                    {asinData.reviews !== null && typeof asinData.reviews === 'number'
+                                      ? asinData.reviews.toLocaleString()
+                                      : "Not available"}
+                                  </div>
+                                  {reviewPercentile !== null && (
+                                    <div className="text-xs text-gray-500 mt-1">
+                                      {reviewPercentile >= 75 ? "Top 25%" : reviewPercentile >= 50 ? "Top 50%" : reviewPercentile >= 25 ? "Bottom 50%" : "Bottom 25%"} vs Page-1
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                {/* BSR */}
+                                <div>
+                                  <div className="text-xs text-gray-500 mb-1">BSR</div>
+                                  <div className="text-xl font-semibold text-gray-900">
+                                    {asinData.bsr !== null && typeof asinData.bsr === 'number'
+                                      ? `#${asinData.bsr.toLocaleString()}`
+                                      : "Not available"}
+                                  </div>
+                                </div>
+                              </div>
+                              
+                              <div className="flex flex-wrap gap-2">
+                                {asinData.fulfillment && (
+                                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${
+                                    asinData.fulfillment === 'FBA' ? 'bg-blue-100 text-blue-800' :
+                                    asinData.fulfillment === 'FBM' ? 'bg-gray-100 text-gray-800' :
+                                    'bg-yellow-100 text-yellow-800'
+                                  }`}>
+                                    {asinData.fulfillment}
+                                  </span>
+                                )}
+                                {asinData.brand_owner && (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                                    {asinData.brand_owner}
+                                  </span>
+                                )}
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                                  {inputAsin}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
                         </div>
                         
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {/* Review Count */}
-                          <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                            <div className="text-xs text-gray-500 mb-1">Review Count</div>
-                            <div className="text-lg font-semibold text-gray-900 mb-1">
-                              {asinData.reviews !== null && typeof asinData.reviews === 'number'
-                                ? asinData.reviews.toLocaleString()
-                                : "—"}
-                            </div>
-                            <div className="text-xs text-gray-600">
-                              Total reviews for this ASIN
-                            </div>
-                          </div>
-                          
-                          {/* Rating Strength */}
-                          <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                            <div className="text-xs text-gray-500 mb-1">Rating Strength</div>
-                            <div className="text-lg font-semibold text-gray-900 mb-1">
-                              {asinData.rating !== null && typeof asinData.rating === 'number' && !isNaN(asinData.rating)
-                                ? `${asinData.rating.toFixed(1)} ★`
-                                : "—"}
-                            </div>
-                            <div className="text-xs text-gray-600">
-                              Average rating for this ASIN
-                            </div>
-                          </div>
-                          
-                          {/* Price */}
-                          <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                            <div className="text-xs text-gray-500 mb-1">Price</div>
-                            <div className="text-lg font-semibold text-gray-900 mb-1">
-                              {asinData.price !== null && typeof asinData.price === 'number'
-                                ? formatCurrency(asinData.price)
-                                : "—"}
-                            </div>
-                            <div className="text-xs text-gray-600">
-                              Current selling price
-                            </div>
-                          </div>
-                          
-                          {/* Brand Owner */}
-                          <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                            <div className="text-xs text-gray-500 mb-1">Brand Owner</div>
-                            <div className="text-lg font-semibold text-gray-900 mb-1">
-                              {asinData.brand_owner || "—"}
-                            </div>
-                            <div className="text-xs text-gray-600">
-                              Seller type for this ASIN
-                            </div>
-                          </div>
-                          
-                          {/* Additional Core Metrics */}
-                          {asinData.bsr !== null && (
-                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">BSR</div>
-                              <div className="text-lg font-semibold text-gray-900">
-                                #{asinData.bsr.toLocaleString()}
+                        {/* ─────────────────────────────────────────────────────────── */}
+                        {/* PAGE-1 COMPETITOR GRID                                    */}
+                        {/* ─────────────────────────────────────────────────────────── */}
+                        <div className="mb-6">
+                          <h2 className="text-xl font-semibold text-gray-900 mb-4">Page 1 Competitors</h2>
+                          {selectedCompetitor && (
+                            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                              <div className="text-sm text-blue-900">
+                                <span className="font-medium">Selected competitor:</span> {selectedCompetitor.title || selectedCompetitor.asin}
+                              </div>
+                              <div className="text-xs text-blue-700 mt-1">
+                                Ask questions about this competitor in the chat
                               </div>
                             </div>
                           )}
                           
-                          {asinData.fulfillment && (
-                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">Fulfillment</div>
-                              <div className="text-lg font-semibold text-gray-900">
-                                {asinData.fulfillment}
-                              </div>
+                          {page1Listings.length === 0 ? (
+                            <div className="p-8 text-center bg-white border rounded-lg">
+                              <p className="text-gray-500">No competitors found</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              {page1Listings
+                                .filter((l: any) => l && (l.asin || l.ASIN) && (l.title || l.Title))
+                                .sort((a: any, b: any) => {
+                                  // Sort by organic rank (1-indexed, lower = better)
+                                  const rankA = a.organic_rank || a.position || a.Position || 999;
+                                  const rankB = b.organic_rank || b.position || b.Position || 999;
+                                  return rankA - rankB;
+                                })
+                                .map((l: any) => {
+                                  const listingAsin = l.asin || l.ASIN || "";
+                                  const isTargetAsin = listingAsin === inputAsin;
+                                  const isSelected = selectedCompetitor?.asin === listingAsin;
+                                  
+                                  return (
+                                    <div
+                                      key={listingAsin}
+                                      onClick={() => !isTargetAsin && setSelectedCompetitor(isSelected ? null : l)}
+                                      className={`bg-white border-2 rounded-lg p-4 cursor-pointer transition-all hover:shadow-md ${
+                                        isTargetAsin
+                                          ? 'border-blue-500 bg-blue-50'
+                                          : isSelected
+                                          ? 'border-blue-400 border-dashed'
+                                          : 'border-gray-200 hover:border-gray-300'
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-4">
+                                        {/* Image */}
+                                        <div className="flex-shrink-0">
+                                          {l.image || l.image_url ? (
+                                            <img
+                                              src={l.image || l.image_url}
+                                              alt={l.title || listingAsin}
+                                              className="w-20 h-20 object-contain rounded border border-gray-200"
+                                            />
+                                          ) : (
+                                            <div className="w-20 h-20 bg-gray-100 rounded border border-gray-200 flex items-center justify-center">
+                                              <span className="text-xs text-gray-400">IMG</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                        
+                                        {/* Details */}
+                                        <div className="flex-1 min-w-0">
+                                          <div className="flex items-start justify-between gap-2 mb-1">
+                                            <h3 className="text-sm font-medium text-gray-900 line-clamp-2 flex-1">
+                                              {l.title || l.Title || listingAsin}
+                                            </h3>
+                                            {isTargetAsin && (
+                                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 flex-shrink-0">
+                                                Target
+                                              </span>
+                                            )}
+                                          </div>
+                                          
+                                          <div className="flex items-center gap-4 text-sm">
+                                            {/* Price */}
+                                            <div>
+                                              <span className="text-gray-900 font-semibold">
+                                                {l.price || l.Price ? formatCurrency(l.price || l.Price) : "Not available"}
+                                              </span>
+                                            </div>
+                                            
+                                            {/* Rating + Reviews */}
+                                            {(l.rating || l.Rating) && (
+                                              <div className="flex items-center gap-1">
+                                                <span className="text-yellow-400">★</span>
+                                                <span className="text-gray-700">{typeof (l.rating || l.Rating) === 'number' ? (l.rating || l.Rating).toFixed(1) : l.rating || l.Rating}</span>
+                                                {l.reviews || l.Reviews ? (
+                                                  <span className="text-gray-500 text-xs">
+                                                    ({typeof (l.reviews || l.Reviews) === 'number' ? (l.reviews || l.Reviews).toLocaleString() : l.reviews || l.Reviews})
+                                                  </span>
+                                                ) : null}
+                                              </div>
+                                            )}
+                                            
+                                            {/* BSR */}
+                                            {(l.bsr || l.BSR) && (
+                                              <div className="text-gray-600 text-xs">
+                                                BSR: #{typeof (l.bsr || l.BSR) === 'number' ? (l.bsr || l.BSR).toLocaleString() : l.bsr || l.BSR}
+                                              </div>
+                                            )}
+                                          </div>
+                                          
+                                          {/* Badges */}
+                                          <div className="flex flex-wrap gap-1 mt-2">
+                                            {l.is_sponsored || l.IsSponsored ? (
+                                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
+                                                Sponsored
+                                              </span>
+                                            ) : null}
+                                            {l.fulfillment || l.Fulfillment ? (
+                                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                                (l.fulfillment || l.Fulfillment) === 'FBA' ? 'bg-blue-100 text-blue-800' :
+                                                (l.fulfillment || l.Fulfillment) === 'FBM' ? 'bg-gray-100 text-gray-800' :
+                                                'bg-yellow-100 text-yellow-800'
+                                              }`}>
+                                                {l.fulfillment || l.Fulfillment}
+                                              </span>
+                                            ) : null}
+                                            {l.organic_rank || l.position || l.Position ? (
+                                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                                                Rank #{l.organic_rank || l.position || l.Position}
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                          
+                                          {/* ASIN */}
+                                          <div className="mt-1 text-xs text-gray-400">
+                                            {listingAsin}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                             </div>
                           )}
                         </div>
-                      </div>
+                      </>
                     );
                   })()}
                   
@@ -1126,10 +1310,10 @@ export default function AnalyzeForm({
                     <div className="bg-white border rounded-xl p-6 shadow-sm">
                       <div className="mb-4">
                         <h2 className="text-lg font-semibold text-gray-900 mb-1">
-                          ASIN Snapshot
+                          ASIN Analysis
                         </h2>
                         <p className="text-xs text-gray-500">
-                          Single-product competitive analysis for displacement targeting
+                          Product data unavailable
                         </p>
                       </div>
                       <div className="text-sm text-gray-500 text-center py-4">
@@ -1153,7 +1337,8 @@ export default function AnalyzeForm({
           onMessagesChange={setChatMessages}
           marketSnapshot={analysis?.market_snapshot || null}
           analysisMode={analysisMode}
-          selectedListing={selectedListing}
+          selectedListing={analysisMode === 'KEYWORD' ? selectedListing : null}
+          selectedCompetitor={analysisMode === 'ASIN' ? selectedCompetitor : null}
         />
       </div>
     </div>

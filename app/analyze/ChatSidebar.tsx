@@ -62,8 +62,10 @@ interface ChatSidebarProps {
   onMarginSnapshotUpdate?: (snapshot: MarginSnapshot) => void;
   /** Analysis mode: 'ASIN' for competitive targeting, 'KEYWORD' for market discovery */
   analysisMode?: 'ASIN' | 'KEYWORD' | null;
-  /** Selected listing (for AI context) */
+  /** Selected listing (for AI context in KEYWORD mode) */
   selectedListing?: any | null;
+  /** Selected competitor (for AI context in ASIN mode) */
+  selectedCompetitor?: any | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,6 +219,7 @@ export default function ChatSidebar({
   onMarginSnapshotUpdate,
   analysisMode = null,
   selectedListing = null,
+  selectedCompetitor = null,
 }: ChatSidebarProps) {
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
@@ -291,7 +294,8 @@ export default function ChatSidebar({
         body: JSON.stringify({
           analysisRunId,
           message: messageToSend,
-          selectedListing: selectedListing || null, // Pass selected listing for AI context
+          selectedListing: analysisMode === 'KEYWORD' ? (selectedListing || null) : null,
+          selectedCompetitor: analysisMode === 'ASIN' ? (selectedCompetitor || null) : null,
         }),
       });
 
