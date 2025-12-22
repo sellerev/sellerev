@@ -45,6 +45,7 @@ import {
 interface ChatRequestBody {
   analysisRunId: string;
   message: string;
+  selectedListing?: any | null; // Optional selected listing for AI context
 }
 
 function validateRequestBody(body: unknown): body is ChatRequestBody {
@@ -79,17 +80,37 @@ function buildContextMessage(
     sourcing_model: string;
   },
   inputType: string,
-  inputValue: string
+  inputValue: string,
+  selectedListing?: any | null
 ): string {
   const contextParts: string[] = [];
 
-  // Section 1: Original Analysis (marked as AUTHORITATIVE to prevent silent overrides)
+  // Section 1: Original Analysis (available for reference, but not emphasized for keyword mode)
   const confidenceDowngrades = (analysisResponse.confidence_downgrades as string[] | undefined) || [];
   const confidenceDowngradeText = confidenceDowngrades.length > 0
     ? `\n\nConfidence Downgrades:\n${confidenceDowngrades.map((reason, idx) => `- ${reason}`).join("\n")}`
     : "";
   
-  contextParts.push(`=== ORIGINAL ANALYSIS (AUTHORITATIVE) ===
+  // For keyword mode, de-emphasize verdicts (they're not shown in UI)
+  if (inputType === "idea") {
+    contextParts.push(`=== ANALYSIS CONTEXT (AVAILABLE IF ASKED) ===
+This analysis data is available for reference if the user asks about it.
+
+Input: ${inputType.toUpperCase()} - ${inputValue}
+
+Note: Verdicts and recommendations are not displayed in the UI by default.
+Only provide them if the user explicitly asks about the analysis verdict or recommendations.
+
+Available analysis data:
+- Verdict: ${(analysisResponse.decision as { verdict: string })?.verdict || "Not available"}
+- Confidence: ${(analysisResponse.decision as { confidence: number })?.confidence || "N/A"}%${confidenceDowngradeText}
+- Executive Summary: ${analysisResponse.executive_summary || "Not available"}
+- Risks: Available if asked
+- Recommended Actions: Available if asked
+- Assumptions & Limits: Available if asked`);
+  } else {
+    // ASIN mode: Keep full context (ASIN mode still uses verdicts)
+    contextParts.push(`=== ORIGINAL ANALYSIS (AUTHORITATIVE) ===
 This analysis anchors this conversation. Do not contradict without explicit explanation.
 
 Input: ${inputType.toUpperCase()} - ${inputValue}
@@ -108,6 +129,7 @@ ${JSON.stringify(analysisResponse.recommended_actions, null, 2)}
 
 Assumptions & Limits:
 ${JSON.stringify(analysisResponse.assumptions_and_limits, null, 2)}`);
+  }
 
   // Section 2: Market Data (explicitly labeled as CACHED to prevent fresh data assumptions)
   if (rainforestData && Object.keys(rainforestData).length > 0) {
@@ -292,6 +314,25 @@ This margin snapshot is the single source of truth. Always reference it when ans
       console.error("Error building margin snapshot context:", error);
       // Don't fail - just skip margin snapshot section
     }
+  }
+
+  // Section 7: Selected Listing Context (if provided)
+  if (selectedListing && typeof selectedListing === 'object' && selectedListing !== null) {
+    contextParts.push(`=== SELECTED LISTING (USER CONTEXT) ===
+The user has selected this listing from Page 1. Reference it when answering questions.
+
+ASIN: ${selectedListing.asin || 'Not available'}
+Title: ${selectedListing.title || 'Not available'}
+Price: ${selectedListing.price !== null && selectedListing.price !== undefined ? `$${selectedListing.price.toFixed(2)}` : 'Not available'}
+Rating: ${selectedListing.rating !== null && selectedListing.rating !== undefined ? selectedListing.rating.toFixed(1) : 'Not available'}
+Reviews: ${selectedListing.reviews !== null && selectedListing.reviews !== undefined ? selectedListing.reviews.toLocaleString() : 'Not available'}
+BSR: ${selectedListing.bsr !== null && selectedListing.bsr !== undefined ? `#${selectedListing.bsr.toLocaleString()}` : 'Not available'}
+Organic Rank: ${selectedListing.organic_rank !== null && selectedListing.organic_rank !== undefined ? `#${selectedListing.organic_rank}` : 'Not available'}
+Fulfillment: ${selectedListing.fulfillment || 'Not available'}
+Brand: ${selectedListing.brand || 'Not available'}
+Sponsored: ${selectedListing.is_sponsored ? 'Yes' : 'No'}
+
+When the user asks about a specific product or compares products, reference this selected listing's data.`);
   }
 
   return contextParts.join("\n\n");
@@ -1139,7 +1180,8 @@ export async function POST(req: NextRequest) {
         analysisRun.rainforest_data as Record<string, unknown> | null,
         sellerProfile,
         analysisRun.input_type,
-        analysisRun.input_value
+        analysisRun.input_value,
+        body.selectedListing || null
       );
 
       // 9. Build Market Snapshot Summary (from cached response.market_snapshot only)

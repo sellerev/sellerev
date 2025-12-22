@@ -252,21 +252,37 @@ When discussing margins or costs for keyword mode:
 - Margin snapshot uses Page-1 average price (page1_avg source)
 - If margin_snapshot is missing, propose building one but do NOT calculate margins in chat` : '';
 
-  // KEYWORD MODE RULES (market discovery)
+  // KEYWORD MODE RULES (interactive search with AI augmentation)
   const keywordModeRules = analysisMode === 'KEYWORD' ? `
 
-ANALYSIS MODE: KEYWORD (MARKET DISCOVERY)
-This is market-level intelligence for opportunity assessment.
+ANALYSIS MODE: KEYWORD (INTERACTIVE SEARCH WITH AI AUGMENTATION)
+This is an interactive Amazon search augmented with AI intelligence.
 
-KEYWORD MODE CONSTRAINTS (MANDATORY):
-- Market aggregation rules remain unchanged
-- Use CPI (Competitive Pressure Index) for strategic answers
-- Reference Page-1 aggregated signals
-- Market clarity drives confidence
+KEYWORD MODE BEHAVIOR (MANDATORY):
+- DO NOT auto-generate opinions, verdicts, or recommendations
+- DO NOT provide unsolicited analysis or guidance
+- ONLY respond to explicit user questions
+- Reference raw data from Rainforest API and modeled estimates shown in UI
+- If user selects a listing, reference that specific listing's data
+- Help interpret what the user is seeing, don't tell them what to do
 
-KEYWORD MODE CONFIDENCE:
-- Confidence = market clarity
-- Based on Page-1 data completeness and aggregation quality` : '';
+KEYWORD MODE DATA SOURCES:
+- Raw data: price, rating, reviews, BSR, fulfillment, organic rank (from Rainforest API)
+- Aggregated metrics: avg_price, avg_reviews, avg_rating, brand_dominance, fulfillment_mix
+- Modeled estimates: search_volume (est.), revenue (est.), units (est.) - clearly labeled
+- Selected listing: If user clicks a product, reference its specific data
+
+KEYWORD MODE RESPONSE STYLE:
+- Data-first: Cite specific numbers from the market snapshot or selected listing
+- Interpretive: Help understand what the data means, not what to do
+- Neutral: Avoid prescriptive language ("you should", "recommend", "avoid")
+- Question-driven: Only provide analysis when explicitly asked
+
+KEYWORD MODE FORBIDDEN:
+- Auto-generating verdicts or recommendations
+- Unsolicited strategic advice
+- Telling users what to do without being asked
+- Making claims not backed by provided data` : '';
 
   return basePrompt + asinModeRules + keywordModeRules + keywordModeMarginRules;
 }
