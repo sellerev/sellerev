@@ -1705,7 +1705,7 @@ export default function AnalyzeForm({
                       Assumptions & Limits
                     </h2>
                     <span className="text-xs text-gray-400">
-                      ({analysis.assumptions_and_limits.length} items)
+                      ({analysis.assumptions_and_limits?.length || 0} items)
                     </span>
                   </div>
                   <svg
@@ -1722,15 +1722,19 @@ export default function AnalyzeForm({
                     This analysis is based on available data. The following limitations apply:
                   </p>
                   <ul className="space-y-2">
-                    {analysis.assumptions_and_limits.map((item, idx) => (
-                      <li
-                        key={idx}
-                        className="flex items-start gap-2 text-gray-600 text-sm"
-                      >
-                        <span className="text-gray-400 mt-0.5">•</span>
-                        {item}
-                      </li>
-                    ))}
+                    {analysis.assumptions_and_limits && Array.isArray(analysis.assumptions_and_limits) && analysis.assumptions_and_limits.length > 0 ? (
+                      analysis.assumptions_and_limits.map((item, idx) => (
+                        <li
+                          key={idx}
+                          className="flex items-start gap-2 text-gray-600 text-sm"
+                        >
+                          <span className="text-gray-400 mt-0.5">•</span>
+                          {item}
+                        </li>
+                      ))
+                    ) : (
+                      <li className="text-gray-500 text-sm italic">No assumptions or limits specified</li>
+                    )}
                   </ul>
                 </div>
               </details>
