@@ -111,6 +111,15 @@ export function estimateSearchVolume(
     baseVolume = page1Listings * 1500; // ~1.5k searches per Page-1 listing
   }
   
+  // Fallback: If baseVolume is still 0, use minimum conservative estimate
+  // Even with minimal data, we can provide a conservative range
+  if (baseVolume === 0 && page1Listings > 0) {
+    baseVolume = page1Listings * 500; // Very conservative: 500 searches per listing
+  } else if (baseVolume === 0) {
+    // Absolute minimum: assume at least 1k searches/month for any keyword with results
+    baseVolume = 1000;
+  }
+  
   // Factor 3: Average reviews (demand proxy)
   // Higher reviews suggest more historical searches
   let reviewMultiplier = 1.0;

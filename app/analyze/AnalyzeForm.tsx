@@ -96,9 +96,15 @@ interface AnalysisResponse {
     avg_price: number | null;
     avg_reviews: number | null;
     avg_rating: number | null;
+    avg_bsr?: number | null;
     total_page1_listings: number; // Only Page 1 listings
     sponsored_count: number;
     dominance_score: number; // 0-100, % of listings belonging to top brand
+    fulfillment_mix?: {
+      fba: number;
+      fbm: number;
+      amazon: number;
+    } | null;
     representative_asin?: string | null; // Optional representative ASIN for fee estimation
     // Page 1 product listings (for data-first display)
     listings?: Array<{
@@ -107,6 +113,9 @@ interface AnalysisResponse {
       price: number | null;
       rating: number | null;
       reviews: number | null;
+      bsr?: number | null;
+      organic_rank?: number | null;
+      fulfillment?: "FBA" | "FBM" | "Amazon" | null;
       is_sponsored: boolean;
       position: number;
       brand: string | null;
@@ -288,16 +297,38 @@ function calculate30DayUnits(listings: Array<{ price: number | null; reviews: nu
 
 /**
  * Calculate fulfillment mix (FBA / FBM / Amazon %)
- * Currently simplified as fulfillment data not in ParsedListing
+ * Extracts from listings if fulfillment field is available
  */
 function calculateFulfillmentMix(listings: Array<any>): {
   fba: number;
   fbm: number;
   amazon: number;
 } {
-  // Placeholder - fulfillment data not available in current structure
-  // Return defaults for now (will show "—" in UI)
-  return { fba: 0, fbm: 0, amazon: 0 };
+  if (!listings || listings.length === 0) {
+    return { fba: 0, fbm: 0, amazon: 0 };
+  }
+  
+  let fbaCount = 0;
+  let fbmCount = 0;
+  let amazonCount = 0;
+  
+  listings.forEach((l: any) => {
+    const fulfillment = l.fulfillment || l.Fulfillment;
+    if (fulfillment === "FBA") fbaCount++;
+    else if (fulfillment === "FBM") fbmCount++;
+    else if (fulfillment === "Amazon") amazonCount++;
+  });
+  
+  const totalWithFulfillment = fbaCount + fbmCount + amazonCount;
+  if (totalWithFulfillment === 0) {
+    return { fba: 0, fbm: 0, amazon: 0 };
+  }
+  
+  return {
+    fba: Math.round((fbaCount / totalWithFulfillment) * 100),
+    fbm: Math.round((fbmCount / totalWithFulfillment) * 100),
+    amazon: Math.round((amazonCount / totalWithFulfillment) * 100),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -931,6 +962,9 @@ export default function AnalyzeForm({
                     price: l.price || l.Price || null,
                     rating: l.rating || l.Rating || null,
                     reviews: l.reviews || l.Reviews || l.review_count || null,
+                    bsr: l.bsr || l.BSR || null,
+                    organic_rank: l.organic_rank || l.position || l.Position || null,
+                    fulfillment: l.fulfillment || l.Fulfillment || null,
                     image: l.image || l.image_url || l.Image || null,
                     is_sponsored: l.is_sponsored || l.IsSponsored || false,
                     revenue_est: l.revenue_est || l.est_monthly_revenue || null,
@@ -982,9 +1016,11 @@ export default function AnalyzeForm({
                           <thead className="bg-gray-50 border-b">
                             <tr>
                               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Organic Rank</th>
                               <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
                               <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Rating</th>
                               <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Reviews</th>
+                              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">BSR</th>
                               <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Est. Monthly Revenue</th>
                               <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Revenue Share</th>
                             </tr>
@@ -1030,6 +1066,11 @@ export default function AnalyzeForm({
                                     </div>
                                   </td>
                                   <td className="px-4 py-3 text-right text-sm text-gray-900">
+                                    {listing.organic_rank !== null && listing.organic_rank !== undefined
+                                      ? `#${listing.organic_rank}`
+                                      : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-sm text-gray-900">
                                     {listing.price !== null && listing.price !== undefined ? formatCurrency(listing.price) : "—"}
                                   </td>
                                   <td className="px-4 py-3 text-right text-sm text-gray-900">
@@ -1040,6 +1081,11 @@ export default function AnalyzeForm({
                                   <td className="px-4 py-3 text-right text-sm text-gray-900">
                                     {listing.reviews !== null && listing.reviews !== undefined
                                       ? listing.reviews.toLocaleString()
+                                      : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-sm text-gray-900">
+                                    {listing.bsr !== null && listing.bsr !== undefined
+                                      ? `#${listing.bsr.toLocaleString()}`
                                       : "—"}
                                   </td>
                                   <td className="px-4 py-3 text-right text-sm font-medium text-gray-900">
@@ -1101,7 +1147,9 @@ export default function AnalyzeForm({
               {analysisMode === 'KEYWORD' && analysis.market_snapshot && (() => {
                 const snapshot = analysis.market_snapshot;
                 const listings = snapshot.listings || [];
-                const fulfillmentMix = calculateFulfillmentMix(listings);
+                
+                // Use fulfillment_mix from snapshot if available, otherwise calculate
+                const fulfillmentMix = snapshot.fulfillment_mix || calculateFulfillmentMix(listings);
                 
                 // Calculate brand dominance (top brand %)
                 const brandCounts: Record<string, number> = {};
@@ -1135,14 +1183,26 @@ export default function AnalyzeForm({
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Fulfillment Mix</div>
                         <div className="text-lg font-semibold text-gray-900">
-                          {fulfillmentMix.fba > 0 || fulfillmentMix.fbm > 0 
-                            ? `FBA ${fulfillmentMix.fba}% / FBM ${fulfillmentMix.fbm}%`
+                          {fulfillmentMix && (fulfillmentMix.fba > 0 || fulfillmentMix.fbm > 0 || fulfillmentMix.amazon > 0)
+                            ? `FBA ${fulfillmentMix.fba}% / FBM ${fulfillmentMix.fbm}%${fulfillmentMix.amazon > 0 ? ` / Amazon ${fulfillmentMix.amazon}%` : ''}`
                             : "—"}
                         </div>
                         <div className="text-xs text-gray-600 mt-1">
                           FBA / FBM / Amazon %
                         </div>
                       </div>
+                      {/* Average BSR */}
+                      {snapshot.avg_bsr !== null && snapshot.avg_bsr !== undefined && (
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                          <div className="text-xs text-gray-500 mb-1">Avg BSR</div>
+                          <div className="text-lg font-semibold text-gray-900">
+                            #{snapshot.avg_bsr.toLocaleString()}
+                          </div>
+                          <div className="text-xs text-gray-600 mt-1">
+                            Average Best Seller Rank
+                          </div>
+                        </div>
+                      )}
                       {/* Page-1 Density */}
                       <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="text-xs text-gray-500 mb-1">Page-1 Density</div>

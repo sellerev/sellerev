@@ -1275,7 +1275,9 @@ ${body.input_value}`;
           avg_price: snapshot.avg_price,
           avg_rating: snapshot.avg_rating,
           avg_reviews: snapshot.avg_reviews,
+          avg_bsr: snapshot.avg_bsr || null,
           dominance_score: snapshot.dominance_score || null,
+          fulfillment_mix: snapshot.fulfillment_mix || null,
           listings: listings.map((listing) => ({
             asin: listing.asin || "",
             title: listing.title || "",
@@ -1283,7 +1285,9 @@ ${body.input_value}`;
             price: listing.price || null,
             rating: listing.rating || null,
             reviews: listing.reviews || null,
-            bsr: null, // BSR not available in listings structure
+            bsr: listing.bsr || null, // BSR from Rainforest API if available
+            organic_rank: listing.position || null, // Organic rank (1-indexed position)
+            fulfillment: listing.fulfillment || null, // FBA/FBM/Amazon
             image: listing.image_url || null,
             is_sponsored: listing.is_sponsored || false,
             revenue_est: listing.est_monthly_revenue || null,

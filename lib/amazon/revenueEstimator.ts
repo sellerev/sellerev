@@ -41,10 +41,11 @@ const CATEGORY_VELOCITY_MULTIPLIERS: Record<string, number[]> = {
 };
 
 /**
- * Base monthly revenue estimate for position 1 (baseline)
- * This is a rough estimate - position 1 products typically see $5k-50k/month depending on category
+ * Base 30-day revenue estimate for position 1 (baseline)
+ * This is a rough estimate - position 1 products typically see $50k-500k/30-days depending on category
+ * H10 shows top products with $500k-$1M+ in 30-day revenue for competitive keywords
  */
-const BASE_MONTHLY_REVENUE_POSITION_1 = 15000; // $15k/month baseline for position 1
+const BASE_30DAY_REVENUE_POSITION_1 = 150000; // $150k/30-days baseline for position 1 (conservative)
 
 /**
  * Infer category from keyword or use default
@@ -79,14 +80,16 @@ function getVelocityMultiplier(category: string, position: number): number {
 }
 
 /**
- * Estimate monthly revenue for a single listing
+ * Estimate 30-day revenue for a single listing
  * 
  * Formula: base_revenue * price_ratio * velocity_multiplier
  * 
  * Where:
- * - base_revenue = BASE_MONTHLY_REVENUE_POSITION_1
+ * - base_revenue = BASE_30DAY_REVENUE_POSITION_1
  * - price_ratio = listing_price / avg_price (normalized around 1.0)
  * - velocity_multiplier = position-based multiplier from category table
+ * 
+ * Note: This estimates 30-day revenue (not monthly) to match H10's reporting format
  */
 export function estimateListingRevenue(
   price: number,
@@ -108,9 +111,9 @@ export function estimateListingRevenue(
   // Very cheap products might have higher volume, very expensive products might have lower volume
   const clampedPriceRatio = Math.max(0.5, Math.min(2.0, priceRatio));
   
-  // Estimate revenue: base * price_ratio * velocity
+  // Estimate 30-day revenue: base * price_ratio * velocity
   // Higher prices can support similar or higher revenue if conversion is maintained
-  const estRevenue = BASE_MONTHLY_REVENUE_POSITION_1 * clampedPriceRatio * velocityMultiplier;
+  const estRevenue = BASE_30DAY_REVENUE_POSITION_1 * clampedPriceRatio * velocityMultiplier;
   
   // Round to nearest dollar
   const roundedRevenue = Math.round(estRevenue);
@@ -119,15 +122,17 @@ export function estimateListingRevenue(
   const confidence: "low" | "medium" = position <= 8 ? "medium" : "low";
   
   return {
-    est_monthly_revenue: roundedRevenue,
+    est_monthly_revenue: roundedRevenue, // Note: field name is "monthly" but value is 30-day
     revenue_confidence: confidence,
   };
 }
 
 /**
- * Estimate monthly units sold
+ * Estimate 30-day units sold
  * 
  * units = revenue / price
+ * 
+ * Note: This estimates 30-day units (not monthly) to match H10's reporting format
  */
 export function estimateListingUnits(
   revenue: number,

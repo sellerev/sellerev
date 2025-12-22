@@ -17,9 +17,11 @@ export interface ParsedListing {
   rating: number | null;
   reviews: number | null;
   is_sponsored: boolean;
-  position: number;
+  position: number; // Organic rank (1-indexed position on Page 1)
   brand: string | null;
   image_url: string | null; // Rainforest search_results[].image
+  bsr: number | null; // Best Seller Rank (if available from Rainforest)
+  fulfillment: "FBA" | "FBM" | "Amazon" | null; // Fulfillment type (if available)
   est_monthly_revenue?: number | null; // 30-day revenue estimate (modeled)
   est_monthly_units?: number | null; // 30-day units estimate (modeled)
   revenue_confidence?: "low" | "medium"; // Confidence level for revenue estimate
@@ -30,9 +32,15 @@ export interface KeywordMarketSnapshot {
   avg_price: number | null;
   avg_reviews: number | null;
   avg_rating: number | null;
+  avg_bsr: number | null; // Average Best Seller Rank
   total_page1_listings: number; // Only Page 1 listings
   sponsored_count: number;
   dominance_score: number; // 0-100, % of listings belonging to top brand
+  fulfillment_mix: {
+    fba: number; // % of listings fulfilled by Amazon (FBA)
+    fbm: number; // % of listings merchant fulfilled (FBM)
+    amazon: number; // % of listings sold by Amazon
+  } | null;
   representative_asin?: string | null; // Optional representative ASIN for fee estimation
   // 30-Day Revenue Estimates (modeled, not exact)
   est_total_monthly_revenue_min?: number | null;
@@ -107,6 +115,53 @@ function parseRating(item: any): number | null {
   if (item.rating !== undefined && item.rating !== null) {
     const parsed = parseFloat(item.rating.toString());
     return isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+/**
+ * Safely parses BSR (Best Seller Rank).
+ */
+function parseBSR(item: any): number | null {
+  // Try various BSR field names from Rainforest API
+  if (item.bsr !== undefined && item.bsr !== null) {
+    const parsed = parseInt(item.bsr.toString().replace(/,/g, ""), 10);
+    return isNaN(parsed) ? null : parsed;
+  }
+  if (item.best_seller_rank !== undefined && item.best_seller_rank !== null) {
+    const parsed = parseInt(item.best_seller_rank.toString().replace(/,/g, ""), 10);
+    return isNaN(parsed) ? null : parsed;
+  }
+  if (item.rank !== undefined && item.rank !== null) {
+    const parsed = parseInt(item.rank.toString().replace(/,/g, ""), 10);
+    return isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+/**
+ * Safely parses fulfillment type (FBA/FBM/Amazon).
+ */
+function parseFulfillment(item: any): "FBA" | "FBM" | "Amazon" | null {
+  // Try various fulfillment field names from Rainforest API
+  if (item.fulfillment) {
+    const fulfillment = item.fulfillment.toString().toUpperCase();
+    if (fulfillment.includes("FBA") || fulfillment.includes("FULFILLED BY AMAZON")) {
+      return "FBA";
+    }
+    if (fulfillment.includes("FBM") || fulfillment.includes("MERCHANT")) {
+      return "FBM";
+    }
+    if (fulfillment.includes("AMAZON")) {
+      return "Amazon";
+    }
+  }
+  if (item.is_amazon) {
+    return "Amazon";
+  }
+  if (item.is_prime) {
+    // Prime usually means FBA, but not always
+    return "FBA";
   }
   return null;
 }
@@ -196,7 +251,9 @@ export async function fetchKeywordMarketSnapshot(
       const rating = parseRating(item);
       const reviews = parseReviews(item);
       const is_sponsored = item.is_sponsored ?? false;
-      const position = item.position ?? index + 1;
+      const position = item.position ?? index + 1; // Organic rank (1-indexed)
+      const bsr = parseBSR(item);
+      const fulfillment = parseFulfillment(item);
       
       // Extract brand: try item.brand first, then infer from title
       let brand = item.brand ?? null;
@@ -217,6 +274,8 @@ export async function fetchKeywordMarketSnapshot(
         position,
         brand,
         image_url,
+        bsr,
+        fulfillment,
       };
     });
     } catch (parseError) {
@@ -262,6 +321,36 @@ export async function fetchKeywordMarketSnapshot(
         ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length
         : null;
 
+    // Average BSR (only over listings with BSR)
+    const listingsWithBSR = validListings.filter((l) => l.bsr !== null && l.bsr !== undefined);
+    const avg_bsr =
+      listingsWithBSR.length > 0
+        ? listingsWithBSR.reduce((sum, l) => sum + (l.bsr ?? 0), 0) / listingsWithBSR.length
+        : null;
+
+    // Fulfillment mix calculation
+    let fulfillmentMix: { fba: number; fbm: number; amazon: number } | null = null;
+    if (validListings.length > 0) {
+      let fbaCount = 0;
+      let fbmCount = 0;
+      let amazonCount = 0;
+      
+      validListings.forEach((l) => {
+        if (l.fulfillment === "FBA") fbaCount++;
+        else if (l.fulfillment === "FBM") fbmCount++;
+        else if (l.fulfillment === "Amazon") amazonCount++;
+      });
+      
+      const totalWithFulfillment = fbaCount + fbmCount + amazonCount;
+      if (totalWithFulfillment > 0) {
+        fulfillmentMix = {
+          fba: Math.round((fbaCount / totalWithFulfillment) * 100),
+          fbm: Math.round((fbmCount / totalWithFulfillment) * 100),
+          amazon: Math.round((amazonCount / totalWithFulfillment) * 100),
+        };
+      }
+    }
+
     // Top brands (count occurrences by brand if available) - Page 1 only
     const brandCounts: Record<string, number> = {};
     validListings.forEach((l) => {
@@ -285,9 +374,11 @@ export async function fetchKeywordMarketSnapshot(
       avg_price: avg_price !== null ? Math.round(avg_price * 100) / 100 : null,
       avg_reviews: avg_reviews !== null ? Math.round(avg_reviews) : null,
       avg_rating: avg_rating !== null ? Math.round(avg_rating * 10) / 10 : null,
+      avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
       total_page1_listings,
       sponsored_count,
       dominance_score,
+      fulfillment_mix: fulfillmentMix,
     };
 
     // Estimate revenue and units for each listing (30-day estimates)
@@ -320,6 +411,7 @@ export async function fetchKeywordMarketSnapshot(
     });
 
     // Aggregate total revenue and units estimates
+    // Always calculate aggregates, even if some listings have null estimates
     const revenueEstimates = listingsWithEstimates
       .filter(l => l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined)
       .map(l => ({
@@ -328,9 +420,17 @@ export async function fetchKeywordMarketSnapshot(
         revenue_confidence: l.revenue_confidence || "low",
       }));
     
-    const aggregated = aggregateRevenueEstimates(revenueEstimates);
+    // Always return aggregates (even if empty array, will return 0s)
+    const aggregated = revenueEstimates.length > 0
+      ? aggregateRevenueEstimates(revenueEstimates)
+      : {
+          total_revenue_min: 0,
+          total_revenue_max: 0,
+          total_units_min: 0,
+          total_units_max: 0,
+        };
     
-    // Estimate search volume
+    // Estimate search volume (always returns a value, never null)
     const searchVolumeEstimator = await import("./searchVolumeEstimator");
     const searchVolume = searchVolumeEstimator.estimateSearchVolume(
       totalResults,
@@ -342,10 +442,10 @@ export async function fetchKeywordMarketSnapshot(
     
     const snapshotWithEstimates: KeywordMarketSnapshot = {
       ...snapshot,
-      est_total_monthly_revenue_min: aggregated.total_revenue_min,
-      est_total_monthly_revenue_max: aggregated.total_revenue_max,
-      est_total_monthly_units_min: aggregated.total_units_min,
-      est_total_monthly_units_max: aggregated.total_units_max,
+      est_total_monthly_revenue_min: aggregated.total_revenue_min > 0 ? aggregated.total_revenue_min : null,
+      est_total_monthly_revenue_max: aggregated.total_revenue_max > 0 ? aggregated.total_revenue_max : null,
+      est_total_monthly_units_min: aggregated.total_units_min > 0 ? aggregated.total_units_min : null,
+      est_total_monthly_units_max: aggregated.total_units_max > 0 ? aggregated.total_units_max : null,
       search_demand: {
         search_volume_range: searchVolume.search_volume_range,
         search_volume_confidence: searchVolume.search_volume_confidence,
