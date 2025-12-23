@@ -1015,13 +1015,9 @@ export async function POST(req: NextRequest) {
       }
     }
     
-    // Record analyzed keyword/ASIN in memory (append-only, no confirmation needed)
-    if (analysisRun.input_type === "idea") {
-      sellerMemory = recordAnalyzedKeyword(sellerMemory, analysisRun.input_value);
-    } else {
-      // ASIN mode removed - all analyses are keyword-only
-      sellerMemory = recordAnalyzedAsin(sellerMemory, analysisRun.input_value);
-    }
+    // Record analyzed keyword in memory (append-only, no confirmation needed)
+    // All analyses are keyword-only now
+    sellerMemory = recordAnalyzedKeyword(sellerMemory, analysisRun.input_value);
     
     // Save updated memory (if changed)
     await supabase
