@@ -1112,11 +1112,51 @@ ${body.input_value}`;
       // dominance_score is always a number (0-100), so no need to delete
     }
 
+    // 13. Clean and validate response before insert
+    // Remove undefined values (PostgreSQL JSONB doesn't handle undefined well)
+    function cleanForJSON(obj: any): any {
+      if (obj === null || obj === undefined) {
+        return null;
+      }
+      if (Array.isArray(obj)) {
+        return obj.map(cleanForJSON).filter(item => item !== undefined);
+      }
+      if (typeof obj === 'object') {
+        const cleaned: any = {};
+        for (const [key, value] of Object.entries(obj)) {
+          if (value !== undefined) {
+            cleaned[key] = cleanForJSON(value);
+          }
+        }
+        return cleaned;
+      }
+      return obj;
+    }
+    
+    const cleanedResponse = cleanForJSON(finalResponse);
+    
+    let serializedResponse: string;
+    try {
+      serializedResponse = JSON.stringify(cleanedResponse);
+      console.log("RESPONSE_SIZE", { size_bytes: serializedResponse.length });
+    } catch (serializeError) {
+      console.error("RESPONSE_SERIALIZATION_ERROR", serializeError);
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Failed to serialize analysis response",
+          details: serializeError instanceof Error ? serializeError.message : String(serializeError),
+        },
+        { status: 500, headers: res.headers }
+      );
+    }
+
     // 13. Save to analysis_runs
     console.log("BEFORE_INSERT", {
       user_id: user.id,
       input_type: body.input_type,
       has_decision: !!decisionJson.decision,
+      response_size_bytes: serializedResponse.length,
     });
 
     const { data: insertedRun, error: insertError } = await supabase
@@ -1130,7 +1170,7 @@ ${body.input_value}`;
         seller_stage: sellerProfile.stage,
         seller_experience_months: sellerProfile.experience_months,
         seller_monthly_revenue_range: sellerProfile.monthly_revenue_range,
-        response: finalResponse, // Store contract-compliant response
+        response: cleanedResponse, // Store cleaned, contract-compliant response
       })
       .select("id")
       .single();
@@ -1143,8 +1183,28 @@ ${body.input_value}`;
         hint: insertError?.hint,
         code: insertError?.code,
       });
+      
+      // Try to serialize finalResponse to check for issues
+      let responseSize = 0;
+      let canSerialize = true;
+      try {
+        const serialized = JSON.stringify(finalResponse);
+        responseSize = serialized.length;
+      } catch (serializeError) {
+        canSerialize = false;
+        console.error("CANNOT_SERIALIZE_RESPONSE", serializeError);
+      }
+      
       return NextResponse.json(
-        { success: false, error: "Failed to save analysis run" },
+        { 
+          success: false, 
+          error: "Failed to save analysis run",
+          details: insertError?.message || "Unknown database error",
+          hint: insertError?.hint || null,
+          code: insertError?.code || null,
+          response_size: responseSize,
+          can_serialize: canSerialize,
+        },
         { status: 500, headers: res.headers }
       );
     }
