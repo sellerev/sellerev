@@ -734,7 +734,6 @@ export async function POST(req: NextRequest) {
     let marginSnapshot: any = null;
     
     // First, calculate margin snapshot (needed for contract response)
-    let marginSnapshot: any = null;
     try {
       const priceForMargin = marketSnapshot?.avg_price || 25.0;
       

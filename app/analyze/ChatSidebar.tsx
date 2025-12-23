@@ -104,7 +104,7 @@ function getSuggestedQuestions(
   marketSnapshot: MarketSnapshot | null
 ): string[] {
   // ASIN mode: Competitive targeting questions
-  if (analysisMode === 'ASIN') {
+  if (false) { // ASIN mode removed - keyword-only
     return [
       "How can I beat this ASIN?",
       "What's the displacement strategy for this listing?",

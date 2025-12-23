@@ -1018,7 +1018,8 @@ export async function POST(req: NextRequest) {
     // Record analyzed keyword/ASIN in memory (append-only, no confirmation needed)
     if (analysisRun.input_type === "idea") {
       sellerMemory = recordAnalyzedKeyword(sellerMemory, analysisRun.input_value);
-    } else if (analysisRun.input_type === "asin") {
+    } else {
+      // ASIN mode removed - all analyses are keyword-only
       sellerMemory = recordAnalyzedAsin(sellerMemory, analysisRun.input_value);
     }
     
@@ -1191,7 +1192,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Determine analysis mode from input_type
-    const analysisMode: 'ASIN' | 'KEYWORD' = analysisRun.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
+    const analysisMode: 'KEYWORD' = 'KEYWORD'; // All analyses are keyword-only
     
     // 8a. Extract ai_context from analyze contract (if available)
     // The analyze contract stores ai_context in the response
@@ -1211,7 +1212,7 @@ export async function POST(req: NextRequest) {
     // Build AI Copilot system prompt (locked behavior contract)
     const systemPrompt = buildCopilotSystemPrompt(
       copilotContext,
-      analysisRun.input_type === 'asin' ? 'asin' : 'keyword'
+      'keyword' // All analyses are keyword-only
     );
     
     // Log AI reasoning inputs for audit/debugging
