@@ -181,59 +181,6 @@ CRITICAL:
 - NO partial answers
 - If data is missing, refuse completely`;
 
-  // ASIN MODE RULES (competitive targeting)
-  const asinModeRules = analysisMode === 'ASIN' ? `
-
-ANALYSIS MODE: ASIN (COMPETITIVE TARGETING)
-This is a single-product competitive analysis for displacement targeting.
-
-ASIN MODE CONSTRAINTS (MANDATORY):
-- NEVER say "insufficient Page-1 data" or "Page-1 average"
-- NEVER ask for market aggregation
-- PPC, pricing, and margin answers must be inferred from the ASIN itself
-- Focus on displacement strategy, not market discovery
-- Use language like "this ASIN", "this listing", "displacement"
-- NEVER use keyword-style language: "market density", "keyword competition", "Page-1 average"
-
-FORBIDDEN PHRASES IN ASIN MODE:
-- "Page-1 average"
-- "market density"
-- "keyword competition"
-- "insufficient Page-1 data"
-- "market aggregation"
-- "Page-1 competitors" (unless explicitly comparing the ASIN to competitors)
-- "insufficient data" (for margins - always provide estimates)
-- "provide COGS" or "what is your COGS" (never ask - always propose)
-
-REQUIRED PHRASES IN ASIN MODE:
-- "this ASIN"
-- "this listing"
-- "displacement"
-- "competitive target"
-- "review moat" (absolute, not relative to Page-1)
-
-ASIN MODE CONFIDENCE:
-- Confidence = displacement feasibility
-- NOT market clarity or Page-1 data completeness
-- Focus on whether this specific ASIN can be displaced
-
-ASIN MODE MARGIN BEHAVIOR (MANDATORY - Cost Refinement):
-When discussing margins or costs for ASIN mode:
-- NEVER recalculate margins - ALWAYS reference margin_snapshot only
-- NEVER ask "provide COGS" or "what is your COGS" or "I need your COGS and FBA fees"
-- If margin_snapshot.confidence_tier === "REFINED":
-  - Use authoritative tone: "Based on your actual costs..." or "Using your refined inputs..."
-  - Treat costs as authoritative - do not suggest alternative assumptions
-  - NEVER ask for COGS/FBA fees again once refined
-- If margin_snapshot.confidence_tier === "ESTIMATED":
-  - Use proposal tone: "Based on typical ranges..." or "Typically sellers land COGS between..."
-  - Proactively suggest reasonable ranges based on sourcing_model
-  - Offer actions: "I can estimate with assumptions" or "Plug in your real costs"
-- Always reference margin_snapshot values (estimated_cogs_min/max, estimated_fba_fee, net_margin_min_pct/max_pct, breakeven_price_min/max)
-- Always anchor to "this ASIN" - never reference Page-1 averages for margins
-- Language: "for this ASIN", "at this price point", "for this listing"
-- If margin_snapshot is missing, propose building one but do NOT calculate margins in chat` : '';
-
   const keywordModeMarginRules = analysisMode === 'KEYWORD' ? `
 
 KEYWORD MODE MARGIN BEHAVIOR (MANDATORY - Cost Refinement):
@@ -284,7 +231,7 @@ KEYWORD MODE FORBIDDEN:
 - Telling users what to do without being asked
 - Making claims not backed by provided data` : '';
 
-  return basePrompt + asinModeRules + keywordModeRules + keywordModeMarginRules;
+  return basePrompt + keywordModeRules + keywordModeMarginRules;
 }
 
 // Legacy export for backward compatibility (defaults to KEYWORD mode)

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
+import { normalizeListing } from "@/lib/amazon/normalizeListing";
 
 /**
  * Sellerev Analyze Page - Core Product Component
@@ -181,40 +182,12 @@ interface AnalysisResponse {
     last_updated: string; // ISO timestamp
     source: "user";
   };
-  // Optional: ASIN-specific product data (when input_type === "asin")
-  asin_snapshot?: {
-    asin: string;
-    price: number | null;
-    rating: number | null;
-    reviews: number | null;
-    bsr: number | null; // Primary category BSR
-    fulfillment: "FBA" | "FBM" | "Amazon" | null;
-    brand_owner: "Amazon" | "Brand" | "Unknown" | null;
-    // Relative positioning vs Page 1 (percentiles)
-    position_vs_page1?: {
-      price_percentile: number | null; // 0-100, lower = cheaper
-      review_percentile: number | null; // 0-100, higher = more reviews
-      rating_percentile: number | null; // 0-100, higher = better rating
-      brand_context: string | null; // "Brand-led niche" | "Fragmented niche"
-    } | null;
-    // ASIN Competitive Pressure Score (1-10, replaces CPI for ASIN)
-    pressure_score?: {
-      score: number; // 1-10
-      label: "Low" | "Moderate" | "High";
-      explanation: string;
-    } | null;
-  } | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VALIDATION HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-function isValidASIN(value: string): boolean {
-  // ASIN format: 10 alphanumeric characters, typically starting with B0
-  const asinPattern = /^[A-Z0-9]{10}$/i;
-  return asinPattern.test(value.trim());
-}
 
 function formatCurrency(value: number | null | undefined): string {
   if (value === null || value === undefined || typeof value !== 'number' || isNaN(value)) {
@@ -391,10 +364,7 @@ export default function AnalyzeForm({
   // STATE
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Input state - pre-populate if loading from history
-  const [inputType, setInputType] = useState<"asin" | "keyword">(
-    initialAnalysis?.input_type || "keyword"
-  );
+  // Input state - pre-populate if loading from history (keyword-only)
   const [inputValue, setInputValue] = useState(
     initialAnalysis?.input_value || ""
   );
@@ -424,9 +394,6 @@ export default function AnalyzeForm({
   
   // Selected listing state (for AI context)
   const [selectedListing, setSelectedListing] = useState<any | null>(null);
-  
-  // Selected competitor state (for ASIN mode)
-  const [selectedCompetitor, setSelectedCompetitor] = useState<any | null>(null);
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -436,12 +403,14 @@ export default function AnalyzeForm({
     setInputError(null);
 
     if (!inputValue.trim()) {
-      setInputError("Please enter a value to analyze");
+      setInputError("Please enter a keyword to search");
       return false;
     }
 
-    if (inputType === "asin" && !isValidASIN(inputValue)) {
-      setInputError("Please enter a valid ASIN (10 alphanumeric characters)");
+    // Check if input looks like an ASIN
+    const asinPattern = /^B0[A-Z0-9]{8}$/i;
+    if (asinPattern.test(inputValue.trim())) {
+      setInputError("Analyze currently supports keyword search only.");
       return false;
     }
 
@@ -457,17 +426,13 @@ export default function AnalyzeForm({
     setChatMessages([]); // Clear previous chat
 
     try {
-      // Map UI input type to API input type
-      // UI shows "Keyword" but API expects "idea"
-      const apiInputType = inputType === "keyword" ? "idea" : "asin";
-
-      console.log("ANALYZE_REQUEST_START", { apiInputType, inputValue: inputValue.trim() });
+      console.log("ANALYZE_REQUEST_START", { inputValue: inputValue.trim() });
 
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          input_type: apiInputType,
+          input_type: "keyword",
           input_value: inputValue.trim(),
         }),
       });
@@ -530,16 +495,13 @@ export default function AnalyzeForm({
         }
       }
       
-      // Extract asin_snapshot from decision if present
-      const asinSnapshot = data.decision.asin_snapshot || null;
-      
       // PART G: Extract margin_snapshot from decision (first-class feature)
       const marginSnapshot = data.decision.margin_snapshot || null;
       
       const analysisData: AnalysisResponse = {
         analysis_run_id: data.analysisRunId,
         created_at: new Date().toISOString(),
-        input_type: inputType,
+        input_type: "keyword",
         input_value: inputValue.trim(),
         decision: data.decision.decision,
         executive_summary: data.decision.executive_summary,
@@ -549,10 +511,6 @@ export default function AnalyzeForm({
         assumptions_and_limits: data.decision.assumptions_and_limits,
         market_snapshot: preservedMarketSnapshot && typeof preservedMarketSnapshot === 'object' && !Array.isArray(preservedMarketSnapshot) 
           ? preservedMarketSnapshot 
-          : null,
-        market_data: data.decision.market_data,
-        asin_snapshot: asinSnapshot && typeof asinSnapshot === 'object' && !Array.isArray(asinSnapshot) && asinSnapshot !== null
-          ? asinSnapshot
           : null,
         margin_snapshot: marginSnapshot && typeof marginSnapshot === 'object' && !Array.isArray(marginSnapshot) && marginSnapshot !== null
           ? marginSnapshot
@@ -587,26 +545,9 @@ export default function AnalyzeForm({
   // ANALYSIS MODE DERIVATION
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Derive analysis mode from input_type
-   * - input_type === 'asin' → analysisMode = 'ASIN'
-   * - input_type === 'keyword' → analysisMode = 'KEYWORD'
-   */
-  const analysisMode: 'ASIN' | 'KEYWORD' | null = analysis 
-    ? (analysis.input_type === 'asin' ? 'ASIN' : 'KEYWORD')
-    : null;
+  // Analysis is always keyword-only
+  const analysisMode: 'KEYWORD' | null = analysis ? 'KEYWORD' : null;
 
-  // Defensive assertion: Ensure analysisMode matches input_type
-  if (analysis && process.env.NODE_ENV === 'development') {
-    const expectedMode = analysis.input_type === 'asin' ? 'ASIN' : 'KEYWORD';
-    if (analysisMode !== expectedMode) {
-      console.error('Analysis mode mismatch:', { 
-        input_type: analysis.input_type, 
-        analysisMode, 
-        expectedMode 
-      });
-    }
-  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // UI HELPERS
@@ -626,43 +567,10 @@ export default function AnalyzeForm({
       <div className="border-b bg-white shadow-sm sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex gap-3 items-end">
-            {/* Input Type Toggle */}
-            <div className="w-32">
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                Type
-              </label>
-              <div className={`flex border rounded-lg overflow-hidden ${readOnly ? "opacity-60" : ""}`}>
-                <button
-                  type="button"
-                  className={`flex-1 py-2 px-3 text-sm font-medium transition-colors ${
-                    inputType === "asin"
-                      ? "bg-black text-white"
-                      : "bg-white text-gray-700 hover:bg-gray-50"
-                  } ${readOnly ? "cursor-not-allowed" : ""}`}
-                  onClick={() => !readOnly && setInputType("asin")}
-                  disabled={loading || readOnly}
-                >
-                  ASIN
-                </button>
-                <button
-                  type="button"
-                  className={`flex-1 py-2 px-3 text-sm font-medium transition-colors ${
-                    inputType === "keyword"
-                      ? "bg-black text-white"
-                      : "bg-white text-gray-700 hover:bg-gray-50"
-                  } ${readOnly ? "cursor-not-allowed" : ""}`}
-                  onClick={() => !readOnly && setInputType("keyword")}
-                  disabled={loading || readOnly}
-                >
-                  Keyword
-                </button>
-              </div>
-            </div>
-
-            {/* Input Field */}
+            {/* Keyword Input Field */}
             <div className="flex-1">
               <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                {inputType === "asin" ? "Amazon ASIN" : "Product Keyword"}
+                Search Keyword
               </label>
               <input
                 type="text"
@@ -682,11 +590,7 @@ export default function AnalyzeForm({
                   }
                 }}
                 disabled={loading || readOnly}
-                placeholder={
-                  inputType === "asin"
-                    ? "e.g., B0CHX3PNKD"
-                    : "e.g., yoga mat, wireless earbuds"
-                }
+                placeholder="Search any Amazon keyword…"
                 readOnly={readOnly}
               />
               {inputError && (
@@ -800,8 +704,8 @@ export default function AnalyzeForm({
             </div>
           ) : (
             <div className="p-6 space-y-6">
-              {/* KEYWORD MODE: Interactive Amazon-style search */}
-              {analysisMode === 'KEYWORD' && analysis.market_snapshot ? (
+              {/* KEYWORD ANALYSIS: Interactive Amazon-style search */}
+              {analysis.market_snapshot ? (
                 <>
                   {/* ─────────────────────────────────────────────────────────── */}
                   {/* MARKET SNAPSHOT ROW - Raw Metrics Only                    */}
@@ -888,25 +792,16 @@ export default function AnalyzeForm({
                   {/* PAGE 1 RESULTS - Amazon-Style Grid                          */}
                   {/* ─────────────────────────────────────────────────────────── */}
                   {(() => {
-                const snapshot = analysis.market_snapshot;
-                const listings = snapshot.listings || [];
-                
-                // Normalize listings
-                const normalizedListings = [...listings]
-                  .filter((l: any) => l && (l.asin || l.ASIN) && (l.title || l.Title))
-                  .map((l: any) => ({
-                    asin: l.asin || l.ASIN || "",
-                    title: l.title || l.Title || "",
-                    brand: l.brand || l.Brand || null,
-                    price: l.price || l.Price || null,
-                    rating: l.rating || l.Rating || null,
-                    reviews: l.reviews || l.Reviews || l.review_count || null,
-                    bsr: l.bsr || l.BSR || null,
-                    organic_rank: l.organic_rank || l.position || l.Position || null,
-                    fulfillment: l.fulfillment || l.Fulfillment || null,
-                    image: l.image || l.image_url || l.Image || null,
-                    is_sponsored: l.is_sponsored || l.IsSponsored || false,
-                  }));
+                    const snapshot = analysis.market_snapshot;
+                    const listings = snapshot.listings || [];
+                    
+                    // Normalize listings using helper
+                    const normalizedListings = [...listings]
+                      .filter((l: any) => {
+                        const normalized = normalizeListing(l);
+                        return normalized.asin && normalized.title;
+                      })
+                      .map((l: any) => normalizeListing(l));
                 
                 return (
                   <div>
@@ -927,9 +822,9 @@ export default function AnalyzeForm({
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {normalizedListings.map((listing: any, idx: number) => {
+                        {normalizedListings.map((listing, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
-                          const imageUrl = listing.image || listing.image_url || null;
+                          const imageUrl = listing.image;
                           
                           return (
                             <div
@@ -964,27 +859,25 @@ export default function AnalyzeForm({
                               
                               {/* Title (2 lines max) */}
                               <h3 className="text-sm font-medium text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
-                                {listing.title || "—"}
+                                {listing.title}
                               </h3>
                               
                               {/* Price */}
                               <div className="mb-2">
                                 <span className="text-lg font-semibold text-gray-900">
-                                  {listing.price !== null && listing.price !== undefined
-                                    ? formatCurrency(listing.price)
-                                    : "Price not available"}
+                                  {listing.price !== null ? formatCurrency(listing.price) : "Price not available"}
                                 </span>
                               </div>
                               
                               {/* Rating + Reviews */}
                               <div className="mb-2 flex items-center gap-2">
-                                {listing.rating !== null && typeof listing.rating === 'number' && !isNaN(listing.rating) ? (
+                                {listing.rating !== null ? (
                                   <>
                                     <span className="text-yellow-400">★</span>
                                     <span className="text-sm text-gray-700">{listing.rating.toFixed(1)}</span>
                                   </>
                                 ) : null}
-                                {listing.reviews !== null && listing.reviews !== undefined ? (
+                                {listing.reviews !== null ? (
                                   <span className="text-xs text-gray-500">
                                     ({listing.reviews.toLocaleString()})
                                   </span>
@@ -992,7 +885,7 @@ export default function AnalyzeForm({
                               </div>
                               
                               {/* BSR */}
-                              {listing.bsr !== null && listing.bsr !== undefined && (
+                              {listing.bsr !== null && (
                                 <div className="mb-2 text-xs text-gray-500">
                                   BSR: #{listing.bsr.toLocaleString()}
                                 </div>
@@ -1000,7 +893,7 @@ export default function AnalyzeForm({
                               
                               {/* Badges */}
                               <div className="flex flex-wrap gap-1 mt-2">
-                                {listing.is_sponsored && (
+                                {listing.sponsored && (
                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
                                     Sponsored
                                   </span>
@@ -1014,7 +907,7 @@ export default function AnalyzeForm({
                                     {listing.fulfillment}
                                   </span>
                                 )}
-                                {listing.organic_rank !== null && listing.organic_rank !== undefined && (
+                                {listing.organic_rank !== null && (
                                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
                                     Rank #{listing.organic_rank}
                                   </span>
@@ -1034,294 +927,6 @@ export default function AnalyzeForm({
                   );
                 })()}
                 </>
-              ) : analysisMode === 'ASIN' ? (
-                /* ASIN MODE: Product-Centric Competitive Analysis */
-                <>
-                  {analysisMode === 'ASIN' && analysis.asin_snapshot && (() => {
-                    const asinData = analysis.asin_snapshot;
-                    const marketSnapshot = analysis.market_snapshot;
-                    const page1Listings = marketSnapshot?.listings || [];
-                    const inputAsin = analysis.input_value;
-                    
-                    // Find the ASIN in Page-1 listings to get image/title
-                    const asinListing = page1Listings.find((l: any) => 
-                      (l.asin || l.ASIN || l.asin) === inputAsin
-                    ) as any;
-                    
-                    // Calculate percentiles if available
-                    const pricePercentile = asinData.position_vs_page1?.price_percentile ?? null;
-                    const reviewPercentile = asinData.position_vs_page1?.review_percentile ?? null;
-                    
-                    return (
-                      <>
-                        {/* ─────────────────────────────────────────────────────────── */}
-                        {/* PINNED ASIN CARD - Always Visible                        */}
-                        {/* ─────────────────────────────────────────────────────────── */}
-                        <div className="bg-white border-2 border-blue-500 rounded-xl p-6 shadow-lg mb-6">
-                          <div className="flex items-start gap-6">
-                            {/* Product Image */}
-                            <div className="flex-shrink-0">
-                              {((asinListing as any)?.image || (asinListing as any)?.image_url) ? (
-                                <img
-                                  src={(asinListing as any).image || (asinListing as any).image_url}
-                                  alt={(asinListing as any)?.title || (asinListing as any)?.Title || inputAsin}
-                                  className="w-48 h-48 object-contain rounded-lg border border-gray-200"
-                                />
-                              ) : (
-                                <div className="w-48 h-48 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center">
-                                  <span className="text-sm text-gray-400">No image</span>
-                                </div>
-                              )}
-                            </div>
-                            
-                            {/* Product Details */}
-                            <div className="flex-1">
-                              <div className="mb-2">
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                  Target ASIN
-                                </span>
-                              </div>
-                              
-                              <h1 className="text-2xl font-bold text-gray-900 mb-3">
-                                {(asinListing as any)?.title || (asinListing as any)?.Title || inputAsin}
-                              </h1>
-                              
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                                {/* Price */}
-                                <div>
-                                  <div className="text-xs text-gray-500 mb-1">Price</div>
-                                  <div className="text-xl font-semibold text-gray-900">
-                                    {asinData.price !== null && typeof asinData.price === 'number'
-                                      ? formatCurrency(asinData.price)
-                                      : "Not available"}
-                                  </div>
-                                  {pricePercentile !== null && (
-                                    <div className="text-xs text-gray-500 mt-1">
-                                      {pricePercentile <= 25 ? "Lower 25%" : pricePercentile <= 50 ? "Lower 50%" : pricePercentile <= 75 ? "Upper 50%" : "Upper 25%"} vs Page-1
-                                    </div>
-                                  )}
-                                </div>
-                                
-                                {/* Rating */}
-                                <div>
-                                  <div className="text-xs text-gray-500 mb-1">Rating</div>
-                                  <div className="text-xl font-semibold text-gray-900">
-                                    {asinData.rating !== null && typeof asinData.rating === 'number' && !isNaN(asinData.rating)
-                                      ? `${asinData.rating.toFixed(1)} ★`
-                                      : "Not available"}
-                                  </div>
-                                </div>
-                                
-                                {/* Reviews */}
-                                <div>
-                                  <div className="text-xs text-gray-500 mb-1">Reviews</div>
-                                  <div className="text-xl font-semibold text-gray-900">
-                                    {asinData.reviews !== null && typeof asinData.reviews === 'number'
-                                      ? asinData.reviews.toLocaleString()
-                                      : "Not available"}
-                                  </div>
-                                  {reviewPercentile !== null && (
-                                    <div className="text-xs text-gray-500 mt-1">
-                                      {reviewPercentile >= 75 ? "Top 25%" : reviewPercentile >= 50 ? "Top 50%" : reviewPercentile >= 25 ? "Bottom 50%" : "Bottom 25%"} vs Page-1
-                                    </div>
-                                  )}
-                                </div>
-                                
-                                {/* BSR */}
-                                <div>
-                                  <div className="text-xs text-gray-500 mb-1">BSR</div>
-                                  <div className="text-xl font-semibold text-gray-900">
-                                    {asinData.bsr !== null && typeof asinData.bsr === 'number'
-                                      ? `#${asinData.bsr.toLocaleString()}`
-                                      : "Not available"}
-                                  </div>
-                                </div>
-                              </div>
-                              
-                              <div className="flex flex-wrap gap-2">
-                                {asinData.fulfillment && (
-                                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${
-                                    asinData.fulfillment === 'FBA' ? 'bg-blue-100 text-blue-800' :
-                                    asinData.fulfillment === 'FBM' ? 'bg-gray-100 text-gray-800' :
-                                    'bg-yellow-100 text-yellow-800'
-                                  }`}>
-                                    {asinData.fulfillment}
-                                  </span>
-                                )}
-                                {asinData.brand_owner && (
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                                    {asinData.brand_owner}
-                                  </span>
-                                )}
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                                  {inputAsin}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        
-                        {/* ─────────────────────────────────────────────────────────── */}
-                        {/* PAGE-1 COMPETITOR GRID                                    */}
-                        {/* ─────────────────────────────────────────────────────────── */}
-                        <div className="mb-6">
-                          <h2 className="text-xl font-semibold text-gray-900 mb-4">Page 1 Competitors</h2>
-                          {selectedCompetitor && (
-                            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                              <div className="text-sm text-blue-900">
-                                <span className="font-medium">Selected competitor:</span> {selectedCompetitor.title || selectedCompetitor.asin}
-                              </div>
-                              <div className="text-xs text-blue-700 mt-1">
-                                Ask questions about this competitor in the chat
-                              </div>
-                            </div>
-                          )}
-                          
-                          {page1Listings.length === 0 ? (
-                            <div className="p-8 text-center bg-white border rounded-lg">
-                              <p className="text-gray-500">No competitors found</p>
-                            </div>
-                          ) : (
-                            <div className="space-y-3">
-                              {page1Listings
-                                .filter((l: any) => l && (l.asin || l.ASIN) && (l.title || l.Title))
-                                .sort((a: any, b: any) => {
-                                  // Sort by organic rank (1-indexed, lower = better)
-                                  const rankA = a.organic_rank || a.position || a.Position || 999;
-                                  const rankB = b.organic_rank || b.position || b.Position || 999;
-                                  return rankA - rankB;
-                                })
-                                .map((l: any) => {
-                                  const listingAsin = l.asin || l.ASIN || "";
-                                  const isTargetAsin = listingAsin === inputAsin;
-                                  const isSelected = selectedCompetitor?.asin === listingAsin;
-                                  
-                                  return (
-                                    <div
-                                      key={listingAsin}
-                                      onClick={() => !isTargetAsin && setSelectedCompetitor(isSelected ? null : l)}
-                                      className={`bg-white border-2 rounded-lg p-4 cursor-pointer transition-all hover:shadow-md ${
-                                        isTargetAsin
-                                          ? 'border-blue-500 bg-blue-50'
-                                          : isSelected
-                                          ? 'border-blue-400 border-dashed'
-                                          : 'border-gray-200 hover:border-gray-300'
-                                      }`}
-                                    >
-                                      <div className="flex items-center gap-4">
-                                        {/* Image */}
-                                        <div className="flex-shrink-0">
-                                          {l.image || l.image_url ? (
-                                            <img
-                                              src={l.image || l.image_url}
-                                              alt={l.title || listingAsin}
-                                              className="w-20 h-20 object-contain rounded border border-gray-200"
-                                            />
-                                          ) : (
-                                            <div className="w-20 h-20 bg-gray-100 rounded border border-gray-200 flex items-center justify-center">
-                                              <span className="text-xs text-gray-400">IMG</span>
-                                            </div>
-                                          )}
-                                        </div>
-                                        
-                                        {/* Details */}
-                                        <div className="flex-1 min-w-0">
-                                          <div className="flex items-start justify-between gap-2 mb-1">
-                                            <h3 className="text-sm font-medium text-gray-900 line-clamp-2 flex-1">
-                                              {l.title || l.Title || listingAsin}
-                                            </h3>
-                                            {isTargetAsin && (
-                                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 flex-shrink-0">
-                                                Target
-                                              </span>
-                                            )}
-                                          </div>
-                                          
-                                          <div className="flex items-center gap-4 text-sm">
-                                            {/* Price */}
-                                            <div>
-                                              <span className="text-gray-900 font-semibold">
-                                                {l.price || l.Price ? formatCurrency(l.price || l.Price) : "Not available"}
-                                              </span>
-                                            </div>
-                                            
-                                            {/* Rating + Reviews */}
-                                            {(l.rating || l.Rating) && (
-                                              <div className="flex items-center gap-1">
-                                                <span className="text-yellow-400">★</span>
-                                                <span className="text-gray-700">{typeof (l.rating || l.Rating) === 'number' ? (l.rating || l.Rating).toFixed(1) : l.rating || l.Rating}</span>
-                                                {l.reviews || l.Reviews ? (
-                                                  <span className="text-gray-500 text-xs">
-                                                    ({typeof (l.reviews || l.Reviews) === 'number' ? (l.reviews || l.Reviews).toLocaleString() : l.reviews || l.Reviews})
-                                                  </span>
-                                                ) : null}
-                                              </div>
-                                            )}
-                                            
-                                            {/* BSR */}
-                                            {(l.bsr || l.BSR) && (
-                                              <div className="text-gray-600 text-xs">
-                                                BSR: #{typeof (l.bsr || l.BSR) === 'number' ? (l.bsr || l.BSR).toLocaleString() : l.bsr || l.BSR}
-                                              </div>
-                                            )}
-                                          </div>
-                                          
-                                          {/* Badges */}
-                                          <div className="flex flex-wrap gap-1 mt-2">
-                                            {l.is_sponsored || l.IsSponsored ? (
-                                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
-                                                Sponsored
-                                              </span>
-                                            ) : null}
-                                            {l.fulfillment || l.Fulfillment ? (
-                                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                                (l.fulfillment || l.Fulfillment) === 'FBA' ? 'bg-blue-100 text-blue-800' :
-                                                (l.fulfillment || l.Fulfillment) === 'FBM' ? 'bg-gray-100 text-gray-800' :
-                                                'bg-yellow-100 text-yellow-800'
-                                              }`}>
-                                                {l.fulfillment || l.Fulfillment}
-                                              </span>
-                                            ) : null}
-                                            {l.organic_rank || l.position || l.Position ? (
-                                              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                                                Rank #{l.organic_rank || l.position || l.Position}
-                                              </span>
-                                            ) : null}
-                                          </div>
-                                          
-                                          {/* ASIN */}
-                                          <div className="mt-1 text-xs text-gray-400">
-                                            {listingAsin}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                            </div>
-                          )}
-                        </div>
-                      </>
-                    );
-                  })()}
-                  
-                  {/* ASIN mode fallback: render even if asin_snapshot is missing */}
-                  {analysisMode === 'ASIN' && !analysis.asin_snapshot && (
-                    <div className="bg-white border rounded-xl p-6 shadow-sm">
-                      <div className="mb-4">
-                        <h2 className="text-lg font-semibold text-gray-900 mb-1">
-                          ASIN Analysis
-                        </h2>
-                        <p className="text-xs text-gray-500">
-                          Product data unavailable
-                        </p>
-                      </div>
-                      <div className="text-sm text-gray-500 text-center py-4">
-                        ASIN data unavailable — analysis proceeding with available information
-                      </div>
-                    </div>
-                  )}
-                </>
               ) : null}
             </div>
           )}
@@ -1337,8 +942,7 @@ export default function AnalyzeForm({
           onMessagesChange={setChatMessages}
           marketSnapshot={analysis?.market_snapshot || null}
           analysisMode={analysisMode}
-          selectedListing={analysisMode === 'KEYWORD' ? selectedListing : null}
-          selectedCompetitor={analysisMode === 'ASIN' ? selectedCompetitor : null}
+          selectedListing={selectedListing}
         />
       </div>
     </div>

@@ -45,8 +45,7 @@ import {
 interface ChatRequestBody {
   analysisRunId: string;
   message: string;
-  selectedListing?: any | null; // Optional selected listing for AI context (KEYWORD mode)
-  selectedCompetitor?: any | null; // Optional selected competitor for AI context (ASIN mode)
+  selectedListing?: any | null; // Optional selected listing for AI context
 }
 
 function validateRequestBody(body: unknown): body is ChatRequestBody {
@@ -82,8 +81,7 @@ function buildContextMessage(
   },
   inputType: string,
   inputValue: string,
-  selectedListing?: any | null,
-  selectedCompetitor?: any | null
+  selectedListing?: any | null
 ): string {
   const contextParts: string[] = [];
 
@@ -93,12 +91,11 @@ function buildContextMessage(
     ? `\n\nConfidence Downgrades:\n${confidenceDowngrades.map((reason, idx) => `- ${reason}`).join("\n")}`
     : "";
   
-  // For keyword mode, de-emphasize verdicts (they're not shown in UI)
-  if (inputType === "keyword") {
-    contextParts.push(`=== ANALYSIS CONTEXT (AVAILABLE IF ASKED) ===
+  // Keyword mode: de-emphasize verdicts (they're not shown in UI)
+  contextParts.push(`=== ANALYSIS CONTEXT (AVAILABLE IF ASKED) ===
 This analysis data is available for reference if the user asks about it.
 
-Input: ${inputType.toUpperCase()} - ${inputValue}
+Input: KEYWORD - ${inputValue}
 
 Note: Verdicts and recommendations are not displayed in the UI by default.
 Only provide them if the user explicitly asks about the analysis verdict or recommendations.
@@ -110,49 +107,6 @@ Available analysis data:
 - Risks: Available if asked
 - Recommended Actions: Available if asked
 - Assumptions & Limits: Available if asked`);
-  } else {
-    // ASIN mode: Keep full context (ASIN mode still uses verdicts)
-    try {
-      const risks = analysisResponse.risks 
-        ? (typeof analysisResponse.risks === 'object' ? JSON.stringify(analysisResponse.risks, null, 2) : String(analysisResponse.risks))
-        : "Not available";
-      const recommendedActions = analysisResponse.recommended_actions
-        ? (typeof analysisResponse.recommended_actions === 'object' ? JSON.stringify(analysisResponse.recommended_actions, null, 2) : String(analysisResponse.recommended_actions))
-        : "Not available";
-      const assumptionsAndLimits = analysisResponse.assumptions_and_limits
-        ? (Array.isArray(analysisResponse.assumptions_and_limits) 
-            ? JSON.stringify(analysisResponse.assumptions_and_limits, null, 2)
-            : String(analysisResponse.assumptions_and_limits))
-        : "Not available";
-      
-      contextParts.push(`=== ORIGINAL ANALYSIS (AUTHORITATIVE) ===
-This analysis anchors this conversation. Do not contradict without explicit explanation.
-
-Input: ${inputType.toUpperCase()} - ${inputValue}
-
-Verdict: ${(analysisResponse.decision as { verdict: string })?.verdict || "UNKNOWN"}
-Confidence: ${(analysisResponse.decision as { confidence: number })?.confidence || "N/A"}%${confidenceDowngradeText}
-
-Executive Summary:
-${analysisResponse.executive_summary || "Not available"}
-
-Risks:
-${risks}
-
-Recommended Actions:
-${recommendedActions}
-
-Assumptions & Limits:
-${assumptionsAndLimits}`);
-    } catch (error) {
-      console.error("Error formatting ASIN mode context:", error);
-      // Fallback to minimal context
-      contextParts.push(`=== ORIGINAL ANALYSIS (AUTHORITATIVE) ===
-Input: ${inputType.toUpperCase()} - ${inputValue}
-Verdict: ${(analysisResponse.decision as { verdict: string })?.verdict || "UNKNOWN"}
-Confidence: ${(analysisResponse.decision as { confidence: number })?.confidence || "N/A"}%`);
-    }
-  }
 
   // Section 2: Market Data (explicitly labeled as CACHED to prevent fresh data assumptions)
   if (rainforestData && Object.keys(rainforestData).length > 0) {
@@ -375,55 +329,6 @@ When the user asks about a specific product or compares products, reference this
     }
   }
   
-  // Section 8: Selected Competitor Context (ASIN mode)
-  if (selectedCompetitor && typeof selectedCompetitor === 'object' && selectedCompetitor !== null) {
-    try {
-      const competitorAsin = selectedCompetitor.asin || selectedCompetitor.ASIN || 'Not available';
-      const competitorPrice = (selectedCompetitor.price || selectedCompetitor.Price) !== null && 
-                              (selectedCompetitor.price || selectedCompetitor.Price) !== undefined
-        ? (typeof (selectedCompetitor.price || selectedCompetitor.Price) === 'number'
-            ? `$${(selectedCompetitor.price || selectedCompetitor.Price).toFixed(2)}`
-            : String(selectedCompetitor.price || selectedCompetitor.Price))
-        : 'Not available';
-      const competitorRating = (selectedCompetitor.rating || selectedCompetitor.Rating) !== null &&
-                               (selectedCompetitor.rating || selectedCompetitor.Rating) !== undefined
-        ? (typeof (selectedCompetitor.rating || selectedCompetitor.Rating) === 'number'
-            ? (selectedCompetitor.rating || selectedCompetitor.Rating).toFixed(1)
-            : String(selectedCompetitor.rating || selectedCompetitor.Rating))
-        : 'Not available';
-      const competitorReviews = (selectedCompetitor.reviews || selectedCompetitor.Reviews) !== null &&
-                                (selectedCompetitor.reviews || selectedCompetitor.Reviews) !== undefined
-        ? (typeof (selectedCompetitor.reviews || selectedCompetitor.Reviews) === 'number'
-            ? (selectedCompetitor.reviews || selectedCompetitor.Reviews).toLocaleString()
-            : String(selectedCompetitor.reviews || selectedCompetitor.Reviews))
-        : 'Not available';
-      
-      contextParts.push(`=== SELECTED COMPETITOR (USER CONTEXT) ===
-The user has selected this competitor from Page 1. Reference it when answering questions about competitive positioning.
-
-ASIN: ${competitorAsin}
-Title: ${selectedCompetitor.title || selectedCompetitor.Title || 'Not available'}
-Price: ${competitorPrice}
-Rating: ${competitorRating}
-Reviews: ${competitorReviews}
-BSR: ${(selectedCompetitor.bsr || selectedCompetitor.BSR) !== null && (selectedCompetitor.bsr || selectedCompetitor.BSR) !== undefined
-  ? `#${typeof (selectedCompetitor.bsr || selectedCompetitor.BSR) === 'number'
-      ? (selectedCompetitor.bsr || selectedCompetitor.BSR).toLocaleString()
-      : String(selectedCompetitor.bsr || selectedCompetitor.BSR)}`
-  : 'Not available'}
-Organic Rank: ${(selectedCompetitor.organic_rank || selectedCompetitor.position || selectedCompetitor.Position) !== null &&
-                (selectedCompetitor.organic_rank || selectedCompetitor.position || selectedCompetitor.Position) !== undefined
-  ? `#${selectedCompetitor.organic_rank || selectedCompetitor.position || selectedCompetitor.Position}`
-  : 'Not available'}
-Fulfillment: ${selectedCompetitor.fulfillment || selectedCompetitor.Fulfillment || 'Not available'}
-Brand: ${selectedCompetitor.brand || selectedCompetitor.Brand || 'Not available'}
-Sponsored: ${selectedCompetitor.is_sponsored || selectedCompetitor.IsSponsored ? 'Yes' : 'No'}
-
-When the user asks about competitive positioning, pricing strategy, or comparisons, reference this selected competitor's data relative to the target ASIN.`);
-    } catch (error) {
-      console.error("Error formatting selected competitor context:", error);
-    }
-  }
 
   return contextParts.join("\n\n");
 }
@@ -1271,8 +1176,7 @@ export async function POST(req: NextRequest) {
         sellerProfile,
         analysisRun.input_type,
         analysisRun.input_value,
-        body.selectedListing || null,
-        body.selectedCompetitor || null
+        body.selectedListing || null
       );
 
       // 9. Build Market Snapshot Summary (from cached response.market_snapshot only)
