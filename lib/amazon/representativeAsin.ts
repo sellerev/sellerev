@@ -80,3 +80,4 @@ export function pickRepresentativeAsin(
   // Final fallback: First listing with ASIN (any position, any sponsorship)
   return listingsWithAsin[0].asin!;
 }
+

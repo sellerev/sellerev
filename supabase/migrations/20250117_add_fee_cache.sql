@@ -43,3 +43,4 @@ ON public.fee_cache
 FOR SELECT
 TO authenticated
 USING (true);
+

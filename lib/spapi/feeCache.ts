@@ -116,3 +116,4 @@ export async function setCachedFee(
     console.error("Error caching fee estimate:", error);
   }
 }
+

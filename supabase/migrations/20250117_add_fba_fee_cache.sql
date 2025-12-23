@@ -39,3 +39,4 @@ ON public.fba_fee_cache
 FOR SELECT
 TO authenticated
 USING (true);
+
