@@ -970,49 +970,65 @@ export async function POST(req: NextRequest) {
 
     // 4a. Load or create seller_memory (AI Copilot persistent memory)
     let sellerMemory: SellerMemory;
-    const { data: memoryRow, error: memoryError } = await supabase
-      .from("seller_memory")
-      .select("memory")
-      .eq("user_id", user.id)
-      .single();
+    try {
+      const { data: memoryRow, error: memoryError } = await supabase
+        .from("seller_memory")
+        .select("memory")
+        .eq("user_id", user.id)
+        .single();
 
-    if (memoryError || !memoryRow || !memoryRow.memory) {
-      // Create default memory
+      if (memoryError || !memoryRow || !memoryRow.memory) {
+        // Create default memory
+        sellerMemory = createDefaultSellerMemory();
+        // Merge with seller profile data
+        const profileData = mapSellerProfileToMemory(sellerProfile);
+        sellerMemory.seller_profile = {
+          ...sellerMemory.seller_profile,
+          ...profileData,
+        };
+        
+        // Save to database (don't fail if this fails)
+        try {
+          await supabase
+            .from("seller_memory")
+            .insert({
+              user_id: user.id,
+              memory: sellerMemory,
+            });
+        } catch (insertError) {
+          console.error("Failed to insert seller memory (non-critical):", insertError);
+        }
+      } else {
+        // Validate and use existing memory
+        const memory = memoryRow.memory as unknown;
+        if (validateSellerMemory(memory)) {
+          sellerMemory = memory;
+          // Update profile data if it changed
+          const profileData = mapSellerProfileToMemory(sellerProfile);
+          sellerMemory.seller_profile = {
+            ...sellerMemory.seller_profile,
+            ...profileData,
+          };
+        } else {
+          // Invalid memory, reset to default
+          console.warn("Invalid seller memory structure, resetting to default");
+          sellerMemory = createDefaultSellerMemory();
+          const profileData = mapSellerProfileToMemory(sellerProfile);
+          sellerMemory.seller_profile = {
+            ...sellerMemory.seller_profile,
+            ...profileData,
+          };
+        }
+      }
+    } catch (memoryError) {
+      console.error("Error loading/creating seller memory:", memoryError);
+      // Fallback to default memory if loading fails
       sellerMemory = createDefaultSellerMemory();
-      // Merge with seller profile data
       const profileData = mapSellerProfileToMemory(sellerProfile);
       sellerMemory.seller_profile = {
         ...sellerMemory.seller_profile,
         ...profileData,
       };
-      
-      // Save to database
-      await supabase
-        .from("seller_memory")
-        .insert({
-          user_id: user.id,
-          memory: sellerMemory,
-        });
-    } else {
-      // Validate and use existing memory
-      const memory = memoryRow.memory as unknown;
-      if (validateSellerMemory(memory)) {
-        sellerMemory = memory;
-        // Update profile data if it changed
-        const profileData = mapSellerProfileToMemory(sellerProfile);
-        sellerMemory.seller_profile = {
-          ...sellerMemory.seller_profile,
-          ...profileData,
-        };
-      } else {
-        // Invalid memory, reset to default
-        sellerMemory = createDefaultSellerMemory();
-        const profileData = mapSellerProfileToMemory(sellerProfile);
-        sellerMemory.seller_profile = {
-          ...sellerMemory.seller_profile,
-          ...profileData,
-        };
-      }
     }
     
     // Record analyzed keyword in memory (append-only, no confirmation needed)
@@ -1020,14 +1036,24 @@ export async function POST(req: NextRequest) {
     sellerMemory = recordAnalyzedKeyword(sellerMemory, analysisRun.input_value);
     
     // Save updated memory (if changed)
-    await supabase
-      .from("seller_memory")
-      .upsert({
-        user_id: user.id,
-        memory: sellerMemory,
-      }, {
-        onConflict: "user_id",
-      });
+    try {
+      const { error: memorySaveError } = await supabase
+        .from("seller_memory")
+        .upsert({
+          user_id: user.id,
+          memory: sellerMemory,
+        }, {
+          onConflict: "user_id",
+        });
+      
+      if (memorySaveError) {
+        console.error("Failed to save seller memory:", memorySaveError);
+        // Don't fail the request - memory save is not critical
+      }
+    } catch (memoryError) {
+      console.error("Error saving seller memory:", memoryError);
+      // Don't fail the request - memory save is not critical
+    }
 
     // 5. Fetch all prior analysis_messages for this run (conversation history)
     // ────────────────────────────────────────────────────────────────────────
@@ -1182,6 +1208,13 @@ export async function POST(req: NextRequest) {
       );
     } catch (error) {
       console.error("Error building context message:", error);
+      const errorDetails = error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+      } : { error: String(error) };
+      console.error("CONTEXT_BUILD_ERROR_DETAILS", errorDetails);
+      
       // Fallback to minimal context
       contextMessage = `Analysis for ${analysisRun.input_type}: ${analysisRun.input_value}`;
       marketSnapshotSummary = "";
@@ -1206,10 +1239,23 @@ export async function POST(req: NextRequest) {
     };
     
     // Build AI Copilot system prompt (locked behavior contract)
-    const systemPrompt = buildCopilotSystemPrompt(
-      copilotContext,
-      'keyword' // All analyses are keyword-only
-    );
+    let systemPrompt: string;
+    try {
+      systemPrompt = buildCopilotSystemPrompt(
+        copilotContext,
+        'keyword' // All analyses are keyword-only
+      );
+    } catch (promptError) {
+      console.error("Failed to build copilot system prompt:", promptError);
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Failed to build system prompt",
+          details: promptError instanceof Error ? promptError.message : String(promptError),
+        },
+        { status: 500, headers: res.headers }
+      );
+    }
     
     // Log AI reasoning inputs for audit/debugging
     console.log("AI_COPILOT_INPUT", {
@@ -1583,13 +1629,25 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("Chat endpoint error:", error);
+    const errorDetails = error instanceof Error ? {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+    } : { error: String(error) };
+    
+    console.error("CHAT_ERROR_DETAILS", {
+      ...errorDetails,
+      timestamp: new Date().toISOString(),
+    });
+    
     return NextResponse.json(
       {
         ok: false,
         error: "Internal server error",
         details: error instanceof Error ? error.message : "Unknown error",
+        stack: error instanceof Error ? error.stack : undefined,
       },
-      { status: 500 }
+      { status: 500, headers: res.headers }
     );
   }
 }
