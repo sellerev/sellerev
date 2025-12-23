@@ -382,12 +382,14 @@ function validateRequestBody(body: any): body is AnalyzeRequestBody {
 
 function validateDecisionContract(data: any): data is DecisionContract {
   if (typeof data !== "object" || data === null) {
+    console.error("VALIDATION_FAILED: data is not an object", { type: typeof data, value: data });
     return false;
   }
 
   // Check all required keys exist
   for (const key of REQUIRED_DECISION_KEYS) {
     if (!(key in data)) {
+      console.error("VALIDATION_FAILED: missing required key", { key, available_keys: Object.keys(data) });
       return false;
     }
   }
@@ -401,6 +403,15 @@ function validateDecisionContract(data: any): data is DecisionContract {
     data.decision.confidence < 0 ||
     data.decision.confidence > 100
   ) {
+    console.error("VALIDATION_FAILED: invalid decision object", {
+      is_object: typeof data.decision === "object",
+      is_null: data.decision === null,
+      verdict: data.decision?.verdict,
+      verdict_valid: data.decision?.verdict ? ["GO", "CAUTION", "NO_GO"].includes(data.decision.verdict) : false,
+      confidence: data.decision?.confidence,
+      confidence_type: typeof data.decision?.confidence,
+      confidence_valid: typeof data.decision?.confidence === "number" && data.decision.confidence >= 0 && data.decision.confidence <= 100,
+    });
     return false;
   }
 
@@ -417,6 +428,13 @@ function validateDecisionContract(data: any): data is DecisionContract {
     !data.reasoning.primary_factors.every((item: any) => typeof item === "string") ||
     typeof data.reasoning.seller_context_impact !== "string"
   ) {
+    console.error("VALIDATION_FAILED: invalid reasoning object", {
+      is_object: typeof data.reasoning === "object",
+      is_null: data.reasoning === null,
+      has_primary_factors: Array.isArray(data.reasoning?.primary_factors),
+      primary_factors_valid: Array.isArray(data.reasoning?.primary_factors) && data.reasoning.primary_factors.every((item: any) => typeof item === "string"),
+      has_seller_context_impact: typeof data.reasoning?.seller_context_impact === "string",
+    });
     return false;
   }
 
@@ -427,6 +445,7 @@ function validateDecisionContract(data: any): data is DecisionContract {
     typeof data.risks !== "object" ||
     data.risks === null
   ) {
+    console.error("VALIDATION_FAILED: risks is not an object", { risks: data.risks, type: typeof data.risks });
     return false;
   }
   for (const riskKey of riskKeys) {
@@ -437,6 +456,15 @@ function validateDecisionContract(data: any): data is DecisionContract {
       !riskLevels.includes(data.risks[riskKey].level) ||
       typeof data.risks[riskKey].explanation !== "string"
     ) {
+      console.error("VALIDATION_FAILED: invalid risk", {
+        riskKey,
+        has_key: riskKey in data.risks,
+        is_object: typeof data.risks[riskKey] === "object",
+        is_null: data.risks[riskKey] === null,
+        level: data.risks[riskKey]?.level,
+        level_valid: riskLevels.includes(data.risks[riskKey]?.level),
+        has_explanation: typeof data.risks[riskKey]?.explanation === "string",
+      });
       return false;
     }
   }
@@ -895,7 +923,22 @@ ${body.input_value}`;
         .replace(/\s*```$/i, "")
         .trim();
       decisionJson = JSON.parse(cleanedContent);
+      
+      // Log the parsed JSON structure for debugging
+      console.log("OPENAI_PARSED_JSON", {
+        keys: Object.keys(decisionJson),
+        has_decision: !!decisionJson.decision,
+        decision_keys: decisionJson.decision ? Object.keys(decisionJson.decision) : [],
+        has_reasoning: !!decisionJson.reasoning,
+        reasoning_keys: decisionJson.reasoning ? Object.keys(decisionJson.reasoning) : [],
+        has_risks: !!decisionJson.risks,
+        risks_keys: decisionJson.risks ? Object.keys(decisionJson.risks) : [],
+      });
     } catch (parseError) {
+      console.error("JSON_PARSE_ERROR", {
+        error: parseError,
+        content_preview: content.substring(0, 500),
+      });
       return NextResponse.json(
         {
           success: false,
@@ -908,12 +951,43 @@ ${body.input_value}`;
 
     // 10. Validate decision contract structure
     if (!validateDecisionContract(decisionJson)) {
+      // Enhanced error logging
+      const receivedKeys = Object.keys(decisionJson);
+      const missingKeys = REQUIRED_DECISION_KEYS.filter(key => !receivedKeys.includes(key));
+      const extraKeys = receivedKeys.filter(key => !REQUIRED_DECISION_KEYS.includes(key));
+      
+      console.error("DECISION_CONTRACT_VALIDATION_FAILED", {
+        received_keys: receivedKeys,
+        required_keys: REQUIRED_DECISION_KEYS,
+        missing_keys: missingKeys,
+        extra_keys: extraKeys,
+        decision_structure: decisionJson.decision ? {
+          has_verdict: 'verdict' in decisionJson.decision,
+          has_confidence: 'confidence' in decisionJson.decision,
+          verdict_value: decisionJson.decision.verdict,
+          confidence_value: decisionJson.decision.confidence,
+        } : null,
+        reasoning_structure: decisionJson.reasoning ? {
+          has_primary_factors: 'primary_factors' in decisionJson.reasoning,
+          has_seller_context_impact: 'seller_context_impact' in decisionJson.reasoning,
+        } : null,
+        risks_structure: decisionJson.risks ? {
+          keys: Object.keys(decisionJson.risks),
+          has_competition: 'competition' in decisionJson.risks,
+          has_pricing: 'pricing' in decisionJson.risks,
+          has_differentiation: 'differentiation' in decisionJson.risks,
+          has_operations: 'operations' in decisionJson.risks,
+        } : null,
+      });
+      
       return NextResponse.json(
         {
           success: false,
           error: "OpenAI output does not match decision contract. Missing required keys or invalid structure.",
-          received_keys: Object.keys(decisionJson),
+          received_keys: receivedKeys,
           required_keys: REQUIRED_DECISION_KEYS,
+          missing_keys: missingKeys,
+          extra_keys: extraKeys,
         },
         { status: 500, headers: res.headers }
       );
