@@ -77,10 +77,12 @@ export default async function AnalysisDetailPage({ params }: AnalysisDetailPageP
       primary_factors: string[];
       seller_context_impact: string;
     },
-    risks: response.risks as Record<
-      string,
-      { level: "Low" | "Medium" | "High"; explanation: string }
-    >,
+    risks: response.risks as {
+      competition: { level: "Low" | "Medium" | "High"; explanation: string };
+      pricing: { level: "Low" | "Medium" | "High"; explanation: string };
+      differentiation: { level: "Low" | "Medium" | "High"; explanation: string };
+      operations: { level: "Low" | "Medium" | "High"; explanation: string };
+    },
     recommended_actions: response.recommended_actions as {
       must_do: string[];
       should_do: string[];
