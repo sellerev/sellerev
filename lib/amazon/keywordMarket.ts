@@ -190,21 +190,21 @@ export async function fetchKeywordMarketSnapshot(
   const rainforestApiKey = process.env.RAINFOREST_API_KEY;
   
   if (!rainforestApiKey) {
-    console.warn("RAINFOREST_API_KEY not configured");
-    return null;
+    console.error("RAINFOREST_API_KEY not configured in environment variables");
+    throw new Error("Rainforest API key not configured. Please set RAINFOREST_API_KEY environment variable.");
   }
 
   try {
+    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1`;
+    console.log("RAINFOREST_API_REQUEST", { keyword, url: apiUrl.replace(rainforestApiKey, "***") });
+    
     // Fetch Amazon search results via Rainforest API
-    const response = await fetch(
-      `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1`,
-      {
-        method: "GET",
-        headers: {
-          "Accept": "application/json",
-        },
-      }
-    );
+    const response = await fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+      },
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -219,15 +219,28 @@ export async function fetchKeywordMarketSnapshot(
     try {
       raw = await response.json();
     } catch (jsonError) {
+      const responseText = await response.text().catch(() => "Unable to read response");
       console.error("Failed to parse Rainforest API JSON response", {
         keyword,
+        status: response.status,
+        statusText: response.statusText,
+        response_preview: responseText.substring(0, 500),
         error: jsonError instanceof Error ? jsonError.message : String(jsonError),
       });
       return null;
     }
 
-    // Log raw payload for debugging
-    console.log("RAW_KEYWORD_RESULTS", JSON.stringify(raw, null, 2));
+    // Log raw payload structure for debugging (truncated for large responses)
+    console.log("RAW_KEYWORD_RESULTS", {
+      keyword,
+      status: response.status,
+      has_request_info: !!raw.request_info,
+      has_search_information: !!raw.search_information,
+      search_results_count: Array.isArray(raw.search_results) ? raw.search_results.length : "not an array",
+      search_results_type: typeof raw.search_results,
+      raw_keys: Object.keys(raw),
+      error: raw.error || null,
+    });
     
     // Extract search_information.total_results for search volume estimation
     // total_results is typically a string like "50,000 results" or number
@@ -242,9 +255,24 @@ export async function fetchKeywordMarketSnapshot(
       }
     }
 
+    // Check for API errors in response
+    if (raw.error) {
+      console.error("Rainforest API returned an error", {
+        keyword,
+        error: raw.error,
+        error_type: raw.error_type || "unknown",
+        request_info: raw.request_info || null,
+      });
+      return null;
+    }
+
     // Extract search_results array
     if (!raw || typeof raw !== "object") {
-      console.error("Invalid Rainforest API response structure");
+      console.error("Invalid Rainforest API response structure", {
+        keyword,
+        response_type: typeof raw,
+        response_value: raw,
+      });
       return null;
     }
 

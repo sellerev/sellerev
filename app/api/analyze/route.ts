@@ -738,13 +738,29 @@ export async function POST(req: NextRequest) {
         );
       }
       
-      keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
-      console.log("RAIN_DATA_RAW", {
-        has_data: !!keywordMarketData,
-        has_snapshot: !!keywordMarketData?.snapshot,
-        total_listings: keywordMarketData?.snapshot?.total_page1_listings || 0,
-        listings_count: keywordMarketData?.listings?.length || 0,
-      });
+      try {
+        keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
+        console.log("RAIN_DATA_RAW", {
+          has_data: !!keywordMarketData,
+          has_snapshot: !!keywordMarketData?.snapshot,
+          total_listings: keywordMarketData?.snapshot?.total_page1_listings || 0,
+          listings_count: keywordMarketData?.listings?.length || 0,
+        });
+      } catch (fetchError) {
+        console.error("FETCH_KEYWORD_MARKET_EXCEPTION", {
+          keyword: body.input_value,
+          error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+          stack: fetchError instanceof Error ? fetchError.stack : undefined,
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            error: fetchError instanceof Error ? fetchError.message : "Failed to fetch market data",
+            details: "An error occurred while fetching data from Rainforest API. Please check your API configuration.",
+          },
+          { status: 500, headers: res.headers }
+        );
+      }
       
       // Cache the result (non-blocking)
       if (keywordMarketData) {
