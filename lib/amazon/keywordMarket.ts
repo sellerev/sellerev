@@ -52,8 +52,14 @@ export interface KeywordMarketSnapshot {
   // Search volume estimation (modeled, not exact)
   search_demand?: {
     search_volume_range: string; // e.g., "10k–20k"
-    search_volume_confidence: "low" | "medium";
+    search_volume_confidence: "low" | "medium" | "high";
+    search_volume_source?: string; // Task 5: "model_v1" | "model_v2"
+    model_version?: string; // Task 5: Model version
   } | null;
+  // Task 5: Model metadata
+  search_volume_source?: string; // "model_v1" | "model_v2"
+  revenue_estimate_source?: string; // "model_v1" | "model_v2"
+  model_version?: string; // "v2.0.20250117"
   // Competitive Pressure Index (CPI) - seller-context aware, 0-100
   // Computed once per analysis, cached, immutable
   cpi?: {
@@ -185,7 +191,9 @@ function inferBrandFromTitle(title: string | null): string | null {
  * @returns KeywordMarketData if valid data exists, null otherwise
  */
 export async function fetchKeywordMarketSnapshot(
-  keyword: string
+  keyword: string,
+  supabase?: any,
+  marketplace: string = "US"
 ): Promise<KeywordMarketData | null> {
   const rainforestApiKey = process.env.RAINFOREST_API_KEY;
   
@@ -567,18 +575,37 @@ export async function fetchKeywordMarketSnapshot(
 
     // TASK 3: Aggregate total revenue and units estimates - OPTIONAL, wrapped in try/catch
     // TASK 4: Make revenue aggregation optional - do NOT block analyze if it fails
+    // TASK 5: Try V2 model first, fallback to V1
     let aggregated = {
       total_revenue_min: 0,
       total_revenue_max: 0,
       total_units_min: 0,
       total_units_max: 0,
     };
+    let revenueEstimateSource = "model_v1";
+    let revenueModelVersion = "v1.0";
     
-    // TASK 3: Aggregate total revenue and units estimates - OPTIONAL, wrapped in try/catch
-    // TASK 4: Make revenue aggregation optional - do NOT block analyze if it fails
     try {
-      // Only aggregate if we have the function and valid estimates
-      if (aggregateRevenueEstimatesFunc && typeof aggregateRevenueEstimatesFunc === 'function') {
+      // Try V2 model first (if supabase provided and model exists)
+      if (supabase) {
+        const { estimateRevenueV2 } = await import("@/lib/estimators/modelV2");
+        const v2Revenue = await estimateRevenueV2(supabase, {
+          page1_count: listings.length,
+          avg_reviews: avg_reviews,
+          sponsored_count: sponsored_count,
+          avg_price: avg_price,
+          category: undefined,
+        }, marketplace);
+        
+        if (v2Revenue) {
+          aggregated = v2Revenue;
+          revenueEstimateSource = "model_v2";
+          revenueModelVersion = v2Revenue.model_version;
+        }
+      }
+      
+      // If V2 not available or returned null, use V1 aggregation
+      if (revenueEstimateSource === "model_v1" && aggregateRevenueEstimatesFunc && typeof aggregateRevenueEstimatesFunc === 'function') {
         const revenueEstimates = listingsWithEstimates
           .filter(l => l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined)
           .map(l => ({
@@ -591,7 +618,7 @@ export async function fetchKeywordMarketSnapshot(
         if (revenueEstimates.length > 0) {
           aggregated = aggregateRevenueEstimatesFunc(revenueEstimates);
         }
-      } else {
+      } else if (revenueEstimateSource === "model_v1") {
         // TASK 1: Function not available - log but don't fail
         console.warn("REVENUE_AGGREGATION_FUNCTION_NOT_AVAILABLE", {
           keyword,
@@ -613,39 +640,80 @@ export async function fetchKeywordMarketSnapshot(
       // aggregated already defaults to zeros above
     }
     
-    // TASK 4: Estimate search volume (ALWAYS returns a value when Page-1 listings exist) - wrapped in try/catch
-    // Never returns null - uses deterministic H10-style heuristics
-    let search_demand: { search_volume_range: string; search_volume_confidence: "low" | "medium" } | null = null;
+    // TASK 4: Estimate search volume using V2 model (with calibration) - wrapped in try/catch
+    // Never returns null - uses deterministic H10-style heuristics with learned calibration
+    let search_demand: { 
+      search_volume_range: string; 
+      search_volume_confidence: "low" | "medium" | "high";
+      search_volume_source?: string;
+      model_version?: string;
+    } | null = null;
     
     if (listings.length > 0) {
       try {
-        const searchVolumeEstimator = await import("./searchVolumeEstimator");
-        const searchVolume = searchVolumeEstimator.estimateSearchVolume({
-          page1Listings: listings,
-          sponsoredCount: sponsored_count,
-          avgReviews: avg_reviews, // avg_reviews is always a number now (never null)
-          category: undefined, // Can be enhanced later with category detection
-        });
-        
-        // Format range as string (e.g., "10k–20k")
-        const formatRange = (min: number, max: number): string => {
-          if (min >= 1000000 || max >= 1000000) {
-            const minM = (min / 1000000).toFixed(1).replace(/\.0$/, '');
-            const maxM = (max / 1000000).toFixed(1).replace(/\.0$/, '');
-            return `${minM}M–${maxM}M`;
-          } else if (min >= 1000 || max >= 1000) {
-            const minK = Math.round(min / 1000);
-            const maxK = Math.round(max / 1000);
-            return `${minK}k–${maxK}k`;
-          } else {
-            return `${min}–${max}`;
-          }
-        };
-        
-        search_demand = {
-          search_volume_range: formatRange(searchVolume.min, searchVolume.max),
-          search_volume_confidence: searchVolume.confidence,
-        };
+        // Try V2 model first (if supabase provided and model exists)
+        if (supabase) {
+          const { estimateSearchVolumeV2 } = await import("@/lib/estimators/modelV2");
+          const v2Estimate = await estimateSearchVolumeV2(supabase, {
+            page1_count: listings.length,
+            avg_reviews: avg_reviews,
+            sponsored_count: sponsored_count,
+            avg_price: avg_price,
+            category: undefined, // Can be enhanced later
+          }, marketplace);
+          
+          // Format range as string (e.g., "10k–20k")
+          const formatRange = (min: number, max: number): string => {
+            if (min >= 1000000 || max >= 1000000) {
+              const minM = (min / 1000000).toFixed(1).replace(/\.0$/, '');
+              const maxM = (max / 1000000).toFixed(1).replace(/\.0$/, '');
+              return `${minM}M–${maxM}M`;
+            } else if (min >= 1000 || max >= 1000) {
+              const minK = Math.round(min / 1000);
+              const maxK = Math.round(max / 1000);
+              return `${minK}k–${maxK}k`;
+            } else {
+              return `${min}–${max}`;
+            }
+          };
+          
+          search_demand = {
+            search_volume_range: formatRange(v2Estimate.min, v2Estimate.max),
+            search_volume_confidence: v2Estimate.confidence,
+            search_volume_source: v2Estimate.source, // Task 5: Add source metadata
+            model_version: v2Estimate.model_version, // Task 5: Add model version
+          };
+        } else {
+          // Fallback to V1 if no supabase/model available
+          const searchVolumeEstimator = await import("./searchVolumeEstimator");
+          const searchVolume = searchVolumeEstimator.estimateSearchVolume({
+            page1Listings: listings,
+            sponsoredCount: sponsored_count,
+            avgReviews: avg_reviews,
+            category: undefined,
+          });
+          
+          const formatRange = (min: number, max: number): string => {
+            if (min >= 1000000 || max >= 1000000) {
+              const minM = (min / 1000000).toFixed(1).replace(/\.0$/, '');
+              const maxM = (max / 1000000).toFixed(1).replace(/\.0$/, '');
+              return `${minM}M–${maxM}M`;
+            } else if (min >= 1000 || max >= 1000) {
+              const minK = Math.round(min / 1000);
+              const maxK = Math.round(max / 1000);
+              return `${minK}k–${maxK}k`;
+            } else {
+              return `${min}–${max}`;
+            }
+          };
+          
+          search_demand = {
+            search_volume_range: formatRange(searchVolume.min, searchVolume.max),
+            search_volume_confidence: searchVolume.confidence,
+            search_volume_source: "model_v1", // Task 5: Add source metadata
+            model_version: "v1.0", // Task 5: Add model version
+          };
+        }
       } catch (searchVolumeError) {
         console.error("Search volume estimator failed, using fallback range", {
           keyword,
@@ -656,18 +724,28 @@ export async function fetchKeywordMarketSnapshot(
         search_demand = {
           search_volume_range: "12k–18k",
           search_volume_confidence: "low",
+          search_volume_source: "fallback",
+          model_version: "v1.0",
         };
       }
     }
     
     // TASK 4: market_snapshot.est_total_monthly_revenue may be null (revenue aggregation is optional)
-    const snapshotWithEstimates: KeywordMarketSnapshot = {
+    // TASK 5: Add model version metadata
+    const snapshotWithEstimates: KeywordMarketSnapshot & {
+      search_volume_source?: string;
+      revenue_estimate_source?: string;
+      model_version?: string;
+    } = {
       ...snapshot,
       est_total_monthly_revenue_min: aggregated.total_revenue_min > 0 ? aggregated.total_revenue_min : null,
       est_total_monthly_revenue_max: aggregated.total_revenue_max > 0 ? aggregated.total_revenue_max : null,
       est_total_monthly_units_min: aggregated.total_units_min > 0 ? aggregated.total_units_min : null,
       est_total_monthly_units_max: aggregated.total_units_max > 0 ? aggregated.total_units_max : null,
       search_demand, // Always set when listings exist, null only if no listings
+      search_volume_source: search_demand?.search_volume_source || "model_v1", // Task 5: Add source metadata
+      revenue_estimate_source: revenueEstimateSource, // Task 5: Add source metadata
+      model_version: search_demand?.model_version || revenueModelVersion, // Task 5: Add model version
     };
 
     // TASK 5: Invariant log right before returning snapshot

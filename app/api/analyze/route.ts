@@ -719,8 +719,40 @@ export async function POST(req: NextRequest) {
     // 7. Check cache first (aggressive caching for cost control)
     const { getCachedKeywordAnalysis, cacheKeywordAnalysis } = await import("@/lib/amazon/keywordCache");
     const marketplace = "US"; // TODO: Extract from request if available
+    const inputType = "keyword";
+    const page = 1;
     
-    let keywordMarketData = await getCachedKeywordAnalysis(supabase, body.input_value, marketplace);
+    // Task 2 & 3: Get cache with status tracking
+    const cacheResult = await getCachedKeywordAnalysis(
+      supabase, 
+      body.input_value, 
+      marketplace,
+      inputType,
+      page
+    );
+    
+    let keywordMarketData: KeywordMarketData | null = cacheResult.data;
+    let cacheStatus = cacheResult.status;
+    let cacheAgeSeconds = cacheResult.age_seconds;
+    
+    // Task 3: If stale, trigger async refresh (non-blocking)
+    if (cacheStatus === 'STALE') {
+      console.log("CACHE_STALE_ASYNC_REFRESH", {
+        keyword: body.input_value,
+        age_seconds: cacheAgeSeconds,
+        message: "Triggering async refresh in background",
+      });
+      // Trigger async refresh (non-blocking)
+      fetchKeywordMarketSnapshot(body.input_value)
+        .then((freshData) => {
+          if (freshData) {
+            cacheKeywordAnalysis(supabase, body.input_value, marketplace, freshData, inputType, page)
+              .then(() => console.log("CACHE_REFRESHED", { keyword: body.input_value }))
+              .catch((err) => console.error("CACHE_REFRESH_ERROR", err));
+          }
+        })
+        .catch((err) => console.error("ASYNC_REFRESH_ERROR", err));
+    }
     
     if (!keywordMarketData) {
       // Cache miss - fetch from Rainforest
@@ -740,7 +772,7 @@ export async function POST(req: NextRequest) {
       
       let fetchError: Error | null = null; // Store error for later check
       try {
-        keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
+        keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value, supabase, marketplace);
         console.log("RAIN_DATA_RAW", {
           has_data: !!keywordMarketData,
           has_snapshot: !!keywordMarketData?.snapshot,
@@ -852,7 +884,7 @@ export async function POST(req: NextRequest) {
         const hasRealListings = keywordMarketData.listings && keywordMarketData.listings.length > 0;
         if (hasRealListings) {
           // Only cache if we have real listings (not fallback)
-          cacheKeywordAnalysis(supabase, body.input_value, marketplace, keywordMarketData)
+          cacheKeywordAnalysis(supabase, body.input_value, marketplace, keywordMarketData, inputType, page)
             .then(() => console.log("CACHE_STORED", { 
               keyword: body.input_value,
               listings_count: keywordMarketData.listings.length,
@@ -1557,12 +1589,82 @@ ${body.input_value}`;
     // 14. Return success response (ALWAYS 200, never 422)
     const responseStatus = hasRealListings ? "complete" : "partial";
     
+    // Task 4: Add cache debug headers
+    const cacheHeaders: Record<string, string> = {
+      'x-sellerev-cache': cacheStatus || 'MISS',
+      'x-sellerev-cache-age': String(cacheAgeSeconds || 0),
+    };
+    
     console.log("RETURNING_SUCCESS", {
       status: responseStatus,
       has_decision: !!decisionJson,
       has_analysisRunId: !!insertedRun.id,
       data_quality: dataQuality,
+      cache_status: cacheStatus,
+      cache_age_seconds: cacheAgeSeconds,
     });
+    
+    // Task 2: Insert market observation on every successful analyze
+    try {
+      const { insertMarketObservation, normalizeKeyword } = await import("@/lib/estimators/observations");
+      
+      if (keywordMarketData && keywordMarketData.snapshot) {
+        const snapshot = keywordMarketData.snapshot;
+        const listings = keywordMarketData.listings || [];
+        
+        await insertMarketObservation(supabase, {
+          marketplace,
+          keyword: body.input_value,
+          normalized_keyword: normalizeKeyword(body.input_value),
+          page: 1,
+          listings_json: listings,
+          summary_json: {
+            avg_price: snapshot.avg_price,
+            avg_reviews: snapshot.avg_reviews,
+            avg_rating: snapshot.avg_rating,
+            sponsored_pct: snapshot.sponsored_count && snapshot.total_page1_listings > 0
+              ? Math.round((snapshot.sponsored_count / snapshot.total_page1_listings) * 100)
+              : 0,
+            total_listings: snapshot.total_page1_listings,
+            fulfillment_mix: snapshot.fulfillment_mix || null,
+          },
+          estimator_inputs_json: {
+            page1_count: snapshot.total_page1_listings,
+            avg_reviews: snapshot.avg_reviews,
+            sponsored_count: snapshot.sponsored_count || 0,
+            avg_price: snapshot.avg_price,
+            category: snapshot.category || undefined,
+          },
+          estimator_outputs_json: {
+            search_volume: snapshot.search_demand ? {
+              min: 0, // Will be populated by estimator
+              max: 0,
+              source: snapshot.search_demand.search_volume_confidence || "modeled",
+              confidence: snapshot.search_demand.search_volume_confidence || "low",
+            } : undefined,
+            revenue_estimates: snapshot.est_total_monthly_revenue_min ? {
+              total_revenue_min: snapshot.est_total_monthly_revenue_min,
+              total_revenue_max: snapshot.est_total_monthly_revenue_max || snapshot.est_total_monthly_revenue_min,
+              total_units_min: snapshot.est_total_monthly_units_min || 0,
+              total_units_max: snapshot.est_total_monthly_units_max || snapshot.est_total_monthly_units_min || 0,
+            } : undefined,
+          },
+          data_quality: {
+            has_listings: listings.length > 0,
+            listings_count: listings.length,
+            missing_fields: [
+              ...(snapshot.avg_price === null ? ['avg_price'] : []),
+              ...(snapshot.avg_rating === null ? ['avg_rating'] : []),
+              ...(snapshot.avg_bsr === null ? ['avg_bsr'] : []),
+            ],
+            fallback_used: !hasRealListings,
+          },
+        });
+      }
+    } catch (obsError) {
+      console.error("Failed to insert market observation:", obsError);
+      // Don't throw - observation insertion is non-critical
+    }
     
     return NextResponse.json(
       {
@@ -1572,7 +1674,13 @@ ${body.input_value}`;
         analysisRunId: insertedRun.id,
         decision: finalResponse, // Return contract-compliant response
       },
-      { status: 200, headers: res.headers }
+      { 
+        status: 200, 
+        headers: {
+          ...res.headers,
+          ...cacheHeaders, // Task 4: Add cache debug headers
+        }
+      }
     );
   } catch (err) {
     // TASK 2: Classify error - processing_error vs other errors

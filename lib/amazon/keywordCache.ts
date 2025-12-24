@@ -2,8 +2,8 @@
  * Keyword Analysis Cache
  * 
  * Aggressively caches keyword analysis results to control costs.
- * Cache key: analyze:keyword:${keyword}:${marketplace}
- * TTL: 24 hours
+ * Cache key: analyze:${marketplace}:${input_type}:${normalized_query}:${page}:${DATA_CONTRACT_VERSION}
+ * TTL: 24 hours with stale-while-revalidate
  * 
  * Cached data:
  * - Page-1 listings
@@ -24,34 +24,58 @@ export interface CachedKeywordAnalysis {
 }
 
 const CACHE_TTL_HOURS = 24;
+const CACHE_TTL_SECONDS = CACHE_TTL_HOURS * 60 * 60;
+const DATA_CONTRACT_VERSION = "v1.0"; // Increment when data contract changes
 
 /**
- * Generate cache key for keyword analysis
+ * Generate cache key for keyword analysis (Task 1)
+ * Format: analyze:${marketplace}:${input_type}:${normalized_query}:${page}:${DATA_CONTRACT_VERSION}
  */
-export function getCacheKey(keyword: string, marketplace: string = "US"): string {
+export function getCacheKey(
+  keyword: string, 
+  marketplace: string = "US",
+  inputType: string = "keyword",
+  page: number = 1
+): string {
   const normalizedKeyword = keyword.toLowerCase().trim();
-  return `analyze:keyword:${normalizedKeyword}:${marketplace}`;
+  return `analyze:${marketplace}:${inputType}:${normalizedKeyword}:${page}:${DATA_CONTRACT_VERSION}`;
 }
 
 /**
  * Check if cached data is still valid
+ * Returns: { valid: boolean, age_seconds: number, stale: boolean }
+ * stale = true if age >= TTL but < TTL*2 (for stale-while-revalidate)
  */
-export function isCacheValid(cached: CachedKeywordAnalysis): boolean {
+export function getCacheStatus(cached: CachedKeywordAnalysis): {
+  valid: boolean;
+  age_seconds: number;
+  stale: boolean;
+} {
+  const cachedAt = new Date(cached.cached_at);
   const expiresAt = new Date(cached.expires_at);
   const now = new Date();
-  return now < expiresAt;
+  const ageMs = now.getTime() - cachedAt.getTime();
+  const ageSeconds = Math.floor(ageMs / 1000);
+  const ttlSeconds = CACHE_TTL_SECONDS;
+  
+  const valid = now < expiresAt;
+  const stale = ageSeconds >= ttlSeconds && ageSeconds < ttlSeconds * 2;
+  
+  return { valid, age_seconds: ageSeconds, stale };
 }
 
 /**
- * Store keyword analysis in cache
+ * Store keyword analysis in cache (Task 2: Add CACHE_WRITE log)
  */
 export async function cacheKeywordAnalysis(
   supabase: any,
   keyword: string,
   marketplace: string,
-  data: KeywordMarketData
+  data: KeywordMarketData,
+  inputType: string = "keyword",
+  page: number = 1
 ): Promise<void> {
-  const cacheKey = getCacheKey(keyword, marketplace);
+  const cacheKey = getCacheKey(keyword, marketplace, inputType, page);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + CACHE_TTL_HOURS * 60 * 60 * 1000);
   
@@ -64,6 +88,9 @@ export async function cacheKeywordAnalysis(
     expires_at: expiresAt.toISOString(),
   };
   
+  // Calculate payload size
+  const payloadBytes = JSON.stringify(cached).length;
+  
   try {
     await supabase
       .from("keyword_analysis_cache")
@@ -71,9 +98,17 @@ export async function cacheKeywordAnalysis(
         cache_key: cacheKey,
         data: cached,
         expires_at: expiresAt.toISOString(),
+        created_at: now.toISOString(), // Ensure created_at is set
       }, {
         onConflict: "cache_key",
       });
+    
+    // Task 2: Log CACHE_WRITE
+    console.log("CACHE_WRITE", {
+      key: cacheKey,
+      ttl_seconds: CACHE_TTL_SECONDS,
+      payload_bytes: payloadBytes,
+    });
   } catch (error) {
     console.error("Failed to cache keyword analysis:", error);
     // Don't throw - caching is non-critical
@@ -81,45 +116,88 @@ export async function cacheKeywordAnalysis(
 }
 
 /**
- * Retrieve cached keyword analysis
+ * Retrieve cached keyword analysis (Task 2 & 3: Add logging and stale-while-revalidate)
+ * Returns: { data: KeywordMarketData | null, status: 'HIT' | 'MISS' | 'STALE', age_seconds: number }
  */
 export async function getCachedKeywordAnalysis(
   supabase: any,
   keyword: string,
-  marketplace: string = "US"
-): Promise<KeywordMarketData | null> {
-  const cacheKey = getCacheKey(keyword, marketplace);
+  marketplace: string = "US",
+  inputType: string = "keyword",
+  page: number = 1
+): Promise<{
+  data: KeywordMarketData | null;
+  status: 'HIT' | 'MISS' | 'STALE';
+  age_seconds: number;
+}> {
+  const cacheKey = getCacheKey(keyword, marketplace, inputType, page);
+  
+  // Task 2: Log CACHE_LOOKUP
+  console.log("CACHE_LOOKUP", { key: cacheKey });
   
   try {
-    const { data, error } = await supabase
+    const { data: cacheRow, error } = await supabase
       .from("keyword_analysis_cache")
-      .select("data, expires_at")
+      .select("data, expires_at, created_at")
       .eq("cache_key", cacheKey)
       .single();
     
-    if (error || !data) {
-      return null;
+    if (error || !cacheRow) {
+      // Task 2: Log CACHE_MISS
+      console.log("CACHE_MISS", { key: cacheKey });
+      return { data: null, status: 'MISS', age_seconds: 0 };
     }
     
-    const cached = data.data as CachedKeywordAnalysis;
+    const cached = cacheRow.data as CachedKeywordAnalysis;
+    const createdAt = new Date(cacheRow.created_at || cached.cached_at);
+    const now = new Date();
+    const ageMs = now.getTime() - createdAt.getTime();
+    const ageSeconds = Math.floor(ageMs / 1000);
+    const ttlSeconds = CACHE_TTL_SECONDS;
     
-    // Check if cache is still valid
-    if (!isCacheValid(cached)) {
-      // Cache expired - delete it
+    // Task 3: Enforce TTL with stale-while-revalidate
+    if (ageSeconds < ttlSeconds) {
+      // Fresh cache - return immediately
+      console.log("CACHE_HIT", { key: cacheKey, age_seconds: ageSeconds });
+      return {
+        data: {
+          snapshot: cached.snapshot,
+          listings: cached.listings,
+        },
+        status: 'HIT',
+        age_seconds: ageSeconds,
+      };
+    } else if (ageSeconds < ttlSeconds * 2) {
+      // Stale but usable - return cached AND trigger async refresh (Task 3)
+      console.log("CACHE_STALE", { 
+        key: cacheKey, 
+        age_seconds: ageSeconds,
+        message: "Returning stale cache, triggering async refresh",
+      });
+      return {
+        data: {
+          snapshot: cached.snapshot,
+          listings: cached.listings,
+        },
+        status: 'STALE',
+        age_seconds: ageSeconds,
+      };
+    } else {
+      // Too stale - delete and treat as miss
       await supabase
         .from("keyword_analysis_cache")
         .delete()
         .eq("cache_key", cacheKey);
-      return null;
+      console.log("CACHE_MISS", { 
+        key: cacheKey, 
+        reason: "expired",
+        age_seconds: ageSeconds,
+      });
+      return { data: null, status: 'MISS', age_seconds: ageSeconds };
     }
-    
-    // Return cached data
-    return {
-      snapshot: cached.snapshot,
-      listings: cached.listings,
-    };
   } catch (error) {
     console.error("Failed to retrieve cached keyword analysis:", error);
-    return null;
+    console.log("CACHE_MISS", { key: cacheKey, reason: "error" });
+    return { data: null, status: 'MISS', age_seconds: 0 };
   }
 }
