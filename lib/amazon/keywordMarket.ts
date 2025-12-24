@@ -194,6 +194,10 @@ export async function fetchKeywordMarketSnapshot(
     throw new Error("Rainforest API key not configured. Please set RAINFOREST_API_KEY environment variable.");
   }
 
+  // TASK 2: Track if we extracted ASINs to classify errors correctly
+  let extractedAsinCount = 0;
+  let apiReturnedResults = false;
+
   try {
     const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1`;
     console.log("RAINFOREST_API_REQUEST", { keyword, url: apiUrl.replace(rainforestApiKey, "***") });
@@ -328,13 +332,16 @@ export async function fetchKeywordMarketSnapshot(
     
     // Count ASINs to verify we have valid listings
     const asinCount = searchResults.filter((item: any) => item.asin).length;
+    extractedAsinCount = asinCount; // TASK 2: Track for error classification
+    apiReturnedResults = searchResults.length > 0; // TASK 2: Track if API returned results
+    
     if (asinCount === 0) {
       console.log("No ASINs found in any result", {
         keyword,
         total_items: searchResults.length,
         sample_item: searchResults[0] ? Object.keys(searchResults[0]) : null,
       });
-      return null;
+      return null; // TASK 2: This is genuine "zero_asins" case
     }
 
     // Step 4: Parse and normalize each search result item
@@ -401,26 +408,29 @@ export async function fetchKeywordMarketSnapshot(
       (listing) => listing.asin !== null && listing.asin !== undefined && listing.asin !== ""
     );
 
-    console.warn("PAGE1_LISTINGS_COUNT", validListings.length); // Step 7: Debug log
-    console.log(`Extracted ${validListings.length} valid listings from ${parsedListings.length} total results`, {
+    // TASK 1: Create canonical `listings` variable for all downstream logic
+    const listings = validListings; // Canonical variable name
+
+    console.warn("PAGE1_LISTINGS_COUNT", listings.length); // Step 7: Debug log
+    console.log(`Extracted ${listings.length} valid listings from ${parsedListings.length} total results`, {
       keyword,
-      valid_listings: validListings.length,
+      valid_listings: listings.length,
       total_parsed: parsedListings.length,
-      sample_valid_listing: validListings[0] ? {
-        asin: validListings[0].asin,
-        has_title: !!validListings[0].title,
-        has_price: validListings[0].price !== null,
-        has_reviews: validListings[0].reviews !== null,
-        has_rating: validListings[0].rating !== null,
+      sample_valid_listing: listings[0] ? {
+        asin: listings[0].asin,
+        has_title: !!listings[0].title,
+        has_price: listings[0].price !== null,
+        has_reviews: listings[0].reviews !== null,
+        has_rating: listings[0].rating !== null,
       } : null,
     });
 
     // Step 5: Only return null if ZERO ASINs exist
-    if (validListings.length === 0) {
+    if (listings.length === 0) {
       console.log("No valid listings (zero ASINs found)", {
         keyword,
         total_parsed: parsedListings.length,
-        valid_count: validListings.length,
+        valid_count: listings.length,
         sample_listing: parsedListings[0] ? {
           has_asin: !!parsedListings[0].asin,
           asin_value: parsedListings[0].asin,
@@ -429,30 +439,30 @@ export async function fetchKeywordMarketSnapshot(
       return null;
     }
 
-    // Aggregate metrics from Page 1 listings only
-    const total_page1_listings = validListings.length;
-    const sponsored_count = validListings.filter((l) => l.is_sponsored).length;
+    // Aggregate metrics from Page 1 listings only (using canonical `listings` variable)
+    const total_page1_listings = listings.length;
+    const sponsored_count = listings.filter((l) => l.is_sponsored).length;
 
-    // Step 6: Average price (only over listings with price) - do NOT fall back to category estimates when real listings exist
-    const listingsWithPrice = validListings.filter((l) => l.price !== null && l.price !== undefined);
+    // TASK 3: Average price (only over listings with price != null) - do NOT fall back when real listings exist
+    const listingsWithPrice = listings.filter((l) => l.price !== null && l.price !== undefined);
     const avg_price =
       listingsWithPrice.length > 0
         ? listingsWithPrice.reduce((sum, l) => sum + (l.price ?? 0), 0) / listingsWithPrice.length
         : null; // null is OK - we'll use fallback only if NO listings exist
 
-    // Average reviews - ALWAYS return a value (use computeAvgReviews helper)
+    // TASK 3: Average reviews (only over listings with reviews != null)
     const { computeAvgReviews } = await import("./marketAggregates");
-    const avg_reviews = computeAvgReviews(validListings);
+    const avg_reviews = computeAvgReviews(listings); // Always returns a number (0 if none)
 
-    // Step 6: Average rating (only over listings with rating) - do NOT fall back when real listings exist
-    const listingsWithRating = validListings.filter((l) => l.rating !== null && l.rating !== undefined);
+    // TASK 3: Average rating (only over listings with rating != null) - do NOT fall back when real listings exist
+    const listingsWithRating = listings.filter((l) => l.rating !== null && l.rating !== undefined);
     const avg_rating =
       listingsWithRating.length > 0
         ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length
         : null; // null is OK - we'll use fallback only if NO listings exist
 
     // Average BSR (only over listings with BSR)
-    const listingsWithBSR = validListings.filter((l) => l.bsr !== null && l.bsr !== undefined);
+    const listingsWithBSR = listings.filter((l) => l.bsr !== null && l.bsr !== undefined);
     const avg_bsr =
       listingsWithBSR.length > 0
         ? listingsWithBSR.reduce((sum, l) => sum + (l.bsr ?? 0), 0) / listingsWithBSR.length
@@ -460,13 +470,13 @@ export async function fetchKeywordMarketSnapshot(
 
     // Fulfillment mix calculation - ALWAYS return a value (use computeFulfillmentMix helper)
     const { computeFulfillmentMix } = await import("./fulfillmentMix");
-    const fulfillmentMix = validListings.length > 0 
-      ? computeFulfillmentMix(validListings)
+    const fulfillmentMix = listings.length > 0 
+      ? computeFulfillmentMix(listings)
       : { fba: 0, fbm: 0, amazon: 0 };
 
     // Top brands (count occurrences by brand if available) - Page 1 only
     const brandCounts: Record<string, number> = {};
-    validListings.forEach((l) => {
+    listings.forEach((l) => {
       if (l.brand) {
         brandCounts[l.brand] = (brandCounts[l.brand] || 0) + 1;
       }
@@ -494,34 +504,45 @@ export async function fetchKeywordMarketSnapshot(
       fulfillment_mix: fulfillmentMix, // Always an object now (never null when listings exist)
     };
 
-    // Estimate revenue and units for each listing (30-day estimates)
-    const revenueEstimator = await import("./revenueEstimator");
-    const { estimateListingRevenueWithUnits, aggregateRevenueEstimates } = revenueEstimator;
+    // TASK 4: Estimate revenue and units for each listing (30-day estimates) - wrapped in try/catch
+    let listingsWithEstimates: ParsedListing[] = listings; // Default to listings without estimates if estimator fails
     
-    const listingsWithEstimates: ParsedListing[] = validListings.map((listing) => {
-      if (listing.price === null || listing.price <= 0) {
+    try {
+      const revenueEstimator = await import("./revenueEstimator");
+      const { estimateListingRevenueWithUnits, aggregateRevenueEstimates } = revenueEstimator;
+      
+      listingsWithEstimates = listings.map((listing) => {
+        if (listing.price === null || listing.price <= 0) {
+          return {
+            ...listing,
+            est_monthly_revenue: null,
+            est_monthly_units: null,
+            revenue_confidence: "low",
+          };
+        }
+        
+        const estimate = estimateListingRevenueWithUnits(
+          listing.price,
+          listing.position,
+          avg_price,
+          keyword
+        );
+        
         return {
           ...listing,
-          est_monthly_revenue: null,
-          est_monthly_units: null,
-          revenue_confidence: "low",
+          est_monthly_revenue: estimate.est_monthly_revenue,
+          est_monthly_units: estimate.est_monthly_units,
+          revenue_confidence: estimate.revenue_confidence,
         };
-      }
-      
-      const estimate = estimateListingRevenueWithUnits(
-        listing.price,
-        listing.position,
-        avg_price,
-        keyword
-      );
-      
-      return {
-        ...listing,
-        est_monthly_revenue: estimate.est_monthly_revenue,
-        est_monthly_units: estimate.est_monthly_units,
-        revenue_confidence: estimate.revenue_confidence,
-      };
-    });
+      });
+    } catch (revenueError) {
+      console.error("Revenue estimator failed, keeping listings without estimates", {
+        keyword,
+        error: revenueError instanceof Error ? revenueError.message : String(revenueError),
+        listings_count: listings.length,
+      });
+      // listingsWithEstimates already defaults to listings above
+    }
 
     // Aggregate total revenue and units estimates
     // Always calculate aggregates, even if some listings have null estimates
@@ -543,38 +564,51 @@ export async function fetchKeywordMarketSnapshot(
           total_units_max: 0,
         };
     
-    // Estimate search volume (ALWAYS returns a value when Page-1 listings exist)
+    // TASK 4: Estimate search volume (ALWAYS returns a value when Page-1 listings exist) - wrapped in try/catch
     // Never returns null - uses deterministic H10-style heuristics
     let search_demand: { search_volume_range: string; search_volume_confidence: "low" | "medium" } | null = null;
     
     if (listings.length > 0) {
-      const searchVolumeEstimator = await import("./searchVolumeEstimator");
-      const searchVolume = searchVolumeEstimator.estimateSearchVolume({
-        page1Listings: listings,
-        sponsoredCount: sponsored_count,
-        avgReviews: avg_reviews, // avg_reviews is always a number now (never null)
-        category: undefined, // Can be enhanced later with category detection
-      });
-      
-      // Format range as string (e.g., "10k–20k")
-      const formatRange = (min: number, max: number): string => {
-        if (min >= 1000000 || max >= 1000000) {
-          const minM = (min / 1000000).toFixed(1).replace(/\.0$/, '');
-          const maxM = (max / 1000000).toFixed(1).replace(/\.0$/, '');
-          return `${minM}M–${maxM}M`;
-        } else if (min >= 1000 || max >= 1000) {
-          const minK = Math.round(min / 1000);
-          const maxK = Math.round(max / 1000);
-          return `${minK}k–${maxK}k`;
-        } else {
-          return `${min}–${max}`;
-        }
-      };
-      
-      search_demand = {
-        search_volume_range: formatRange(searchVolume.min, searchVolume.max),
-        search_volume_confidence: searchVolume.confidence,
-      };
+      try {
+        const searchVolumeEstimator = await import("./searchVolumeEstimator");
+        const searchVolume = searchVolumeEstimator.estimateSearchVolume({
+          page1Listings: listings,
+          sponsoredCount: sponsored_count,
+          avgReviews: avg_reviews, // avg_reviews is always a number now (never null)
+          category: undefined, // Can be enhanced later with category detection
+        });
+        
+        // Format range as string (e.g., "10k–20k")
+        const formatRange = (min: number, max: number): string => {
+          if (min >= 1000000 || max >= 1000000) {
+            const minM = (min / 1000000).toFixed(1).replace(/\.0$/, '');
+            const maxM = (max / 1000000).toFixed(1).replace(/\.0$/, '');
+            return `${minM}M–${maxM}M`;
+          } else if (min >= 1000 || max >= 1000) {
+            const minK = Math.round(min / 1000);
+            const maxK = Math.round(max / 1000);
+            return `${minK}k–${maxK}k`;
+          } else {
+            return `${min}–${max}`;
+          }
+        };
+        
+        search_demand = {
+          search_volume_range: formatRange(searchVolume.min, searchVolume.max),
+          search_volume_confidence: searchVolume.confidence,
+        };
+      } catch (searchVolumeError) {
+        console.error("Search volume estimator failed, using fallback range", {
+          keyword,
+          error: searchVolumeError instanceof Error ? searchVolumeError.message : String(searchVolumeError),
+          listings_count: listings.length,
+        });
+        // TASK 4: Set fallback range instead of null
+        search_demand = {
+          search_volume_range: "12k–18k",
+          search_volume_confidence: "low",
+        };
+      }
     }
     
     const snapshotWithEstimates: KeywordMarketSnapshot = {
@@ -586,8 +620,13 @@ export async function fetchKeywordMarketSnapshot(
       search_demand, // Always set when listings exist, null only if no listings
     };
 
-    // Step 6: Always populate market_snapshot.listings[] if listings exist
-    console.warn("PAGE1_LISTINGS_COUNT", listingsWithEstimates.length); // Step 7: Debug log
+    // TASK 5: Invariant log right before returning snapshot
+    console.warn("KEYWORD_SNAPSHOT_RETURN", { 
+      listings_count: listingsWithEstimates.length, 
+      has_real_listings: listingsWithEstimates.length > 0 
+    });
+    
+    // TASK 3: Always populate market_snapshot.listings[] if listings exist
     console.log("RETURNING_KEYWORD_MARKET_DATA", {
       keyword,
       total_listings: listingsWithEstimates.length,
@@ -599,11 +638,28 @@ export async function fetchKeywordMarketSnapshot(
     
     return {
       snapshot: snapshotWithEstimates,
-      listings: listingsWithEstimates, // Step 6: Always populated if listings exist
+      listings: listingsWithEstimates, // TASK 3: Always populated if listings exist
     };
   } catch (error) {
-    console.error("Error fetching keyword market snapshot:", error);
-    return null;
+    // TASK 2: Classify error - don't treat processing errors as "zero ASINs"
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isProcessingError = apiReturnedResults && extractedAsinCount > 0;
+    
+    console.error("Error fetching keyword market snapshot:", {
+      keyword,
+      error: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined,
+      api_returned_results: apiReturnedResults,
+      extracted_asin_count: extractedAsinCount,
+      error_type: isProcessingError ? "processing_error" : "api_error",
+    });
+    
+    // TASK 2: If we extracted ASINs but processing failed, throw with classification
+    if (isProcessingError) {
+      throw new Error(`Processing error: ${errorMessage} (extracted ${extractedAsinCount} ASINs but processing failed)`);
+    }
+    
+    return null; // Only return null for genuine API errors or zero ASINs
   }
 }
 

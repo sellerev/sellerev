@@ -739,36 +739,58 @@ export async function POST(req: NextRequest) {
       }
       
       try {
-      keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
-      console.log("RAIN_DATA_RAW", {
-        has_data: !!keywordMarketData,
-        has_snapshot: !!keywordMarketData?.snapshot,
-        total_listings: keywordMarketData?.snapshot?.total_page1_listings || 0,
-        listings_count: keywordMarketData?.listings?.length || 0,
-        has_real_listings: (keywordMarketData?.listings?.length || 0) > 0,
-      });
-      
-      // Step 6: Do NOT use fallback if real listings exist
-      if (keywordMarketData && keywordMarketData.listings && keywordMarketData.listings.length > 0) {
-        console.log("REAL_LISTINGS_FOUND", {
-          keyword: body.input_value,
-          listing_count: keywordMarketData.listings.length,
-          message: "Using real listings, NOT fallback estimates",
+        keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
+        console.log("RAIN_DATA_RAW", {
+          has_data: !!keywordMarketData,
+          has_snapshot: !!keywordMarketData?.snapshot,
+          total_listings: keywordMarketData?.snapshot?.total_page1_listings || 0,
+          listings_count: keywordMarketData?.listings?.length || 0,
+          has_real_listings: (keywordMarketData?.listings?.length || 0) > 0,
         });
-      }
-    } catch (fetchError) {
+        
+        // TASK 3: Do NOT use fallback if real listings exist
+        if (keywordMarketData && keywordMarketData.listings && keywordMarketData.listings.length > 0) {
+          console.log("REAL_LISTINGS_FOUND", {
+            keyword: body.input_value,
+            listing_count: keywordMarketData.listings.length,
+            message: "Using real listings, NOT fallback estimates",
+          });
+        }
+      } catch (fetchError) {
+        // TASK 2: Classify error - processing_error vs zero_asins
+        const errorMessage = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        const isProcessingError = errorMessage.includes("Processing error") && errorMessage.includes("extracted");
+        
         console.error("FETCH_KEYWORD_MARKET_EXCEPTION", {
           keyword: body.input_value,
-          error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+          error: errorMessage,
           stack: fetchError instanceof Error ? fetchError.stack : undefined,
+          error_type: isProcessingError ? "processing_error" : "api_error",
         });
-        // Use fallback instead of erroring
+        
+        // TASK 2: Only use fallback for genuine zero ASINs, not processing errors
+        // For processing errors, we should still try to return what we have
+        if (isProcessingError) {
+          // Processing error means we had ASINs but something failed
+          // Don't use fallback - let the error propagate or handle differently
+          console.error("PROCESSING_ERROR_NOT_ZERO_ASINS", {
+            keyword: body.input_value,
+            message: "Rainforest returned ASINs but processing failed - do NOT use fallback",
+          });
+          // Re-throw to be handled by outer error handler
+          throw fetchError;
+        }
+        
+        // Only use fallback for genuine API errors or zero ASINs
         const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
         keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
-        console.log("USING_FALLBACK_MARKET_DATA", { keyword: body.input_value, reason: "fetch_exception" });
+        console.log("USING_FALLBACK_MARKET_DATA", { 
+          keyword: body.input_value, 
+          reason: "api_error_or_zero_asins" 
+        });
       }
       
-      // Step 5: Only use fallback if Rainforest truly returned ZERO ASINs
+      // TASK 2 & 5: Only use fallback if Rainforest truly returned ZERO ASINs
       // If Rainforest returned null OR listings array is empty, use fallback
       if (!keywordMarketData || !keywordMarketData.listings || keywordMarketData.listings.length === 0) {
         console.log("RAINFOREST_RETURNED_ZERO_ASINS", {
@@ -776,7 +798,7 @@ export async function POST(req: NextRequest) {
           has_data: !!keywordMarketData,
           listings_count: keywordMarketData?.listings?.length || 0,
           using_fallback: true,
-          reason: "Zero ASINs found in Rainforest response",
+          reason: "zero_asins", // TASK 2: Explicit reason
         });
         const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
         keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
@@ -788,11 +810,24 @@ export async function POST(req: NextRequest) {
         });
       }
       
-      // Cache the result (non-blocking) - even fallback data
+      // TASK 6: Cache should store successful snapshot with listings
+      // Never cache an "empty" snapshot when Rainforest returned listings but processing crashed
       if (keywordMarketData) {
-        cacheKeywordAnalysis(supabase, body.input_value, marketplace, keywordMarketData)
-          .then(() => console.log("CACHE_STORED", { keyword: body.input_value }))
-          .catch((error) => console.error("CACHE_STORE_ERROR", error));
+        const hasRealListings = keywordMarketData.listings && keywordMarketData.listings.length > 0;
+        if (hasRealListings) {
+          // Only cache if we have real listings (not fallback)
+          cacheKeywordAnalysis(supabase, body.input_value, marketplace, keywordMarketData)
+            .then(() => console.log("CACHE_STORED", { 
+              keyword: body.input_value,
+              listings_count: keywordMarketData.listings.length,
+            }))
+            .catch((error) => console.error("CACHE_STORE_ERROR", error));
+        } else {
+          console.log("SKIPPING_CACHE_FALLBACK_DATA", {
+            keyword: body.input_value,
+            reason: "Avoiding cache poisoning with fallback data",
+          });
+        }
       }
     } else {
       console.log("CACHE_HIT", { 
@@ -813,13 +848,13 @@ export async function POST(req: NextRequest) {
       keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
     }
     
-    // Determine data quality status
-    const hasRealListings = keywordMarketData.snapshot.total_page1_listings > 0;
+    // TASK 2: Determine data quality status with proper error classification
+    const hasRealListings = keywordMarketData.listings && keywordMarketData.listings.length > 0;
     const dataQuality = {
       rainforest: hasRealListings ? "success" : "empty",
       reason: hasRealListings 
         ? null 
-        : "Rainforest returned no page-1 results",
+        : "zero_asins", // TASK 2: Explicit reason (not "processing_error" here since we'd have thrown)
       fallback_used: !hasRealListings,
     };
     
@@ -1504,18 +1539,30 @@ ${body.input_value}`;
       { status: 200, headers: res.headers }
     );
   } catch (err) {
+    // TASK 2: Classify error - processing_error vs other errors
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const isProcessingError = errorMessage.includes("Processing error") && errorMessage.includes("extracted");
+    
     console.error("ANALYZE_ERROR", {
       error: err,
-      message: err instanceof Error ? err.message : String(err),
+      message: errorMessage,
       stack: err instanceof Error ? err.stack : undefined,
       name: err instanceof Error ? err.name : undefined,
+      error_type: isProcessingError ? "processing_error" : "internal_error",
     });
+    
+    // TASK 2: Return proper error classification
     return NextResponse.json(
       {
         success: false,
+        status: "error",
         error: "Internal analyze error",
-        details: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
+        details: errorMessage,
+        data_quality: {
+          rainforest: isProcessingError ? "processing_error" : "error",
+          reason: isProcessingError ? "processing_error" : "internal_error",
+          fallback_used: false,
+        },
       },
       { status: 500, headers: res.headers }
     );
