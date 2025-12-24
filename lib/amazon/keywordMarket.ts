@@ -230,6 +230,13 @@ export async function fetchKeywordMarketSnapshot(
       return null;
     }
 
+    // Log FULL raw response for debugging (Step 1)
+    console.log("RAW_KEYWORD_RESULTS_FULL", {
+      keyword,
+      status: response.status,
+      full_response: JSON.stringify(raw, null, 2), // Full response for inspection
+    });
+    
     // Log raw payload structure for debugging (truncated for large responses)
     console.log("RAW_KEYWORD_RESULTS", {
       keyword,
@@ -238,6 +245,9 @@ export async function fetchKeywordMarketSnapshot(
       has_search_information: !!raw.search_information,
       search_results_count: Array.isArray(raw.search_results) ? raw.search_results.length : "not an array",
       search_results_type: typeof raw.search_results,
+      organic_results_count: Array.isArray(raw.organic_results) ? raw.organic_results.length : "not an array",
+      ads_count: Array.isArray(raw.ads) ? raw.ads.length : "not an array",
+      results_count: Array.isArray(raw.results) ? raw.results.length : "not an array",
       raw_keys: Object.keys(raw),
       error: raw.error || null,
     });
@@ -276,85 +286,144 @@ export async function fetchKeywordMarketSnapshot(
       return null;
     }
 
-    const searchResults = raw.search_results || [];
+    // Step 2: Collect ALL listings from ALL possible locations in Rainforest response
+    // Check: search_results, organic_results, ads, results, etc.
+    const allResultArrays: any[][] = [];
+    
+    if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
+      allResultArrays.push(raw.search_results);
+    }
+    if (Array.isArray(raw.organic_results) && raw.organic_results.length > 0) {
+      allResultArrays.push(raw.organic_results);
+    }
+    if (Array.isArray(raw.ads) && raw.ads.length > 0) {
+      allResultArrays.push(raw.ads);
+    }
+    if (Array.isArray(raw.results) && raw.results.length > 0) {
+      allResultArrays.push(raw.results);
+    }
+    
+    // Flatten all arrays into a single array
+    const searchResults = allResultArrays.flat();
+    
+    console.log("COLLECTED_LISTINGS_FROM_ALL_SOURCES", {
+      keyword,
+      search_results_count: Array.isArray(raw.search_results) ? raw.search_results.length : 0,
+      organic_results_count: Array.isArray(raw.organic_results) ? raw.organic_results.length : 0,
+      ads_count: Array.isArray(raw.ads) ? raw.ads.length : 0,
+      results_count: Array.isArray(raw.results) ? raw.results.length : 0,
+      total_collected: searchResults.length,
+    });
 
-    // 422 ONLY if search_results is empty or missing
-    if (!Array.isArray(searchResults) || searchResults.length === 0) {
-      console.log("No search results found", {
+    // Step 5: Only return null if ZERO ASINs exist across all result blocks
+    if (searchResults.length === 0) {
+      console.log("No search results found in any location", {
         keyword,
         has_raw: !!raw,
         raw_keys: raw ? Object.keys(raw) : [],
-        search_results_type: Array.isArray(searchResults) ? "array" : typeof searchResults,
-        search_results_length: Array.isArray(searchResults) ? searchResults.length : "N/A",
+        checked_locations: ["search_results", "organic_results", "ads", "results"],
+      });
+      return null;
+    }
+    
+    // Count ASINs to verify we have valid listings
+    const asinCount = searchResults.filter((item: any) => item.asin).length;
+    if (asinCount === 0) {
+      console.log("No ASINs found in any result", {
+        keyword,
+        total_items: searchResults.length,
+        sample_item: searchResults[0] ? Object.keys(searchResults[0]) : null,
       });
       return null;
     }
 
-    // Parse each search result item
+    // Step 4: Parse and normalize each search result item
+    // Normalize using single helper - all fields except ASIN are optional
     let parsedListings: ParsedListing[] = [];
     try {
       parsedListings = searchResults.map((item: any, index: number) => {
+      // Step 2: ASIN is required, everything else is optional
       const asin = item.asin ?? null;
-      const title = item.title ?? null;
-      const price = parsePrice(item);
-      const rating = parseRating(item);
-      const reviews = parseReviews(item);
-      const is_sponsored = item.is_sponsored ?? false;
-      const position = item.position ?? index + 1; // Organic rank (1-indexed)
-      const bsr = parseBSR(item);
-      const fulfillment = parseFulfillment(item);
       
-      // Extract brand: try item.brand first, then infer from title
+      // Step 4: Normalize all fields (nullable where appropriate)
+      const title = item.title ?? null; // Optional
+      const price = parsePrice(item); // Nullable
+      const rating = parseRating(item); // Nullable
+      const reviews = parseReviews(item); // Nullable
+      const is_sponsored = item.is_sponsored ?? false; // Boolean, default false
+      const position = item.position ?? index + 1; // Organic rank (1-indexed)
+      const bsr = parseBSR(item); // Nullable
+      const fulfillment = parseFulfillment(item); // Nullable
+      
+      // Extract brand: try item.brand first, then infer from title (if title exists)
       let brand = item.brand ?? null;
       if (!brand && title) {
         brand = inferBrandFromTitle(title);
       }
 
       // Extract image URL from Rainforest search_results[].image
-      const image_url = item.image ?? null;
+      const image_url = item.image ?? null; // Nullable
       
       // Extract seller and is_prime for fulfillment mix detection
-      const seller = item.seller ?? null;
-      const is_prime = item.is_prime ?? false;
+      const seller = item.seller ?? null; // Nullable
+      const is_prime = item.is_prime ?? false; // Boolean, default false
 
+      // Step 4: Return normalized listing - only ASIN is required
       return {
-        asin,
-        title,
-        price,
-        rating,
-        reviews,
-        is_sponsored,
+        asin, // Required
+        title, // Optional (nullable)
+        price, // Optional (nullable)
+        rating, // Optional (nullable)
+        reviews, // Optional (nullable)
+        is_sponsored, // Boolean
         position,
-        brand,
-        image_url,
-        bsr,
-        fulfillment,
+        brand, // Optional (nullable)
+        image_url, // Optional (nullable)
+        bsr, // Optional (nullable)
+        fulfillment, // Optional (nullable)
         // Add seller and is_prime for fulfillment mix computation
-        seller,
-        is_prime,
+        seller, // Optional (nullable)
+        is_prime, // Boolean
       } as ParsedListing & { seller?: string | null; is_prime?: boolean };
     });
     } catch (parseError) {
-      console.error("Error parsing search results:", parseError);
+      console.error("Error parsing search results:", {
+        error: parseError,
+        keyword,
+        search_results_length: searchResults.length,
+      });
       return null;
     }
 
-    // VALID listing rule: A listing is valid if asin exists AND title exists
+    // Step 2 & 3: VALID listing rule: A listing is valid if ASIN exists (title is optional)
+    // Do NOT filter out listings due to missing optional fields (price, reviews, rating, BSR, fulfillment)
     const validListings = parsedListings.filter(
-      (listing) => listing.asin !== null && listing.title !== null
+      (listing) => listing.asin !== null && listing.asin !== undefined && listing.asin !== ""
     );
 
-    console.log(`Extracted ${validListings.length} valid listings from ${parsedListings.length} total results`);
+    console.warn("PAGE1_LISTINGS_COUNT", validListings.length); // Step 7: Debug log
+    console.log(`Extracted ${validListings.length} valid listings from ${parsedListings.length} total results`, {
+      keyword,
+      valid_listings: validListings.length,
+      total_parsed: parsedListings.length,
+      sample_valid_listing: validListings[0] ? {
+        asin: validListings[0].asin,
+        has_title: !!validListings[0].title,
+        has_price: validListings[0].price !== null,
+        has_reviews: validListings[0].reviews !== null,
+        has_rating: validListings[0].rating !== null,
+      } : null,
+    });
 
-    // If total_page1_listings > 0, proceed with analysis (even if avg_price or avg_reviews are null)
+    // Step 5: Only return null if ZERO ASINs exist
     if (validListings.length === 0) {
-      console.log("No valid listings (missing asin or title)", {
+      console.log("No valid listings (zero ASINs found)", {
         keyword,
         total_parsed: parsedListings.length,
         valid_count: validListings.length,
         sample_listing: parsedListings[0] ? {
           has_asin: !!parsedListings[0].asin,
-          has_title: !!parsedListings[0].title,
+          asin_value: parsedListings[0].asin,
         } : null,
       });
       return null;
@@ -364,23 +433,23 @@ export async function fetchKeywordMarketSnapshot(
     const total_page1_listings = validListings.length;
     const sponsored_count = validListings.filter((l) => l.is_sponsored).length;
 
-    // Average price (only over listings with price)
-    const listingsWithPrice = validListings.filter((l) => l.price !== null);
+    // Step 6: Average price (only over listings with price) - do NOT fall back to category estimates when real listings exist
+    const listingsWithPrice = validListings.filter((l) => l.price !== null && l.price !== undefined);
     const avg_price =
       listingsWithPrice.length > 0
         ? listingsWithPrice.reduce((sum, l) => sum + (l.price ?? 0), 0) / listingsWithPrice.length
-        : null;
+        : null; // null is OK - we'll use fallback only if NO listings exist
 
     // Average reviews - ALWAYS return a value (use computeAvgReviews helper)
     const { computeAvgReviews } = await import("./marketAggregates");
     const avg_reviews = computeAvgReviews(validListings);
 
-    // Average rating (only over listings with rating)
-    const listingsWithRating = validListings.filter((l) => l.rating !== null);
+    // Step 6: Average rating (only over listings with rating) - do NOT fall back when real listings exist
+    const listingsWithRating = validListings.filter((l) => l.rating !== null && l.rating !== undefined);
     const avg_rating =
       listingsWithRating.length > 0
         ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length
-        : null;
+        : null; // null is OK - we'll use fallback only if NO listings exist
 
     // Average BSR (only over listings with BSR)
     const listingsWithBSR = validListings.filter((l) => l.bsr !== null && l.bsr !== undefined);
@@ -517,9 +586,20 @@ export async function fetchKeywordMarketSnapshot(
       search_demand, // Always set when listings exist, null only if no listings
     };
 
+    // Step 6: Always populate market_snapshot.listings[] if listings exist
+    console.warn("PAGE1_LISTINGS_COUNT", listingsWithEstimates.length); // Step 7: Debug log
+    console.log("RETURNING_KEYWORD_MARKET_DATA", {
+      keyword,
+      total_listings: listingsWithEstimates.length,
+      snapshot_total_page1_listings: snapshotWithEstimates.total_page1_listings,
+      has_avg_price: snapshotWithEstimates.avg_price !== null,
+      has_avg_reviews: snapshotWithEstimates.avg_reviews > 0,
+      has_avg_rating: snapshotWithEstimates.avg_rating !== null,
+    });
+    
     return {
       snapshot: snapshotWithEstimates,
-      listings: listingsWithEstimates,
+      listings: listingsWithEstimates, // Step 6: Always populated if listings exist
     };
   } catch (error) {
     console.error("Error fetching keyword market snapshot:", error);

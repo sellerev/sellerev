@@ -739,14 +739,24 @@ export async function POST(req: NextRequest) {
       }
       
       try {
-        keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
-        console.log("RAIN_DATA_RAW", {
-          has_data: !!keywordMarketData,
-          has_snapshot: !!keywordMarketData?.snapshot,
-          total_listings: keywordMarketData?.snapshot?.total_page1_listings || 0,
-          listings_count: keywordMarketData?.listings?.length || 0,
+      keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
+      console.log("RAIN_DATA_RAW", {
+        has_data: !!keywordMarketData,
+        has_snapshot: !!keywordMarketData?.snapshot,
+        total_listings: keywordMarketData?.snapshot?.total_page1_listings || 0,
+        listings_count: keywordMarketData?.listings?.length || 0,
+        has_real_listings: (keywordMarketData?.listings?.length || 0) > 0,
+      });
+      
+      // Step 6: Do NOT use fallback if real listings exist
+      if (keywordMarketData && keywordMarketData.listings && keywordMarketData.listings.length > 0) {
+        console.log("REAL_LISTINGS_FOUND", {
+          keyword: body.input_value,
+          listing_count: keywordMarketData.listings.length,
+          message: "Using real listings, NOT fallback estimates",
         });
-      } catch (fetchError) {
+      }
+    } catch (fetchError) {
         console.error("FETCH_KEYWORD_MARKET_EXCEPTION", {
           keyword: body.input_value,
           error: fetchError instanceof Error ? fetchError.message : String(fetchError),
@@ -758,14 +768,24 @@ export async function POST(req: NextRequest) {
         console.log("USING_FALLBACK_MARKET_DATA", { keyword: body.input_value, reason: "fetch_exception" });
       }
       
-      // If Rainforest returned null, use fallback
-      if (!keywordMarketData) {
-        console.log("RAINFOREST_RETURNED_NULL", {
+      // Step 5: Only use fallback if Rainforest truly returned ZERO ASINs
+      // If Rainforest returned null OR listings array is empty, use fallback
+      if (!keywordMarketData || !keywordMarketData.listings || keywordMarketData.listings.length === 0) {
+        console.log("RAINFOREST_RETURNED_ZERO_ASINS", {
           keyword: body.input_value,
+          has_data: !!keywordMarketData,
+          listings_count: keywordMarketData?.listings?.length || 0,
           using_fallback: true,
+          reason: "Zero ASINs found in Rainforest response",
         });
         const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
         keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
+      } else {
+        console.log("REAL_LISTINGS_AVAILABLE", {
+          keyword: body.input_value,
+          listings_count: keywordMarketData.listings.length,
+          message: "Using real listings, skipping fallback",
+        });
       }
       
       // Cache the result (non-blocking) - even fallback data
