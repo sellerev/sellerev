@@ -197,6 +197,12 @@ export default function ChatSidebar({
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [pendingMemoryConfirmation, setPendingMemoryConfirmation] = useState<{
+    pendingMemoryId: string;
+    message: string;
+    memoryDescription: string;
+    subtext?: string;
+  } | null>(null);
   
   // Refs for auto-scroll
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -304,11 +310,16 @@ export default function ChatSidebar({
             try {
               const json = JSON.parse(line.slice(6));
               
-              // Handle metadata (e.g., cost override updates)
-              if (json.metadata && (json.metadata.type === "cost_override_applied" || json.metadata.type === "margin_snapshot_refined")) {
-                const { margin_snapshot } = json.metadata;
-                if (margin_snapshot && onMarginSnapshotUpdate) {
-                  onMarginSnapshotUpdate(margin_snapshot);
+              // Handle metadata (e.g., cost override updates, memory confirmation)
+              if (json.metadata) {
+                if (json.metadata.type === "cost_override_applied" || json.metadata.type === "margin_snapshot_refined") {
+                  const { margin_snapshot } = json.metadata;
+                  if (margin_snapshot && onMarginSnapshotUpdate) {
+                    onMarginSnapshotUpdate(margin_snapshot);
+                  }
+                } else if (json.metadata.type === "memory_confirmation") {
+                  // Show memory confirmation prompt
+                  setPendingMemoryConfirmation(json.metadata);
                 }
               }
               
@@ -512,6 +523,76 @@ export default function ChatSidebar({
           </>
         )}
       </div>
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* MEMORY CONFIRMATION PROMPT                                           */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {pendingMemoryConfirmation && (
+        <div className="p-4 border-t bg-blue-50">
+          <p className="text-sm text-gray-900 mb-2 font-medium">
+            {pendingMemoryConfirmation.message}
+          </p>
+          <p className="text-xs text-gray-600 mb-3">
+            {pendingMemoryConfirmation.memoryDescription}
+          </p>
+          {pendingMemoryConfirmation.subtext && (
+            <p className="text-xs text-gray-500 mb-3">
+              {pendingMemoryConfirmation.subtext}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={async () => {
+                try {
+                  const response = await fetch("/api/memory/confirm", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      pendingMemoryId: pendingMemoryConfirmation.pendingMemoryId,
+                      confidence: "medium",
+                    }),
+                  });
+                  if (response.ok) {
+                    setPendingMemoryConfirmation(null);
+                  } else {
+                    alert("Failed to save preference");
+                  }
+                } catch (error) {
+                  console.error("Error confirming memory:", error);
+                  alert("Failed to save preference");
+                }
+              }}
+              className="px-3 py-1.5 bg-black text-white rounded text-sm font-medium hover:bg-gray-800"
+            >
+              Save it
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const response = await fetch("/api/memory/reject", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      pendingMemoryId: pendingMemoryConfirmation.pendingMemoryId,
+                    }),
+                  });
+                  if (response.ok) {
+                    setPendingMemoryConfirmation(null);
+                  } else {
+                    alert("Failed to reject preference");
+                  }
+                } catch (error) {
+                  console.error("Error rejecting memory:", error);
+                  alert("Failed to reject preference");
+                }
+              }}
+              className="px-3 py-1.5 border border-gray-300 rounded text-sm font-medium hover:bg-gray-50"
+            >
+              Don't save
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* INPUT AREA                                                          */}
