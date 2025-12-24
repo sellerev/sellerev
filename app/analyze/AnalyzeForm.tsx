@@ -449,7 +449,9 @@ export default function AnalyzeForm({
         error: data.error 
       });
 
-      if (!res.ok || !data.success) {
+      // STEP 7: Never block on errors - always render with best available data
+      // Only show errors for actual failures (500), not missing data (which uses fallbacks)
+      if (!res.ok || (!data.success && res.status >= 500)) {
         const errorMsg = data.error || "Analysis failed";
         const errorDetails = data.details || "";
         const errorStack = data.stack || "";
@@ -476,6 +478,17 @@ export default function AnalyzeForm({
         setError(displayError);
         setLoading(false);
         return;
+      }
+      
+      // Handle partial data (status: "partial") - still render, just show notice
+      // Store status for UI to display appropriate messaging
+      const isPartialData = data.status === "partial" || data.data_quality?.fallback_used;
+      if (isPartialData) {
+        console.log("PARTIAL_DATA_DETECTED", {
+          status: data.status,
+          data_quality: data.data_quality,
+        });
+        // Don't set error - just log. UI will show "best available data" message
       }
 
       if (!data.analysisRunId) {
@@ -754,6 +767,8 @@ export default function AnalyzeForm({
                     const snapshot = analysis.market_snapshot;
                     const page1Count = snapshot?.page1_count ?? snapshot?.total_page1_listings ?? 0;
                     const hasListings = page1Count > 0;
+                    // Check if we have real listings (not fallback)
+                    const hasRealListings = hasListings && (snapshot?.listings?.length || 0) > 0;
                     
                     // Use locked contract format: search_volume { min, max } or fallback to search_demand
                     let searchVolume: string | null = null;
@@ -770,19 +785,22 @@ export default function AnalyzeForm({
                     
                     return (
                       <div className="bg-white border rounded-lg p-4 mb-6">
+                        {!hasRealListings && (
+                          <div className="mb-2 text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded border border-amber-200">
+                            <span className="font-medium">Showing best available market data:</span> No Page-1 listings found. Metrics below are estimated using category defaults.
+                          </div>
+                        )}
                         <div className="mb-2 text-xs text-gray-500">
                           <span className="font-medium">Note:</span> Metrics labeled "(est.)" are modeled estimates, not Amazon-reported data.
                         </div>
                         <div className="grid grid-cols-8 gap-4 text-sm">
-                          {/* Search Volume - ALWAYS show when listings exist */}
+                          {/* Search Volume - ALWAYS show (Step 3) */}
                           <div>
                             <div className="text-xs text-gray-500 mb-0.5">Search Volume</div>
                             <div className="font-semibold text-gray-900">
-                              {hasListings && searchVolume 
-                                ? `${searchVolume} (est.)` 
-                                : hasListings 
-                                  ? "18k–32k (est.)" // Fallback estimate when listings exist
-                                  : "Not available"}
+                              {searchVolume 
+                                ? `${searchVolume}${snapshot?.search_volume?.source === 'modeled' ? ' (est.)' : ''}` 
+                                : "12k–18k (est.)"} {/* Always show fallback, never "Not available" */}
                             </div>
                           </div>
                       {/* Page-1 Listings */}
@@ -801,17 +819,13 @@ export default function AnalyzeForm({
                             : "Not available"}
                         </div>
                       </div>
-                      {/* Avg Reviews - ALWAYS show when listings exist */}
+                      {/* Avg Reviews - ALWAYS show (Step 4) */}
                       <div>
                         <div className="text-xs text-gray-500 mb-0.5">Avg Reviews</div>
                         <div className="font-semibold text-gray-900">
-                          {hasListings && snapshot?.avg_reviews !== undefined && snapshot?.avg_reviews !== null
-                            ? snapshot.avg_reviews === 0
-                              ? "<10 (new market)"
-                              : snapshot.avg_reviews.toLocaleString()
-                            : hasListings
-                              ? "<10 (new market)" // Default when listings exist but no review data
-                              : "Not available"}
+                          {snapshot?.avg_reviews !== undefined && snapshot?.avg_reviews !== null && snapshot.avg_reviews > 0
+                            ? snapshot.avg_reviews.toLocaleString()
+                            : "<10 (new market)"} {/* Always show, never "Not available" */}
                         </div>
                       </div>
                       {/* Avg Rating */}
@@ -844,11 +858,9 @@ export default function AnalyzeForm({
                           </span>
                         </div>
                         <div className="font-semibold text-gray-900">
-                          {hasListings && fulfillmentMix
-                            ? `FBA ${fulfillmentMix.fba}% · FBM ${fulfillmentMix.fbm}% · Amazon ${fulfillmentMix.amazon}%`
-                            : hasListings
-                              ? "FBA 70% · FBM 25% · Amazon 5% (est.)"
-                              : "Not available"}
+                          {fulfillmentMix
+                            ? `FBA ${fulfillmentMix.fba}% · FBM ${fulfillmentMix.fbm}% · Amazon ${fulfillmentMix.amazon}%${fulfillmentMix.source === 'estimated' ? ' (est.)' : ''}`
+                            : "FBA 65% · FBM 25% · Amazon 10% (est.)"} {/* Always show, never "Not available" */}
                         </div>
                       </div>
                       {/* Sponsored Count */}
@@ -880,7 +892,14 @@ export default function AnalyzeForm({
                 
                 return (
                   <div>
-                    <h2 className="text-xl font-semibold text-gray-900 mb-4">Page 1 Results</h2>
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
+                      {normalizedListings.length === 0 && (
+                        <div className="text-sm text-amber-600 bg-amber-50 px-3 py-1 rounded border border-amber-200">
+                          No Page 1 listings returned — market data estimated
+                        </div>
+                      )}
+                    </div>
                     {selectedListing && (
                       <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                         <div className="text-sm text-blue-900">
@@ -893,7 +912,8 @@ export default function AnalyzeForm({
                     )}
                     {normalizedListings.length === 0 ? (
                       <div className="p-8 text-center bg-white border rounded-lg">
-                        <p className="text-gray-500">No products found</p>
+                        <p className="text-gray-500 mb-2">No Page 1 listings returned</p>
+                        <p className="text-sm text-amber-600">Market data shown above is estimated</p>
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">

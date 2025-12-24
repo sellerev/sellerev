@@ -752,31 +752,27 @@ export async function POST(req: NextRequest) {
           error: fetchError instanceof Error ? fetchError.message : String(fetchError),
           stack: fetchError instanceof Error ? fetchError.stack : undefined,
         });
-        return NextResponse.json(
-          {
-            success: false,
-            error: fetchError instanceof Error ? fetchError.message : "Failed to fetch market data",
-            details: "An error occurred while fetching data from Rainforest API. Please check your API configuration.",
-          },
-          { status: 500, headers: res.headers }
-        );
+        // Use fallback instead of erroring
+        const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
+        keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
+        console.log("USING_FALLBACK_MARKET_DATA", { keyword: body.input_value, reason: "fetch_exception" });
       }
       
-      // Cache the result (non-blocking)
+      // If Rainforest returned null, use fallback
+      if (!keywordMarketData) {
+        console.log("RAINFOREST_RETURNED_NULL", {
+          keyword: body.input_value,
+          using_fallback: true,
+        });
+        const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
+        keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
+      }
+      
+      // Cache the result (non-blocking) - even fallback data
       if (keywordMarketData) {
         cacheKeywordAnalysis(supabase, body.input_value, marketplace, keywordMarketData)
           .then(() => console.log("CACHE_STORED", { keyword: body.input_value }))
           .catch((error) => console.error("CACHE_STORE_ERROR", error));
-      } else {
-        console.error("FETCH_KEYWORD_MARKET_RETURNED_NULL", {
-          keyword: body.input_value,
-          possible_reasons: [
-            "Rainforest API returned no results",
-            "Rainforest API returned error",
-            "No valid listings (missing ASIN or title)",
-            "Invalid API response structure",
-          ],
-        });
       }
     } else {
       console.log("CACHE_HIT", { 
@@ -785,50 +781,30 @@ export async function POST(req: NextRequest) {
       });
     }
     
-    // Guard: 422 ONLY if search_results is empty or missing (Page 1 only)
-    if (!keywordMarketData) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "No market data available for this keyword. The Rainforest API returned no results. Please try a different keyword.",
-          details: "This could mean the keyword has no search results on Amazon, or the API request failed.",
-        },
-        { status: 422, headers: res.headers }
-      );
+    // GUARANTEE: market_snapshot MUST ALWAYS EXIST
+    // If somehow we still don't have data, create fallback
+    if (!keywordMarketData || !keywordMarketData.snapshot) {
+      console.error("FORCE_FALLBACK_MARKET_DATA", {
+        keyword: body.input_value,
+        has_data: !!keywordMarketData,
+        has_snapshot: !!keywordMarketData?.snapshot,
+      });
+      const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
+      keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
     }
     
-    if (!keywordMarketData.snapshot) {
-      console.error("KEYWORD_MARKET_DATA_MISSING_SNAPSHOT", {
-        keyword: body.input_value,
-        has_listings: !!keywordMarketData.listings,
-        listings_count: keywordMarketData.listings?.length || 0,
-      });
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Invalid market data structure. Please try again.",
-          details: "Market data snapshot is missing.",
-        },
-        { status: 500, headers: res.headers }
-      );
-    }
-    
-    if (keywordMarketData.snapshot.total_page1_listings === 0) {
-      console.log("ZERO_PAGE1_LISTINGS", {
-        keyword: body.input_value,
-        listings_count: keywordMarketData.listings?.length || 0,
-      });
-      return NextResponse.json(
-        {
-          success: false,
-          error: "No market data available for this keyword. No Page-1 listings found.",
-          details: "This keyword may not have any products on Amazon's first page of search results.",
-        },
-        { status: 422, headers: res.headers }
-      );
-    }
+    // Determine data quality status
+    const hasRealListings = keywordMarketData.snapshot.total_page1_listings > 0;
+    const dataQuality = {
+      rainforest: hasRealListings ? "success" : "empty",
+      reason: hasRealListings 
+        ? null 
+        : "Rainforest returned no page-1 results",
+      fallback_used: !hasRealListings,
+    };
     
     // Use the snapshot directly (already aggregated)
+    // GUARANTEED to exist after fallback logic above
     const marketSnapshot = keywordMarketData.snapshot;
     const marketSnapshotJson = keywordMarketData.snapshot;
     
@@ -1205,8 +1181,11 @@ ${body.input_value}`;
       // market_snapshot must ALWAYS have required fields with NO nulls when listings exist
       const hasListings = listings.length > 0;
       
-      // Ensure search_volume always has min/max (never null)
-      // Parse range string (e.g., "18k–32k") to min/max numbers
+      // FORCE SEARCH VOLUME TO ALWAYS RENDER (Step 3)
+      // Priority: 1) Cached/SP-API, 2) Rainforest proxy, 3) Modeled fallback
+      let searchVolume: { min: number; max: number; source: "sp_api" | "historical" | "modeled"; confidence: "high" | "medium" | "low" };
+      
+      // Try to parse from search_demand if available
       const parseRange = (rangeStr: string): { min: number; max: number } => {
         const match = rangeStr.match(/(\d+(?:\.\d+)?)([kM]?)\s*[–-]\s*(\d+(?:\.\d+)?)([kM]?)/);
         if (match) {
@@ -1214,15 +1193,35 @@ ${body.input_value}`;
           const max = parseFloat(match[3]) * (match[4] === 'M' ? 1000000 : match[4] === 'k' ? 1000 : 1);
           return { min: Math.round(min), max: Math.round(max) };
         }
-        // Fallback if parsing fails
-        return { min: 1000, max: 5000 };
+        return { min: 0, max: 0 };
       };
       
-      const searchVolume = snapshot.search_demand?.search_volume_range
-        ? parseRange(snapshot.search_demand.search_volume_range)
-        : hasListings
-          ? { min: 1000, max: 5000 } // Default when listings exist but no search volume
-          : { min: 0, max: 0 }; // No listings
+      if (snapshot.search_demand?.search_volume_range) {
+        const parsed = parseRange(snapshot.search_demand.search_volume_range);
+        searchVolume = {
+          ...parsed,
+          source: "historical" as const,
+          confidence: snapshot.search_demand.search_volume_confidence === "medium" ? "medium" : "low",
+        };
+      } else if (hasListings) {
+        // Use estimator with real listings
+        const { estimateSearchVolume } = await import("@/lib/amazon/searchVolumeEstimator");
+        const estimated = estimateSearchVolume({
+          page1Listings: listings,
+          sponsoredCount: snapshot.sponsored_count || 0,
+          avgReviews: snapshot.avg_reviews || 0,
+          category: snapshot.category || undefined,
+        });
+        searchVolume = {
+          ...estimated,
+          source: "modeled" as const,
+        };
+      } else {
+        // Use fallback estimator when no listings
+        const { estimateSearchVolumeFallback } = await import("@/lib/amazon/marketFallbacks");
+        const fallback = estimateSearchVolumeFallback(0, snapshot.category || null);
+        searchVolume = fallback;
+      }
       
       // Ensure avg_reviews is always a number (never null)
       const avgReviews = snapshot.avg_reviews !== null && snapshot.avg_reviews !== undefined
@@ -1239,18 +1238,23 @@ ${body.input_value}`;
         ? snapshot.avg_rating
         : 0;
       
-      // Ensure fulfillment_mix always has values (never null when listings exist)
-      const fulfillmentMix = snapshot.fulfillment_mix || { fba: 0, fbm: 0, amazon: 0 };
+      // FORCE FULFILLMENT MIX TO ALWAYS RENDER (Step 4)
+      // Add source tracking: "real" if from Rainforest, "estimated" if fallback
+      const fulfillmentMix = snapshot.fulfillment_mix || { fba: 65, fbm: 25, amazon: 10 };
+      const fulfillmentMixWithSource = {
+        ...fulfillmentMix,
+        source: hasListings && snapshot.fulfillment_mix ? "real" as const : "estimated" as const,
+      };
       
       keywordMarket = {
         market_snapshot: {
           // LOCKED DATA CONTRACT - Required fields, no nulls when listings exist
           // These fields MUST always be present and never null
-          search_volume: searchVolume, // { min: number, max: number } - always present
+          search_volume: searchVolume, // { min, max, source, confidence } - ALWAYS present
           avg_reviews: avgReviews, // number (never null, 0 if no valid reviews)
           avg_price: avgPrice, // number (never null, 0 if no prices)
           avg_rating: avgRating, // number (never null, 0 if no ratings)
-          fulfillment_mix: fulfillmentMix, // { fba: number, fbm: number, amazon: number } - always present when listings exist
+          fulfillment_mix: fulfillmentMixWithSource, // { fba, fbm, amazon, source } - ALWAYS present
           page1_count: snapshot.total_page1_listings || 0, // number (never null)
           
           // Additional fields (optional but included for compatibility)
@@ -1459,14 +1463,21 @@ ${body.input_value}`;
       }
     }
 
-    // 14. Return success response
+    // 14. Return success response (ALWAYS 200, never 422)
+    const responseStatus = hasRealListings ? "complete" : "partial";
+    
     console.log("RETURNING_SUCCESS", {
-      analysisRunId: insertedRun.id,
+      status: responseStatus,
       has_decision: !!decisionJson,
+      has_analysisRunId: !!insertedRun.id,
+      data_quality: dataQuality,
     });
+    
     return NextResponse.json(
       {
         success: true,
+        status: responseStatus, // "complete" or "partial"
+        data_quality: dataQuality, // Explains limitations
         analysisRunId: insertedRun.id,
         decision: finalResponse, // Return contract-compliant response
       },

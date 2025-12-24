@@ -799,8 +799,9 @@ function detectCostOverrides(
 function buildMarketSnapshotSummary(
   marketSnapshot: Record<string, unknown> | null
 ): string {
-  if (!marketSnapshot) {
-    return "";
+  // HARDEN: Never crash on missing market snapshot (Step 6)
+  if (!marketSnapshot || typeof marketSnapshot !== 'object') {
+    return "=== MARKET SNAPSHOT ===\nMarket snapshot data is not available. This analysis may have used estimated values.";
   }
 
   const parts: string[] = [];
@@ -826,10 +827,14 @@ function buildMarketSnapshotSummary(
     parts.push(`- Price Band: $${avgPrice.toFixed(2)}`);
   }
   
-  // Review Moat
-  const avgReviews = (marketSnapshot.avg_reviews as number) || null;
-  if (avgReviews !== null && typeof avgReviews === 'number' && !isNaN(avgReviews)) {
+  // Review Moat - HARDEN: always default to 0, never null (Step 6)
+  const avgReviews = (typeof marketSnapshot.avg_reviews === 'number' && !isNaN(marketSnapshot.avg_reviews))
+    ? marketSnapshot.avg_reviews
+    : 0; // Default to 0, not null
+  if (avgReviews > 0) {
     parts.push(`- Review Moat: ${avgReviews.toLocaleString()} reviews`);
+  } else {
+    parts.push(`- Review Moat: <10 (new market)`);
   }
   
   // Quality Threshold
@@ -838,8 +843,12 @@ function buildMarketSnapshotSummary(
     parts.push(`- Quality Threshold: ${avgRating.toFixed(1)} rating`);
   }
   
-  // Competitive Density
-  const totalListings = (marketSnapshot.total_page1_listings as number) || null;
+  // Competitive Density - HARDEN: check both field names (Step 6)
+  const totalListings = (typeof marketSnapshot.page1_count === 'number' && !isNaN(marketSnapshot.page1_count))
+    ? marketSnapshot.page1_count
+    : (typeof marketSnapshot.total_page1_listings === 'number' && !isNaN(marketSnapshot.total_page1_listings))
+      ? marketSnapshot.total_page1_listings
+      : null;
   if (totalListings !== null && totalListings !== undefined) {
     parts.push(`- Competitive Density: ${totalListings} listings`);
   }
