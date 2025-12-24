@@ -9,7 +9,7 @@ import { ExtractedMemory } from "./memoryExtraction";
 
 export interface SellerMemoryRecord {
   id: string;
-  seller_id: string;
+  user_id: string;
   memory_type: string;
   key: string;
   value: unknown;
@@ -33,7 +33,7 @@ export async function getSellerMemories(
     const { data, error } = await supabase
       .from("seller_memory")
       .select("*")
-      .eq("seller_id", sellerId)
+      .eq("user_id", sellerId)
       .order("updated_at", { ascending: false });
     
     if (error) {
@@ -67,7 +67,7 @@ export async function upsertMemories(
   try {
     // Prepare records for upsert
     const records = memories.map((memory) => ({
-      seller_id: sellerId,
+      user_id: sellerId,
       memory_type: memory.memory_type,
       key: memory.key,
       value: memory.value,
@@ -77,11 +77,11 @@ export async function upsertMemories(
       is_user_editable: true,
     }));
 
-    // Upsert using the unique constraint (seller_id, key)
+    // Upsert using the unique constraint (user_id, key)
     const { error } = await supabase
       .from("seller_memory")
       .upsert(records, {
-        onConflict: "seller_id,key",
+        onConflict: "user_id,key",
         ignoreDuplicates: false,
       });
 
@@ -117,7 +117,7 @@ export async function updateMemory(
         ...updates,
         updated_at: new Date().toISOString(),
       })
-      .eq("seller_id", sellerId)
+      .eq("user_id", sellerId)
       .eq("key", key);
 
     if (error) {
@@ -142,7 +142,7 @@ export async function deleteMemory(
     const { error } = await supabase
       .from("seller_memory")
       .delete()
-      .eq("seller_id", sellerId)
+      .eq("user_id", sellerId)
       .eq("key", key);
 
     if (error) {
@@ -167,7 +167,7 @@ export async function getMemoriesByType(
     const { data, error } = await supabase
       .from("seller_memory")
       .select("*")
-      .eq("seller_id", sellerId)
+      .eq("user_id", sellerId)
       .eq("memory_type", memoryType)
       .order("updated_at", { ascending: false });
     

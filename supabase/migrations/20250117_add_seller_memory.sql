@@ -4,7 +4,7 @@
 -- Primary memory table
 CREATE TABLE IF NOT EXISTS seller_memory (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  seller_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   
   memory_type TEXT NOT NULL CHECK (memory_type IN (
     'sourcing',
@@ -38,11 +38,11 @@ CREATE TABLE IF NOT EXISTS seller_memory (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   
   -- Unique constraint: one memory per seller per key
-  UNIQUE(seller_id, key)
+  UNIQUE(user_id, key)
 );
 
 -- Indexes for performance
-CREATE INDEX IF NOT EXISTS idx_seller_memory_seller_id ON seller_memory(seller_id);
+CREATE INDEX IF NOT EXISTS idx_seller_memory_user_id ON seller_memory(user_id);
 CREATE INDEX IF NOT EXISTS idx_seller_memory_type ON seller_memory(memory_type);
 CREATE INDEX IF NOT EXISTS idx_seller_memory_key ON seller_memory(key);
 CREATE INDEX IF NOT EXISTS idx_seller_memory_updated_at ON seller_memory(updated_at DESC);
@@ -52,20 +52,20 @@ ALTER TABLE seller_memory ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can view their own memory"
   ON seller_memory FOR SELECT
-  USING (auth.uid() = seller_id);
+  USING (auth.uid() = user_id);
 
 CREATE POLICY "Users can insert their own memory"
   ON seller_memory FOR INSERT
-  WITH CHECK (auth.uid() = seller_id);
+  WITH CHECK (auth.uid() = user_id);
 
 CREATE POLICY "Users can update their own memory"
   ON seller_memory FOR UPDATE
-  USING (auth.uid() = seller_id)
-  WITH CHECK (auth.uid() = seller_id);
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
 
 CREATE POLICY "Users can delete their own memory"
   ON seller_memory FOR DELETE
-  USING (auth.uid() = seller_id);
+  USING (auth.uid() = user_id);
 
 -- Trigger to update updated_at
 CREATE OR REPLACE FUNCTION update_seller_memory_updated_at()
@@ -84,7 +84,7 @@ CREATE TRIGGER update_seller_memory_updated_at
 -- Seller Attachments table (for future use)
 CREATE TABLE IF NOT EXISTS seller_attachments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  seller_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   
   file_type TEXT NOT NULL CHECK (file_type IN ('pdf', 'csv', 'image', 'text')),
   file_url TEXT NOT NULL,
@@ -95,19 +95,19 @@ CREATE TABLE IF NOT EXISTS seller_attachments (
 );
 
 -- Indexes
-CREATE INDEX IF NOT EXISTS idx_seller_attachments_seller_id ON seller_attachments(seller_id);
+CREATE INDEX IF NOT EXISTS idx_seller_attachments_user_id ON seller_attachments(user_id);
 
 -- RLS Policies
 ALTER TABLE seller_attachments ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can view their own attachments"
   ON seller_attachments FOR SELECT
-  USING (auth.uid() = seller_id);
+  USING (auth.uid() = user_id);
 
 CREATE POLICY "Users can insert their own attachments"
   ON seller_attachments FOR INSERT
-  WITH CHECK (auth.uid() = seller_id);
+  WITH CHECK (auth.uid() = user_id);
 
 CREATE POLICY "Users can delete their own attachments"
   ON seller_attachments FOR DELETE
-  USING (auth.uid() = seller_id);
+  USING (auth.uid() = user_id);
