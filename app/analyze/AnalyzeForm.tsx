@@ -451,14 +451,29 @@ export default function AnalyzeForm({
 
       if (!res.ok || !data.success) {
         const errorMsg = data.error || "Analysis failed";
-        const errorDetails = data.details || data.stack || "";
+        const errorDetails = data.details || "";
+        const errorStack = data.stack || "";
+        
+        // Log full error details to console for debugging
         console.error("ANALYZE_ERROR", { 
           error: errorMsg, 
           details: errorDetails,
+          stack: errorStack,
           status: res.status,
           data 
         });
-        setError(errorDetails ? `${errorMsg}: ${errorDetails}` : errorMsg);
+        
+        // Display user-friendly error message (limit length, exclude stack traces)
+        let displayError = errorMsg;
+        if (errorDetails && !errorDetails.includes("at ") && !errorDetails.includes("Error:")) {
+          // Only include details if it's not a stack trace and not too long
+          const truncatedDetails = errorDetails.length > 200 
+            ? errorDetails.substring(0, 200) + "..." 
+            : errorDetails;
+          displayError = `${errorMsg}: ${truncatedDetails}`;
+        }
+        
+        setError(displayError);
         setLoading(false);
         return;
       }
@@ -653,7 +668,24 @@ export default function AnalyzeForm({
           {/* Global Error */}
           {error && (
             <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
-              <p className="text-red-700 text-sm">{error}</p>
+              <div className="flex items-start gap-2">
+                <svg className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div className="flex-1">
+                  <p className="text-red-700 text-sm font-medium">Analysis Error</p>
+                  <p className="text-red-600 text-sm mt-1">{error}</p>
+                </div>
+                <button
+                  onClick={() => setError(null)}
+                  className="text-red-400 hover:text-red-600 flex-shrink-0"
+                  aria-label="Dismiss error"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
           )}
 
