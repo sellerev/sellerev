@@ -1636,12 +1636,37 @@ ${body.input_value}`;
             category: snapshot.category || undefined,
           },
           estimator_outputs_json: {
-            search_volume: snapshot.search_demand ? {
-              min: 0, // Will be populated by estimator
-              max: 0,
-              source: snapshot.search_demand.search_volume_confidence || "modeled",
-              confidence: snapshot.search_demand.search_volume_confidence || "low",
-            } : undefined,
+            search_volume: snapshot.search_demand ? (() => {
+              // Parse search_volume_range string (e.g., "10k–20k", "1.5M–2M") to extract min/max
+              const rangeStr = snapshot.search_demand.search_volume_range || "";
+              let min = 0;
+              let max = 0;
+              
+              if (rangeStr) {
+                const parts = rangeStr.split(/[–-]/).map(s => s.trim());
+                if (parts.length === 2) {
+                  const parseValue = (val: string): number => {
+                    val = val.toLowerCase();
+                    if (val.endsWith('m')) {
+                      return parseFloat(val) * 1000000;
+                    } else if (val.endsWith('k')) {
+                      return parseFloat(val) * 1000;
+                    } else {
+                      return parseFloat(val) || 0;
+                    }
+                  };
+                  min = parseValue(parts[0]);
+                  max = parseValue(parts[1]);
+                }
+              }
+              
+              return {
+                min,
+                max,
+                source: snapshot.search_demand.search_volume_source || "model_v1",
+                confidence: snapshot.search_demand.search_volume_confidence || "low",
+              };
+            })() : undefined,
             revenue_estimates: snapshot.est_total_monthly_revenue_min ? {
               total_revenue_min: snapshot.est_total_monthly_revenue_min,
               total_revenue_max: snapshot.est_total_monthly_revenue_max || snapshot.est_total_monthly_revenue_min,

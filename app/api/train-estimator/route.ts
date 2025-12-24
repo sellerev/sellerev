@@ -63,6 +63,7 @@ function trainLinearModel(
   // Calculate R² and MAE
   let ssRes = 0;
   let ssTot = 0;
+  let sumAbsError = 0;
   const yMean = y.reduce((a, b) => a + b, 0) / n;
   
   for (let i = 0; i < n; i++) {
@@ -70,12 +71,14 @@ function trainLinearModel(
     for (let j = 0; j < nFeatures; j++) {
       prediction += coefs[j] * X[i][j];
     }
-    ssRes += Math.pow(prediction - y[i], 2);
+    const error = prediction - y[i];
+    ssRes += Math.pow(error, 2);
     ssTot += Math.pow(y[i] - yMean, 2);
+    sumAbsError += Math.abs(error);
   }
   
   const rSquared = 1 - (ssRes / ssTot);
-  const mae = Math.sqrt(ssRes / n);
+  const mae = sumAbsError / n; // Mean Absolute Error (not RMSE)
   
   return {
     intercept,
