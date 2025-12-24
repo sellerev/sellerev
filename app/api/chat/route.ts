@@ -1475,11 +1475,13 @@ export async function POST(req: NextRequest) {
 
         const reader = openaiResponse.body?.getReader();
         if (!reader) {
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
           return;
         }
 
         const decoder = new TextDecoder();
+        let readerReleased = false;
         
         try {
           while (true) {
@@ -1503,11 +1505,18 @@ export async function POST(req: NextRequest) {
                     // Send each chunk to the client
                     controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
                   }
-                } catch {
-                  // Skip malformed JSON chunks
+                } catch (parseError) {
+                  // Skip malformed JSON chunks - log for debugging
+                  console.warn("Skipping malformed JSON chunk:", line.substring(0, 100));
                 }
               }
             }
+          }
+          
+          // Ensure reader is released
+          if (!readerReleased) {
+            reader.releaseLock();
+            readerReleased = true;
           }
 
           // 14. Validate response for hallucinations (TRIPWIRE)
@@ -1614,37 +1623,63 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // 16. Save messages to database after streaming completes
+          // Signal end of stream FIRST (don't block on database save)
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+          
+          // 16. Save messages to database after streaming completes (non-blocking)
           // ────────────────────────────────────────────────────────────────
           // Persist both user and assistant messages for history restoration
           // ────────────────────────────────────────────────────────────────
+          // Do this after closing the stream so it doesn't block the response
           if (finalMessage) {
-            try {
-              await supabase.from("analysis_messages").insert([
-                {
-                  analysis_run_id: body.analysisRunId,
-                  user_id: user.id,
-                  role: "user",
-                  content: body.message,
-                },
-                {
-                  analysis_run_id: body.analysisRunId,
-                  user_id: user.id,
-                  role: "assistant",
-                  content: finalMessage,
-                },
-              ]);
-            } catch (saveError) {
+            // Don't await - let it run in background
+            supabase.from("analysis_messages").insert([
+              {
+                analysis_run_id: body.analysisRunId,
+                user_id: user.id,
+                role: "user",
+                content: body.message,
+              },
+              {
+                analysis_run_id: body.analysisRunId,
+                user_id: user.id,
+                role: "assistant",
+                content: finalMessage,
+              },
+            ]).then(() => {
+              // Success - no need to log
+            }).catch((saveError) => {
               console.error("Failed to save chat messages:", saveError);
-            }
+            });
           }
-
-          // Signal end of stream
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
         } catch (error) {
           console.error("Streaming error:", error);
-          controller.error(error);
+          
+          // Ensure reader is released even on error
+          if (!readerReleased && reader) {
+            try {
+              reader.releaseLock();
+            } catch (releaseError) {
+              // Ignore release errors
+            }
+          }
+          
+          // Try to send error message to client before closing
+          try {
+            const errorMessage = error instanceof Error ? error.message : "An error occurred while streaming";
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errorMessage })}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          } catch (enqueueError) {
+            // If we can't enqueue, just close
+          }
+          
+          // Always close the controller
+          try {
+            controller.close();
+          } catch (closeError) {
+            // Controller might already be closed
+          }
         }
       },
     });
