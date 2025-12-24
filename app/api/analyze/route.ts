@@ -738,6 +738,7 @@ export async function POST(req: NextRequest) {
         );
       }
       
+      let fetchError: Error | null = null; // Store error for later check
       try {
         keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
         console.log("RAIN_DATA_RAW", {
@@ -756,52 +757,87 @@ export async function POST(req: NextRequest) {
             message: "Using real listings, NOT fallback estimates",
           });
         }
-      } catch (fetchError) {
+      } catch (err) {
+        fetchError = err instanceof Error ? err : new Error(String(err));
         // TASK 2: Classify error - processing_error vs zero_asins
-        const errorMessage = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        const errorMessage = fetchError.message;
         const isProcessingError = errorMessage.includes("Processing error") && errorMessage.includes("extracted");
         
-        console.error("FETCH_KEYWORD_MARKET_EXCEPTION", {
+        // TASK 5: Revenue aggregation failures must NOT trigger fallback or "zero ASINs"
+        const isRevenueAggregationError = errorMessage.includes("aggregateRevenueEstimates") || 
+                                         errorMessage.includes("REVENUE_AGGREGATION") ||
+                                         errorMessage.includes("revenue aggregation") ||
+                                         errorMessage.includes("REVENUE_AGGREGATION_ONLY");
+        
+          console.error("FETCH_KEYWORD_MARKET_EXCEPTION", {
           keyword: body.input_value,
           error: errorMessage,
-          stack: fetchError instanceof Error ? fetchError.stack : undefined,
+          stack: fetchError.stack,
           error_type: isProcessingError ? "processing_error" : "api_error",
+          is_revenue_aggregation_error: isRevenueAggregationError,
         });
         
-        // TASK 2: Only use fallback for genuine zero ASINs, not processing errors
-        // For processing errors, we should still try to return what we have
-        if (isProcessingError) {
-          // Processing error means we had ASINs but something failed
-          // Don't use fallback - let the error propagate or handle differently
+        // TASK 5: Revenue aggregation errors should NOT block analyze
+        // Since revenue aggregation is wrapped in try/catch, it shouldn't throw
+        // But if it does, we should NOT use fallback
+        if (isRevenueAggregationError) {
+          console.warn("REVENUE_AGGREGATION_ERROR_IN_CATCH", {
+            keyword: body.input_value,
+            message: "Revenue aggregation error in catch - this shouldn't happen if properly wrapped",
+            error: errorMessage,
+          });
+          // TASK 5: Don't use fallback - revenue aggregation is optional
+          // Set keywordMarketData to null and let it check below
+          keywordMarketData = null;
+        } else if (isProcessingError) {
+          // Other processing errors - don't use fallback, let error propagate
           console.error("PROCESSING_ERROR_NOT_ZERO_ASINS", {
             keyword: body.input_value,
             message: "Rainforest returned ASINs but processing failed - do NOT use fallback",
           });
           // Re-throw to be handled by outer error handler
-          throw fetchError;
+          throw err;
+        } else {
+          // Genuine API errors or zero ASINs - use fallback
+          const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
+          keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
+          console.log("USING_FALLBACK_MARKET_DATA", { 
+            keyword: body.input_value, 
+            reason: "api_error_or_zero_asins" 
+          });
         }
-        
-        // Only use fallback for genuine API errors or zero ASINs
-        const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
-        keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
-        console.log("USING_FALLBACK_MARKET_DATA", { 
-          keyword: body.input_value, 
-          reason: "api_error_or_zero_asins" 
-        });
       }
       
       // TASK 2 & 5: Only use fallback if Rainforest truly returned ZERO ASINs
-      // If Rainforest returned null OR listings array is empty, use fallback
+      // TASK 5: Revenue aggregation failures must NOT trigger "zero ASINs" or fallback
       if (!keywordMarketData || !keywordMarketData.listings || keywordMarketData.listings.length === 0) {
-        console.log("RAINFOREST_RETURNED_ZERO_ASINS", {
-          keyword: body.input_value,
-          has_data: !!keywordMarketData,
-          listings_count: keywordMarketData?.listings?.length || 0,
-          using_fallback: true,
-          reason: "zero_asins", // TASK 2: Explicit reason
-        });
-        const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
-        keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
+        // TASK 5: Check if we had a revenue aggregation error (shouldn't use fallback in that case)
+        const hadRevenueAggregationError = fetchError && (
+          fetchError.message.includes("aggregateRevenueEstimates") || 
+          fetchError.message.includes("REVENUE_AGGREGATION") ||
+          fetchError.message.includes("revenue aggregation")
+        );
+        
+        if (!hadRevenueAggregationError) {
+          console.log("RAINFOREST_RETURNED_ZERO_ASINS", {
+            keyword: body.input_value,
+            has_data: !!keywordMarketData,
+            listings_count: keywordMarketData?.listings?.length || 0,
+            using_fallback: true,
+            reason: "zero_asins", // TASK 2: Explicit reason
+          });
+          const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
+          keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
+        } else {
+          // TASK 5: Revenue aggregation error - don't use fallback
+          console.error("REVENUE_AGGREGATION_ERROR_NO_FALLBACK", {
+            keyword: body.input_value,
+            message: "Revenue aggregation failed - should not use fallback, this indicates a bug",
+          });
+          // This shouldn't happen - revenue aggregation is wrapped and shouldn't throw
+          // But if it does, we should return an error, not fallback
+          throw new Error("Revenue aggregation failed but listings should have been returned");
+        }
       } else {
         console.log("REAL_LISTINGS_AVAILABLE", {
           keyword: body.input_value,

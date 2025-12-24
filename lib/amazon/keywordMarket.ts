@@ -506,10 +506,29 @@ export async function fetchKeywordMarketSnapshot(
 
     // TASK 4: Estimate revenue and units for each listing (30-day estimates) - wrapped in try/catch
     let listingsWithEstimates: ParsedListing[] = listings; // Default to listings without estimates if estimator fails
+    let aggregateRevenueEstimatesFunc: ((estimates: any[]) => any) | null = null; // Store function reference for later use
     
     try {
       const revenueEstimator = await import("./revenueEstimator");
-      const { estimateListingRevenueWithUnits, aggregateRevenueEstimates } = revenueEstimator;
+      
+      // TASK 1: Safely extract functions with fallback
+      const estimateListingRevenueWithUnits = revenueEstimator.estimateListingRevenueWithUnits;
+      const aggFunc = revenueEstimator.aggregateRevenueEstimates;
+      
+      if (!estimateListingRevenueWithUnits || typeof estimateListingRevenueWithUnits !== 'function') {
+        throw new Error("estimateListingRevenueWithUnits is not a function");
+      }
+      
+      if (aggFunc && typeof aggFunc === 'function') {
+        aggregateRevenueEstimatesFunc = aggFunc; // Store function reference
+      } else {
+        console.warn("aggregateRevenueEstimates function not found in revenueEstimator module", {
+          keyword,
+          has_aggFunc: !!aggFunc,
+          aggFunc_type: typeof aggFunc,
+          revenueEstimator_keys: Object.keys(revenueEstimator),
+        });
+      }
       
       listingsWithEstimates = listings.map((listing) => {
         if (listing.price === null || listing.price <= 0) {
@@ -539,30 +558,60 @@ export async function fetchKeywordMarketSnapshot(
       console.error("Revenue estimator failed, keeping listings without estimates", {
         keyword,
         error: revenueError instanceof Error ? revenueError.message : String(revenueError),
+        stack: revenueError instanceof Error ? revenueError.stack : undefined,
         listings_count: listings.length,
       });
       // listingsWithEstimates already defaults to listings above
+      // aggregateRevenueEstimatesFunc remains null
     }
 
-    // Aggregate total revenue and units estimates
-    // Always calculate aggregates, even if some listings have null estimates
-    const revenueEstimates = listingsWithEstimates
-      .filter(l => l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined)
-      .map(l => ({
-        est_monthly_revenue: l.est_monthly_revenue!,
-        est_monthly_units: l.est_monthly_units || 0,
-        revenue_confidence: l.revenue_confidence || "low",
-      }));
+    // TASK 3: Aggregate total revenue and units estimates - OPTIONAL, wrapped in try/catch
+    // TASK 4: Make revenue aggregation optional - do NOT block analyze if it fails
+    let aggregated = {
+      total_revenue_min: 0,
+      total_revenue_max: 0,
+      total_units_min: 0,
+      total_units_max: 0,
+    };
     
-    // Always return aggregates (even if empty array, will return 0s)
-    const aggregated = revenueEstimates.length > 0
-      ? aggregateRevenueEstimates(revenueEstimates)
-      : {
-          total_revenue_min: 0,
-          total_revenue_max: 0,
-          total_units_min: 0,
-          total_units_max: 0,
-        };
+    // TASK 3: Aggregate total revenue and units estimates - OPTIONAL, wrapped in try/catch
+    // TASK 4: Make revenue aggregation optional - do NOT block analyze if it fails
+    try {
+      // Only aggregate if we have the function and valid estimates
+      if (aggregateRevenueEstimatesFunc && typeof aggregateRevenueEstimatesFunc === 'function') {
+        const revenueEstimates = listingsWithEstimates
+          .filter(l => l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined)
+          .map(l => ({
+            est_monthly_revenue: l.est_monthly_revenue!,
+            est_monthly_units: l.est_monthly_units || 0,
+            revenue_confidence: l.revenue_confidence || "low",
+          }));
+        
+        // Only call if we have estimates
+        if (revenueEstimates.length > 0) {
+          aggregated = aggregateRevenueEstimatesFunc(revenueEstimates);
+        }
+      } else {
+        // TASK 1: Function not available - log but don't fail
+        console.warn("REVENUE_AGGREGATION_FUNCTION_NOT_AVAILABLE", {
+          keyword,
+          has_function: !!aggregateRevenueEstimatesFunc,
+          function_type: typeof aggregateRevenueEstimatesFunc,
+          listings_count: listings.length,
+          message: "aggregateRevenueEstimates function not available, skipping aggregation",
+        });
+      }
+    } catch (aggError) {
+      // TASK 3: Log warning, do NOT throw
+      console.warn("REVENUE_AGGREGATION_FAILED", {
+        keyword,
+        error: aggError instanceof Error ? aggError.message : String(aggError),
+        stack: aggError instanceof Error ? aggError.stack : undefined,
+        listings_count: listings.length,
+        message: "Revenue aggregation failed, but listings will still be returned",
+      });
+      // aggregated already defaults to zeros above
+    }
     
     // TASK 4: Estimate search volume (ALWAYS returns a value when Page-1 listings exist) - wrapped in try/catch
     // Never returns null - uses deterministic H10-style heuristics
@@ -611,6 +660,7 @@ export async function fetchKeywordMarketSnapshot(
       }
     }
     
+    // TASK 4: market_snapshot.est_total_monthly_revenue may be null (revenue aggregation is optional)
     const snapshotWithEstimates: KeywordMarketSnapshot = {
       ...snapshot,
       est_total_monthly_revenue_min: aggregated.total_revenue_min > 0 ? aggregated.total_revenue_min : null,
@@ -626,6 +676,12 @@ export async function fetchKeywordMarketSnapshot(
       has_real_listings: listingsWithEstimates.length > 0 
     });
     
+    // TASK 6: Final invariant log
+    console.info("KEYWORD_ANALYZE_COMPLETE", {
+      listings_count: listingsWithEstimates.length,
+      has_revenue_estimate: !!(snapshotWithEstimates.est_total_monthly_revenue_min || snapshotWithEstimates.est_total_monthly_revenue_max),
+    });
+    
     // TASK 3: Always populate market_snapshot.listings[] if listings exist
     console.log("RETURNING_KEYWORD_MARKET_DATA", {
       keyword,
@@ -634,6 +690,7 @@ export async function fetchKeywordMarketSnapshot(
       has_avg_price: snapshotWithEstimates.avg_price !== null,
       has_avg_reviews: snapshotWithEstimates.avg_reviews > 0,
       has_avg_rating: snapshotWithEstimates.avg_rating !== null,
+      has_revenue_estimate: !!(snapshotWithEstimates.est_total_monthly_revenue_min || snapshotWithEstimates.est_total_monthly_revenue_max),
     });
     
     return {
@@ -644,6 +701,9 @@ export async function fetchKeywordMarketSnapshot(
     // TASK 2: Classify error - don't treat processing errors as "zero ASINs"
     const errorMessage = error instanceof Error ? error.message : String(error);
     const isProcessingError = apiReturnedResults && extractedAsinCount > 0;
+    const isRevenueAggregationError = errorMessage.includes("aggregateRevenueEstimates") || 
+                                     errorMessage.includes("REVENUE_AGGREGATION") ||
+                                     errorMessage.includes("revenue aggregation");
     
     console.error("Error fetching keyword market snapshot:", {
       keyword,
@@ -652,10 +712,28 @@ export async function fetchKeywordMarketSnapshot(
       api_returned_results: apiReturnedResults,
       extracted_asin_count: extractedAsinCount,
       error_type: isProcessingError ? "processing_error" : "api_error",
+      is_revenue_aggregation_error: isRevenueAggregationError,
     });
     
-    // TASK 2: If we extracted ASINs but processing failed, throw with classification
-    if (isProcessingError) {
+    // TASK 5: Revenue aggregation failures must NOT trigger "zero ASINs" or "No Page-1 listings"
+    // If it's a revenue aggregation error and we have ASINs, we should still return the listings
+    // However, since we're in a catch block, we can't easily reconstruct the data
+    // The revenue aggregation happens AFTER listings are created, so if we get here,
+    // it means the error happened during revenue aggregation
+    // We should re-throw with a special marker so the caller knows it's a revenue-only error
+    if (isRevenueAggregationError && extractedAsinCount > 0) {
+      console.warn("REVENUE_AGGREGATION_ERROR_BUT_HAS_LISTINGS", {
+        keyword,
+        extracted_asin_count: extractedAsinCount,
+        message: "Revenue aggregation failed but we have listings - this should be handled before catch",
+      });
+      // This shouldn't happen if we wrapped revenue aggregation properly
+      // But if it does, throw with a special marker
+      throw new Error(`REVENUE_AGGREGATION_ONLY: ${errorMessage} (extracted ${extractedAsinCount} ASINs, revenue aggregation failed)`);
+    }
+    
+    // TASK 2: If we extracted ASINs but processing failed (non-revenue errors), throw with classification
+    if (isProcessingError && !isRevenueAggregationError) {
       throw new Error(`Processing error: ${errorMessage} (extracted ${extractedAsinCount} ASINs but processing failed)`);
     }
     
