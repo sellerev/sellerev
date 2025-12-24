@@ -190,13 +190,22 @@ Use price band as the selling price for margin calculations.`);
       // Check for new structure (from resolveFbaFees for ASIN inputs)
       if ('fulfillment_fee' in fbaFees || 'referral_fee' in fbaFees || 'total_fba_fees' in fbaFees) {
         const fulfillmentFee = fbaFees.fulfillment_fee !== null && fbaFees.fulfillment_fee !== undefined
-          ? `$${parseFloat(fbaFees.fulfillment_fee).toFixed(2)}`
+          ? (() => {
+              const val = parseFloat(fbaFees.fulfillment_fee);
+              return !isNaN(val) ? `$${val.toFixed(2)}` : "Not available";
+            })()
           : "Not available";
         const referralFee = fbaFees.referral_fee !== null && fbaFees.referral_fee !== undefined
-          ? `$${parseFloat(fbaFees.referral_fee).toFixed(2)}`
+          ? (() => {
+              const val = parseFloat(fbaFees.referral_fee);
+              return !isNaN(val) ? `$${val.toFixed(2)}` : "Not available";
+            })()
           : "Not available";
         const totalFees = fbaFees.total_fba_fees !== null && fbaFees.total_fba_fees !== undefined
-          ? `$${parseFloat(fbaFees.total_fba_fees).toFixed(2)}`
+          ? (() => {
+              const val = parseFloat(fbaFees.total_fba_fees);
+              return !isNaN(val) ? `$${val.toFixed(2)}` : "Not available";
+            })()
           : "Not available";
         
         if (fbaFees.source === "amazon" && totalFees !== "Not available") {
@@ -211,7 +220,10 @@ These fees are Amazon-provided (from SP-API) for ASIN analysis.`);
       } else if ('total_fee' in fbaFees) {
         // Legacy structure (for keyword analyses)
         const totalFee = fbaFees.total_fee !== null && fbaFees.total_fee !== undefined
-          ? `$${parseFloat(fbaFees.total_fee).toFixed(2)}`
+          ? (() => {
+              const val = parseFloat(fbaFees.total_fee);
+              return !isNaN(val) ? `$${val.toFixed(2)}` : null;
+            })()
           : null;
         
         if (totalFee) {
@@ -245,21 +257,28 @@ ${isAmazonProvided ? "These fees are Amazon-provided (from SP-API)." : "These fe
   if (marginSnapshot && typeof marginSnapshot === 'object') {
     try {
       const cogsRange = marginSnapshot.estimated_cogs_min !== null && marginSnapshot.estimated_cogs_min !== undefined &&
-                        marginSnapshot.estimated_cogs_max !== null && marginSnapshot.estimated_cogs_max !== undefined
+                        marginSnapshot.estimated_cogs_max !== null && marginSnapshot.estimated_cogs_max !== undefined &&
+                        typeof marginSnapshot.estimated_cogs_min === 'number' && !isNaN(marginSnapshot.estimated_cogs_min) &&
+                        typeof marginSnapshot.estimated_cogs_max === 'number' && !isNaN(marginSnapshot.estimated_cogs_max)
         ? `$${marginSnapshot.estimated_cogs_min.toFixed(2)}–$${marginSnapshot.estimated_cogs_max.toFixed(2)}`
         : "Not available";
       
-      const fbaFee = marginSnapshot.estimated_fba_fee !== null && marginSnapshot.estimated_fba_fee !== undefined
+      const fbaFee = marginSnapshot.estimated_fba_fee !== null && marginSnapshot.estimated_fba_fee !== undefined &&
+                      typeof marginSnapshot.estimated_fba_fee === 'number' && !isNaN(marginSnapshot.estimated_fba_fee)
         ? `$${marginSnapshot.estimated_fba_fee.toFixed(2)}`
         : "Not available";
       
       const marginRange = marginSnapshot.net_margin_min_pct !== null && marginSnapshot.net_margin_min_pct !== undefined &&
-                          marginSnapshot.net_margin_max_pct !== null && marginSnapshot.net_margin_max_pct !== undefined
+                          marginSnapshot.net_margin_max_pct !== null && marginSnapshot.net_margin_max_pct !== undefined &&
+                          typeof marginSnapshot.net_margin_min_pct === 'number' && !isNaN(marginSnapshot.net_margin_min_pct) &&
+                          typeof marginSnapshot.net_margin_max_pct === 'number' && !isNaN(marginSnapshot.net_margin_max_pct)
         ? `${marginSnapshot.net_margin_min_pct.toFixed(1)}%–${marginSnapshot.net_margin_max_pct.toFixed(1)}%`
         : "Not available";
       
       const breakevenRange = marginSnapshot.breakeven_price_min !== null && marginSnapshot.breakeven_price_min !== undefined &&
-                            marginSnapshot.breakeven_price_max !== null && marginSnapshot.breakeven_price_max !== undefined
+                            marginSnapshot.breakeven_price_max !== null && marginSnapshot.breakeven_price_max !== undefined &&
+                            typeof marginSnapshot.breakeven_price_min === 'number' && !isNaN(marginSnapshot.breakeven_price_min) &&
+                            typeof marginSnapshot.breakeven_price_max === 'number' && !isNaN(marginSnapshot.breakeven_price_max)
         ? `$${marginSnapshot.breakeven_price_min.toFixed(2)}–$${marginSnapshot.breakeven_price_max.toFixed(2)}`
         : "Not available";
       
@@ -296,10 +315,10 @@ This margin snapshot is the single source of truth. Always reference it when ans
   // Section 7: Selected Listing/Competitor Context (if provided)
   if (selectedListing && typeof selectedListing === 'object' && selectedListing !== null) {
     try {
-      const price = typeof selectedListing.price === 'number' && !isNaN(selectedListing.price)
+      const price = typeof selectedListing.price === 'number' && !isNaN(selectedListing.price) && selectedListing.price !== null && selectedListing.price !== undefined
         ? `$${selectedListing.price.toFixed(2)}`
         : 'Not available';
-      const rating = typeof selectedListing.rating === 'number' && !isNaN(selectedListing.rating)
+      const rating = typeof selectedListing.rating === 'number' && !isNaN(selectedListing.rating) && selectedListing.rating !== null && selectedListing.rating !== undefined
         ? selectedListing.rating.toFixed(1)
         : 'Not available';
       const reviews = typeof selectedListing.reviews === 'number' && !isNaN(selectedListing.reviews)
@@ -798,10 +817,12 @@ function detectCostOverrides(
       };
     }
     if (sellingPrice !== null && sellingPrice !== undefined && cogs >= sellingPrice) {
+      const cogsStr = typeof cogs === 'number' && !isNaN(cogs) ? cogs.toFixed(2) : String(cogs);
+      const priceStr = typeof sellingPrice === 'number' && !isNaN(sellingPrice) ? sellingPrice.toFixed(2) : String(sellingPrice);
       return {
         cogs: null,
         fba_fees: fbaFees,
-        validationError: `COGS ($${cogs.toFixed(2)}) cannot be greater than or equal to the selling price ($${sellingPrice.toFixed(2)}). Please provide a valid cost.`,
+        validationError: `COGS ($${cogsStr}) cannot be greater than or equal to the selling price ($${priceStr}). Please provide a valid cost.`,
       };
     }
   }
@@ -815,10 +836,12 @@ function detectCostOverrides(
       };
     }
     if (sellingPrice !== null && sellingPrice !== undefined && fbaFees >= sellingPrice) {
+      const feesStr = typeof fbaFees === 'number' && !isNaN(fbaFees) ? fbaFees.toFixed(2) : String(fbaFees);
+      const priceStr = typeof sellingPrice === 'number' && !isNaN(sellingPrice) ? sellingPrice.toFixed(2) : String(sellingPrice);
       return {
         cogs,
         fba_fees: null,
-        validationError: `FBA fees ($${fbaFees.toFixed(2)}) cannot be greater than or equal to the selling price ($${sellingPrice.toFixed(2)}). Please provide a valid fee amount.`,
+        validationError: `FBA fees ($${feesStr}) cannot be greater than or equal to the selling price ($${priceStr}). Please provide a valid fee amount.`,
       };
     }
   }
@@ -861,19 +884,19 @@ function buildMarketSnapshotSummary(
   
   // Price Band
   const avgPrice = (marketSnapshot.avg_price as number) || null;
-  if (avgPrice !== null) {
+  if (avgPrice !== null && typeof avgPrice === 'number' && !isNaN(avgPrice)) {
     parts.push(`- Price Band: $${avgPrice.toFixed(2)}`);
   }
   
   // Review Moat
   const avgReviews = (marketSnapshot.avg_reviews as number) || null;
-  if (avgReviews !== null) {
+  if (avgReviews !== null && typeof avgReviews === 'number' && !isNaN(avgReviews)) {
     parts.push(`- Review Moat: ${avgReviews.toLocaleString()} reviews`);
   }
   
   // Quality Threshold
   const avgRating = (marketSnapshot.avg_rating as number) || null;
-  if (avgRating !== null) {
+  if (avgRating !== null && typeof avgRating === 'number' && !isNaN(avgRating)) {
     parts.push(`- Quality Threshold: ${avgRating.toFixed(1)} rating`);
   }
   
@@ -1074,7 +1097,11 @@ export async function POST(req: NextRequest) {
     let cogsAssumption: string = "";
     
     // If margin_snapshot exists, extract COGS info from it
-    if (marginSnapshotForCogs && marginSnapshotForCogs.estimated_cogs_min !== null && marginSnapshotForCogs.estimated_cogs_max !== null) {
+    if (marginSnapshotForCogs && 
+        marginSnapshotForCogs.estimated_cogs_min !== null && marginSnapshotForCogs.estimated_cogs_min !== undefined &&
+        marginSnapshotForCogs.estimated_cogs_max !== null && marginSnapshotForCogs.estimated_cogs_max !== undefined &&
+        typeof marginSnapshotForCogs.estimated_cogs_min === 'number' && !isNaN(marginSnapshotForCogs.estimated_cogs_min) &&
+        typeof marginSnapshotForCogs.estimated_cogs_max === 'number' && !isNaN(marginSnapshotForCogs.estimated_cogs_max)) {
       const estimatedRange = marginSnapshotForCogs.estimated_cogs_min === marginSnapshotForCogs.estimated_cogs_max
         ? `$${marginSnapshotForCogs.estimated_cogs_min.toFixed(2)}`
         : `$${marginSnapshotForCogs.estimated_cogs_min.toFixed(2)}–$${marginSnapshotForCogs.estimated_cogs_max.toFixed(2)}`;
@@ -1103,7 +1130,10 @@ export async function POST(req: NextRequest) {
             sourcing_model: sellerProfile.sourcing_model as any,
           });
           
-          const estimatedRange = `$${cogsEstimate.low.toFixed(2)}–$${cogsEstimate.high.toFixed(2)}`;
+          const estimatedRange = typeof cogsEstimate.low === 'number' && !isNaN(cogsEstimate.low) && 
+                                 typeof cogsEstimate.high === 'number' && !isNaN(cogsEstimate.high)
+            ? `$${cogsEstimate.low.toFixed(2)}–$${cogsEstimate.high.toFixed(2)}`
+            : "Not available";
           const confidenceLabel = cogsEstimate.confidence === "low" ? "Low confidence" 
             : cogsEstimate.confidence === "medium" ? "Medium confidence" 
             : "High confidence";
@@ -1426,10 +1456,10 @@ export async function POST(req: NextRequest) {
         // This allows the frontend to update the UI with refined margin data
         if (shouldSaveSnapshot && marginSnapshot) {
           const refinedValues: string[] = [];
-          if (costRefinement?.cogs !== undefined && costRefinement.cogs !== null) {
+          if (costRefinement?.cogs !== undefined && costRefinement.cogs !== null && typeof costRefinement.cogs === 'number' && !isNaN(costRefinement.cogs)) {
             refinedValues.push(`$${costRefinement.cogs.toFixed(2)} COGS`);
           }
-          if (costRefinement?.fbaFee !== undefined && costRefinement.fbaFee !== null) {
+          if (costRefinement?.fbaFee !== undefined && costRefinement.fbaFee !== null && typeof costRefinement.fbaFee === 'number' && !isNaN(costRefinement.fbaFee)) {
             refinedValues.push(`$${costRefinement.fbaFee.toFixed(2)} FBA fees`);
           }
           
