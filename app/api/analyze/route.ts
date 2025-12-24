@@ -830,11 +830,27 @@ export async function POST(req: NextRequest) {
     
     // Build contract-compliant response
     if (keywordMarketData) {
-      contractResponse = buildKeywordAnalyzeResponse(
-        body.input_value,
-        keywordMarketData,
-        marginSnapshot
-      );
+      try {
+        contractResponse = buildKeywordAnalyzeResponse(
+          body.input_value,
+          keywordMarketData,
+          marginSnapshot
+        );
+        console.log("CONTRACT_RESPONSE_BUILT", {
+          has_products: !!contractResponse?.products,
+          product_count: contractResponse?.products?.length || 0,
+          has_summary: !!contractResponse?.summary,
+          has_market_structure: !!contractResponse?.market_structure,
+        });
+      } catch (contractError) {
+        console.error("CONTRACT_BUILD_ERROR", {
+          error: contractError,
+          message: contractError instanceof Error ? contractError.message : String(contractError),
+          stack: contractError instanceof Error ? contractError.stack : undefined,
+        });
+        // Continue without contractResponse - will use keywordMarket instead
+        contractResponse = null;
+      }
     }
     
     // 8. Build system prompt with ai_context ONLY
@@ -1378,12 +1394,18 @@ ${body.input_value}`;
       { status: 200, headers: res.headers }
     );
   } catch (err) {
-    console.error("ANALYZE_ERROR", err);
+    console.error("ANALYZE_ERROR", {
+      error: err,
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      name: err instanceof Error ? err.name : undefined,
+    });
     return NextResponse.json(
       {
         success: false,
         error: "Internal analyze error",
         details: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
       },
       { status: 500, headers: res.headers }
     );

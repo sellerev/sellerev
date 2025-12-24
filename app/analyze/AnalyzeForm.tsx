@@ -451,8 +451,14 @@ export default function AnalyzeForm({
 
       if (!res.ok || !data.success) {
         const errorMsg = data.error || "Analysis failed";
-        console.error("ANALYZE_ERROR", { error: errorMsg, data });
-        setError(errorMsg);
+        const errorDetails = data.details || data.stack || "";
+        console.error("ANALYZE_ERROR", { 
+          error: errorMsg, 
+          details: errorDetails,
+          status: res.status,
+          data 
+        });
+        setError(errorDetails ? `${errorMsg}: ${errorDetails}` : errorMsg);
         setLoading(false);
         return;
       }

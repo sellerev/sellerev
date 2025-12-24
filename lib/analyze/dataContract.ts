@@ -246,7 +246,23 @@ export function buildKeywordAnalyzeResponse(
   marketplace: Marketplace = "US",
   currency: Currency = "USD"
 ): KeywordAnalyzeResponse {
+  // Guard against null/undefined inputs
+  if (!marketData) {
+    throw new Error("marketData is required but was null or undefined");
+  }
+  if (!marginSnapshot) {
+    throw new Error("marginSnapshot is required but was null or undefined");
+  }
+  
   const { snapshot, listings } = marketData;
+  
+  // Guard against missing snapshot or listings
+  if (!snapshot) {
+    throw new Error("marketData.snapshot is required but was null or undefined");
+  }
+  if (!Array.isArray(listings)) {
+    throw new Error("marketData.listings must be an array");
+  }
   
   // Filter organic listings only (exclude sponsored)
   const organicListings = listings.filter(l => !l.is_sponsored);
@@ -265,18 +281,18 @@ export function buildKeywordAnalyzeResponse(
     const revenueShare = totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0;
     
     return {
-      rank: index + 1,
+      rank: listing.position || index + 1, // Use position from listing if available
       asin: listing.asin || "",
       title: listing.title || "",
       image_url: listing.image_url || null,
       price: listing.price || 0,
       rating: listing.rating || 0,
       review_count: listing.reviews || 0,
-      bsr: null, // BSR not available in listings structure
+      bsr: listing.bsr || null, // BSR from ParsedListing
       estimated_monthly_units: listing.est_monthly_units || 0,
       estimated_monthly_revenue: revenue,
       revenue_share_pct: Math.round(revenueShare * 100) / 100,
-      fulfillment: "FBM", // Default - fulfillment not in ParsedListing
+      fulfillment: normalizeFulfillment(listing.fulfillment), // Use fulfillment from ParsedListing
       brand: listing.brand || null,
       seller_country: inferSellerCountry(listing),
     };
@@ -290,12 +306,18 @@ export function buildKeywordAnalyzeResponse(
   const priceMin = prices.length > 0 ? Math.min(...prices) : 0;
   const priceMax = prices.length > 0 ? Math.max(...prices) : 0;
   
-  // Calculate fulfillment mix (placeholder - data not available)
-  const fulfillmentMix = {
-    fba_pct: 0,
-    fbm_pct: 100,
-    amazon_pct: 0,
-  };
+  // Calculate fulfillment mix from snapshot (if available)
+  const fulfillmentMix = snapshot.fulfillment_mix
+    ? {
+        fba_pct: snapshot.fulfillment_mix.fba,
+        fbm_pct: snapshot.fulfillment_mix.fbm,
+        amazon_pct: snapshot.fulfillment_mix.amazon,
+      }
+    : {
+        fba_pct: 0,
+        fbm_pct: 100,
+        amazon_pct: 0,
+      };
   
   // Build market structure
   const marketStructure = {
@@ -336,22 +358,27 @@ export function buildKeywordAnalyzeResponse(
   };
   
   // Build margin snapshot (from MarginSnapshot type)
+  // Guard against null/undefined marginSnapshot
+  if (!marginSnapshot) {
+    throw new Error("marginSnapshot is required but was null or undefined");
+  }
+  
   const marginSnapshotContract = {
     assumed_price: marginSnapshot.assumed_price || 0,
     assumed_cogs_range: [
-      marginSnapshot.estimated_cogs_min || 0,
-      marginSnapshot.estimated_cogs_max || 0,
+      marginSnapshot.estimated_cogs_min ?? 0,
+      marginSnapshot.estimated_cogs_max ?? 0,
     ] as [number, number],
-    assumed_fba_fees: marginSnapshot.estimated_fba_fee || 0,
+    assumed_fba_fees: marginSnapshot.estimated_fba_fee ?? 0,
     estimated_net_margin_pct_range: [
-      marginSnapshot.net_margin_min_pct || 0,
-      marginSnapshot.net_margin_max_pct || 0,
+      marginSnapshot.net_margin_min_pct ?? 0,
+      marginSnapshot.net_margin_max_pct ?? 0,
     ] as [number, number],
     breakeven_price_range: [
-      marginSnapshot.breakeven_price_min || 0,
-      marginSnapshot.breakeven_price_max || 0,
+      marginSnapshot.breakeven_price_min ?? 0,
+      marginSnapshot.breakeven_price_max ?? 0,
     ] as [number, number],
-    assumptions: marginSnapshot.assumptions || [],
+    assumptions: Array.isArray(marginSnapshot.assumptions) ? marginSnapshot.assumptions : [],
   };
   
   // Build AI context (read-only copy)
