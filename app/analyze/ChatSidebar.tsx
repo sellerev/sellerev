@@ -98,69 +98,40 @@ function calculateMarketPressure(
 
 /**
  * Get suggested questions based on analysis mode and market snapshot
+ * 
+ * These are neutral, interpretive prompts - not prescriptive or verdict-like.
+ * Show 3-4 suggestions when analysis first loads (no messages yet).
  */
 function getSuggestedQuestions(
   analysisMode: 'ASIN' | 'KEYWORD' | null | undefined,
-  marketSnapshot: MarketSnapshot | null
+  marketSnapshot: MarketSnapshot | null,
+  selectedListing: any | null = null
 ): string[] {
-  // ASIN mode: Competitive targeting questions
-  if (false) { // ASIN mode removed - keyword-only
+  // If a listing is selected, show contextual suggestions
+  if (selectedListing) {
     return [
-      "How can I beat this ASIN?",
-      "What's the displacement strategy for this listing?",
-      "What price point should I target?",
-      "How do margins work for this product?",
-      "What differentiation is needed to compete?",
+      "Why is this listing ranking despite fewer reviews?",
+      "Is this price point typical for Page 1?",
+      "What advantages does this listing appear to have?",
     ];
   }
   
-  // KEYWORD mode: Market discovery questions
+  // KEYWORD mode: Neutral, interpretive market questions
   if (analysisMode === 'KEYWORD') {
-    if (!marketSnapshot) {
-      // Default questions if no snapshot
-      return [
-        "Can I beat this review barrier?",
-        "Where do margins break here?",
-        "Is PPC required in this market?",
-        "What would differentiation need to look like?",
-        "What price do I need to win?",
-      ];
-    }
-
-    const pressure = calculateMarketPressure(
-      marketSnapshot.avg_reviews,
-      marketSnapshot.sponsored_count,
-      marketSnapshot.dominance_score
-    );
-
-    if (pressure === "High") {
-      // High pressure → risk & margin chips
-      return [
-        "Can I beat this review barrier?",
-        "Where do margins break here?",
-        "Is PPC required in this market?",
-        "What would differentiation need to look like?",
-        "What price do I need to win?",
-      ];
-    } else {
-      // Low/Moderate pressure → opportunity chips
-      return [
-        "Where do margins break here?",
-        "What price do I need to win?",
-        "What would differentiation need to look like?",
-        "Can I beat this review barrier?",
-        "Is PPC required in this market?",
-      ];
-    }
+    // Default neutral questions (interpretive, not prescriptive)
+    return [
+      "How competitive does this market look?",
+      "What stands out on Page 1?",
+      "How do sellers usually assess this category?",
+      "Which listings are earning more than expected?",
+    ];
   }
   
   // Fallback (no mode detected)
   return [
-    "Where do margins break here?",
-    "What price do I need to win?",
-    "What would differentiation need to look like?",
-    "Can I beat this review barrier?",
-    "Is PPC required?",
+    "How competitive does this market look?",
+    "What stands out on Page 1?",
+    "How do sellers usually assess this category?",
   ];
 }
 
@@ -245,6 +216,14 @@ export default function ChatSidebar({
   useEffect(() => {
     setMessages(initialMessages);
   }, [analysisRunId, initialMessages]);
+
+  // Show contextual suggestions when a listing is selected (if no messages yet)
+  // This happens silently - chat context updates, then suggestions appear
+  useEffect(() => {
+    // If a listing is selected and we have no messages, the suggestions will automatically
+    // update via getSuggestedQuestions() which checks selectedListing
+    // No need to force a re-render - the component will naturally show updated suggestions
+  }, [selectedListing]);
 
   // Auto-scroll to bottom when new messages arrive or streaming updates
   // Scrolls the messages container, not the page (prevents page from scrolling)
@@ -428,19 +407,19 @@ export default function ChatSidebar({
               The AI assistant will help you:
             </p>
             <ul className="text-xs text-gray-400 mt-2 space-y-1">
-              <li>• Explain the verdict</li>
-              <li>• Run what-if scenarios</li>
-              <li>• Calculate margins</li>
-              <li>• Compare competitors</li>
+              <li>• Understand market data</li>
+              <li>• Compare listings</li>
+              <li>• Explore different scenarios</li>
+              <li>• Interpret what you're seeing</li>
             </ul>
           </div>
         ) : messages.length === 0 && !isLoading ? (
-          /* Post-analysis, no messages yet: Show suggested question chips */
+          /* Post-analysis, no messages yet: Show suggested question chips (quiet by default) */
           <div className="space-y-3">
             <p className="text-xs text-gray-500 text-center mb-4">
               Suggested questions:
             </p>
-            {getSuggestedQuestions(analysisMode, marketSnapshot).map((question, idx) => (
+            {getSuggestedQuestions(analysisMode, marketSnapshot, selectedListing).slice(0, 4).map((question, idx) => (
               <button
                 key={idx}
                 className="w-full text-left text-sm p-3 bg-white border rounded-lg hover:bg-gray-50 hover:border-gray-300 transition-colors text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"

@@ -1248,7 +1248,9 @@ export async function POST(req: NextRequest) {
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       // System prompt: Contains locked behavior contract + ai_context + seller_memory
       { role: "system", content: systemPrompt },
-      // Initial assistant greeting (data-grounded, not verdict-like)
+      // Initial assistant greeting (quiet, data-grounded, not verdict-like)
+      // Note: Chat should be quiet by default - no auto messages
+      // This greeting is only used in conversation history, not as an auto-message
       { role: "assistant", content: "I have the market data and your seller profile. I can help you understand what the numbers mean, compare products, or explore different scenarios. What would you like to know?" },
     ];
     
