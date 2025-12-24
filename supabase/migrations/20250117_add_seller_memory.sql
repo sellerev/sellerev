@@ -1,8 +1,12 @@
 -- Seller Memory System
 -- Stores factual, structured information about sellers that persists across sessions
 
+-- Drop existing table if it exists (to fix any previous migration issues)
+DROP TABLE IF EXISTS seller_attachments CASCADE;
+DROP TABLE IF EXISTS seller_memory CASCADE;
+
 -- Primary memory table
-CREATE TABLE IF NOT EXISTS seller_memory (
+CREATE TABLE seller_memory (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   
@@ -42,10 +46,10 @@ CREATE TABLE IF NOT EXISTS seller_memory (
 );
 
 -- Indexes for performance
-CREATE INDEX IF NOT EXISTS idx_seller_memory_user_id ON seller_memory(user_id);
-CREATE INDEX IF NOT EXISTS idx_seller_memory_type ON seller_memory(memory_type);
-CREATE INDEX IF NOT EXISTS idx_seller_memory_key ON seller_memory(key);
-CREATE INDEX IF NOT EXISTS idx_seller_memory_updated_at ON seller_memory(updated_at DESC);
+CREATE INDEX idx_seller_memory_user_id ON seller_memory(user_id);
+CREATE INDEX idx_seller_memory_type ON seller_memory(memory_type);
+CREATE INDEX idx_seller_memory_key ON seller_memory(key);
+CREATE INDEX idx_seller_memory_updated_at ON seller_memory(updated_at DESC);
 
 -- RLS Policies
 ALTER TABLE seller_memory ENABLE ROW LEVEL SECURITY;
@@ -82,7 +86,7 @@ CREATE TRIGGER update_seller_memory_updated_at
   EXECUTE FUNCTION update_seller_memory_updated_at();
 
 -- Seller Attachments table (for future use)
-CREATE TABLE IF NOT EXISTS seller_attachments (
+CREATE TABLE seller_attachments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   
@@ -95,7 +99,7 @@ CREATE TABLE IF NOT EXISTS seller_attachments (
 );
 
 -- Indexes
-CREATE INDEX IF NOT EXISTS idx_seller_attachments_user_id ON seller_attachments(user_id);
+CREATE INDEX idx_seller_attachments_user_id ON seller_attachments(user_id);
 
 -- RLS Policies
 ALTER TABLE seller_attachments ENABLE ROW LEVEL SECURITY;
