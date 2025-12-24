@@ -8,15 +8,17 @@ CREATE TABLE IF NOT EXISTS pending_memory (
   memory_candidate JSONB NOT NULL, -- Full ExtractedMemory object
   reason TEXT NOT NULL CHECK (reason IN ('inferred', 'conflict', 'low_confidence')),
   
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  
-  -- Prevent duplicate pending memories for same key
-  UNIQUE(user_id, (memory_candidate->>'memory_type'), (memory_candidate->>'key'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Indexes
 CREATE INDEX idx_pending_memory_user_id ON pending_memory(user_id);
 CREATE INDEX idx_pending_memory_created_at ON pending_memory(created_at DESC);
+
+-- Unique index to prevent duplicate pending memories for same key
+-- Uses computed expressions from JSONB
+CREATE UNIQUE INDEX idx_pending_memory_unique_key 
+  ON pending_memory(user_id, (memory_candidate->>'memory_type'), (memory_candidate->>'key'));
 
 -- RLS Policies
 ALTER TABLE pending_memory ENABLE ROW LEVEL SECURITY;
