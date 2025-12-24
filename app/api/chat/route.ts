@@ -355,6 +355,9 @@ When the user asks about a specific product or compares products, reference this
 /**
  * Determines if the AI can answer a question based on available data
  * 
+ * NOTE: This function is now minimal - most blocking is handled by the system prompt.
+ * Only use for hard blocks (predictions, guarantees, external data).
+ * 
  * @param message - User's question
  * @param analysisResponse - Analysis response data
  * @param marketSnapshot - Market snapshot data
@@ -377,7 +380,6 @@ function canAnswerQuestion(
   missingItems: string[];
   options: string[];
 } {
-  // Note: margin_snapshot is available at analysisResponse.margin_snapshot (Part G)
   const normalized = message.toLowerCase().trim();
   const missingItems: string[] = [];
   const options: string[] = [];
@@ -385,7 +387,7 @@ function canAnswerQuestion(
   // Check for prediction/guarantee requests (always refuse)
   const predictionPatterns = [
     /\b(will|guarantee|guaranteed|predict|prediction|future|forecast|projected|expect|expectation)\b/i,
-    /\b(how much|how many|what will|when will|guaranteed profit|guaranteed sales)\b/i,
+    /\b(guaranteed profit|guaranteed sales)\b/i,
   ];
   
   for (const pattern of predictionPatterns) {
@@ -397,66 +399,10 @@ function canAnswerQuestion(
       };
     }
   }
-
-  // Check for margin/profit questions
-  const marginPatterns = [
-    /\b(margin|profit|breakeven|break even|net margin|gross margin)\b/i,
-    /\b(how much profit|what's my margin|what margin|profitability)\b/i,
-  ];
   
-  // Margin questions: Never block - always propose assumptions first
-  // The system prompt handles proposing COGS_ASSUMPTION and offering actions
-  // We only refuse if we have absolutely no data to work with
-  if (marginPatterns.some(p => p.test(normalized))) {
-    // Note: margin_snapshot is now at analysisResponse.margin_snapshot (Part G), not nested in marketSnapshot
-    // Margin snapshot check removed - handled in buildContextMessage
-  }
-
-  // Check for fee questions
-  // Never block on fee questions - system prompt will cite available data or propose assumptions
-  // Fee questions can always be answered with available data from market snapshot or margin snapshot
-
-  // Check for price questions
-  // Price questions can always be answered from market snapshot or margin snapshot
-  // Never block - system prompt will cite available data
-
-  // Check for strategic questions about competition/viability
-  // CPI requirement applies ONLY to KEYWORD mode (CPI is market-level metric)
-  // ASIN mode can answer strategic questions using ASIN-specific data (review moat, price, brand owner)
-  const strategicPatterns = [
-    /\b(how hard|how difficult|viability|viable|competitive|competition|market entry|enter this market|break into)\b/i,
-    /\b(should I launch|can I compete|worth pursuing|worth it)\b/i,
-  ];
-  
-  if (strategicPatterns.some(p => p.test(normalized))) {
-    // KEYWORD mode: Require CPI for strategic questions (market-level metric)
-    if (analysisMode === 'KEYWORD') {
-      try {
-        const cpi = (marketSnapshot?.cpi as { score?: number; label?: string } | null) || null;
-        if (!cpi || typeof cpi !== 'object' || cpi === null || 
-            typeof cpi.score !== 'number' || typeof cpi.label !== 'string') {
-          return {
-            canAnswer: false,
-            missingItems: ["Competitive Pressure Index (CPI) not available"],
-            options: ["Run an analysis to get CPI data", "Ask about specific metrics available in the market snapshot"],
-          };
-        }
-      } catch (error) {
-        // If CPI access fails, refuse to answer (KEYWORD mode only)
-        return {
-          canAnswer: false,
-          missingItems: ["Competitive Pressure Index (CPI) not available"],
-          options: ["Run an analysis to get CPI data", "Ask about specific metrics available in the market snapshot"],
-        };
-      }
-    }
-    // ASIN mode: Can answer strategic questions using ASIN snapshot data (review moat, price, brand owner)
-    // No CPI required - ASIN mode uses displacement feasibility, not market-level CPI
-  }
-  
-  // Check for data outside cached context
+  // Check for data outside cached context (hard block)
   const externalDataPatterns = [
-    /\b(bsr|best seller rank|sales volume|units sold|revenue|sales rank)\b/i,
+    /\b(exact sales volume|exact units sold|exact revenue|exact sales rank)\b/i,
     /\b(ppc cost|advertising cost|ad spend|sponsored ad cost)\b/i,
     /\b(conversion rate|click through rate|ctr)\b/i,
   ];
@@ -464,20 +410,12 @@ function canAnswerQuestion(
   if (externalDataPatterns.some(p => p.test(normalized))) {
     return {
       canAnswer: false,
-      missingItems: ["This data is not available in the cached analysis"],
-      options: ["Ask about data available in the market snapshot", "Ask about margin calculations using provided costs"],
+      missingItems: ["This exact data is not available in the cached analysis"],
+      options: ["Ask about estimated data available in the market snapshot", "Ask about margin calculations using provided costs"],
     };
   }
 
-  // If missing items found, cannot answer
-  if (missingItems.length > 0) {
-    return {
-      canAnswer: false,
-      missingItems,
-      options: options.length > 0 ? options : ["Provide the missing data to proceed"],
-    };
-  }
-
+  // All other questions can be answered (system prompt will handle limitations)
   return { canAnswer: true, missingItems: [], options: [] };
 }
 
@@ -963,6 +901,7 @@ export async function POST(req: NextRequest) {
     // ────────────────────────────────────────────────────────────────
     // This is critical for anti-hallucination: we only use data that was
     // already validated and stored during the original analysis.
+    // ❗ CHAT MUST NEVER RE-CALL RAINFOREST - only use cached data
     const { data: analysisRun, error: analysisError } = await supabase
       .from("analysis_runs")
       .select("*")
@@ -1309,8 +1248,8 @@ export async function POST(req: NextRequest) {
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       // System prompt: Contains locked behavior contract + ai_context + seller_memory
       { role: "system", content: systemPrompt },
-      // Initial assistant greeting (optional, but helps set tone)
-      { role: "assistant", content: "I understand. I have the analysis context and seller memory. I will only reason over the provided data and use your preferences to tailor my responses. How can I help you explore this analysis?" },
+      // Initial assistant greeting (data-grounded, not verdict-like)
+      { role: "assistant", content: "I have the market data and your seller profile. I can help you understand what the numbers mean, compare products, or explore different scenarios. What would you like to know?" },
     ];
     
     // Add validation context if cost refinement failed
@@ -1333,71 +1272,66 @@ export async function POST(req: NextRequest) {
     // 12. Append the new user message
     messages.push({ role: "user", content: body.message });
 
-    // 13. Validate if AI can answer based on available data
+    // 13. Check for profitability questions (require product-level COGS)
     // ────────────────────────────────────────────────────────────────────────
-    // Check if required data is missing for the user's question intent
-    // ────────────────────────────────────────────────────────────────────────
-    // Note: margin_snapshot is passed via analysisResponse (Part G structure)
-    const canAnswerResult = canAnswerQuestion(
-      body.message,
-      analysisResponse,
-      marketSnapshot,
-      sellerProfile,
-      analysisMode
-    );
-
-    if (!canAnswerResult.canAnswer) {
-      // Log refusal event
-      console.error("CHAT_REFUSAL_TRIGGERED", {
-        analysisRunId: body.analysisRunId,
-        userId: user.id,
-        userMessage: body.message,
-        missingItems: canAnswerResult.missingItems,
-        options: canAnswerResult.options,
-        timestamp: new Date().toISOString(),
-      });
+    const { classifyQuestion } = await import("@/lib/ai/copilotSystemPrompt");
+    const questionClassification = classifyQuestion(body.message);
+    
+    // Check if profitability question requires product-level COGS
+    if (questionClassification.category === "PROFITABILITY" && questionClassification.requiresProductLevelCogs) {
+      // Check if we have product-level COGS in the data
+      // For keyword mode, we typically don't have product-level COGS
+      const hasProductLevelCogs = false; // Keyword mode doesn't have product-level COGS
       
-      // Short-circuit: Return refusal response without calling OpenAI
-      const encoder = new TextEncoder();
-      const refusalMessage = formatRefusalResponse(canAnswerResult.missingItems, canAnswerResult.options);
+      if (!hasProductLevelCogs) {
+        // Return mandatory profitability refusal
+        const encoder = new TextEncoder();
+        const profitabilityRefusal = `We can't determine profitability directly because product-level COGS isn't available.
 
-      const stream = new ReadableStream({
-        async start(controller) {
-          // Send refusal message as a single chunk
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: refusalMessage })}\n\n`));
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
-        },
-      });
+What we can do is compare revenue potential, price positioning, and competitive pressure.
 
-      // Save refusal message to database
-      try {
-        await supabase.from("analysis_messages").insert([
-          {
-            analysis_run_id: body.analysisRunId,
-            user_id: user.id,
-            role: "user",
-            content: body.message,
+Would you like me to:
+• Compare revenue estimates across listings
+• Analyze price positioning relative to competitors
+• Discuss competitive pressure indicators`;
+
+        const stream = new ReadableStream({
+          async start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: profitabilityRefusal })}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
           },
-          {
-            analysis_run_id: body.analysisRunId,
-            user_id: user.id,
-            role: "assistant",
-            content: refusalMessage,
+        });
+
+        // Save to database
+        try {
+          await supabase.from("analysis_messages").insert([
+            {
+              analysis_run_id: body.analysisRunId,
+              user_id: user.id,
+              role: "user",
+              content: body.message,
+            },
+            {
+              analysis_run_id: body.analysisRunId,
+              user_id: user.id,
+              role: "assistant",
+              content: profitabilityRefusal,
+            },
+          ]);
+        } catch (saveError) {
+          console.error("Failed to save profitability refusal:", saveError);
+        }
+
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            ...Object.fromEntries(res.headers.entries()),
           },
-        ]);
-      } catch (saveError) {
-        console.error("Failed to save refusal message:", saveError);
+        });
       }
-
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-          ...Object.fromEntries(res.headers.entries()),
-        },
-      });
     }
 
     // 14. Call OpenAI with streaming enabled
@@ -1519,15 +1453,59 @@ export async function POST(req: NextRequest) {
             readerReleased = true;
           }
 
-          // 14. Validate response for hallucinations (TRIPWIRE)
+          // 14. Validate response for forbidden language (TRIPWIRE)
           // ────────────────────────────────────────────────────────────────
-          // Scan response for invented data, forbidden phrases, unsupported metrics
+          // Scan response for forbidden phrases: confidence scores, verdict language, internal headers
           // ────────────────────────────────────────────────────────────────
           let finalMessage = fullAssistantMessage.trim();
           let tripwireTriggered = false;
           let tripwireReason: string | undefined;
           
           if (finalMessage) {
+            // Check for forbidden phrases
+            const forbiddenPhrases = [
+              /confidence level:\s*(high|medium|low)/i,
+              /confidence:\s*(high|medium|low)/i,
+              /data interpretation/i,
+              /scenario answer/i,
+              /response corrected due to data validation/i,
+              /corrected due to validation/i,
+              /this analysis suggests/i,
+              /i can't answer reliably/i,
+            ];
+            
+            for (const pattern of forbiddenPhrases) {
+              if (pattern.test(finalMessage)) {
+                tripwireTriggered = true;
+                tripwireReason = `Forbidden phrase detected: ${pattern.source}`;
+                
+                // Log the event
+                console.error("AI_COPILOT_FORBIDDEN_LANGUAGE_TRIPWIRE", {
+                  analysisRunId: body.analysisRunId,
+                  userId: user.id,
+                  reason: tripwireReason,
+                  messagePreview: finalMessage.substring(0, 200),
+                  userMessage: body.message,
+                  timestamp: new Date().toISOString(),
+                });
+                
+                // Remove forbidden phrases and clean up
+                finalMessage = finalMessage
+                  .replace(/confidence level:\s*(high|medium|low)/gi, "")
+                  .replace(/confidence:\s*(high|medium|low)/gi, "")
+                  .replace(/data interpretation/gi, "")
+                  .replace(/scenario answer/gi, "")
+                  .replace(/response corrected due to data validation/gi, "")
+                  .replace(/corrected due to validation/gi, "")
+                  .replace(/this analysis suggests/gi, "The data shows")
+                  .replace(/i can't answer reliably/gi, "I don't have the data needed to answer that")
+                  .replace(/\n\n\n+/g, "\n\n") // Clean up extra newlines
+                  .trim();
+                
+                break;
+              }
+            }
+            
             // Extract allowed numbers from context
             const allowedNumbers = extractAllowedNumbers(
               analysisResponse,
@@ -1538,7 +1516,7 @@ export async function POST(req: NextRequest) {
             // Extract allowed metrics (currently none - we don't support ACOS, TACOS, etc.)
             const allowedMetrics = new Set<string>();
             
-            // Validate response
+            // Validate response for hallucinations (invented data)
             const validation = validateResponseForHallucination(
               finalMessage,
               allowedNumbers,
@@ -1549,7 +1527,7 @@ export async function POST(req: NextRequest) {
               tripwireTriggered = true;
               tripwireReason = validation.reason;
               
-              // Log the event (REQUIRED for audit/debugging)
+              // Log the event
               console.error("AI_COPILOT_HALLUCINATION_TRIPWIRE", {
                 analysisRunId: body.analysisRunId,
                 userId: user.id,
@@ -1561,11 +1539,10 @@ export async function POST(req: NextRequest) {
                 timestamp: new Date().toISOString(),
               });
               
-              // Replace with safe fallback
-              const fallbackMessage = "I can't answer that reliably with the data available.\n\nThis question would require assumptions beyond verified inputs.";
+              // Replace with calm explanation (no "corrected" language)
+              const fallbackMessage = "I don't have the data needed to answer that definitively.\n\nThis question would require information beyond what's available in the analysis.";
               
-              // Send correction notice and fallback
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: "\n\n[Response corrected due to data validation]\n\n" })}\n\n`));
+              // Send fallback (no correction notice)
               controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: fallbackMessage })}\n\n`));
               
               // Replace final message with fallback for database storage
@@ -1583,44 +1560,17 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // 15. Enforce confidence tier disclaimers (backend enforcement)
+          // 15. Remove any remaining confidence/verdict language (cleanup)
           // ────────────────────────────────────────────────────────────────
-          // If assistant gives numeric conclusions with LOW confidence, append disclaimer
-          // ────────────────────────────────────────────────────────────────
-          let disclaimerAppended = false;
-          
+          // Final pass to remove any confidence scores or verdict language that slipped through
           if (finalMessage) {
-            // Check if message contains numeric conclusions (dollar amounts, percentages, margins)
-            const hasNumericConclusions = /\$\d+|\d+%|margin|profit|breakeven/i.test(finalMessage);
-            
-            // Check if confidence level is LOW
-            const hasLowConfidence = /confidence level:\s*low/i.test(finalMessage);
-            
-            // Check if it's NOT a refusal response
-            const isNotRefusal = !finalMessage.includes("I don't have enough verified data");
-            
-            // If LOW confidence + numeric conclusions + not refusal → append disclaimer
-            if (hasLowConfidence && hasNumericConclusions && isNotRefusal) {
-              // Check if disclaimer already present
-              if (!finalMessage.includes("directional only") && !finalMessage.includes("capital decisions")) {
-                // Log confidence downgrade event
-                console.warn("CONFIDENCE_DOWNGRADED", {
-                  analysisRunId: body.analysisRunId,
-                  userId: user.id,
-                  reason: "LOW confidence with numeric conclusions",
-                  hasNumericConclusions: true,
-                  hasLowConfidence: true,
-                  timestamp: new Date().toISOString(),
-                });
-                
-                const disclaimer = "\n\nThis estimate is directional only and should not be used for capital decisions.";
-                finalMessage += disclaimer;
-                disclaimerAppended = true;
-                
-                // Send disclaimer to client as additional content chunk
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: disclaimer })}\n\n`));
-              }
-            }
+            // Remove confidence language
+            finalMessage = finalMessage
+              .replace(/confidence level:\s*(high|medium|low)/gi, "")
+              .replace(/confidence:\s*(high|medium|low)/gi, "")
+              .replace(/confidence tier:\s*(high|medium|low)/gi, "")
+              .replace(/\n\n\n+/g, "\n\n") // Clean up extra newlines
+              .trim();
           }
 
           // Signal end of stream FIRST (don't block on database save)

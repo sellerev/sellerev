@@ -22,6 +22,8 @@ export interface ParsedListing {
   image_url: string | null; // Rainforest search_results[].image
   bsr: number | null; // Best Seller Rank (if available from Rainforest)
   fulfillment: "FBA" | "FBM" | "Amazon" | null; // Fulfillment type (if available)
+  seller?: string | null; // Seller name (for Amazon Retail detection)
+  is_prime?: boolean; // Prime eligibility (for FBA detection)
   est_monthly_revenue?: number | null; // 30-day revenue estimate (modeled)
   est_monthly_units?: number | null; // 30-day units estimate (modeled)
   revenue_confidence?: "low" | "medium"; // Confidence level for revenue estimate
@@ -30,7 +32,7 @@ export interface ParsedListing {
 export interface KeywordMarketSnapshot {
   keyword: string;
   avg_price: number | null;
-  avg_reviews: number | null;
+  avg_reviews: number; // Always a number (0 if no valid reviews)
   avg_rating: number | null;
   avg_bsr: number | null; // Average Best Seller Rank
   total_page1_listings: number; // Only Page 1 listings
@@ -40,7 +42,7 @@ export interface KeywordMarketSnapshot {
     fba: number; // % of listings fulfilled by Amazon (FBA)
     fbm: number; // % of listings merchant fulfilled (FBM)
     amazon: number; // % of listings sold by Amazon
-  } | null;
+  } | null; // null only if no listings exist
   representative_asin?: string | null; // Optional representative ASIN for fee estimation
   // 30-Day Revenue Estimates (modeled, not exact)
   est_total_monthly_revenue_min?: number | null;
@@ -263,6 +265,10 @@ export async function fetchKeywordMarketSnapshot(
 
       // Extract image URL from Rainforest search_results[].image
       const image_url = item.image ?? null;
+      
+      // Extract seller and is_prime for fulfillment mix detection
+      const seller = item.seller ?? null;
+      const is_prime = item.is_prime ?? false;
 
       return {
         asin,
@@ -276,7 +282,10 @@ export async function fetchKeywordMarketSnapshot(
         image_url,
         bsr,
         fulfillment,
-      };
+        // Add seller and is_prime for fulfillment mix computation
+        seller,
+        is_prime,
+      } as ParsedListing & { seller?: string | null; is_prime?: boolean };
     });
     } catch (parseError) {
       console.error("Error parsing search results:", parseError);
@@ -307,12 +316,9 @@ export async function fetchKeywordMarketSnapshot(
         ? listingsWithPrice.reduce((sum, l) => sum + (l.price ?? 0), 0) / listingsWithPrice.length
         : null;
 
-    // Average reviews (only over listings with reviews)
-    const listingsWithReviews = validListings.filter((l) => l.reviews !== null);
-    const avg_reviews =
-      listingsWithReviews.length > 0
-        ? listingsWithReviews.reduce((sum, l) => sum + (l.reviews ?? 0), 0) / listingsWithReviews.length
-        : null;
+    // Average reviews - ALWAYS return a value (use computeAvgReviews helper)
+    const { computeAvgReviews } = await import("./marketAggregates");
+    const avg_reviews = computeAvgReviews(validListings);
 
     // Average rating (only over listings with rating)
     const listingsWithRating = validListings.filter((l) => l.rating !== null);
@@ -328,28 +334,11 @@ export async function fetchKeywordMarketSnapshot(
         ? listingsWithBSR.reduce((sum, l) => sum + (l.bsr ?? 0), 0) / listingsWithBSR.length
         : null;
 
-    // Fulfillment mix calculation
-    let fulfillmentMix: { fba: number; fbm: number; amazon: number } | null = null;
-    if (validListings.length > 0) {
-      let fbaCount = 0;
-      let fbmCount = 0;
-      let amazonCount = 0;
-      
-      validListings.forEach((l) => {
-        if (l.fulfillment === "FBA") fbaCount++;
-        else if (l.fulfillment === "FBM") fbmCount++;
-        else if (l.fulfillment === "Amazon") amazonCount++;
-      });
-      
-      const totalWithFulfillment = fbaCount + fbmCount + amazonCount;
-      if (totalWithFulfillment > 0) {
-        fulfillmentMix = {
-          fba: Math.round((fbaCount / totalWithFulfillment) * 100),
-          fbm: Math.round((fbmCount / totalWithFulfillment) * 100),
-          amazon: Math.round((amazonCount / totalWithFulfillment) * 100),
-        };
-      }
-    }
+    // Fulfillment mix calculation - ALWAYS return a value (use computeFulfillmentMix helper)
+    const { computeFulfillmentMix } = await import("./fulfillmentMix");
+    const fulfillmentMix = validListings.length > 0 
+      ? computeFulfillmentMix(validListings)
+      : { fba: 0, fbm: 0, amazon: 0 };
 
     // Top brands (count occurrences by brand if available) - Page 1 only
     const brandCounts: Record<string, number> = {};
@@ -372,13 +361,13 @@ export async function fetchKeywordMarketSnapshot(
     const snapshot: KeywordMarketSnapshot = {
       keyword,
       avg_price: avg_price !== null ? Math.round(avg_price * 100) / 100 : null,
-      avg_reviews: avg_reviews !== null ? Math.round(avg_reviews) : null,
+      avg_reviews: avg_reviews, // Always a number now (never null)
       avg_rating: avg_rating !== null ? Math.round(avg_rating * 10) / 10 : null,
       avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
       total_page1_listings,
       sponsored_count,
       dominance_score,
-      fulfillment_mix: fulfillmentMix,
+      fulfillment_mix: fulfillmentMix, // Always an object now (never null when listings exist)
     };
 
     // Estimate revenue and units for each listing (30-day estimates)
@@ -430,15 +419,39 @@ export async function fetchKeywordMarketSnapshot(
           total_units_max: 0,
         };
     
-    // Estimate search volume (always returns a value, never null)
-    const searchVolumeEstimator = await import("./searchVolumeEstimator");
-    const searchVolume = searchVolumeEstimator.estimateSearchVolume(
-      totalResults,
-      total_page1_listings,
-      avg_reviews,
-      sponsored_count,
-      keyword
-    );
+    // Estimate search volume (ALWAYS returns a value when Page-1 listings exist)
+    // Never returns null - uses deterministic H10-style heuristics
+    let search_demand: { search_volume_range: string; search_volume_confidence: "low" | "medium" } | null = null;
+    
+    if (listings.length > 0) {
+      const searchVolumeEstimator = await import("./searchVolumeEstimator");
+      const searchVolume = searchVolumeEstimator.estimateSearchVolume({
+        page1Listings: listings,
+        sponsoredCount: sponsored_count,
+        avgReviews: avg_reviews, // avg_reviews is always a number now (never null)
+        category: undefined, // Can be enhanced later with category detection
+      });
+      
+      // Format range as string (e.g., "10k–20k")
+      const formatRange = (min: number, max: number): string => {
+        if (min >= 1000000 || max >= 1000000) {
+          const minM = (min / 1000000).toFixed(1).replace(/\.0$/, '');
+          const maxM = (max / 1000000).toFixed(1).replace(/\.0$/, '');
+          return `${minM}M–${maxM}M`;
+        } else if (min >= 1000 || max >= 1000) {
+          const minK = Math.round(min / 1000);
+          const maxK = Math.round(max / 1000);
+          return `${minK}k–${maxK}k`;
+        } else {
+          return `${min}–${max}`;
+        }
+      };
+      
+      search_demand = {
+        search_volume_range: formatRange(searchVolume.min, searchVolume.max),
+        search_volume_confidence: searchVolume.confidence,
+      };
+    }
     
     const snapshotWithEstimates: KeywordMarketSnapshot = {
       ...snapshot,
@@ -446,10 +459,7 @@ export async function fetchKeywordMarketSnapshot(
       est_total_monthly_revenue_max: aggregated.total_revenue_max > 0 ? aggregated.total_revenue_max : null,
       est_total_monthly_units_min: aggregated.total_units_min > 0 ? aggregated.total_units_min : null,
       est_total_monthly_units_max: aggregated.total_units_max > 0 ? aggregated.total_units_max : null,
-      search_demand: {
-        search_volume_range: searchVolume.search_volume_range,
-        search_volume_confidence: searchVolume.search_volume_confidence,
-      },
+      search_demand, // Always set when listings exist, null only if no listings
     };
 
     return {

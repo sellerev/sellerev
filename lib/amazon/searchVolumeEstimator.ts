@@ -1,196 +1,88 @@
 /**
- * Keyword Search Volume Estimation (Modeled, Not Exact)
+ * Keyword Search Volume Estimation (H10-Style, Deterministic)
  * 
- * Estimates search volume using:
- * - Rainforest search_information.total_results
- * - Page-1 density (listings count)
- * - Avg reviews (demand proxy)
- * - Sponsored count (competition intensity)
- * - Category heuristics
+ * ALWAYS returns a value when Page-1 listings exist.
+ * Never returns null, undefined, or "Not available".
  * 
- * Rules:
- * - Always output a RANGE (never single number)
- * - Never imply this is Amazon-reported data
- * - Confidence caps based on data availability
+ * Core Heuristic (H10-style, deterministic):
+ * - Base volume: page1Listings.length * 1800
+ * - Review multiplier: <100 → 0.7x, 100–500 → 1.0x, 500–1500 → 1.3x, 1500+ → 1.6x
+ * - Sponsored pressure: >30% sponsored → +20%
+ * - Category multiplier: Electronics/Home → 1.1–1.3x, Niche → 0.8–1.0x
  * 
- * ───────────────────────────────────────────────────────────────────────────
- * SQP INTEGRATION ROADMAP (FUTURE):
- * ───────────────────────────────────────────────────────────────────────────
- * This estimator will be replaced by SQP (Search Query Performance) data
- * when available. SQP integration requires:
- * - Seller connects SP-API
- * - Amazon approves Search Query Performance scope
- * 
- * When SQP is available:
- * - search_volume_range → Use SQP monthly_search_volume (exact Amazon data)
- * - search_volume_confidence → Always "high" (reliable Amazon source)
- * 
- * When SQP is NOT available:
- * - Fallback to this estimator (current behavior)
- * - UI remains identical (data source swap only)
- * 
- * SQP will NOT replace:
- * - CPI calculations
- * - Brand dominance metrics
- * - Review moat analysis
- * ───────────────────────────────────────────────────────────────────────────
+ * Output: Always returns a range (min, max) with confidence level
  */
+
+import { ParsedListing } from "./keywordMarket";
 
 export interface SearchVolumeEstimate {
-  search_volume_range: string; // e.g., "10k–20k", "30k–60k", "60k–120k"
-  search_volume_confidence: "low" | "medium";
+  min: number;
+  max: number;
+  confidence: 'low' | 'medium';
 }
 
 /**
- * Category multipliers for search volume estimation
- * Different categories have different typical search volumes
- */
-const CATEGORY_MULTIPLIERS: Record<string, number> = {
-  electronics: 1.5, // Higher search volume
-  beauty: 1.3,
-  home: 1.0, // Baseline
-  health: 0.9,
-  default: 1.0,
-};
-
-/**
- * Infer category from keyword
- */
-function inferCategory(keyword: string): string {
-  const normalized = keyword.toLowerCase();
-  
-  if (/electronic|tech|computer|phone|tablet|headphone|speaker|smartwatch/i.test(normalized)) {
-    return "electronics";
-  }
-  if (/beauty|cosmetic|skincare|makeup|hair|perfume|nail/i.test(normalized)) {
-    return "beauty";
-  }
-  if (/home|kitchen|cookware|furniture|decor|bedding/i.test(normalized)) {
-    return "home";
-  }
-  if (/fitness|health|supplement|vitamin|workout|exercise|gym/i.test(normalized)) {
-    return "health";
-  }
-  
-  return "default";
-}
-
-/**
- * Estimate search volume from Page-1 metrics
+ * Estimate search volume using H10-style deterministic heuristics
  * 
- * Base formula considers:
- * 1. total_results (if available) - broader market size
- * 2. page1_listings - Page-1 saturation
- * 3. avg_reviews - demand proxy (more reviews = more searches historically)
- * 4. sponsored_count - competition intensity (more sponsored = more searches)
- * 5. category multiplier - category-specific adjustments
+ * @param page1Listings - Array of Page-1 listings (required)
+ * @param sponsoredCount - Number of sponsored listings
+ * @param avgReviews - Average review count across listings
+ * @param category - Optional category string for multiplier
+ * @returns Always returns a range (never null)
  */
-export function estimateSearchVolume(
-  totalResults: number | null,
-  page1Listings: number,
-  avgReviews: number | null,
-  sponsoredCount: number,
-  keyword: string
-): SearchVolumeEstimate {
-  // Infer category
-  const category = inferCategory(keyword);
-  const categoryMultiplier = CATEGORY_MULTIPLIERS[category] || CATEGORY_MULTIPLIERS.default;
+export function estimateSearchVolume({
+  page1Listings,
+  sponsoredCount,
+  avgReviews,
+  category
+}: {
+  page1Listings: ParsedListing[];
+  sponsoredCount: number;
+  avgReviews: number;
+  category?: string;
+}): { min: number; max: number; confidence: 'low' | 'medium' } {
+  // Base volume: page1Listings.length * 1800
+  const base = page1Listings.length * 1800;
   
-  // Base estimation factors
-  let baseVolume = 0;
-  
-  // Factor 1: Use total_results if available (scaled down to monthly searches)
-  // Amazon total_results is typically much higher than monthly searches
-  // Rough heuristic: monthly searches ≈ total_results / 50 (conservative)
-  if (totalResults !== null && totalResults > 0) {
-    baseVolume = Math.min(totalResults / 50, 200000); // Cap at 200k to avoid outliers
-  } else {
-    // Factor 2: Page-1 density heuristic
-    // More Page-1 listings suggests higher search volume
-    // Typical range: 10-30k searches/month for well-populated Page 1
-    baseVolume = page1Listings * 1500; // ~1.5k searches per Page-1 listing
-  }
-  
-  // Fallback: If baseVolume is still 0, use minimum conservative estimate
-  // Even with minimal data, we can provide a conservative range
-  if (baseVolume === 0 && page1Listings > 0) {
-    baseVolume = page1Listings * 500; // Very conservative: 500 searches per listing
-  } else if (baseVolume === 0) {
-    // Absolute minimum: assume at least 1k searches/month for any keyword with results
-    baseVolume = 1000;
-  }
-  
-  // Factor 3: Average reviews (demand proxy)
-  // Higher reviews suggest more historical searches
+  // Review multiplier
   let reviewMultiplier = 1.0;
-  if (avgReviews !== null && avgReviews > 0) {
-    // Normalize: 1000 reviews ≈ 1.0x, 10000 reviews ≈ 1.3x
-    reviewMultiplier = 1.0 + (Math.log10(Math.max(avgReviews, 100)) - 2) * 0.15;
-    reviewMultiplier = Math.max(0.8, Math.min(1.5, reviewMultiplier)); // Clamp 0.8-1.5x
+  if (avgReviews < 100) {
+    reviewMultiplier = 0.7;
+  } else if (avgReviews >= 100 && avgReviews < 500) {
+    reviewMultiplier = 1.0;
+  } else if (avgReviews >= 500 && avgReviews < 1500) {
+    reviewMultiplier = 1.3;
+  } else {
+    reviewMultiplier = 1.6;
   }
   
-  // Factor 4: Sponsored count (competition intensity)
-  // More sponsored ads = more competitive = likely higher search volume
-  let sponsoredMultiplier = 1.0;
-  if (sponsoredCount > 0 && page1Listings > 0) {
-    const sponsoredRatio = sponsoredCount / page1Listings;
-    // 0% sponsored → 0.9x, 50% sponsored → 1.2x, 100% sponsored → 1.5x
-    sponsoredMultiplier = 0.9 + sponsoredRatio * 0.6;
+  // Sponsored pressure: >30% sponsored → +20%
+  const totalListings = page1Listings.length;
+  const sponsoredRatio = totalListings > 0 ? sponsoredCount / totalListings : 0;
+  const sponsoredMultiplier = sponsoredRatio > 0.3 ? 1.2 : 1.0;
+  
+  // Category multiplier
+  let categoryMultiplier = 1.0;
+  if (category) {
+    const normalizedCategory = category.toLowerCase();
+    if (/electronic|home|kitchen/i.test(normalizedCategory)) {
+      // Electronics / Home → 1.1–1.3x (randomize slightly for range)
+      categoryMultiplier = 1.2;
+    } else {
+      // Niche categories → 0.8–1.0x
+      categoryMultiplier = 0.9;
+    }
   }
   
   // Apply all multipliers
-  const estimatedVolume = baseVolume * categoryMultiplier * reviewMultiplier * sponsoredMultiplier;
+  const estimatedVolume = base * reviewMultiplier * sponsoredMultiplier * categoryMultiplier;
   
-  // Convert to range format (always range, never single number)
-  // Ranges are ±30% around the estimate
-  const minVolume = Math.round(estimatedVolume * 0.7);
-  const maxVolume = Math.round(estimatedVolume * 1.3);
+  // Always return a range: min = round(base * 0.7), max = round(base * 1.3)
+  const min = Math.round(estimatedVolume * 0.7);
+  const max = Math.round(estimatedVolume * 1.3);
   
-  // Format as readable string (k for thousands, M for millions)
-  const formatRange = (min: number, max: number): string => {
-    if (min >= 1000000 || max >= 1000000) {
-      // Millions
-      const minM = (min / 1000000).toFixed(1).replace(/\.0$/, '');
-      const maxM = (max / 1000000).toFixed(1).replace(/\.0$/, '');
-      return `${minM}M–${maxM}M`;
-    } else if (min >= 1000 || max >= 1000) {
-      // Thousands
-      const minK = Math.round(min / 1000);
-      const maxK = Math.round(max / 1000);
-      return `${minK}k–${maxK}k`;
-    } else {
-      // Hundreds
-      return `${min}–${max}`;
-    }
-  };
+  // Confidence: low if category unknown, medium otherwise
+  const confidence: 'low' | 'medium' = category ? 'medium' : 'low';
   
-  const searchVolumeRange = formatRange(minVolume, maxVolume);
-  
-  // Confidence determination
-  // Start with "medium" if we have good data
-  let confidence: "low" | "medium" = "medium";
-  
-  // Downgrade to "low" if:
-  // - total_results missing AND page1_listings < 20
-  // - avg_reviews missing
-  // - sponsored_count missing (but we check sponsoredCount > 0, so 0 is valid)
-  if (totalResults === null && page1Listings < 20) {
-    confidence = "low";
-  }
-  if (avgReviews === null) {
-    confidence = "low";
-  }
-  
-  // If page1 listings < 20, widen the range further (±50%)
-  let finalRange = searchVolumeRange;
-  if (page1Listings < 20) {
-    const widerMin = Math.round(estimatedVolume * 0.5);
-    const widerMax = Math.round(estimatedVolume * 1.5);
-    finalRange = formatRange(widerMin, widerMax);
-  }
-  
-  return {
-    search_volume_range: finalRange,
-    search_volume_confidence: confidence,
-  };
+  return { min, max, confidence };
 }

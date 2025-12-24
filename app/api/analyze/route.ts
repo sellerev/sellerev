@@ -716,9 +716,27 @@ export async function POST(req: NextRequest) {
 
     console.log("SELLER_PROFILE", sellerProfile);
 
-    // 7. Fetch keyword market data
-    const keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
-    console.log("RAIN_DATA_RAW", keywordMarketData);
+    // 7. Check cache first (aggressive caching for cost control)
+    const { getCachedKeywordAnalysis, cacheKeywordAnalysis } = await import("@/lib/amazon/keywordCache");
+    const marketplace = "US"; // TODO: Extract from request if available
+    
+    let keywordMarketData = await getCachedKeywordAnalysis(supabase, body.input_value, marketplace);
+    
+    if (!keywordMarketData) {
+      // Cache miss - fetch from Rainforest
+      console.log("CACHE_MISS", { keyword: body.input_value });
+      keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
+      console.log("RAIN_DATA_RAW", keywordMarketData);
+      
+      // Cache the result (non-blocking)
+      if (keywordMarketData) {
+        cacheKeywordAnalysis(supabase, body.input_value, marketplace, keywordMarketData)
+          .then(() => console.log("CACHE_STORED", { keyword: body.input_value }))
+          .catch((error) => console.error("CACHE_STORE_ERROR", error));
+      }
+    } else {
+      console.log("CACHE_HIT", { keyword: body.input_value });
+    }
     
     // Guard: 422 ONLY if search_results is empty or missing (Page 1 only)
     if (!keywordMarketData || !keywordMarketData.snapshot || keywordMarketData.snapshot.total_page1_listings === 0) {
@@ -1088,22 +1106,66 @@ ${body.input_value}`;
         });
       }
       
-      // Build keywordMarket with required structure
-      // Always include market_snapshot even if listings is empty (UI needs to show empty state)
+      // Build keywordMarket with LOCKED DATA CONTRACT
+      // market_snapshot must ALWAYS have required fields with NO nulls when listings exist
+      const hasListings = listings.length > 0;
+      
+      // Ensure search_volume always has min/max (never null)
+      // Parse range string (e.g., "18k–32k") to min/max numbers
+      const parseRange = (rangeStr: string): { min: number; max: number } => {
+        const match = rangeStr.match(/(\d+(?:\.\d+)?)([kM]?)\s*[–-]\s*(\d+(?:\.\d+)?)([kM]?)/);
+        if (match) {
+          const min = parseFloat(match[1]) * (match[2] === 'M' ? 1000000 : match[2] === 'k' ? 1000 : 1);
+          const max = parseFloat(match[3]) * (match[4] === 'M' ? 1000000 : match[4] === 'k' ? 1000 : 1);
+          return { min: Math.round(min), max: Math.round(max) };
+        }
+        // Fallback if parsing fails
+        return { min: 1000, max: 5000 };
+      };
+      
+      const searchVolume = snapshot.search_demand?.search_volume_range
+        ? parseRange(snapshot.search_demand.search_volume_range)
+        : hasListings
+          ? { min: 1000, max: 5000 } // Default when listings exist but no search volume
+          : { min: 0, max: 0 }; // No listings
+      
+      // Ensure avg_reviews is always a number (never null)
+      const avgReviews = snapshot.avg_reviews !== null && snapshot.avg_reviews !== undefined
+        ? snapshot.avg_reviews
+        : 0;
+      
+      // Ensure avg_price is always a number (never null) - use 0 as fallback if needed
+      const avgPrice = snapshot.avg_price !== null && snapshot.avg_price !== undefined
+        ? snapshot.avg_price
+        : 0;
+      
+      // Ensure avg_rating is always a number (never null) - use 0 as fallback if needed
+      const avgRating = snapshot.avg_rating !== null && snapshot.avg_rating !== undefined
+        ? snapshot.avg_rating
+        : 0;
+      
+      // Ensure fulfillment_mix always has values (never null when listings exist)
+      const fulfillmentMix = snapshot.fulfillment_mix || { fba: 0, fbm: 0, amazon: 0 };
+      
       keywordMarket = {
         market_snapshot: {
-          marketplace: "US", // TODO: Extract from request if available
+          // LOCKED DATA CONTRACT - Required fields, no nulls when listings exist
+          // These fields MUST always be present and never null
+          search_volume: searchVolume, // { min: number, max: number } - always present
+          avg_reviews: avgReviews, // number (never null, 0 if no valid reviews)
+          avg_price: avgPrice, // number (never null, 0 if no prices)
+          avg_rating: avgRating, // number (never null, 0 if no ratings)
+          fulfillment_mix: fulfillmentMix, // { fba: number, fbm: number, amazon: number } - always present when listings exist
+          page1_count: snapshot.total_page1_listings || 0, // number (never null)
+          
+          // Additional fields (optional but included for compatibility)
+          marketplace: "US",
           search_term: body.input_value,
           page: 1,
-          total_results_estimate: null, // Not available in current structure
-          total_page1_listings: snapshot.total_page1_listings || 0,
+          total_results_estimate: null,
           sponsored_count: snapshot.sponsored_count || 0,
-          avg_price: snapshot.avg_price,
-          avg_rating: snapshot.avg_rating,
-          avg_reviews: snapshot.avg_reviews,
           avg_bsr: snapshot.avg_bsr || null,
           dominance_score: snapshot.dominance_score || null,
-          fulfillment_mix: snapshot.fulfillment_mix || null,
           listings: listings.map((listing) => {
             const normalized = normalizeListing(listing);
             return {
@@ -1120,7 +1182,7 @@ ${body.input_value}`;
               is_sponsored: normalized.sponsored,
               revenue_est: listing.est_monthly_revenue || null,
               units_est: listing.est_monthly_units || null,
-              revenue_share: null, // Will be calculated in frontend if needed
+              revenue_share: null,
             };
           }),
         },
