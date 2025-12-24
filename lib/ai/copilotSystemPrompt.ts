@@ -22,6 +22,7 @@ export interface CopilotContext {
   session_context: {
     current_feature: "analyze" | "listing_optimization" | "ppc" | "keywords";
     user_question: string;
+    response_mode?: "concise" | "expanded"; // Response mode for cost control
   };
 }
 
@@ -84,6 +85,42 @@ export function buildCopilotSystemPrompt(
   
   // Classify the question
   const questionClassification = classifyQuestion(session_context.user_question);
+  
+  // Response mode instructions
+  const responseMode = session_context.response_mode || "concise";
+  const responseModeInstructions = responseMode === "concise"
+    ? `
+====================================================
+RESPONSE MODE: CONCISE (Cost Control)
+====================================================
+
+You are in CONCISE mode. Keep responses under 1200 characters.
+
+RULES:
+- Answer the question directly
+- Use bullet points when helpful
+- Skip unnecessary context
+- Focus on actionable insights
+- Only add "If you want, I can expand" at the end if the answer could benefit from more detail
+
+DO NOT:
+- Write long explanations unless necessary
+- Repeat information already visible
+- Add verbose introductions
+`
+    : `
+====================================================
+RESPONSE MODE: EXPANDED
+====================================================
+
+You are in EXPANDED mode. You can provide detailed explanations up to 3000 characters.
+
+Use this mode to:
+- Provide comprehensive analysis
+- Explain complex concepts
+- Offer multiple perspectives
+- Include detailed examples
+`;
 
   return `${basePrompt}
 
@@ -177,12 +214,15 @@ ${questionClassification.category === "PROFITABILITY" ? `
 - Never invent data to answer
 ` : ""}
 
+${responseModeInstructions}
+
 ====================================================
 SESSION CONTEXT
 ====================================================
 
 Current Feature: ${session_context.current_feature}
 User Question: "${session_context.user_question}"
+Response Mode: ${responseMode.toUpperCase()}
 
 Focus your answer on the current feature and question.
 

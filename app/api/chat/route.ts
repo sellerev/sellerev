@@ -46,6 +46,7 @@ interface ChatRequestBody {
   analysisRunId: string;
   message: string;
   selectedListing?: any | null; // Optional selected listing for AI context
+  responseMode?: "concise" | "expanded"; // Response mode (default: concise)
 }
 
 function validateRequestBody(body: unknown): body is ChatRequestBody {
@@ -59,6 +60,117 @@ function validateRequestBody(body: unknown): body is ChatRequestBody {
     typeof b.message === "string" &&
     b.message.trim().length > 0
   );
+}
+
+/**
+ * Builds a compact context with only essential data (for cost reduction)
+ * - Top snapshot metrics only
+ * - Top 10 listings (not all 50)
+ * - Selected listing details
+ * - Compact source map
+ */
+function buildCompactContext(
+  analysisResponse: Record<string, unknown>,
+  marketSnapshot: Record<string, unknown> | null,
+  selectedListing?: any | null,
+  rainforestData?: Record<string, unknown> | null
+): Record<string, unknown> {
+  const compact: Record<string, unknown> = {};
+  
+  // Essential snapshot metrics only
+  if (marketSnapshot && typeof marketSnapshot === 'object') {
+    compact.market_snapshot = {
+      keyword: marketSnapshot.keyword || null,
+      avg_price: marketSnapshot.avg_price || null,
+      avg_reviews: marketSnapshot.avg_reviews || 0,
+      avg_rating: marketSnapshot.avg_rating || null,
+      page1_count: marketSnapshot.page1_count || marketSnapshot.total_page1_listings || 0,
+      sponsored_count: marketSnapshot.sponsored_count || 0,
+      fulfillment_mix: marketSnapshot.fulfillment_mix || null,
+      search_volume: (marketSnapshot.search_demand as any)?.search_volume_range || null,
+      cpi: marketSnapshot.cpi || null,
+    };
+    
+    // Top 10 listings only (not all 50) - check multiple locations
+    let allListings: any[] = [];
+    // Check market_snapshot.listings first
+    if (Array.isArray(marketSnapshot.listings)) {
+      allListings = marketSnapshot.listings;
+    }
+    // Check rainforest_data.listings as fallback
+    else if (rainforestData && typeof rainforestData === 'object' && Array.isArray(rainforestData.listings)) {
+      allListings = rainforestData.listings;
+    }
+    // Check analysisResponse.rainforest_data.listings
+    else if (analysisResponse.rainforest_data && typeof analysisResponse.rainforest_data === 'object') {
+      const rd = analysisResponse.rainforest_data as Record<string, unknown>;
+      if (Array.isArray(rd.listings)) {
+        allListings = rd.listings;
+      }
+    }
+    
+    const topListings = allListings.slice(0, 10).map((l: any) => ({
+      asin: l.asin,
+      title: l.title,
+      price: l.price,
+      rating: l.rating,
+      reviews: l.reviews,
+      is_sponsored: l.is_sponsored || l.sponsored,
+      fulfillment: l.fulfillment,
+      position: l.position || l.organic_rank,
+    }));
+    (compact.market_snapshot as Record<string, unknown>).listings = topListings;
+    (compact.market_snapshot as Record<string, unknown>).total_listings_count = allListings.length;
+    
+    // Selected listing details (if provided)
+    if (selectedListing && typeof selectedListing === 'object') {
+      compact.selected_listing = {
+        asin: selectedListing.asin,
+        title: selectedListing.title,
+        price: selectedListing.price,
+        rating: selectedListing.rating,
+        reviews: selectedListing.reviews,
+        bsr: selectedListing.bsr,
+        fulfillment: selectedListing.fulfillment,
+        is_sponsored: selectedListing.is_sponsored,
+      };
+    }
+  }
+  
+  // Compact source map
+  const searchVolumeSource = (marketSnapshot as any)?.search_volume_source;
+  const revenueEstimateSource = (marketSnapshot as any)?.revenue_estimate_source;
+  const fbaFees = (marketSnapshot as any)?.fba_fees;
+  const modelVersion = (marketSnapshot as any)?.model_version;
+  
+  compact.data_sources = {
+    market_data: searchVolumeSource === "model_v2" ? "Rainforest + V2 Model" 
+      : searchVolumeSource === "model_v1" ? "Rainforest + V1 Heuristic"
+      : "Rainforest API",
+    revenue_estimate: revenueEstimateSource === "model_v2" ? "V2 Model"
+      : revenueEstimateSource === "model_v1" ? "V1 Heuristic"
+      : "Estimated",
+    fba_fees: (fbaFees && typeof fbaFees === 'object' && (fbaFees.source === "sp_api" || fbaFees.source === "amazon")) 
+      ? "Amazon SP-API"
+      : "Estimated",
+    model_version: modelVersion || "v1.0",
+  };
+  
+  // Margin snapshot (essential fields only)
+  const marginSnapshot = (analysisResponse.margin_snapshot as any) || null;
+  if (marginSnapshot) {
+    compact.margin_snapshot = {
+      net_margin_min_pct: marginSnapshot.net_margin_min_pct,
+      net_margin_max_pct: marginSnapshot.net_margin_max_pct,
+      assumed_price: marginSnapshot.assumed_price,
+      estimated_cogs_min: marginSnapshot.estimated_cogs_min,
+      estimated_cogs_max: marginSnapshot.estimated_cogs_max,
+      estimated_fba_fee: marginSnapshot.estimated_fba_fee,
+      confidence_tier: marginSnapshot.confidence_tier,
+    };
+  }
+  
+  return compact;
 }
 
 /**
@@ -1255,15 +1367,34 @@ export async function POST(req: NextRequest) {
     // The analyze contract stores ai_context in the response
     const aiContext = (analysisResponse.ai_context as Record<string, unknown>) || null;
     
+    // 8b. Determine response mode (concise by default, expanded if user requests)
+    const responseMode = body.responseMode || (
+      /\b(explain more|expand|more details|tell me more|elaborate|detailed|comprehensive)\b/i.test(body.message)
+        ? "expanded"
+        : "concise"
+    );
+    
+    // 8c. Build compact or full context based on mode
+    const useCompactContext = responseMode === "concise";
+    const contextToUse = useCompactContext
+      ? buildCompactContext(
+          analysisResponse, 
+          marketSnapshot, 
+          body.selectedListing || null,
+          analysisRun.rainforest_data as Record<string, unknown> | null
+        )
+      : (aiContext || analysisResponse);
+    
     // If ai_context is not available, fall back to legacy context building
     // But prefer the locked contract structure
     const copilotContext = {
-      ai_context: aiContext || analysisResponse, // Fallback to full response if ai_context missing
+      ai_context: contextToUse,
       seller_memory: sellerMemory,
       structured_memories: structuredMemories, // New structured memory system
       session_context: {
         current_feature: "analyze" as const,
         user_question: body.message,
+        response_mode: responseMode, // Pass response mode to system prompt
       },
     };
     
@@ -1409,6 +1540,9 @@ Would you like me to:
       );
     }
 
+    // Determine max_tokens based on response mode
+    const maxTokens = responseMode === "expanded" ? 700 : 300;
+    
     const openaiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -1421,7 +1555,7 @@ Would you like me to:
           model: "gpt-4o-mini",
           messages,
           temperature: 0.7,
-          max_tokens: 1500,
+          max_tokens: maxTokens, // Enforce token limit based on mode
           stream: true, // Enable streaming
         }),
       }
