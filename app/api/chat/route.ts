@@ -1007,14 +1007,41 @@ export async function POST(req: NextRequest) {
       value: unknown;
     }> = [];
     
+    let pendingMemoriesForConfirmation: Array<{
+      id: string;
+      memory_candidate: {
+        memory_type: string;
+        key: string;
+        value: unknown;
+      };
+      reason: string;
+    }> = [];
+    
     try {
-      const { getSellerMemories } = await import("@/lib/ai/sellerMemoryStore");
+      const { getSellerMemories, getPendingMemories } = await import("@/lib/ai/sellerMemoryStore");
+      const { shouldAskUserToConfirm, formatMemoryForConfirmation } = await import("@/lib/ai/memoryMerge");
+      
+      // Load confirmed memories
       const memoryRecords = await getSellerMemories(supabase, user.id);
       structuredMemories = memoryRecords.map((m) => ({
         memory_type: m.memory_type,
         key: m.key,
         value: m.value,
       }));
+      
+      // Load pending memories that should be confirmed
+      const pendingMemories = await getPendingMemories(supabase, user.id);
+      pendingMemoriesForConfirmation = pendingMemories
+        .filter((p) => shouldAskUserToConfirm(p.memory_candidate, p.reason))
+        .map((p) => ({
+          id: p.id,
+          memory_candidate: {
+            memory_type: p.memory_candidate.memory_type,
+            key: p.memory_candidate.key,
+            value: p.memory_candidate.value,
+          },
+          reason: p.reason,
+        }));
     } catch (memoryError) {
       console.error("Failed to load structured seller memories:", memoryError);
       // Continue without structured memories - don't block chat
@@ -1409,6 +1436,9 @@ Would you like me to:
     // ────────────────────────────────────────────────────────────────────────
     const encoder = new TextEncoder();
     let fullAssistantMessage = "";
+    
+    // Capture pendingMemoriesForConfirmation for use in stream closure
+    const pendingMemoriesToShow = pendingMemoriesForConfirmation;
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -1599,6 +1629,25 @@ Would you like me to:
               .trim();
           }
 
+          // Check for pending memories that need confirmation
+          // Only show one at a time, after the response
+          if (pendingMemoriesToShow.length > 0) {
+            const pendingMemory = pendingMemoriesToShow[0];
+            const { formatMemoryForConfirmation } = await import("@/lib/ai/memoryMerge");
+            const memoryDescription = formatMemoryForConfirmation(pendingMemory.memory_candidate as any);
+            
+            // Send confirmation prompt as metadata
+            const confirmationPrompt = {
+              type: "memory_confirmation",
+              pendingMemoryId: pendingMemory.id,
+              message: "I can remember this to improve future answers.\n\nShould I save this about how you operate?",
+              memoryDescription,
+              subtext: "You can change or delete this anytime in Settings.",
+            };
+            
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata: confirmationPrompt })}\n\n`));
+          }
+          
           // Signal end of stream FIRST (don't block on database save)
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
@@ -1629,10 +1678,12 @@ Would you like me to:
               // 17. Extract and store memories from user message (non-blocking, parallel)
               // ────────────────────────────────────────────────────────────────
               // Memory extraction runs in parallel - doesn't block the response
+              // Uses merge logic to determine what to save vs. what to ask user about
               // ────────────────────────────────────────────────────────────────
               try {
                 const { extractMemoriesFromText } = await import("@/lib/ai/memoryExtraction");
-                const { upsertMemories } = await import("@/lib/ai/sellerMemoryStore");
+                const { upsertMemoriesWithMerge } = await import("@/lib/ai/sellerMemoryStore");
+                const { shouldAskUserToConfirm, formatMemoryForConfirmation } = await import("@/lib/ai/memoryMerge");
                 
                 // Extract memories from user message
                 const extractedMemories = await extractMemoriesFromText(
@@ -1644,15 +1695,21 @@ Would you like me to:
                   // Get the user message ID for source_reference
                   const userMessageId = result.data?.[0]?.id || null;
                   
-                  // Upsert memories (insert or update)
-                  await upsertMemories(
+                  // Upsert memories with merge logic
+                  const mergeResult = await upsertMemoriesWithMerge(
                     supabase,
                     user.id,
                     extractedMemories,
                     userMessageId
                   );
                   
-                  console.log(`Extracted and stored ${extractedMemories.length} memories from user message`);
+                  console.log(`Memory extraction: ${mergeResult.inserted} inserted, ${mergeResult.updated} updated, ${mergeResult.pending.length} pending`);
+                  
+                  // If there are pending memories that should be confirmed, we'll handle them
+                  // in the next chat response (they'll be checked when building context)
+                  if (mergeResult.pending.length > 0) {
+                    console.log(`Pending memories requiring confirmation: ${mergeResult.pending.length}`);
+                  }
                 }
               } catch (error) {
                 // Memory extraction failures should not block chat
