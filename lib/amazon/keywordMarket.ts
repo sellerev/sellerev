@@ -207,11 +207,24 @@ export async function fetchKeywordMarketSnapshot(
     );
 
     if (!response.ok) {
-      console.error(`Rainforest API error: ${response.status} ${response.statusText}`);
+      const errorText = await response.text();
+      console.error(`Rainforest API error: ${response.status} ${response.statusText}`, {
+        keyword,
+        error_body: errorText.substring(0, 500), // First 500 chars
+      });
       return null;
     }
 
-    const raw = await response.json();
+    let raw: any;
+    try {
+      raw = await response.json();
+    } catch (jsonError) {
+      console.error("Failed to parse Rainforest API JSON response", {
+        keyword,
+        error: jsonError instanceof Error ? jsonError.message : String(jsonError),
+      });
+      return null;
+    }
 
     // Log raw payload for debugging
     console.log("RAW_KEYWORD_RESULTS", JSON.stringify(raw, null, 2));
@@ -239,7 +252,13 @@ export async function fetchKeywordMarketSnapshot(
 
     // 422 ONLY if search_results is empty or missing
     if (!Array.isArray(searchResults) || searchResults.length === 0) {
-      console.log("No search results found");
+      console.log("No search results found", {
+        keyword,
+        has_raw: !!raw,
+        raw_keys: raw ? Object.keys(raw) : [],
+        search_results_type: Array.isArray(searchResults) ? "array" : typeof searchResults,
+        search_results_length: Array.isArray(searchResults) ? searchResults.length : "N/A",
+      });
       return null;
     }
 
@@ -301,7 +320,15 @@ export async function fetchKeywordMarketSnapshot(
 
     // If total_page1_listings > 0, proceed with analysis (even if avg_price or avg_reviews are null)
     if (validListings.length === 0) {
-      console.log("No valid listings (missing asin or title)");
+      console.log("No valid listings (missing asin or title)", {
+        keyword,
+        total_parsed: parsedListings.length,
+        valid_count: validListings.length,
+        sample_listing: parsedListings[0] ? {
+          has_asin: !!parsedListings[0].asin,
+          has_title: !!parsedListings[0].title,
+        } : null,
+      });
       return null;
     }
 

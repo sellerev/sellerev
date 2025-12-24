@@ -725,25 +725,88 @@ export async function POST(req: NextRequest) {
     if (!keywordMarketData) {
       // Cache miss - fetch from Rainforest
       console.log("CACHE_MISS", { keyword: body.input_value });
+      
+      // Check if RAINFOREST_API_KEY is configured
+      if (!process.env.RAINFOREST_API_KEY) {
+        console.error("RAINFOREST_API_KEY not configured in environment");
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Rainforest API key not configured. Please contact support.",
+          },
+          { status: 500, headers: res.headers }
+        );
+      }
+      
       keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value);
-      console.log("RAIN_DATA_RAW", keywordMarketData);
+      console.log("RAIN_DATA_RAW", {
+        has_data: !!keywordMarketData,
+        has_snapshot: !!keywordMarketData?.snapshot,
+        total_listings: keywordMarketData?.snapshot?.total_page1_listings || 0,
+        listings_count: keywordMarketData?.listings?.length || 0,
+      });
       
       // Cache the result (non-blocking)
       if (keywordMarketData) {
         cacheKeywordAnalysis(supabase, body.input_value, marketplace, keywordMarketData)
           .then(() => console.log("CACHE_STORED", { keyword: body.input_value }))
           .catch((error) => console.error("CACHE_STORE_ERROR", error));
+      } else {
+        console.error("FETCH_KEYWORD_MARKET_RETURNED_NULL", {
+          keyword: body.input_value,
+          possible_reasons: [
+            "Rainforest API returned no results",
+            "Rainforest API returned error",
+            "No valid listings (missing ASIN or title)",
+            "Invalid API response structure",
+          ],
+        });
       }
     } else {
-      console.log("CACHE_HIT", { keyword: body.input_value });
+      console.log("CACHE_HIT", { 
+        keyword: body.input_value,
+        total_listings: keywordMarketData.snapshot?.total_page1_listings || 0,
+      });
     }
     
     // Guard: 422 ONLY if search_results is empty or missing (Page 1 only)
-    if (!keywordMarketData || !keywordMarketData.snapshot || keywordMarketData.snapshot.total_page1_listings === 0) {
+    if (!keywordMarketData) {
       return NextResponse.json(
         {
           success: false,
-          error: "No market data available for this keyword",
+          error: "No market data available for this keyword. The Rainforest API returned no results. Please try a different keyword.",
+          details: "This could mean the keyword has no search results on Amazon, or the API request failed.",
+        },
+        { status: 422, headers: res.headers }
+      );
+    }
+    
+    if (!keywordMarketData.snapshot) {
+      console.error("KEYWORD_MARKET_DATA_MISSING_SNAPSHOT", {
+        keyword: body.input_value,
+        has_listings: !!keywordMarketData.listings,
+        listings_count: keywordMarketData.listings?.length || 0,
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid market data structure. Please try again.",
+          details: "Market data snapshot is missing.",
+        },
+        { status: 500, headers: res.headers }
+      );
+    }
+    
+    if (keywordMarketData.snapshot.total_page1_listings === 0) {
+      console.log("ZERO_PAGE1_LISTINGS", {
+        keyword: body.input_value,
+        listings_count: keywordMarketData.listings?.length || 0,
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: "No market data available for this keyword. No Page-1 listings found.",
+          details: "This keyword may not have any products on Amazon's first page of search results.",
         },
         { status: 422, headers: res.headers }
       );
