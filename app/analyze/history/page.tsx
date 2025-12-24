@@ -32,10 +32,11 @@ function getVerdict(run: AnalysisRun): string {
   // Fallback to parsing response JSON
   try {
     if (run.response && typeof run.response === "object") {
-      return run.response.decision?.verdict || "Unknown";
+      const response = run.response as { decision?: { verdict?: string } };
+      return response.decision?.verdict || "Unknown";
     }
     if (typeof run.response === "string") {
-      const parsed = JSON.parse(run.response);
+      const parsed = JSON.parse(run.response) as { decision?: { verdict?: string } };
       return parsed.decision?.verdict || "Unknown";
     }
   } catch {
@@ -54,10 +55,11 @@ function getConfidence(run: AnalysisRun): number | null {
   // Fallback to parsing response JSON
   try {
     if (run.response && typeof run.response === "object") {
-      return run.response.decision?.confidence ?? null;
+      const response = run.response as { decision?: { confidence?: number } };
+      return response.decision?.confidence ?? null;
     }
     if (typeof run.response === "string") {
-      const parsed = JSON.parse(run.response);
+      const parsed = JSON.parse(run.response) as { decision?: { confidence?: number } };
       return parsed.decision?.confidence ?? null;
     }
   } catch {

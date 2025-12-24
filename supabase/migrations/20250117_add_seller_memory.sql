@@ -1,36 +1,73 @@
--- Add seller_memory table for AI Copilot persistent memory
--- This stores project-aware context that shapes AI responses over time
+-- Seller Memory System
+-- Stores factual, structured information about sellers that persists across sessions
 
+-- Primary memory table
 CREATE TABLE IF NOT EXISTS seller_memory (
-  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  memory JSONB NOT NULL DEFAULT '{}'::jsonb,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  seller_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  
+  memory_type TEXT NOT NULL CHECK (memory_type IN (
+    'sourcing',
+    'costs',
+    'pricing',
+    'logistics',
+    'constraints',
+    'preferences',
+    'goals',
+    'experience',
+    'assets',
+    'strategy'
+  )),
+  
+  key TEXT NOT NULL,
+  value JSONB NOT NULL,
+  
+  confidence TEXT NOT NULL CHECK (confidence IN ('low', 'medium', 'high')),
+  source TEXT NOT NULL CHECK (source IN (
+    'onboarding',
+    'explicit_user_statement',
+    'attachment_extraction',
+    'ai_inference'
+  )),
+  
+  source_reference UUID NULL,
+  is_user_editable BOOLEAN NOT NULL DEFAULT true,
+  last_confirmed_at TIMESTAMPTZ NULL,
+  
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  -- Unique constraint: one memory per seller per key
+  UNIQUE(seller_id, key)
 );
 
--- Index for faster lookups
-CREATE INDEX IF NOT EXISTS idx_seller_memory_user_id ON seller_memory(user_id);
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_seller_memory_seller_id ON seller_memory(seller_id);
+CREATE INDEX IF NOT EXISTS idx_seller_memory_type ON seller_memory(memory_type);
+CREATE INDEX IF NOT EXISTS idx_seller_memory_key ON seller_memory(key);
+CREATE INDEX IF NOT EXISTS idx_seller_memory_updated_at ON seller_memory(updated_at DESC);
 
--- Enable RLS
+-- RLS Policies
 ALTER TABLE seller_memory ENABLE ROW LEVEL SECURITY;
 
--- RLS Policy: Users can only access their own memory
 CREATE POLICY "Users can view their own memory"
-  ON seller_memory
-  FOR SELECT
-  USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can update their own memory"
-  ON seller_memory
-  FOR UPDATE
-  USING (auth.uid() = user_id);
+  ON seller_memory FOR SELECT
+  USING (auth.uid() = seller_id);
 
 CREATE POLICY "Users can insert their own memory"
-  ON seller_memory
-  FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+  ON seller_memory FOR INSERT
+  WITH CHECK (auth.uid() = seller_id);
 
--- Function to update updated_at timestamp
+CREATE POLICY "Users can update their own memory"
+  ON seller_memory FOR UPDATE
+  USING (auth.uid() = seller_id)
+  WITH CHECK (auth.uid() = seller_id);
+
+CREATE POLICY "Users can delete their own memory"
+  ON seller_memory FOR DELETE
+  USING (auth.uid() = seller_id);
+
+-- Trigger to update updated_at
 CREATE OR REPLACE FUNCTION update_seller_memory_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -39,8 +76,38 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Trigger to auto-update updated_at
 CREATE TRIGGER update_seller_memory_updated_at
   BEFORE UPDATE ON seller_memory
   FOR EACH ROW
   EXECUTE FUNCTION update_seller_memory_updated_at();
+
+-- Seller Attachments table (for future use)
+CREATE TABLE IF NOT EXISTS seller_attachments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  seller_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  
+  file_type TEXT NOT NULL CHECK (file_type IN ('pdf', 'csv', 'image', 'text')),
+  file_url TEXT NOT NULL,
+  parsed BOOLEAN NOT NULL DEFAULT false,
+  extracted_memory_count INTEGER NOT NULL DEFAULT 0,
+  
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_seller_attachments_seller_id ON seller_attachments(seller_id);
+
+-- RLS Policies
+ALTER TABLE seller_attachments ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view their own attachments"
+  ON seller_attachments FOR SELECT
+  USING (auth.uid() = seller_id);
+
+CREATE POLICY "Users can insert their own attachments"
+  ON seller_attachments FOR INSERT
+  WITH CHECK (auth.uid() = seller_id);
+
+CREATE POLICY "Users can delete their own attachments"
+  ON seller_attachments FOR DELETE
+  USING (auth.uid() = seller_id);

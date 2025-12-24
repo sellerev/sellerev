@@ -997,6 +997,29 @@ export async function POST(req: NextRequest) {
     // All analyses are keyword-only now
     sellerMemory = recordAnalyzedKeyword(sellerMemory, analysisRun.input_value);
     
+    // 5a. Load structured seller memories (new memory system)
+    // ────────────────────────────────────────────────────────────────────────
+    // Load factual memories from seller_memory table
+    // ────────────────────────────────────────────────────────────────────────
+    let structuredMemories: Array<{
+      memory_type: string;
+      key: string;
+      value: unknown;
+    }> = [];
+    
+    try {
+      const { getSellerMemories } = await import("@/lib/ai/sellerMemoryStore");
+      const memoryRecords = await getSellerMemories(supabase, user.id);
+      structuredMemories = memoryRecords.map((m) => ({
+        memory_type: m.memory_type,
+        key: m.key,
+        value: m.value,
+      }));
+    } catch (memoryError) {
+      console.error("Failed to load structured seller memories:", memoryError);
+      // Continue without structured memories - don't block chat
+    }
+    
     // Save updated memory (if changed)
     try {
       const { error: memorySaveError } = await supabase
@@ -1201,6 +1224,7 @@ export async function POST(req: NextRequest) {
     const copilotContext = {
       ai_context: aiContext || analysisResponse, // Fallback to full response if ai_context missing
       seller_memory: sellerMemory,
+      structured_memories: structuredMemories, // New structured memory system
       session_context: {
         current_feature: "analyze" as const,
         user_question: body.message,
@@ -1599,8 +1623,41 @@ Would you like me to:
                 role: "assistant",
                 content: finalMessage,
               },
-            ]).then(() => {
-              // Success - no need to log
+            ]).then(async (result: any) => {
+              console.log("Chat messages saved to database");
+              
+              // 17. Extract and store memories from user message (non-blocking, parallel)
+              // ────────────────────────────────────────────────────────────────
+              // Memory extraction runs in parallel - doesn't block the response
+              // ────────────────────────────────────────────────────────────────
+              try {
+                const { extractMemoriesFromText } = await import("@/lib/ai/memoryExtraction");
+                const { upsertMemories } = await import("@/lib/ai/sellerMemoryStore");
+                
+                // Extract memories from user message
+                const extractedMemories = await extractMemoriesFromText(
+                  body.message,
+                  'explicit_user_statement'
+                );
+                
+                if (extractedMemories.length > 0) {
+                  // Get the user message ID for source_reference
+                  const userMessageId = result.data?.[0]?.id || null;
+                  
+                  // Upsert memories (insert or update)
+                  await upsertMemories(
+                    supabase,
+                    user.id,
+                    extractedMemories,
+                    userMessageId
+                  );
+                  
+                  console.log(`Extracted and stored ${extractedMemories.length} memories from user message`);
+                }
+              } catch (error) {
+                // Memory extraction failures should not block chat
+                console.error("Memory extraction error (non-blocking):", error);
+              }
             }).catch((saveError) => {
               console.error("Failed to save chat messages:", saveError);
             });

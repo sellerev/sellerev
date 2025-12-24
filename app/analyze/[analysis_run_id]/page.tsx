@@ -61,28 +61,40 @@ export default async function AnalysisDetailPage({ params }: AnalysisDetailPageP
   }
 
   // Transform database record to match AnalysisResponse interface
-  const response = analysisRun.response as Record<string, unknown>;
+  const response = analysisRun.response as Record<string, unknown> | null;
+  
+  // Guard: Ensure response exists and has decision
+  if (!response || typeof response !== 'object' || !response.decision) {
+    redirect("/history");
+  }
 
   const initialAnalysis = {
     analysis_run_id: analysisRun.id,
     created_at: analysisRun.created_at,
     input_type: analysisRun.input_type as "asin" | "keyword",
     input_value: analysisRun.input_value,
-    decision: response.decision as {
+    decision: (response.decision as {
       verdict: "GO" | "CAUTION" | "NO_GO";
       confidence: number;
-    },
+    }) || { verdict: "UNKNOWN" as const, confidence: 0 },
     executive_summary: response.executive_summary as string,
     reasoning: response.reasoning as {
       primary_factors: string[];
       seller_context_impact: string;
     },
-    risks: response.risks as {
-      competition: { level: "Low" | "Medium" | "High"; explanation: string };
-      pricing: { level: "Low" | "Medium" | "High"; explanation: string };
-      differentiation: { level: "Low" | "Medium" | "High"; explanation: string };
-      operations: { level: "Low" | "Medium" | "High"; explanation: string };
-    },
+    risks: (response.risks && typeof response.risks === 'object' && 'competition' in response.risks && 'pricing' in response.risks && 'differentiation' in response.risks && 'operations' in response.risks)
+      ? response.risks as {
+          competition: { level: "Low" | "Medium" | "High"; explanation: string };
+          pricing: { level: "Low" | "Medium" | "High"; explanation: string };
+          differentiation: { level: "Low" | "Medium" | "High"; explanation: string };
+          operations: { level: "Low" | "Medium" | "High"; explanation: string };
+        }
+      : {
+          competition: { level: "Low" as const, explanation: "Risk data unavailable" },
+          pricing: { level: "Low" as const, explanation: "Risk data unavailable" },
+          differentiation: { level: "Low" as const, explanation: "Risk data unavailable" },
+          operations: { level: "Low" as const, explanation: "Risk data unavailable" },
+        },
     recommended_actions: response.recommended_actions as {
       must_do: string[];
       should_do: string[];

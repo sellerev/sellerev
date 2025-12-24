@@ -99,8 +99,10 @@ interface AnalysisResponse {
     avg_rating: number | null;
     avg_bsr?: number | null;
     total_page1_listings: number; // Only Page 1 listings
+    page1_count?: number; // Locked contract field (alternative to total_page1_listings)
     sponsored_count: number;
     dominance_score: number; // 0-100, % of listings belonging to top brand
+    search_volume?: { min: number; max: number } | null; // Locked contract field
     fulfillment_mix?: {
       fba: number;
       fbm: number;
@@ -712,7 +714,8 @@ export default function AnalyzeForm({
                   {/* ─────────────────────────────────────────────────────────── */}
                   {(() => {
                     const snapshot = analysis.market_snapshot;
-                    const hasListings = snapshot && (snapshot.total_page1_listings > 0 || snapshot.page1_count > 0);
+                    const page1Count = snapshot?.page1_count ?? snapshot?.total_page1_listings ?? 0;
+                    const hasListings = page1Count > 0;
                     
                     // Use locked contract format: search_volume { min, max } or fallback to search_demand
                     let searchVolume: string | null = null;
@@ -748,7 +751,7 @@ export default function AnalyzeForm({
                       <div>
                         <div className="text-xs text-gray-500 mb-0.5">Page-1 Listings</div>
                         <div className="font-semibold text-gray-900">
-                          {page1Count}
+                          {snapshot?.page1_count ?? snapshot?.total_page1_listings ?? 0}
                         </div>
                       </div>
                       {/* Avg Price */}

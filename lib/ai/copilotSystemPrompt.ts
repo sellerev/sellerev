@@ -13,6 +13,8 @@
 
 import { SellerMemory } from "./sellerMemory";
 import { buildChatSystemPrompt } from "./chatSystemPrompt";
+import { getSellerMemories } from "./sellerMemoryStore";
+import { buildSellerMemoryContext } from "./memoryExtraction";
 
 export interface CopilotContext {
   ai_context: Record<string, unknown>; // Locked analyze contract
@@ -72,10 +74,10 @@ export function classifyQuestion(question: string): {
  * This extends the base chat system prompt with seller memory context.
  */
 export function buildCopilotSystemPrompt(
-  context: CopilotContext,
+  context: CopilotContext & { structured_memories?: Array<{ memory_type: string; key: string; value: unknown }> },
   analysisMode: "keyword" | "asin" | null = null
 ): string {
-  const { ai_context, seller_memory, session_context } = context;
+  const { ai_context, seller_memory, session_context, structured_memories = [] } = context;
   
   // Get base prompt from chatSystemPrompt (single source of truth)
   const basePrompt = buildChatSystemPrompt(analysisMode);
@@ -104,6 +106,17 @@ PREFERENCES:
 - Dislikes scores-only: ${seller_memory.preferences.dislikes_scores_only ? "Yes" : "No"}
 - Wants H10-style numbers: ${seller_memory.preferences.wants_h10_style_numbers ? "Yes" : "No"}
 - Pricing Sensitivity: ${seller_memory.preferences.pricing_sensitivity}
+
+${(() => {
+  // Build structured memory context if available
+  try {
+    const { buildSellerMemoryContext } = require("./memoryExtraction");
+    const memoryContext = buildSellerMemoryContext(structured_memories);
+    return memoryContext ? `\n${memoryContext}\n` : "";
+  } catch {
+    return "";
+  }
+})()}
 
 Use this memory to:
 - Adjust tone based on seller sophistication
