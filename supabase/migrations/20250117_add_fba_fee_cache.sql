@@ -40,3 +40,6 @@ FOR SELECT
 TO authenticated
 USING (true);
 
+
+
+

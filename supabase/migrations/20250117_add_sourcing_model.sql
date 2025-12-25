@@ -18,3 +18,6 @@ alter table public.seller_profiles
 add constraint seller_profiles_sourcing_model_check
 check (sourcing_model in ('private_label','wholesale_arbitrage','retail_arbitrage','dropshipping','not_sure'));
 
+
+
+

@@ -81,3 +81,6 @@ export function pickRepresentativeAsin(
   return listingsWithAsin[0].asin!;
 }
 
+
+
+
