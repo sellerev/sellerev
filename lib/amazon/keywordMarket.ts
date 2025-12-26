@@ -499,75 +499,226 @@ export async function fetchKeywordMarketSnapshot(
       }
     }
 
-    // CRITICAL: Fetch BSR for each ASIN via product detail endpoint
-    // Rainforest search endpoint doesn't include bestsellers_rank, so we need to fetch product details
-    // We'll fetch for top 20 listings (Page 1 organic results we actually display)
-    const top20Asins = searchResults
-      .filter((item: any) => item.asin && !item.sponsored)
-      .slice(0, 20)
+    // STEP B: Extract all Page-1 ASINs (all listings, not just top 20)
+    const page1Asins = searchResults
+      .filter((item: any) => item.asin)
       .map((item: any) => item.asin);
     
-    console.log("FETCHING_BSR_FOR_ASINS", {
+    console.log("SEARCH_ASINS_COUNT", {
       keyword,
       total_search_results: searchResults.length,
-      top_20_asins: top20Asins,
-      asin_count: top20Asins.length,
+      page1_asins: page1Asins,
+      asin_count: page1Asins.length,
     });
+
+    // STEP C: Bulk cache lookup
+    const { bulkLookupBsrCache, bulkUpsertBsrCache } = await import("./asinBsrCache");
+    const cacheMap = supabase ? await bulkLookupBsrCache(supabase, page1Asins) : new Map();
     
-    // Fetch BSR data for top 20 ASINs in parallel (with rate limiting)
-    const bsrDataMap: Record<string, { rank: number; category: string } | null> = {};
+    const cachedAsins = Array.from(cacheMap.keys());
+    const missingAsins = page1Asins.filter(asin => !cacheMap.has(asin));
     
-    if (top20Asins.length > 0) {
-      // Fetch in batches of 5 to avoid rate limiting
-      const batchSize = 5;
-      for (let i = 0; i < top20Asins.length; i += batchSize) {
-        const batch = top20Asins.slice(i, i + batchSize);
-        const batchPromises = batch.map(async (asin: string) => {
-          try {
-            const productResponse = await fetch(
-              `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${asin}`,
-              {
-                method: "GET",
-                headers: { "Accept": "application/json" },
-              }
-            );
-            
-            if (!productResponse.ok) {
-              console.warn(`Failed to fetch product data for ASIN ${asin}: ${productResponse.status}`);
-              return { asin, bsrData: null };
+    console.log("BSR_CACHE_HITS", {
+      keyword,
+      total_asins: page1Asins.length,
+      cached_asins: cachedAsins.length,
+      missing_asins: missingAsins.length,
+      cache_hit_rate: `${((cachedAsins.length / page1Asins.length) * 100).toFixed(1)}%`,
+    });
+
+    // STEP D: Batch product fetch for missing ASINs (ONE REQUEST)
+    const bsrDataMap: Record<string, { rank: number; category: string; price: number | null } | null> = {};
+    
+    // First, populate from cache
+    for (const [asin, cacheEntry] of cacheMap.entries()) {
+      if (cacheEntry.main_category_bsr !== null && cacheEntry.main_category_bsr !== undefined && cacheEntry.main_category_bsr > 0) {
+        bsrDataMap[asin] = {
+          rank: cacheEntry.main_category_bsr,
+          category: cacheEntry.main_category || 'default',
+          price: cacheEntry.price,
+        };
+      }
+    }
+
+    // Then, batch fetch missing ASINs if any
+    if (missingAsins.length > 0) {
+      console.log("BSR_BATCH_FETCH_ASINS", {
+        keyword,
+        missing_asins: missingAsins,
+        asin_count: missingAsins.length,
+        message: "Fetching all missing ASINs in ONE batch request",
+      });
+
+      // Retry logic: try once, retry once on failure
+      let batchFetchSuccess = false;
+      let batchFetchAttempts = 0;
+      const maxAttempts = 2;
+
+      while (!batchFetchSuccess && batchFetchAttempts < maxAttempts) {
+        batchFetchAttempts++;
+        try {
+          // CRITICAL: ONE batch request with comma-separated ASINs
+          const batchAsinString = missingAsins.join(",");
+          const batchProductUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${batchAsinString}`;
+          
+          const batchResponse = await fetch(batchProductUrl, {
+            method: "GET",
+            headers: { "Accept": "application/json" },
+          });
+
+          if (!batchResponse.ok) {
+            if (batchFetchAttempts >= maxAttempts) {
+              console.warn("BSR_BATCH_FETCH_FAILED", {
+                keyword,
+                status: batchResponse.status,
+                statusText: batchResponse.statusText,
+                asin_count: missingAsins.length,
+                attempts: batchFetchAttempts,
+                message: "Max retries reached, giving up",
+              });
+              break;
+            } else {
+              console.warn("BSR_BATCH_FETCH_RETRY", {
+                keyword,
+                status: batchResponse.status,
+                attempt: batchFetchAttempts,
+                max_attempts: maxAttempts,
+                message: "Retrying batch fetch...",
+              });
+              // Wait a bit before retry
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              continue;
             }
-            
-            const productData = await productResponse.json();
-            const product = productData?.product;
-            
-            if (product) {
-              const bsrData = extractMainCategoryBSR(product);
-              return { asin, bsrData };
-            }
-            
-            return { asin, bsrData: null };
-          } catch (error) {
-            console.warn(`Error fetching BSR for ASIN ${asin}:`, error);
-            return { asin, bsrData: null };
+          } else {
+          const batchData = await batchResponse.json();
+          
+          // Rainforest batch response: comma-separated ASINs may return:
+          // - Array of product objects
+          // - Object with products array
+          // - Single product object (if one ASIN)
+          let products: any[] = [];
+          
+          if (Array.isArray(batchData)) {
+            products = batchData;
+          } else if (batchData.products && Array.isArray(batchData.products)) {
+            products = batchData.products;
+          } else if (batchData.product) {
+            products = Array.isArray(batchData.product) ? batchData.product : [batchData.product];
+          } else if (batchData.asin || batchData.title) {
+            // Single product object
+            products = [batchData];
           }
-        });
-        
-        const batchResults = await Promise.all(batchPromises);
-        batchResults.forEach(({ asin, bsrData }) => {
-          bsrDataMap[asin] = bsrData;
-        });
-        
-        // Small delay between batches to avoid rate limiting
-        if (i + batchSize < top20Asins.length) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          const freshEntries: Array<{
+            asin: string;
+            main_category: string | null;
+            main_category_bsr: number | null;
+            price: number | null;
+          }> = [];
+
+          // Extract BSR from each product in batch response
+          for (const productData of products) {
+            // Handle nested product structure
+            const product = productData?.product || productData;
+            if (!product || !product.asin) {
+              // Try to find ASIN in the data structure
+              const possibleAsin = productData?.asin || product?.asin;
+              if (!possibleAsin) continue;
+              // If we have an ASIN but no product data, skip
+              continue;
+            }
+
+            const asin = product.asin;
+            const bsrData = extractMainCategoryBSR(product);
+            const price = parsePrice(product);
+
+            if (bsrData) {
+              bsrDataMap[asin] = {
+                rank: bsrData.rank,
+                category: bsrData.category,
+                price: price,
+              };
+
+              freshEntries.push({
+                asin,
+                main_category: bsrData.category,
+                main_category_bsr: bsrData.rank,
+                price: price,
+              });
+            } else {
+              // Still cache the entry even if BSR is missing (for price/other data)
+              freshEntries.push({
+                asin,
+                main_category: null,
+                main_category_bsr: null,
+                price: price,
+              });
+            }
+          }
+
+          // Upsert fresh entries to cache
+          if (supabase && freshEntries.length > 0) {
+            await bulkUpsertBsrCache(supabase, freshEntries);
+          }
+
+            console.log("BSR_BATCH_FETCH_SUCCESS", {
+              keyword,
+              requested_asins: missingAsins.length,
+              products_received: products.length,
+              bsr_data_extracted: freshEntries.filter(e => e.main_category_bsr !== null).length,
+              attempts: batchFetchAttempts,
+            });
+            batchFetchSuccess = true;
+          }
+        } catch (error) {
+          if (batchFetchAttempts >= maxAttempts) {
+            console.error("BSR_BATCH_FETCH_EXCEPTION", {
+              keyword,
+              error: error instanceof Error ? error.message : String(error),
+              asin_count: missingAsins.length,
+              attempts: batchFetchAttempts,
+              message: "Batch fetch failed after retries, continuing with cached data only",
+            });
+            // Continue with cached data - don't crash analysis
+            break;
+          } else {
+            console.warn("BSR_BATCH_FETCH_EXCEPTION_RETRY", {
+              keyword,
+              error: error instanceof Error ? error.message : String(error),
+              attempt: batchFetchAttempts,
+              max_attempts: maxAttempts,
+              message: "Retrying batch fetch after exception...",
+            });
+            // Wait a bit before retry
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
       }
-      
-      console.log("BSR_FETCH_COMPLETE", {
+    }
+
+    // STEP E: Log final BSR coverage
+    const listingsWithBSR = Object.values(bsrDataMap).filter(Boolean).length;
+    const bsrCoveragePercent = page1Asins.length > 0 
+      ? ((listingsWithBSR / page1Asins.length) * 100).toFixed(1)
+      : "0.0";
+    
+    const stillMissingAsins = page1Asins.filter(asin => !bsrDataMap[asin] || bsrDataMap[asin] === null);
+    
+    console.log("FINAL_BSR_COVERAGE_PERCENT", {
+      keyword,
+      total_asins: page1Asins.length,
+      asins_with_bsr: listingsWithBSR,
+      coverage_percent: `${bsrCoveragePercent}%`,
+      missing_after_fetch: stillMissingAsins.length,
+      bsr_missing_asins: stillMissingAsins.slice(0, 5), // Log first 5
+    });
+
+    if (stillMissingAsins.length > 0) {
+      console.log("BSR_MISSING_AFTER_FETCH", {
         keyword,
-        asins_fetched: top20Asins.length,
-        bsr_data_found: Object.values(bsrDataMap).filter(Boolean).length,
-        bsr_data_map: bsrDataMap,
+        missing_count: stillMissingAsins.length,
+        missing_asins: stillMissingAsins,
+        message: "These ASINs will be excluded from BSR-based calculations",
       });
     }
 
@@ -588,12 +739,16 @@ export async function fetchKeywordMarketSnapshot(
       const position = item.position ?? index + 1; // Organic rank (1-indexed)
       
       // CRITICAL: Extract main category BSR (top-level category only, not subcategories)
-      // First try from search result item, then from fetched BSR data map
+      // First try from search result item, then from fetched/cached BSR data map
       let mainBSRData = extractMainCategoryBSR(item);
       
-      // If not found in search result, check our fetched BSR data map
+      // If not found in search result, check our cached/fetched BSR data map
       if (!mainBSRData && asin && bsrDataMap[asin]) {
-        mainBSRData = bsrDataMap[asin];
+        const cachedBSR = bsrDataMap[asin];
+        mainBSRData = cachedBSR ? {
+          rank: cachedBSR.rank,
+          category: cachedBSR.category,
+        } : null;
       }
       
       const main_category_bsr = mainBSRData ? mainBSRData.rank : null;
