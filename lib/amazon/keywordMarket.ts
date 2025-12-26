@@ -529,15 +529,30 @@ export async function fetchKeywordMarketSnapshot(
     // STEP D: Batch product fetch for missing ASINs (ONE REQUEST)
     const bsrDataMap: Record<string, { rank: number; category: string; price: number | null } | null> = {};
     
-    // First, populate from cache
+    // First, populate from cache (only valid BSRs: >= 1)
+    const excludedFromCache: string[] = [];
     for (const [asin, cacheEntry] of cacheMap.entries()) {
-      if (cacheEntry.main_category_bsr !== null && cacheEntry.main_category_bsr !== undefined && cacheEntry.main_category_bsr > 0) {
+      // PRODUCTION HARDENING: Validate cached BSR (null, 0, or < 1 are invalid)
+      if (cacheEntry.main_category_bsr !== null && 
+          cacheEntry.main_category_bsr !== undefined && 
+          cacheEntry.main_category_bsr >= 1) {
         bsrDataMap[asin] = {
           rank: cacheEntry.main_category_bsr,
           category: cacheEntry.main_category || 'default',
           price: cacheEntry.price,
         };
+      } else {
+        excludedFromCache.push(asin);
       }
+    }
+    
+    if (excludedFromCache.length > 0) {
+      console.warn("BSR_EXCLUDED_FROM_CACHE", {
+        keyword,
+        excluded_count: excludedFromCache.length,
+        excluded_asins: excludedFromCache.slice(0, 5), // Log first 5
+        message: "Cached entries with invalid BSR excluded from calculations",
+      });
     }
 
     // Then, batch fetch missing ASINs if any
@@ -549,48 +564,16 @@ export async function fetchKeywordMarketSnapshot(
         message: "Fetching all missing ASINs in ONE batch request",
       });
 
-      // Retry logic: try once, retry once on failure
-      let batchFetchSuccess = false;
-      let batchFetchAttempts = 0;
-      const maxAttempts = 2;
+      try {
+        // Use batch fetch with exponential backoff and deduplication
+        const { batchFetchBsrWithBackoff } = await import("./asinBsrCache");
+        const batchData = await batchFetchBsrWithBackoff(
+          rainforestApiKey,
+          missingAsins,
+          keyword
+        );
 
-      while (!batchFetchSuccess && batchFetchAttempts < maxAttempts) {
-        batchFetchAttempts++;
-        try {
-          // CRITICAL: ONE batch request with comma-separated ASINs
-          const batchAsinString = missingAsins.join(",");
-          const batchProductUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${batchAsinString}`;
-          
-          const batchResponse = await fetch(batchProductUrl, {
-            method: "GET",
-            headers: { "Accept": "application/json" },
-          });
-
-          if (!batchResponse.ok) {
-            if (batchFetchAttempts >= maxAttempts) {
-              console.warn("BSR_BATCH_FETCH_FAILED", {
-                keyword,
-                status: batchResponse.status,
-                statusText: batchResponse.statusText,
-                asin_count: missingAsins.length,
-                attempts: batchFetchAttempts,
-                message: "Max retries reached, giving up",
-              });
-              break;
-            } else {
-              console.warn("BSR_BATCH_FETCH_RETRY", {
-                keyword,
-                status: batchResponse.status,
-                attempt: batchFetchAttempts,
-                max_attempts: maxAttempts,
-                message: "Retrying batch fetch...",
-              });
-              // Wait a bit before retry
-              await new Promise(resolve => setTimeout(resolve, 1000));
-              continue;
-            }
-          } else {
-          const batchData = await batchResponse.json();
+        if (batchData) {
           
           // Rainforest batch response: comma-separated ASINs may return:
           // - Array of product objects
@@ -615,6 +598,8 @@ export async function fetchKeywordMarketSnapshot(
             main_category_bsr: number | null;
             price: number | null;
           }> = [];
+          
+          const excludedAsins: string[] = [];
 
           // Extract BSR from each product in batch response
           for (const productData of products) {
@@ -632,20 +617,16 @@ export async function fetchKeywordMarketSnapshot(
             const bsrData = extractMainCategoryBSR(product);
             const price = parsePrice(product);
 
-            if (bsrData) {
-              bsrDataMap[asin] = {
-                rank: bsrData.rank,
-                category: bsrData.category,
-                price: price,
-              };
-
-              freshEntries.push({
+            // PRODUCTION HARDENING: Validate BSR (null, 0, or < 1 are invalid)
+            if (!bsrData || !bsrData.rank || bsrData.rank < 1) {
+              excludedAsins.push(asin);
+              console.warn("BSR_EXCLUDED_INVALID_BSR", {
+                keyword,
                 asin,
-                main_category: bsrData.category,
-                main_category_bsr: bsrData.rank,
-                price: price,
+                bsr_rank: bsrData?.rank ?? null,
+                message: "BSR is null, 0, or < 1 - excluding from calculations",
               });
-            } else {
+              
               // Still cache the entry even if BSR is missing (for price/other data)
               freshEntries.push({
                 asin,
@@ -653,7 +634,32 @@ export async function fetchKeywordMarketSnapshot(
                 main_category_bsr: null,
                 price: price,
               });
+              continue;
             }
+
+            // Valid BSR - add to data map and cache
+            bsrDataMap[asin] = {
+              rank: bsrData.rank,
+              category: bsrData.category,
+              price: price,
+            };
+
+            freshEntries.push({
+              asin,
+              main_category: bsrData.category,
+              main_category_bsr: bsrData.rank,
+              price: price,
+            });
+          }
+          
+          // Log excluded ASINs count
+          if (excludedAsins.length > 0) {
+            console.log("BSR_EXCLUDED_ASINS_COUNT", {
+              keyword,
+              excluded_count: excludedAsins.length,
+              excluded_asins: excludedAsins,
+              message: "ASINs excluded from BSR-based calculations due to invalid BSR",
+            });
           }
 
           // Upsert fresh entries to cache
@@ -661,38 +667,22 @@ export async function fetchKeywordMarketSnapshot(
             await bulkUpsertBsrCache(supabase, freshEntries);
           }
 
-            console.log("BSR_BATCH_FETCH_SUCCESS", {
-              keyword,
-              requested_asins: missingAsins.length,
-              products_received: products.length,
-              bsr_data_extracted: freshEntries.filter(e => e.main_category_bsr !== null).length,
-              attempts: batchFetchAttempts,
-            });
-            batchFetchSuccess = true;
-          }
-        } catch (error) {
-          if (batchFetchAttempts >= maxAttempts) {
-            console.error("BSR_BATCH_FETCH_EXCEPTION", {
-              keyword,
-              error: error instanceof Error ? error.message : String(error),
-              asin_count: missingAsins.length,
-              attempts: batchFetchAttempts,
-              message: "Batch fetch failed after retries, continuing with cached data only",
-            });
-            // Continue with cached data - don't crash analysis
-            break;
-          } else {
-            console.warn("BSR_BATCH_FETCH_EXCEPTION_RETRY", {
-              keyword,
-              error: error instanceof Error ? error.message : String(error),
-              attempt: batchFetchAttempts,
-              max_attempts: maxAttempts,
-              message: "Retrying batch fetch after exception...",
-            });
-            // Wait a bit before retry
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
+          console.log("BSR_BATCH_FETCH_SUCCESS", {
+            keyword,
+            requested_asins: missingAsins.length,
+            products_received: products.length,
+            bsr_data_extracted: freshEntries.filter(e => e.main_category_bsr !== null && e.main_category_bsr >= 1).length,
+            excluded_count: excludedAsins.length,
+          });
         }
+      } catch (error) {
+        console.error("BSR_BATCH_FETCH_EXCEPTION", {
+          keyword,
+          error: error instanceof Error ? error.message : String(error),
+          asin_count: missingAsins.length,
+          message: "Batch fetch failed, continuing with cached data only",
+        });
+        // Continue with cached data - don't crash analysis
       }
     }
 
@@ -751,8 +741,14 @@ export async function fetchKeywordMarketSnapshot(
         } : null;
       }
       
-      const main_category_bsr = mainBSRData ? mainBSRData.rank : null;
-      const main_category = mainBSRData ? mainBSRData.category : null;
+      // PRODUCTION HARDENING: Validate BSR (null, 0, or < 1 are invalid)
+      // Exclude from calculations but still allow listing to exist
+      const main_category_bsr = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1) 
+        ? mainBSRData.rank 
+        : null;
+      const main_category = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1)
+        ? mainBSRData.category
+        : null;
       const bsr = main_category_bsr; // Keep for backward compatibility
       
       const fulfillment = parseFulfillment(item); // Nullable
