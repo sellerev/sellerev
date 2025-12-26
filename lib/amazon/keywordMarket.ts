@@ -1040,8 +1040,8 @@ export async function fetchKeywordMarketSnapshot(
       }));
     }
 
-    // FIX #2: Aggregate BSR-based revenue and units estimates
-    // Simple sum of all BSR-based estimates (no model fallbacks, no position-based logic)
+    // FIX #2: Aggregate BSR-based revenue and units estimates with market dampening
+    // Uses calculateMarketSnapshot() which applies market-level dampening
     let aggregated = {
       total_revenue_min: 0,
       total_revenue_max: 0,
@@ -1052,20 +1052,37 @@ export async function fetchKeywordMarketSnapshot(
     let revenueModelVersion = "v1.0";
     
     try {
-      // Sum all BSR-based estimates
+      // Prepare product estimates for market snapshot calculation
       const validEstimates = listingsWithEstimates.filter(
         l => l.est_monthly_revenue !== null && 
              l.est_monthly_revenue !== undefined && 
              l.est_monthly_units !== null && 
-             l.est_monthly_units !== undefined
+             l.est_monthly_units !== undefined &&
+             l.main_category_bsr !== null &&
+             l.main_category_bsr !== undefined &&
+             l.main_category_bsr > 0 &&
+             l.price !== null &&
+             l.price !== undefined &&
+             l.price > 0
       );
       
       if (validEstimates.length > 0) {
-        // Calculate totals
-        const totalRevenue = validEstimates.reduce((sum, l) => sum + (l.est_monthly_revenue || 0), 0);
-        const totalUnits = validEstimates.reduce((sum, l) => sum + (l.est_monthly_units || 0), 0);
+        // Import market snapshot calculator with dampening
+        const { calculateMarketSnapshot } = await import("./bsrToUnits");
         
-        // Apply confidence-based ranges
+        // Convert listings to product estimates format
+        const productEstimates = validEstimates.map(l => ({
+          asin: l.asin || '',
+          bsr: l.main_category_bsr!,
+          price: l.price!,
+          monthlyUnits: l.est_monthly_units!,
+          monthlyRevenue: l.est_monthly_revenue!,
+        }));
+        
+        // Calculate market snapshot (applies dampening internally)
+        const marketSnapshot = calculateMarketSnapshot(productEstimates);
+        
+        // Apply confidence-based ranges to dampened totals
         // Medium confidence: ±25% range
         // Low confidence: ±40% range
         const mediumConfidenceCount = validEstimates.filter(l => l.revenue_confidence === "medium").length;
@@ -1078,21 +1095,24 @@ export async function fetchKeywordMarketSnapshot(
           ? 0.25 // All medium: 25% adjustment
           : 0.40; // All low: 40% adjustment
         
-        const revenueRange = totalRevenue * avgConfidenceAdjustment;
-        const unitsRange = totalUnits * avgConfidenceAdjustment;
+        const revenueRange = marketSnapshot.totalMonthlyRevenue * avgConfidenceAdjustment;
+        const unitsRange = marketSnapshot.totalMonthlyUnits * avgConfidenceAdjustment;
         
         aggregated = {
-          total_revenue_min: Math.max(0, Math.round(totalRevenue - revenueRange)),
-          total_revenue_max: Math.round(totalRevenue + revenueRange),
-          total_units_min: Math.max(0, Math.round(totalUnits - unitsRange)),
-          total_units_max: Math.round(totalUnits + unitsRange),
+          total_revenue_min: Math.max(0, Math.round(marketSnapshot.totalMonthlyRevenue - revenueRange)),
+          total_revenue_max: Math.round(marketSnapshot.totalMonthlyRevenue + revenueRange),
+          total_units_min: Math.max(0, Math.round(marketSnapshot.totalMonthlyUnits - unitsRange)),
+          total_units_max: Math.round(marketSnapshot.totalMonthlyUnits + unitsRange),
         };
         
-        console.log("BSR_BASED_AGGREGATION", {
+        console.log("BSR_BASED_AGGREGATION_WITH_DAMPENING", {
           keyword,
           valid_estimates_count: validEstimates.length,
-          total_revenue: totalRevenue,
-          total_units: totalUnits,
+          raw_total_revenue: validEstimates.reduce((sum, l) => sum + (l.est_monthly_revenue || 0), 0),
+          raw_total_units: validEstimates.reduce((sum, l) => sum + (l.est_monthly_units || 0), 0),
+          dampened_total_revenue: marketSnapshot.totalMonthlyRevenue,
+          dampened_total_units: marketSnapshot.totalMonthlyUnits,
+          demand_level: marketSnapshot.demandLevel.level,
           revenue_range: `${aggregated.total_revenue_min} - ${aggregated.total_revenue_max}`,
           units_range: `${aggregated.total_units_min} - ${aggregated.total_units_max}`,
         });
