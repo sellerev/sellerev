@@ -404,6 +404,9 @@ export default function AnalyzeForm({
   
   // Selected listing state (for AI context)
   const [selectedListing, setSelectedListing] = useState<any | null>(null);
+  
+  // Sort state for Page 1 Results (default to revenue descending)
+  const [sortBy, setSortBy] = useState<"revenue" | "units" | "bsr" | "reviews" | "price">("revenue");
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -970,29 +973,223 @@ export default function AnalyzeForm({
                   })()}
 
                   {/* ─────────────────────────────────────────────────────────── */}
+                  {/* MARKET SNAPSHOT HERO SECTION (REVENUE-DRIVEN)               */}
+                  {/* ─────────────────────────────────────────────────────────── */}
+                  {(() => {
+                    const snapshot = analysis.market_snapshot;
+                    const listings = snapshot.listings || [];
+                    
+                    // Normalize listings using helper, preserving revenue fields
+                    const normalizedListings = [...listings]
+                      .filter((l: any) => {
+                        const normalized = normalizeListing(l);
+                        return normalized.asin && normalized.title;
+                      })
+                      .map((l: any) => ({
+                        ...normalizeListing(l),
+                        // Preserve revenue estimation fields from raw listing
+                        est_monthly_revenue: l.est_monthly_revenue ?? null,
+                        est_monthly_units: l.est_monthly_units ?? null,
+                        revenue_confidence: l.revenue_confidence ?? "low",
+                      }));
+                    
+                    // Calculate total 30-day Page-1 revenue
+                    const totalRevenue = normalizedListings
+                      .map((l: any) => l.est_monthly_revenue)
+                      .filter((r): r is number => r !== null && r !== undefined)
+                      .reduce((sum, r) => sum + r, 0) || snapshot.est_total_monthly_revenue_min || null;
+                    
+                    // Calculate total 30-day Page-1 units
+                    const totalUnits = normalizedListings
+                      .map((l: any) => l.est_monthly_units)
+                      .filter((u): u is number => u !== null && u !== undefined)
+                      .reduce((sum, u) => sum + u, 0) || snapshot.est_total_monthly_units_min || null;
+                    
+                    // Calculate average BSR from listings with BSR
+                    const bsrListings = normalizedListings.filter((l: any) => l.bsr !== null && l.bsr !== undefined);
+                    const avgBSR = bsrListings.length > 0
+                      ? Math.round(bsrListings.reduce((sum: number, l: any) => sum + (l.bsr || 0), 0) / bsrListings.length)
+                      : snapshot.avg_bsr || null;
+                    
+                    const avgPrice = snapshot.avg_price;
+                    
+                    // Calculate top-10 revenue (sort by revenue, take top 10, sum)
+                    const sortedByRevenue = [...normalizedListings]
+                      .filter((l: any) => l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined)
+                      .sort((a: any, b: any) => (b.est_monthly_revenue || 0) - (a.est_monthly_revenue || 0));
+                    const top10Revenue = sortedByRevenue
+                      .slice(0, 10)
+                      .reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0);
+                    const top10RevenueShare = totalRevenue && totalRevenue > 0
+                      ? Math.round((top10Revenue / totalRevenue) * 100)
+                      : null;
+                    
+                    // Calculate review barrier (average reviews of top 10 by revenue)
+                    const top10ByRevenue = sortedByRevenue.slice(0, 10);
+                    const top10Reviews = top10ByRevenue
+                      .map((l: any) => l.reviews)
+                      .filter((r): r is number => r !== null && r !== undefined && r > 0);
+                    const reviewBarrier = top10Reviews.length > 0
+                      ? Math.round(top10Reviews.reduce((sum, r) => sum + r, 0) / top10Reviews.length)
+                      : null;
+                    
+                    return (
+                      <div className="bg-white border rounded-lg p-6 mb-6">
+                        <h2 className="text-xl font-semibold text-gray-900 mb-4">Market Snapshot (Page 1)</h2>
+                        
+                        {/* Hero Metrics Row */}
+                        <div className="grid grid-cols-4 gap-6 mb-4">
+                          {/* 30-Day Page-1 Revenue */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">30-Day Page-1 Revenue</div>
+                            <div className="text-2xl font-semibold text-gray-900">
+                              {totalRevenue !== null ? formatCurrency(totalRevenue) : "—"}
+                            </div>
+                          </div>
+                          
+                          {/* 30-Day Page-1 Units */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">30-Day Page-1 Units</div>
+                            <div className="text-2xl font-semibold text-gray-900">
+                              {totalUnits !== null ? totalUnits.toLocaleString() : "—"}
+                            </div>
+                          </div>
+                          
+                          {/* Avg BSR */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Avg BSR</div>
+                            <div className="text-2xl font-semibold text-gray-900">
+                              {avgBSR !== null ? `#${avgBSR.toLocaleString()}` : "—"}
+                            </div>
+                          </div>
+                          
+                          {/* Avg Price */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Avg Price</div>
+                            <div className="text-2xl font-semibold text-gray-900">
+                              {avgPrice !== null ? formatCurrency(avgPrice) : "—"}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Footer note */}
+                        <div className="text-xs text-gray-500 mt-2">
+                          Estimates based on Page-1 BSR sales modeling
+                        </div>
+                        
+                        {/* Market Concentration Sub-Row */}
+                        <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t">
+                          {/* Top-10 Revenue */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Top-10 Revenue</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {top10Revenue > 0 ? formatCurrency(top10Revenue) : "—"}
+                            </div>
+                          </div>
+                          
+                          {/* Top-10 Revenue Share */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Top-10 Revenue Share</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {top10RevenueShare !== null ? `${top10RevenueShare}%` : "—"}
+                            </div>
+                          </div>
+                          
+                          {/* Review Barrier */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Review Barrier</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {reviewBarrier !== null ? reviewBarrier.toLocaleString() : "—"}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-0.5">avg reviews (top 10 by revenue)</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ─────────────────────────────────────────────────────────── */}
                   {/* PAGE 1 RESULTS - Amazon-Style Grid                          */}
                   {/* ─────────────────────────────────────────────────────────── */}
                   {(() => {
                     const snapshot = analysis.market_snapshot;
                     const listings = snapshot.listings || [];
                     
-                    // Normalize listings using helper
+                    // Normalize listings using helper, preserving revenue fields
                     const normalizedListings = [...listings]
                       .filter((l: any) => {
                         const normalized = normalizeListing(l);
                         return normalized.asin && normalized.title;
                       })
-                      .map((l: any) => normalizeListing(l));
+                      .map((l: any) => ({
+                        ...normalizeListing(l),
+                        // Preserve revenue estimation fields from raw listing
+                        est_monthly_revenue: l.est_monthly_revenue ?? null,
+                        est_monthly_units: l.est_monthly_units ?? null,
+                        revenue_confidence: l.revenue_confidence ?? "low",
+                      }));
+                    
+                    // Calculate total revenue for share calculation
+                    const totalRevenue = normalizedListings
+                      .map((l: any) => l.est_monthly_revenue)
+                      .filter((r): r is number => r !== null && r !== undefined)
+                      .reduce((sum, r) => sum + r, 0) || snapshot.est_total_monthly_revenue_min || 0;
+                    
+                    // Sort listings - default to revenue descending
+                    const sortedListings = [...normalizedListings].sort((a: any, b: any) => {
+                      switch (sortBy) {
+                        case "revenue":
+                          const aRev = a.est_monthly_revenue ?? 0;
+                          const bRev = b.est_monthly_revenue ?? 0;
+                          return bRev - aRev;
+                        case "units":
+                          const aUnits = a.est_monthly_units ?? 0;
+                          const bUnits = b.est_monthly_units ?? 0;
+                          return bUnits - aUnits;
+                        case "bsr":
+                          const aBsr = a.bsr ?? 999999;
+                          const bBsr = b.bsr ?? 999999;
+                          return aBsr - bBsr; // Lower BSR is better
+                        case "reviews":
+                          const aRevCount = a.reviews ?? 0;
+                          const bRevCount = b.reviews ?? 0;
+                          return bRevCount - aRevCount;
+                        case "price":
+                          const aPrice = a.price ?? 0;
+                          const bPrice = b.price ?? 0;
+                          return bPrice - aPrice;
+                        default:
+                          return 0;
+                      }
+                    });
                 
                 return (
                   <div>
                     <div className="flex items-center justify-between mb-4">
                       <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
-                      {normalizedListings.length === 0 && (
-                        <div className="text-sm text-amber-600 bg-amber-50 px-3 py-1 rounded border border-amber-200">
-                          No Page 1 listings returned — market data estimated
-                        </div>
-                      )}
+                      <div className="flex items-center gap-3">
+                        {normalizedListings.length === 0 && (
+                          <div className="text-sm text-amber-600 bg-amber-50 px-3 py-1 rounded border border-amber-200">
+                            No Page 1 listings returned — market data estimated
+                          </div>
+                        )}
+                        {normalizedListings.length > 0 && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-600">Sort by:</span>
+                            <select
+                              value={sortBy}
+                              onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                              className="text-sm border border-gray-300 rounded px-2 py-1 text-gray-700 focus:outline-none focus:ring-2 focus:ring-black"
+                            >
+                              <option value="revenue">Revenue</option>
+                              <option value="units">Units</option>
+                              <option value="bsr">BSR</option>
+                              <option value="reviews">Reviews</option>
+                              <option value="price">Price</option>
+                            </select>
+                          </div>
+                        )}
+                      </div>
                     </div>
                     {selectedListing && (
                       <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
@@ -1011,7 +1208,7 @@ export default function AnalyzeForm({
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {normalizedListings.map((listing, idx: number) => {
+                        {sortedListings.map((listing, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
                           const imageUrl = listing.image;
                           
@@ -1079,6 +1276,52 @@ export default function AnalyzeForm({
                                   BSR: #{listing.bsr.toLocaleString()}
                                 </div>
                               )}
+                              
+                              {/* Revenue Block */}
+                              {(() => {
+                                const listingWithRevenue = listing as any;
+                                const revenue = listingWithRevenue.est_monthly_revenue;
+                                const units = listingWithRevenue.est_monthly_units;
+                                const revenueShare = revenue !== null && totalRevenue > 0
+                                  ? ((revenue / totalRevenue) * 100).toFixed(1)
+                                  : null;
+                                
+                                if (revenue === null && units === null) {
+                                  return null; // Hide block if both revenue and units are missing
+                                }
+                                
+                                return (
+                                  <div className="mt-3 pt-3 border-t border-gray-200 bg-gray-50 rounded -mx-4 px-4 py-3">
+                                    {/* Est. Monthly Revenue - bold, largest text */}
+                                    <div className="mb-1.5">
+                                      <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Revenue</div>
+                                      <div className="text-xl font-bold text-gray-900">
+                                        {revenue !== null ? formatCurrency(revenue) : "—"}
+                                      </div>
+                                    </div>
+                                    
+                                    {/* Est. Monthly Units */}
+                                    {units !== null && (
+                                      <div className="mb-1.5">
+                                        <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Units</div>
+                                        <div className="text-sm font-semibold text-gray-700">
+                                          {units.toLocaleString()}
+                                        </div>
+                                      </div>
+                                    )}
+                                    
+                                    {/* Share of Page Revenue */}
+                                    {revenueShare !== null && (
+                                      <div>
+                                        <div className="text-xs text-gray-500 mb-0.5">Share of Page Revenue</div>
+                                        <div className="text-sm font-semibold text-gray-700">
+                                          {revenueShare}%
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                               
                               {/* Badges */}
                               <div className="flex flex-wrap gap-1 mt-2">

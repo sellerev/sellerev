@@ -383,7 +383,7 @@ export default function ChatSidebar({
         <h2 className="font-semibold text-gray-900">AI Assistant</h2>
         <p className="text-xs text-gray-500 mt-0.5">
           {analysisRunId
-            ? "Ask questions about this analysis"
+            ? "Explains the visible Page-1 data only"
             : "Complete an analysis to start chatting"}
         </p>
       </div>
