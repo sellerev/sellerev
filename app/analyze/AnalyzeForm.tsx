@@ -621,7 +621,7 @@ export default function AnalyzeForm({
               </label>
               <input
                 type="text"
-                className={`w-full border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent ${
+                className={`w-full border rounded-lg px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent ${
                   inputError ? "border-red-300" : "border-gray-300"
                 } ${readOnly ? "bg-gray-50 cursor-not-allowed" : ""}`}
                 value={inputValue}

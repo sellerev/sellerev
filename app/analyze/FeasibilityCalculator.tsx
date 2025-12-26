@@ -248,7 +248,7 @@ export default function FeasibilityCalculator({
                 target_price: parseFloat(e.target.value) || 0,
               }))
             }
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
           />
         </div>
 
@@ -269,7 +269,7 @@ export default function FeasibilityCalculator({
                 cogs_low_pct: parseFloat(e.target.value) || 0,
               }))
             }
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
           />
         </div>
 
@@ -290,7 +290,7 @@ export default function FeasibilityCalculator({
                 cogs_high_pct: parseFloat(e.target.value) || 0,
               }))
             }
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
           />
         </div>
 
@@ -302,7 +302,7 @@ export default function FeasibilityCalculator({
           <select
             value={inputs.ship_mode}
             onChange={(e) => handleShipModeChange(e.target.value as "air" | "sea" | "none")}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
           >
             <option value="air">Air</option>
             <option value="sea">Sea</option>
@@ -328,7 +328,7 @@ export default function FeasibilityCalculator({
                     ship_cost_per_kg: parseFloat(e.target.value) || 0,
                   }))
                 }
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
               />
             </div>
 
@@ -349,7 +349,7 @@ export default function FeasibilityCalculator({
                   }))
                 }
                 placeholder="Optional"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
               />
             </div>
           </>
@@ -376,7 +376,7 @@ export default function FeasibilityCalculator({
                 }))
               }
               placeholder="Length"
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
             />
             <input
               type="number"
@@ -393,7 +393,7 @@ export default function FeasibilityCalculator({
                 }))
               }
               placeholder="Width"
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
             />
             <input
               type="number"
@@ -410,7 +410,7 @@ export default function FeasibilityCalculator({
                 }))
               }
               placeholder="Height"
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
             />
           </div>
         </div>
@@ -432,7 +432,7 @@ export default function FeasibilityCalculator({
                 referral_fee_pct: parseFloat(e.target.value) || 0,
               }))
             }
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black"
           />
         </div>
       </div>
