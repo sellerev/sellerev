@@ -386,6 +386,8 @@ export default function AnalyzeForm({
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(
     normalizeAnalysis(initialAnalysis)
   );
+  // Track if current analysis is estimated (Tier-1) vs snapshot (Tier-2)
+  const [isEstimated, setIsEstimated] = useState(false);
 
   // Handler for margin snapshot updates from chat (Part G structure)
   const handleMarginSnapshotUpdate = (updatedSnapshot: AnalysisResponse['margin_snapshot']) => {
@@ -437,6 +439,7 @@ export default function AnalyzeForm({
     setError(null);
     setAnalysis(null);
     setChatMessages([]); // Clear previous chat
+    setIsEstimated(false); // Reset estimated flag
 
     try {
       console.log("ANALYZE_REQUEST_START", { inputValue: inputValue.trim() });
@@ -596,8 +599,13 @@ export default function AnalyzeForm({
 
       console.log("ANALYZE_SUCCESS", { 
         analysisRunId: data.analysisRunId,
-        has_analysis: !!analysisData 
+        has_analysis: !!analysisData,
+        estimated: data.estimated || false,
+        dataSource: data.dataSource || 'snapshot',
       });
+
+      // Store estimated flag for UI badges
+      setIsEstimated(data.estimated === true || data.dataSource === 'estimated');
 
       // Normalize and set analysis
       setAnalysis(normalizeAnalysis(analysisData));
@@ -819,6 +827,26 @@ export default function AnalyzeForm({
                     
                     return (
                       <div className="bg-white border rounded-lg p-4 mb-6">
+                        {/* Data Source Badge */}
+                        {isEstimated ? (
+                          <div className="mb-3 flex items-center gap-2">
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                              Estimated
+                            </span>
+                            <span className="text-xs text-gray-600">
+                              Based on initial market signals. Refining with live Amazon data.
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="mb-3 flex items-center gap-2">
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                              Live
+                            </span>
+                            <span className="text-xs text-gray-600">
+                              Calculated using live Amazon category rankings.
+                            </span>
+                          </div>
+                        )}
                         {!hasRealListings && (
                           <div className="mb-2 text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded border border-amber-200">
                             <span className="font-medium">Showing best available market data:</span> No Page-1 listings found. Metrics below are estimated using category defaults.

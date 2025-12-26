@@ -846,40 +846,103 @@ export async function POST(req: NextRequest) {
         })),
       };
     } else {
-      // Snapshot doesn't exist - queue for processing
+      // Snapshot doesn't exist - generate Tier-1 instant estimate
       console.log("SNAPSHOT_MISS", {
         keyword: body.input_value,
-        message: "Queueing keyword for background processing",
+        message: "Generating instant estimate + queueing background snapshot",
       });
 
-      // Queue keyword with default priority (5)
+      // Queue keyword for background processing (Tier-2 snapshot)
       await queueKeyword(supabase, body.input_value, 5, user.id, marketplace);
 
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:848',message:'Returning queued response (202)',data:{keyword:body.input_value,status:'queued'},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
+      // Generate Tier-1 instant estimate using search results
+      try {
+        const { fetchSearchResults } = await import("@/lib/estimates/fetchSearchResults");
+        const { estimateMarketFromSearch } = await import("@/lib/estimates/instantMarketEstimate");
 
-      // Return queued response - user gets immediate feedback
-      return NextResponse.json(
-        {
-          success: true,
-          status: "queued",
-          message: "Analysis queued. Ready in ~5–10 minutes.",
+        // Fetch search results (1 Rainforest credit)
+        const searchProducts = await fetchSearchResults(body.input_value);
+
+        // Generate instant estimate
+        const instantEstimate = estimateMarketFromSearch(searchProducts);
+
+        console.log("INSTANT_ESTIMATE_GENERATED", {
           keyword: body.input_value,
-          queued_at: new Date().toISOString(),
-        },
-        { status: 202, headers: res.headers } // 202 Accepted
-      );
+          productCount: instantEstimate.productCount,
+          totalUnits: instantEstimate.totalMonthlyUnits,
+          totalRevenue: instantEstimate.totalMonthlyRevenue,
+        });
+
+        // Convert to KeywordMarketData format for UI compatibility
+        keywordMarketData = {
+          snapshot: {
+            keyword: body.input_value,
+            avg_price: instantEstimate.averagePrice,
+            avg_reviews: 0, // Not available from search-only
+            avg_rating: null, // Not available from search-only
+            avg_bsr: null, // Not available from search-only (requires product API)
+            total_page1_listings: instantEstimate.productCount,
+            sponsored_count: searchProducts.filter(p => p.is_sponsored).length,
+            dominance_score: 0, // Not calculated for instant estimates
+            fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 }, // Not available from search-only
+            est_total_monthly_revenue_min: instantEstimate.totalMonthlyRevenue,
+            est_total_monthly_revenue_max: instantEstimate.totalMonthlyRevenue,
+            est_total_monthly_units_min: instantEstimate.totalMonthlyUnits,
+            est_total_monthly_units_max: instantEstimate.totalMonthlyUnits,
+            search_demand: null, // Will be computed in background snapshot
+          },
+          listings: searchProducts.map((p) => ({
+            asin: p.asin || '',
+            title: p.title || null,
+            price: p.price,
+            rating: p.rating || null,
+            reviews: p.reviews || null,
+            is_sponsored: p.is_sponsored || false,
+            position: p.position,
+            brand: null,
+            image_url: p.image_url || null,
+            bsr: null, // Not available from search-only
+            main_category_bsr: null,
+            main_category: null,
+            fulfillment: null,
+            est_monthly_revenue: null, // Will be calculated in background snapshot
+            est_monthly_units: null, // Will be calculated in background snapshot
+            revenue_confidence: 'low' as const, // Low confidence for estimates
+          })),
+        };
+
+        // Mark as estimated
+        snapshotStatus = 'estimated';
+      } catch (estimateError) {
+        console.error("INSTANT_ESTIMATE_ERROR", {
+          keyword: body.input_value,
+          error: estimateError instanceof Error ? estimateError.message : String(estimateError),
+        });
+        
+        // If instant estimate fails, fall back to queued response
+        return NextResponse.json(
+          {
+            success: true,
+            status: "queued",
+            message: "Analysis queued. Ready in ~5–10 minutes.",
+            keyword: body.input_value,
+            queued_at: new Date().toISOString(),
+          },
+          { status: 202, headers: res.headers }
+        );
+      }
     }
 
     // Use the snapshot (guaranteed to exist after snapshot check)
     const marketSnapshot = keywordMarketData.snapshot;
     const marketSnapshotJson = keywordMarketData.snapshot;
     
+    const isEstimated = snapshotStatus === 'estimated';
     const dataQuality = {
       snapshot: snapshotStatus,
-      source: 'precomputed',
+      source: isEstimated ? 'estimated' : 'precomputed',
       fallback_used: false,
+      estimated: isEstimated,
     };
     
     // Calculate Competitive Pressure Index (CPI) from Page 1 listings
@@ -1669,11 +1732,15 @@ ${body.input_value}`;
         success: true,
         status: responseStatus, // "complete" or "partial"
         data_quality: dataQuality, // Explains limitations
+        estimated: isEstimated, // Explicit flag for UI state management
+        dataSource: isEstimated ? "estimated" : "snapshot", // Explicit data source
+        queued: isEstimated, // Background job is queued when using estimates
+        message: isEstimated ? "Estimated market data. Refining with live data…" : undefined,
         analysisRunId: insertedRun.id,
         decision: finalResponse, // Return contract-compliant response
       },
       { 
-        status: 200, 
+        status: 200, // Always 200, even for estimated data
         headers: {
           ...res.headers,
           ...snapshotHeaders,
