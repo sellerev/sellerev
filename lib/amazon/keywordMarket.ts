@@ -499,6 +499,78 @@ export async function fetchKeywordMarketSnapshot(
       }
     }
 
+    // CRITICAL: Fetch BSR for each ASIN via product detail endpoint
+    // Rainforest search endpoint doesn't include bestsellers_rank, so we need to fetch product details
+    // We'll fetch for top 20 listings (Page 1 organic results we actually display)
+    const top20Asins = searchResults
+      .filter((item: any) => item.asin && !item.sponsored)
+      .slice(0, 20)
+      .map((item: any) => item.asin);
+    
+    console.log("FETCHING_BSR_FOR_ASINS", {
+      keyword,
+      total_search_results: searchResults.length,
+      top_20_asins: top20Asins,
+      asin_count: top20Asins.length,
+    });
+    
+    // Fetch BSR data for top 20 ASINs in parallel (with rate limiting)
+    const bsrDataMap: Record<string, { rank: number; category: string } | null> = {};
+    
+    if (top20Asins.length > 0) {
+      // Fetch in batches of 5 to avoid rate limiting
+      const batchSize = 5;
+      for (let i = 0; i < top20Asins.length; i += batchSize) {
+        const batch = top20Asins.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (asin: string) => {
+          try {
+            const productResponse = await fetch(
+              `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${asin}`,
+              {
+                method: "GET",
+                headers: { "Accept": "application/json" },
+              }
+            );
+            
+            if (!productResponse.ok) {
+              console.warn(`Failed to fetch product data for ASIN ${asin}: ${productResponse.status}`);
+              return { asin, bsrData: null };
+            }
+            
+            const productData = await productResponse.json();
+            const product = productData?.product;
+            
+            if (product) {
+              const bsrData = extractMainCategoryBSR(product);
+              return { asin, bsrData };
+            }
+            
+            return { asin, bsrData: null };
+          } catch (error) {
+            console.warn(`Error fetching BSR for ASIN ${asin}:`, error);
+            return { asin, bsrData: null };
+          }
+        });
+        
+        const batchResults = await Promise.all(batchPromises);
+        batchResults.forEach(({ asin, bsrData }) => {
+          bsrDataMap[asin] = bsrData;
+        });
+        
+        // Small delay between batches to avoid rate limiting
+        if (i + batchSize < top20Asins.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      
+      console.log("BSR_FETCH_COMPLETE", {
+        keyword,
+        asins_fetched: top20Asins.length,
+        bsr_data_found: Object.values(bsrDataMap).filter(Boolean).length,
+        bsr_data_map: bsrDataMap,
+      });
+    }
+
     // Step 4: Parse and normalize each search result item
     // Normalize using single helper - all fields except ASIN are optional
     let parsedListings: ParsedListing[] = [];
@@ -516,7 +588,14 @@ export async function fetchKeywordMarketSnapshot(
       const position = item.position ?? index + 1; // Organic rank (1-indexed)
       
       // CRITICAL: Extract main category BSR (top-level category only, not subcategories)
-      const mainBSRData = extractMainCategoryBSR(item);
+      // First try from search result item, then from fetched BSR data map
+      let mainBSRData = extractMainCategoryBSR(item);
+      
+      // If not found in search result, check our fetched BSR data map
+      if (!mainBSRData && asin && bsrDataMap[asin]) {
+        mainBSRData = bsrDataMap[asin];
+      }
+      
       const main_category_bsr = mainBSRData ? mainBSRData.rank : null;
       const main_category = mainBSRData ? mainBSRData.category : null;
       const bsr = main_category_bsr; // Keep for backward compatibility
