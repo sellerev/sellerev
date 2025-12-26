@@ -150,52 +150,58 @@ function parseRating(item: any): number | null {
  * @param item - Product item from Rainforest API
  * @returns Object with rank and category, or null if not found
  */
+/**
+ * Extracts main category BSR from product data (handles various formats)
+ * CRITICAL: Uses main category BSR (highest-level category, shortest path), NOT subcategories
+ * 
+ * Rainforest API may return BSR in different formats:
+ * 1. bestsellers_rank array (most common) - array of {rank, category, ...}
+ * 2. bsr field (direct number)
+ * 3. best_seller_rank (singular)
+ * 
+ * Strategy: Find the entry with shortest category string (main categories are shorter)
+ */
 function extractMainCategoryBSR(item: any): { rank: number; category: string } | null {
-  // DEBUG: Log what we're trying to extract
-  const debugInfo: any = {
-    has_bestsellers_rank: !!item.bestsellers_rank,
-    bestsellers_rank_type: typeof item.bestsellers_rank,
-    bestsellers_rank_is_array: Array.isArray(item.bestsellers_rank),
-  };
+  if (!item || !item.asin) {
+    return null;
+  }
   
   // CRITICAL: Try bestsellers_rank array first (Rainforest API format)
+  // This is the primary format from Rainforest search results
   if (item.bestsellers_rank && Array.isArray(item.bestsellers_rank) && item.bestsellers_rank.length > 0) {
-    debugInfo.bestsellers_rank_length = item.bestsellers_rank.length;
-    debugInfo.bestsellers_rank_elements = item.bestsellers_rank.map((r: any, i: number) => ({
-      index: i,
-      rank: r?.rank,
-      category: r?.category,
-      category_path: r?.category_path,
-      link: r?.link,
-      keys: r ? Object.keys(r) : [],
-    }));
-    
     // Find the main category (highest-level, shortest path)
     // Strategy: Choose the entry with the shortest category string (main categories are shorter)
-    let mainBSR: any = null;
+    let mainBSR: { rank: number; category: string } | null = null;
     let shortestCategoryLength = Infinity;
     
     for (const bsrEntry of item.bestsellers_rank) {
-      // Check if this entry has a valid rank
-      if (bsrEntry?.rank !== undefined && bsrEntry?.rank !== null) {
-        const rank = parseInt(bsrEntry.rank.toString().replace(/,/g, ""), 10);
+      if (!bsrEntry || typeof bsrEntry !== 'object') continue;
+      
+      // Try multiple field names for rank
+      const rankValue = bsrEntry.rank ?? 
+                       bsrEntry.Rank ?? 
+                       bsrEntry.rank_value ?? 
+                       bsrEntry.value;
+      
+      if (rankValue !== undefined && rankValue !== null) {
+        const rank = parseInt(rankValue.toString().replace(/,/g, ""), 10);
         if (!isNaN(rank) && rank > 0) {
-          // Get category string (try multiple field names)
+          // Try multiple field names for category
           const categoryStr = bsrEntry.category || 
                               bsrEntry.Category || 
                               bsrEntry.category_name || 
+                              bsrEntry.name ||
                               bsrEntry.category_path ||
                               '';
           
           // Choose the entry with the shortest category string (main category)
-          // Main categories like "Home & Kitchen" are shorter than subcategories
+          // Main categories like "Home & Kitchen" are shorter than subcategories like "Home & Kitchen > Kitchen & Dining > Storage & Organization"
           const categoryLength = categoryStr.length;
-          if (categoryLength < shortestCategoryLength) {
+          if (categoryLength < shortestCategoryLength || (categoryLength === shortestCategoryLength && !mainBSR)) {
             shortestCategoryLength = categoryLength;
             mainBSR = {
               rank,
               category: categoryStr || 'default',
-              original_entry: bsrEntry,
             };
           }
         }
@@ -203,21 +209,8 @@ function extractMainCategoryBSR(item: any): { rank: number; category: string } |
     }
     
     if (mainBSR) {
-      debugInfo.extracted_bsr = mainBSR;
-      console.log("BSR_EXTRACTION_SUCCESS", {
-        asin: item.asin,
-        ...debugInfo,
-      });
-      
-      return {
-        rank: mainBSR.rank,
-        category: mainBSR.category,
-      };
-    } else {
-      debugInfo.reason = "No valid rank found in bestsellers_rank array";
+      return mainBSR;
     }
-  } else {
-    debugInfo.reason = "bestsellers_rank is not an array or is empty";
   }
   
   // Fallback: try direct bsr field (if already parsed, but we don't have category)
@@ -225,40 +218,30 @@ function extractMainCategoryBSR(item: any): { rank: number; category: string } |
     const rank = parseInt(item.bsr.toString().replace(/,/g, ""), 10);
     if (!isNaN(rank) && rank > 0) {
       const category = item.category || item.main_category || item.category_name || 'default';
-      debugInfo.extracted_bsr = { rank, category, source: 'direct_bsr_field' };
-      console.log("BSR_EXTRACTION_FALLBACK_DIRECT", {
-        asin: item.asin,
-        ...debugInfo,
-      });
-      return {
-        rank,
-        category
-      };
+      return { rank, category };
     }
   }
   
-  // Legacy fallback: try best_seller_rank (singular, not array)
+  // Fallback: try best_seller_rank (singular, not array)
   if (item.best_seller_rank !== undefined && item.best_seller_rank !== null) {
     const rank = parseInt(item.best_seller_rank.toString().replace(/,/g, ""), 10);
     if (!isNaN(rank) && rank > 0) {
       const category = item.category || item.main_category || 'default';
-      debugInfo.extracted_bsr = { rank, category, source: 'best_seller_rank_singular' };
-      console.log("BSR_EXTRACTION_FALLBACK_SINGULAR", {
-        asin: item.asin,
-        ...debugInfo,
-      });
-      return {
-        rank,
-        category
-      };
+      return { rank, category };
     }
   }
   
-  // Log failure for debugging
-  console.log("BSR_EXTRACTION_FAILED", {
-    asin: item.asin,
-    ...debugInfo,
-  });
+  // Try nested bestsellers_rank (sometimes it's nested in product data)
+  if (item.product?.bestsellers_rank && Array.isArray(item.product.bestsellers_rank) && item.product.bestsellers_rank.length > 0) {
+    const firstRank = item.product.bestsellers_rank[0];
+    if (firstRank?.rank !== undefined && firstRank?.rank !== null) {
+      const rank = parseInt(firstRank.rank.toString().replace(/,/g, ""), 10);
+      if (!isNaN(rank) && rank > 0) {
+        const category = firstRank.category || firstRank.Category || firstRank.category_name || 'default';
+        return { rank, category };
+      }
+    }
+  }
   
   return null;
 }
@@ -538,19 +521,6 @@ export async function fetchKeywordMarketSnapshot(
       const main_category = mainBSRData ? mainBSRData.category : null;
       const bsr = main_category_bsr; // Keep for backward compatibility
       
-      // DEBUG: Log BSR extraction for first few items
-      if (index < 3) {
-        console.log("BSR_EXTRACTION_PER_ITEM", {
-          keyword,
-          index,
-          asin,
-          has_bestsellers_rank: !!item.bestsellers_rank,
-          mainBSRData,
-          main_category_bsr,
-          main_category,
-        });
-      }
-      
       const fulfillment = parseFulfillment(item); // Nullable
       
       // Extract brand: try item.brand first, then infer from title (if title exists)
@@ -666,14 +636,39 @@ export async function fetchKeywordMarketSnapshot(
         ? listingsWithMainBSR.reduce((sum, l) => sum + (l.main_category_bsr ?? 0), 0) / listingsWithMainBSR.length
         : null;
     
-    // Log BSR extraction stats for debugging
-    console.log("BSR_EXTRACTION_STATS", {
+    // CRITICAL: Log BSR extraction summary for debugging
+    const listingsWithoutBSR = listings.filter((l) => 
+      l.main_category_bsr === null || 
+      l.main_category_bsr === undefined || 
+      l.main_category_bsr <= 0
+    );
+    
+    console.log("BSR_EXTRACTION_SUMMARY", {
       keyword,
       total_listings: listings.length,
-      listings_with_main_bsr: listingsWithMainBSR.length,
+      listings_with_bsr: listingsWithMainBSR.length,
+      listings_without_bsr: listingsWithoutBSR.length,
+      bsr_extraction_rate: `${((listingsWithMainBSR.length / listings.length) * 100).toFixed(1)}%`,
       avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
-      sample_categories: listingsWithMainBSR.slice(0, 5).map(l => l.main_category).filter(Boolean),
+      sample_bsrs: listingsWithMainBSR.slice(0, 5).map(l => ({
+        asin: l.asin,
+        bsr: l.main_category_bsr,
+        category: l.main_category,
+      })),
+      missing_bsr_asins: listingsWithoutBSR.slice(0, 5).map(l => l.asin),
     });
+    
+    // WARNING: If BSR extraction rate is low, log detailed info
+    if (listingsWithMainBSR.length < listings.length * 0.5) {
+      console.warn("BSR_EXTRACTION_LOW_RATE", {
+        keyword,
+        extraction_rate: `${((listingsWithMainBSR.length / listings.length) * 100).toFixed(1)}%`,
+        total_listings: listings.length,
+        with_bsr: listingsWithMainBSR.length,
+        without_bsr: listingsWithoutBSR.length,
+        message: "Less than 50% of listings have BSR - check Rainforest API response structure",
+      });
+    }
 
     // Fulfillment mix calculation - ALWAYS return a value (use computeFulfillmentMix helper)
     const { computeFulfillmentMix } = await import("./fulfillmentMix");
@@ -999,16 +994,35 @@ export async function fetchKeywordMarketSnapshot(
       model_version: search_demand?.model_version || revenueModelVersion, // Task 5: Add model version
     };
 
+    // CRITICAL: Final BSR validation summary
+    const finalBSRCount = listingsWithEstimates.filter(l => 
+      l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0
+    ).length;
+    
+    console.log("BSR_EXTRACTION_FINAL_VALIDATION", {
+      keyword,
+      total_listings: listingsWithEstimates.length,
+      listings_with_valid_bsr: finalBSRCount,
+      bsr_extraction_success_rate: `${((finalBSRCount / listingsWithEstimates.length) * 100).toFixed(1)}%`,
+      avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
+      status: finalBSRCount === listingsWithEstimates.length ? "✅ ALL_LISTINGS_HAVE_BSR" : 
+              finalBSRCount >= listingsWithEstimates.length * 0.8 ? "⚠️ MOST_LISTINGS_HAVE_BSR" :
+              "❌ LOW_BSR_EXTRACTION_RATE",
+    });
+    
     // TASK 5: Invariant log right before returning snapshot
     console.warn("KEYWORD_SNAPSHOT_RETURN", { 
       listings_count: listingsWithEstimates.length, 
-      has_real_listings: listingsWithEstimates.length > 0 
+      has_real_listings: listingsWithEstimates.length > 0,
+      bsr_extraction_rate: `${((finalBSRCount / listingsWithEstimates.length) * 100).toFixed(1)}%`,
     });
     
     // TASK 6: Final invariant log
     console.info("KEYWORD_ANALYZE_COMPLETE", {
       listings_count: listingsWithEstimates.length,
       has_revenue_estimate: !!(snapshotWithEstimates.est_total_monthly_revenue_min || snapshotWithEstimates.est_total_monthly_revenue_max),
+      bsr_extraction_success: finalBSRCount > 0,
+      avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
     });
     
     // TASK 3: Always populate market_snapshot.listings[] if listings exist
