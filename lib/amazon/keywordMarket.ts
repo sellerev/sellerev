@@ -22,7 +22,9 @@ export interface ParsedListing {
   position: number; // Organic rank (1-indexed position on Page 1)
   brand: string | null;
   image_url: string | null; // Rainforest search_results[].image
-  bsr: number | null; // Best Seller Rank (if available from Rainforest)
+  bsr: number | null; // Best Seller Rank (if available from Rainforest) - DEPRECATED: use main_category_bsr
+  main_category_bsr: number | null; // Main category Best Seller Rank (top-level category only)
+  main_category: string | null; // Main category name (e.g., "Home & Kitchen")
   fulfillment: "FBA" | "FBM" | "Amazon" | null; // Fulfillment type (if available)
   seller?: string | null; // Seller name (for Amazon Retail detection)
   is_prime?: boolean; // Prime eligibility (for FBA detection)
@@ -137,23 +139,66 @@ function parseRating(item: any): number | null {
 }
 
 /**
- * Safely parses BSR (Best Seller Rank).
+ * Extracts main category BSR from product data (handles various formats)
+ * CRITICAL: Uses main category BSR (index 0 of bestsellers_rank array), NOT subcategories
+ * 
+ * @param item - Product item from Rainforest API
+ * @returns Object with rank and category, or null if not found
+ */
+function extractMainCategoryBSR(item: any): { rank: number; category: string } | null {
+  // CRITICAL: Use main category BSR (index 0), NOT subcategory
+  // Try bestsellers_rank array first (Rainforest API format)
+  if (item.bestsellers_rank && Array.isArray(item.bestsellers_rank) && item.bestsellers_rank.length > 0) {
+    const mainBSR = item.bestsellers_rank[0];
+    if (mainBSR.rank !== undefined && mainBSR.rank !== null) {
+      const rank = parseInt(mainBSR.rank.toString().replace(/,/g, ""), 10);
+      if (!isNaN(rank) && rank > 0) {
+        // Extract category name, normalize it
+        const category = mainBSR.category || mainBSR.Category || mainBSR.category_name || null;
+        return {
+          rank,
+          category: category || 'default'
+        };
+      }
+    }
+  }
+  
+  // Fallback: try direct bsr field (if already parsed, but we don't have category)
+  // This is less ideal but better than nothing
+  if (item.bsr !== undefined && item.bsr !== null) {
+    const rank = parseInt(item.bsr.toString().replace(/,/g, ""), 10);
+    if (!isNaN(rank) && rank > 0) {
+      // Try to get category from product.category or default
+      const category = item.category || item.main_category || item.category_name || 'default';
+      return {
+        rank,
+        category
+      };
+    }
+  }
+  
+  // Legacy fallback: try best_seller_rank (singular, not array)
+  if (item.best_seller_rank !== undefined && item.best_seller_rank !== null) {
+    const rank = parseInt(item.best_seller_rank.toString().replace(/,/g, ""), 10);
+    if (!isNaN(rank) && rank > 0) {
+      const category = item.category || item.main_category || 'default';
+      return {
+        rank,
+        category
+      };
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Safely parses BSR (Best Seller Rank) - DEPRECATED: use extractMainCategoryBSR instead
+ * @deprecated Use extractMainCategoryBSR for main category BSR extraction
  */
 function parseBSR(item: any): number | null {
-  // Try various BSR field names from Rainforest API
-  if (item.bsr !== undefined && item.bsr !== null) {
-    const parsed = parseInt(item.bsr.toString().replace(/,/g, ""), 10);
-    return isNaN(parsed) ? null : parsed;
-  }
-  if (item.best_seller_rank !== undefined && item.best_seller_rank !== null) {
-    const parsed = parseInt(item.best_seller_rank.toString().replace(/,/g, ""), 10);
-    return isNaN(parsed) ? null : parsed;
-  }
-  if (item.rank !== undefined && item.rank !== null) {
-    const parsed = parseInt(item.rank.toString().replace(/,/g, ""), 10);
-    return isNaN(parsed) ? null : parsed;
-  }
-  return null;
+  const mainBSR = extractMainCategoryBSR(item);
+  return mainBSR ? mainBSR.rank : null;
 }
 
 /**
@@ -376,7 +421,13 @@ export async function fetchKeywordMarketSnapshot(
       const reviews = parseReviews(item); // Nullable
       const is_sponsored = item.is_sponsored ?? false; // Boolean, default false
       const position = item.position ?? index + 1; // Organic rank (1-indexed)
-      const bsr = parseBSR(item); // Nullable
+      
+      // CRITICAL: Extract main category BSR (top-level category only, not subcategories)
+      const mainBSRData = extractMainCategoryBSR(item);
+      const main_category_bsr = mainBSRData ? mainBSRData.rank : null;
+      const main_category = mainBSRData ? mainBSRData.category : null;
+      const bsr = main_category_bsr; // Keep for backward compatibility
+      
       const fulfillment = parseFulfillment(item); // Nullable
       
       // Extract brand: try item.brand first, then infer from title (if title exists)
@@ -403,7 +454,9 @@ export async function fetchKeywordMarketSnapshot(
         position,
         brand, // Optional (nullable)
         image_url, // Optional (nullable)
-        bsr, // Optional (nullable)
+        bsr, // Optional (nullable) - DEPRECATED: use main_category_bsr
+        main_category_bsr, // Main category BSR (top-level category only)
+        main_category, // Main category name
         fulfillment, // Optional (nullable)
         // Add seller and is_prime for fulfillment mix computation
         seller, // Optional (nullable)
@@ -478,12 +531,26 @@ export async function fetchKeywordMarketSnapshot(
         ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length
         : null; // null is OK - we'll use fallback only if NO listings exist
 
-    // Average BSR (only over listings with BSR)
-    const listingsWithBSR = listings.filter((l) => l.bsr !== null && l.bsr !== undefined);
+    // Average BSR (only over listings with main category BSR)
+    // CRITICAL: Only use listings with valid main_category_bsr (exclude if missing)
+    const listingsWithMainBSR = listings.filter((l) => 
+      l.main_category_bsr !== null && 
+      l.main_category_bsr !== undefined && 
+      l.main_category_bsr > 0
+    );
     const avg_bsr =
-      listingsWithBSR.length > 0
-        ? listingsWithBSR.reduce((sum, l) => sum + (l.bsr ?? 0), 0) / listingsWithBSR.length
+      listingsWithMainBSR.length > 0
+        ? listingsWithMainBSR.reduce((sum, l) => sum + (l.main_category_bsr ?? 0), 0) / listingsWithMainBSR.length
         : null;
+    
+    // Log BSR extraction stats for debugging
+    console.log("BSR_EXTRACTION_STATS", {
+      keyword,
+      total_listings: listings.length,
+      listings_with_main_bsr: listingsWithMainBSR.length,
+      avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
+      sample_categories: listingsWithMainBSR.slice(0, 5).map(l => l.main_category).filter(Boolean),
+    });
 
     // Fulfillment mix calculation - ALWAYS return a value (use computeFulfillmentMix helper)
     const { computeFulfillmentMix } = await import("./fulfillmentMix");
@@ -543,34 +610,26 @@ export async function fetchKeywordMarketSnapshot(
       ppc: ppcIndicators,
     };
 
-    // TASK 4: Estimate revenue and units for each listing (30-day estimates) - wrapped in try/catch
-    let listingsWithEstimates: ParsedListing[] = listings; // Default to listings without estimates if estimator fails
-    let aggregateRevenueEstimatesFunc: ((estimates: any[]) => any) | null = null; // Store function reference for later use
+    // FIX #2: BSR-based revenue and units estimation (NO position-based logic, NO fallbacks)
+    // CRITICAL: All estimates come from main_category_bsr → monthly_units → monthly_revenue
+    // If BSR or price is missing, exclude from estimates (no fallbacks)
+    let listingsWithEstimates: ParsedListing[] = [];
     
     try {
-      const revenueEstimator = await import("./revenueEstimator");
-      
-      // TASK 1: Safely extract functions with fallback
-      const estimateListingRevenueWithUnits = revenueEstimator.estimateListingRevenueWithUnits;
-      const aggFunc = revenueEstimator.aggregateRevenueEstimates;
-      
-      if (!estimateListingRevenueWithUnits || typeof estimateListingRevenueWithUnits !== 'function') {
-        throw new Error("estimateListingRevenueWithUnits is not a function");
-      }
-      
-      if (aggFunc && typeof aggFunc === 'function') {
-        aggregateRevenueEstimatesFunc = aggFunc; // Store function reference
-      } else {
-        console.warn("aggregateRevenueEstimates function not found in revenueEstimator module", {
-          keyword,
-          has_aggFunc: !!aggFunc,
-          aggFunc_type: typeof aggFunc,
-          revenueEstimator_keys: Object.keys(revenueEstimator),
-        });
-      }
+      // Import BSR-to-sales calculator
+      const { estimateMonthlySalesFromBSR } = await import("@/lib/revenue/bsr-calculator");
       
       listingsWithEstimates = listings.map((listing) => {
-        if (listing.price === null || listing.price <= 0) {
+        // CRITICAL: Only estimate if we have BOTH main_category_bsr AND price
+        // No fallbacks, no position-based estimates, no hybrids
+        if (
+          listing.main_category_bsr === null || 
+          listing.main_category_bsr === undefined || 
+          listing.main_category_bsr <= 0 ||
+          listing.price === null || 
+          listing.price <= 0
+        ) {
+          // Missing required data - exclude from estimates
           return {
             ...listing,
             est_monthly_revenue: null,
@@ -579,94 +638,132 @@ export async function fetchKeywordMarketSnapshot(
           };
         }
         
-        const estimate = estimateListingRevenueWithUnits(
-          listing.price,
-          listing.position,
-          avg_price,
-          keyword
-        );
+        // Get category (use main_category if available, otherwise default)
+        const category = listing.main_category || 'default';
+        
+        // BSR-based calculation: main_category_bsr → monthly_units
+        const monthlyUnits = estimateMonthlySalesFromBSR(listing.main_category_bsr, category);
+        
+        // Revenue = units * price
+        const monthlyRevenue = monthlyUnits * listing.price;
+        
+        // Confidence: "medium" if BSR is reasonable, "low" if very high BSR
+        const confidence: "low" | "medium" = listing.main_category_bsr <= 100000 ? "medium" : "low";
         
         return {
           ...listing,
-          est_monthly_revenue: estimate.est_monthly_revenue,
-          est_monthly_units: estimate.est_monthly_units,
-          revenue_confidence: estimate.revenue_confidence,
+          est_monthly_revenue: Math.round(monthlyRevenue * 100) / 100, // Round to 2 decimals
+          est_monthly_units: monthlyUnits,
+          revenue_confidence: confidence,
         };
       });
-    } catch (revenueError) {
-      console.error("Revenue estimator failed, keeping listings without estimates", {
+      
+      // Log BSR-based estimation stats
+      const listingsWithEstimatesCount = listingsWithEstimates.filter(
+        l => l.est_monthly_revenue !== null && l.est_monthly_units !== null
+      ).length;
+      
+      console.log("BSR_BASED_ESTIMATION_STATS", {
         keyword,
-        error: revenueError instanceof Error ? revenueError.message : String(revenueError),
-        stack: revenueError instanceof Error ? revenueError.stack : undefined,
+        total_listings: listings.length,
+        listings_with_estimates: listingsWithEstimatesCount,
+        listings_without_estimates: listings.length - listingsWithEstimatesCount,
+        total_estimated_units: listingsWithEstimates
+          .filter(l => l.est_monthly_units !== null)
+          .reduce((sum, l) => sum + (l.est_monthly_units || 0), 0),
+        total_estimated_revenue: listingsWithEstimates
+          .filter(l => l.est_monthly_revenue !== null)
+          .reduce((sum, l) => sum + (l.est_monthly_revenue || 0), 0),
+      });
+      
+    } catch (bsrError) {
+      console.error("BSR-based estimation failed, keeping listings without estimates", {
+        keyword,
+        error: bsrError instanceof Error ? bsrError.message : String(bsrError),
+        stack: bsrError instanceof Error ? bsrError.stack : undefined,
         listings_count: listings.length,
       });
-      // listingsWithEstimates already defaults to listings above
-      // aggregateRevenueEstimatesFunc remains null
+      // If estimation fails, return listings without estimates
+      listingsWithEstimates = listings.map(l => ({
+        ...l,
+        est_monthly_revenue: null,
+        est_monthly_units: null,
+        revenue_confidence: "low" as const,
+      }));
     }
 
-    // TASK 3: Aggregate total revenue and units estimates - OPTIONAL, wrapped in try/catch
-    // TASK 4: Make revenue aggregation optional - do NOT block analyze if it fails
-    // TASK 5: Try V2 model first, fallback to V1
+    // FIX #2: Aggregate BSR-based revenue and units estimates
+    // Simple sum of all BSR-based estimates (no model fallbacks, no position-based logic)
     let aggregated = {
       total_revenue_min: 0,
       total_revenue_max: 0,
       total_units_min: 0,
       total_units_max: 0,
     };
-    let revenueEstimateSource = "model_v1";
+    let revenueEstimateSource = "bsr_based";
     let revenueModelVersion = "v1.0";
     
     try {
-      // Try V2 model first (if supabase provided and model exists)
-      if (supabase) {
-        const { estimateRevenueV2 } = await import("@/lib/estimators/modelV2");
-        const v2Revenue = await estimateRevenueV2(supabase, {
-          page1_count: listings.length,
-          avg_reviews: avg_reviews,
-          sponsored_count: sponsored_count,
-          avg_price: avg_price,
-          category: undefined,
-        }, marketplace);
-        
-        if (v2Revenue) {
-          aggregated = v2Revenue;
-          revenueEstimateSource = "model_v2";
-          revenueModelVersion = v2Revenue.model_version;
-        }
-      }
+      // Sum all BSR-based estimates
+      const validEstimates = listingsWithEstimates.filter(
+        l => l.est_monthly_revenue !== null && 
+             l.est_monthly_revenue !== undefined && 
+             l.est_monthly_units !== null && 
+             l.est_monthly_units !== undefined
+      );
       
-      // If V2 not available or returned null, use V1 aggregation
-      if (revenueEstimateSource === "model_v1" && aggregateRevenueEstimatesFunc && typeof aggregateRevenueEstimatesFunc === 'function') {
-        const revenueEstimates = listingsWithEstimates
-          .filter(l => l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined)
-          .map(l => ({
-            est_monthly_revenue: l.est_monthly_revenue!,
-            est_monthly_units: l.est_monthly_units || 0,
-            revenue_confidence: l.revenue_confidence || "low",
-          }));
+      if (validEstimates.length > 0) {
+        // Calculate totals
+        const totalRevenue = validEstimates.reduce((sum, l) => sum + (l.est_monthly_revenue || 0), 0);
+        const totalUnits = validEstimates.reduce((sum, l) => sum + (l.est_monthly_units || 0), 0);
         
-        // Only call if we have estimates
-        if (revenueEstimates.length > 0) {
-          aggregated = aggregateRevenueEstimatesFunc(revenueEstimates);
-        }
-      } else if (revenueEstimateSource === "model_v1") {
-        // TASK 1: Function not available - log but don't fail
-        console.warn("REVENUE_AGGREGATION_FUNCTION_NOT_AVAILABLE", {
+        // Apply confidence-based ranges
+        // Medium confidence: ±25% range
+        // Low confidence: ±40% range
+        const mediumConfidenceCount = validEstimates.filter(l => l.revenue_confidence === "medium").length;
+        const lowConfidenceCount = validEstimates.filter(l => l.revenue_confidence === "low").length;
+        
+        // Weighted average confidence adjustment
+        const avgConfidenceAdjustment = mediumConfidenceCount > 0 && lowConfidenceCount > 0
+          ? 0.30 // Mixed: use 30% adjustment
+          : mediumConfidenceCount > 0
+          ? 0.25 // All medium: 25% adjustment
+          : 0.40; // All low: 40% adjustment
+        
+        const revenueRange = totalRevenue * avgConfidenceAdjustment;
+        const unitsRange = totalUnits * avgConfidenceAdjustment;
+        
+        aggregated = {
+          total_revenue_min: Math.max(0, Math.round(totalRevenue - revenueRange)),
+          total_revenue_max: Math.round(totalRevenue + revenueRange),
+          total_units_min: Math.max(0, Math.round(totalUnits - unitsRange)),
+          total_units_max: Math.round(totalUnits + unitsRange),
+        };
+        
+        console.log("BSR_BASED_AGGREGATION", {
           keyword,
-          has_function: !!aggregateRevenueEstimatesFunc,
-          function_type: typeof aggregateRevenueEstimatesFunc,
-          listings_count: listings.length,
-          message: "aggregateRevenueEstimates function not available, skipping aggregation",
+          valid_estimates_count: validEstimates.length,
+          total_revenue: totalRevenue,
+          total_units: totalUnits,
+          revenue_range: `${aggregated.total_revenue_min} - ${aggregated.total_revenue_max}`,
+          units_range: `${aggregated.total_units_min} - ${aggregated.total_units_max}`,
+        });
+      } else {
+        console.warn("NO_BSR_BASED_ESTIMATES", {
+          keyword,
+          total_listings: listings.length,
+          listings_with_bsr: listings.filter(l => l.main_category_bsr !== null).length,
+          listings_with_price: listings.filter(l => l.price !== null && l.price > 0).length,
+          message: "No listings had both BSR and price, cannot generate estimates",
         });
       }
     } catch (aggError) {
-      // TASK 3: Log warning, do NOT throw
-      console.warn("REVENUE_AGGREGATION_FAILED", {
+      console.warn("BSR_BASED_AGGREGATION_FAILED", {
         keyword,
         error: aggError instanceof Error ? aggError.message : String(aggError),
         stack: aggError instanceof Error ? aggError.stack : undefined,
         listings_count: listings.length,
-        message: "Revenue aggregation failed, but listings will still be returned",
+        message: "BSR-based aggregation failed, but listings will still be returned",
       });
       // aggregated already defaults to zeros above
     }
