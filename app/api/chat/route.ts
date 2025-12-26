@@ -1504,15 +1504,12 @@ export async function POST(req: NextRequest) {
       : "";
 
     // 10. Build message array for OpenAI
-    // AI Copilot prompt is self-contained with ai_context and seller_memory
+    // AI Copilot prompt is self-contained with ai_context + seller_memory
     // No need for separate context injection - everything is in the system prompt
+    // Chat stays quiet by default - no initial greeting, only respond when user asks
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       // System prompt: Contains locked behavior contract + ai_context + seller_memory
       { role: "system", content: systemPrompt },
-      // Initial assistant greeting (quiet, data-grounded, not verdict-like)
-      // Note: Chat should be quiet by default - no auto messages
-      // This greeting is only used in conversation history, not as an auto-message
-      { role: "assistant", content: "I have the market data and your seller profile. I can help you understand what the numbers mean, compare products, or explore different scenarios. What would you like to know?" },
     ];
     
     // Add validation context if cost refinement failed
@@ -1523,7 +1520,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 11. Append conversation history from database
+    // 11. Append conversation history from database (if exists)
+    // This includes previous user questions and assistant responses
     if (priorMessages && priorMessages.length > 0) {
       for (const msg of priorMessages) {
         if (msg.role === "user" || msg.role === "assistant") {
