@@ -191,6 +191,11 @@ function buildContextMessage(
     experience_months: number | null;
     monthly_revenue_range: string | null;
     sourcing_model: string;
+    goals?: string | null;
+    risk_tolerance?: string | null;
+    margin_target?: number | null;
+    max_fee_pct?: number | null;
+    updated_at?: string;
   },
   inputType: string,
   inputValue: string,
@@ -234,14 +239,38 @@ You must explicitly state this limitation if the user asks about market metrics.
   }
 
   // Section 3: Seller Context (ensures personalized advice)
-  contextParts.push(`=== SELLER CONTEXT ===
-Stage: ${sellerProfile.stage}
-Experience: ${sellerProfile.experience_months !== null ? `${sellerProfile.experience_months} months` : "Not specified"}
-Revenue Range: ${sellerProfile.monthly_revenue_range || "Not specified"}
-Sourcing Model: ${sellerProfile.sourcing_model || "not_sure"}
+  const profileVersion = sellerProfile.updated_at 
+    ? new Date(sellerProfile.updated_at).toISOString()
+    : "unknown";
+  
+  const sellerContextParts: string[] = [
+    `Stage: ${sellerProfile.stage}`,
+    `Experience: ${sellerProfile.experience_months !== null ? `${sellerProfile.experience_months} months` : "Not specified"}`,
+    `Revenue Range: ${sellerProfile.monthly_revenue_range || "Not specified"}`,
+    `Sourcing Model: ${sellerProfile.sourcing_model || "not_sure"}`,
+  ];
+  
+  if (sellerProfile.goals) {
+    sellerContextParts.push(`Goals: ${sellerProfile.goals}`);
+  }
+  if (sellerProfile.risk_tolerance) {
+    sellerContextParts.push(`Risk Tolerance: ${sellerProfile.risk_tolerance}`);
+  }
+  if (sellerProfile.margin_target !== null && sellerProfile.margin_target !== undefined) {
+    sellerContextParts.push(`Margin Target: ${sellerProfile.margin_target}%`);
+  }
+  if (sellerProfile.max_fee_pct !== null && sellerProfile.max_fee_pct !== undefined) {
+    sellerContextParts.push(`Max Fee %: ${sellerProfile.max_fee_pct}%`);
+  }
+  
+  sellerContextParts.push(`Profile Version: ${profileVersion} (updated_at: ${sellerProfile.updated_at || "unknown"})`);
+  
+  contextParts.push(`=== SELLER CONTEXT (LATEST PROFILE) ===
+${sellerContextParts.join("\n")}
 
 Use this context to tailor your advice. A new seller receives different guidance than a scaling seller.
-For margin calculations, use the sourcing_model to infer COGS ranges automatically.`);
+For margin calculations, use the sourcing_model to infer COGS ranges automatically.
+This profile data is always loaded fresh from the database - changes take effect immediately.`);
 
   // Section 4: Market Snapshot (includes pricing data for margin calculations)
   const marketSnapshot = (analysisResponse.market_snapshot as Record<string, unknown>) || null;
@@ -486,6 +515,11 @@ function canAnswerQuestion(
     experience_months: number | null;
     monthly_revenue_range: string | null;
     sourcing_model: string;
+    goals?: string | null;
+    risk_tolerance?: string | null;
+    margin_target?: number | null;
+    max_fee_pct?: number | null;
+    updated_at?: string;
   },
   analysisMode: 'ASIN' | 'KEYWORD' | null = null
 ): {
@@ -691,6 +725,11 @@ function extractAllowedNumbers(
     experience_months: number | null;
     monthly_revenue_range: string | null;
     sourcing_model: string;
+    goals?: string | null;
+    risk_tolerance?: string | null;
+    margin_target?: number | null;
+    max_fee_pct?: number | null;
+    updated_at?: string;
   }
 ): Set<number> {
   const allowed = new Set<number>();
@@ -1038,10 +1077,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Fetch seller profile snapshot
+    // 4. Fetch seller profile snapshot (always load latest with updated_at for versioning)
     const { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
-      .select("stage, experience_months, monthly_revenue_range, sourcing_model")
+      .select("stage, experience_months, monthly_revenue_range, sourcing_model, goals, risk_tolerance, margin_target, max_fee_pct, updated_at")
       .eq("id", user.id)
       .single();
 
@@ -1392,6 +1431,7 @@ export async function POST(req: NextRequest) {
       ai_context: contextToUse,
       seller_memory: sellerMemory,
       structured_memories: structuredMemories, // New structured memory system
+      seller_profile_version: sellerProfile.updated_at || null, // Include profile version for context
       session_context: {
         current_feature: "analyze" as const,
         user_question: body.message,
@@ -1425,6 +1465,8 @@ export async function POST(req: NextRequest) {
       analysisMode,
       hasAiContext: !!aiContext,
       memoryVersion: sellerMemory.version,
+      sellerProfileVersion: sellerProfile.updated_at || "unknown",
+      sellerProfileUpdatedAt: sellerProfile.updated_at || null,
       timestamp: new Date().toISOString(),
     });
 

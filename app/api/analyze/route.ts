@@ -562,9 +562,10 @@ export async function POST(req: NextRequest) {
     const userEmail = user.email || null;
 
     // 3. Gate: Require seller profile (onboarding must be complete)
+    // Always load latest profile with updated_at for versioning
     const { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
-      .select("stage, experience_months, monthly_revenue_range, sourcing_model")
+      .select("stage, experience_months, monthly_revenue_range, sourcing_model, goals, risk_tolerance, margin_target, max_fee_pct, updated_at")
       .eq("id", user.id)
       .single();
 
@@ -714,7 +715,14 @@ export async function POST(req: NextRequest) {
       monthly_revenue_range: sellerProfile.monthly_revenue_range,
     };
 
-    console.log("SELLER_PROFILE", sellerProfile);
+    console.log("SELLER_PROFILE", {
+      stage: sellerProfile.stage,
+      experience_months: sellerProfile.experience_months,
+      revenue_range: sellerProfile.monthly_revenue_range,
+      sourcing_model: sellerProfile.sourcing_model,
+      profile_version: sellerProfile.updated_at || "unknown",
+      profile_updated_at: sellerProfile.updated_at || null,
+    });
 
     // 7. Check cache first (aggressive caching for cost control)
     const { getCachedKeywordAnalysis, cacheKeywordAnalysis } = await import("@/lib/amazon/keywordCache");

@@ -8,12 +8,13 @@ import FinancialConstraintsTab from "./tabs/FinancialConstraintsTab";
 import SourcingLogisticsTab from "./tabs/SourcingLogisticsTab";
 import AIBehaviorTab from "./tabs/AIBehaviorTab";
 import DataSourcesTab from "./tabs/DataSourcesTab";
+import ProfileTab from "./tabs/ProfileTab";
 import PendingMemoryReview from "./components/PendingMemoryReview";
 
-type Tab = "overview" | "preferences" | "financial" | "sourcing" | "ai" | "data";
+type Tab = "profile" | "overview" | "preferences" | "financial" | "sourcing" | "ai" | "data";
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [activeTab, setActiveTab] = useState<Tab>("profile");
   const [pendingCount, setPendingCount] = useState(0);
   const [showPendingReview, setShowPendingReview] = useState(false);
 
@@ -69,6 +70,7 @@ export default function SettingsPage() {
   }
 
   const tabs = [
+    { id: "profile" as Tab, label: "Profile" },
     { id: "overview" as Tab, label: "Overview" },
     { id: "preferences" as Tab, label: "Operating Preferences" },
     { id: "financial" as Tab, label: "Financial Constraints" },
@@ -143,6 +145,7 @@ export default function SettingsPage() {
 
         {/* Tab Content */}
         <div className="bg-white rounded-lg border border-gray-200 p-6">
+          {activeTab === "profile" && <ProfileTab />}
           {activeTab === "overview" && <OverviewTab onReviewPending={() => setShowPendingReview(true)} />}
           {activeTab === "preferences" && <OperatingPreferencesTab />}
           {activeTab === "financial" && <FinancialConstraintsTab />}
