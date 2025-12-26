@@ -207,7 +207,7 @@ export default function ChatSidebar({
   // Refs for auto-scroll
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // ─────────────────────────────────────────────────────────────────────────
   // EFFECTS
@@ -361,12 +361,24 @@ export default function ChatSidebar({
     }
   }, [analysisRunId, input, onMarginSnapshotUpdate]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !isLoading && input.trim() && analysisRunId) {
       e.preventDefault();
       sendMessage();
     }
   };
+
+  // Auto-resize textarea as user types (like Cursor chat)
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      const scrollHeight = inputRef.current.scrollHeight;
+      // Max height of ~6 lines (24px line height * 6 = 144px)
+      const maxHeight = 144;
+      const newHeight = Math.min(scrollHeight, maxHeight);
+      inputRef.current.style.height = `${newHeight}px`;
+    }
+  }, [input]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -375,7 +387,15 @@ export default function ChatSidebar({
   const isDisabled = !analysisRunId;
 
   return (
-    <div className="border-l bg-white flex flex-col h-full" style={{ width: "30%", minWidth: "320px" }}>
+    <div 
+      className="border-l bg-white flex flex-col sticky top-0" 
+      style={{ 
+        width: "30%", 
+        minWidth: "320px",
+        height: "100vh",
+        maxHeight: "100vh"
+      }}
+    >
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* HEADER                                                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}
@@ -598,16 +618,21 @@ export default function ChatSidebar({
       {/* INPUT AREA                                                          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div className="p-4 border-t bg-white shrink-0">
-        <div className="flex gap-2">
-          <input
+        <div className="flex gap-2 items-end">
+          <textarea
             ref={inputRef}
-            type="text"
-            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed resize-none overflow-y-auto"
+            style={{
+              minHeight: "40px",
+              maxHeight: "144px",
+              lineHeight: "24px"
+            }}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={isDisabled ? "Run an analysis first" : "Ask about the analysis..."}
             disabled={isDisabled || isLoading}
+            rows={1}
           />
           <button
             className="bg-black text-white rounded-lg px-4 py-2 font-medium text-sm hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
