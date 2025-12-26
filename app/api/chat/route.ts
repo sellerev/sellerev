@@ -1105,13 +1105,54 @@ export async function POST(req: NextRequest) {
     }
 
     // 4. Fetch seller profile snapshot (always load latest with updated_at for versioning)
-    const { data: sellerProfile, error: profileError } = await supabase
+    // First try with all fields (including new optional fields), fall back to core fields if needed
+    let { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
       .select("stage, experience_months, monthly_revenue_range, sourcing_model, goals, risk_tolerance, margin_target, max_fee_pct, updated_at")
       .eq("id", user.id)
       .single();
 
-    if (profileError || !sellerProfile) {
+    // If error indicates missing columns (new fields don't exist yet), fall back to core fields only
+    if (profileError) {
+      const errorMsg = profileError.message || String(profileError);
+      // Check if it's a column-related error (new fields don't exist) vs profile doesn't exist
+      if (errorMsg.includes("column") || errorMsg.includes("does not exist")) {
+        console.warn("New profile fields not available, falling back to core fields:", errorMsg);
+        const { data: coreProfile, error: coreError } = await supabase
+          .from("seller_profiles")
+          .select("stage, experience_months, monthly_revenue_range, sourcing_model")
+          .eq("id", user.id)
+          .single();
+        
+        if (coreError || !coreProfile) {
+          console.error("Seller profile not found even with core fields:", coreError);
+          return NextResponse.json(
+            { ok: false, error: "Seller profile not found" },
+            { status: 403, headers: res.headers }
+          );
+        }
+        
+        // Add defaults for new fields
+        sellerProfile = {
+          ...coreProfile,
+          goals: null,
+          risk_tolerance: null,
+          margin_target: null,
+          max_fee_pct: null,
+          updated_at: null,
+        };
+        profileError = null;
+      } else {
+        // Different error (profile doesn't exist, permission issue, etc.)
+        console.error("Seller profile fetch error:", profileError);
+        return NextResponse.json(
+          { ok: false, error: "Seller profile not found" },
+          { status: 403, headers: res.headers }
+        );
+      }
+    }
+
+    if (!sellerProfile) {
       return NextResponse.json(
         { ok: false, error: "Seller profile not found" },
         { status: 403, headers: res.headers }
