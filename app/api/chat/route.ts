@@ -17,6 +17,7 @@ import {
   recordAnalyzedKeyword,
   recordAnalyzedAsin,
 } from "@/lib/ai/memoryUpdates";
+import { sanitizeFinancialDirectives } from "@/lib/ai/financialDirectiveFilter";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -1661,6 +1662,27 @@ Would you like me to:
           let tripwireReason: string | undefined;
           
           if (finalMessage) {
+            // Check for financial directive patterns first
+            const financialCheck = sanitizeFinancialDirectives(finalMessage);
+            if (financialCheck.detected) {
+              tripwireTriggered = true;
+              tripwireReason = `Financial directive patterns detected: ${financialCheck.patterns.join(", ")}`;
+              
+              // Log the event
+              console.error("AI_COPILOT_FINANCIAL_DIRECTIVE_TRIPWIRE", {
+                analysisRunId: body.analysisRunId,
+                userId: user.id,
+                reason: tripwireReason,
+                patterns: financialCheck.patterns,
+                messagePreview: finalMessage.substring(0, 200),
+                userMessage: body.message,
+                timestamp: new Date().toISOString(),
+              });
+              
+              // Use sanitized message
+              finalMessage = financialCheck.sanitized;
+            }
+
             // Check for forbidden phrases
             const forbiddenPhrases = [
               /confidence level:\s*(high|medium|low)/i,
@@ -1676,7 +1698,9 @@ Would you like me to:
             for (const pattern of forbiddenPhrases) {
               if (pattern.test(finalMessage)) {
                 tripwireTriggered = true;
-                tripwireReason = `Forbidden phrase detected: ${pattern.source}`;
+                tripwireReason = tripwireReason 
+                  ? `${tripwireReason}; Forbidden phrase: ${pattern.source}`
+                  : `Forbidden phrase detected: ${pattern.source}`;
                 
                 // Log the event
                 console.error("AI_COPILOT_FORBIDDEN_LANGUAGE_TRIPWIRE", {
