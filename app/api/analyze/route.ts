@@ -765,237 +765,133 @@ export async function POST(req: NextRequest) {
       profile_updated_at: sellerProfile.updated_at || null,
     });
 
-    // 7. Check cache first (aggressive caching for cost control)
-    const { getCachedKeywordAnalysis, cacheKeywordAnalysis } = await import("@/lib/amazon/keywordCache");
-    const marketplace = "US"; // TODO: Extract from request if available
-    const inputType = "keyword";
-    const page = 1;
-    
-    // Task 2 & 3: Get cache with status tracking
-    const cacheResult = await getCachedKeywordAnalysis(
-      supabase, 
-      body.input_value, 
-      marketplace,
-      inputType,
-      page
-    );
-    
-    let keywordMarketData: KeywordMarketData | null = cacheResult.data;
-    let cacheStatus = cacheResult.status;
-    let cacheAgeSeconds = cacheResult.age_seconds;
-    
-    // Task 3: If stale, trigger async refresh (non-blocking)
-    if (cacheStatus === 'STALE') {
-      console.log("CACHE_STALE_ASYNC_REFRESH", {
+    // 7. SNAPSHOT-FIRST ARCHITECTURE: Read from precomputed snapshots (NO API calls)
+    const marketplace = "amazon.com"; // Amazon marketplace
+    const {
+      searchKeywordSnapshot,
+      getKeywordProducts,
+      incrementSearchCount,
+      queueKeyword,
+    } = await import("@/lib/snapshots/keywordSnapshots");
+
+    // Check for precomputed snapshot (READ-ONLY, no API calls)
+    const snapshot = await searchKeywordSnapshot(supabase, body.input_value, marketplace);
+    let keywordMarketData: KeywordMarketData | null = null;
+    let snapshotStatus = 'miss';
+
+    if (snapshot) {
+      // Snapshot exists - use it (pure database read)
+      snapshotStatus = 'hit';
+      console.log("SNAPSHOT_HIT", {
         keyword: body.input_value,
-        age_seconds: cacheAgeSeconds,
-        message: "Triggering async refresh in background",
+        last_updated: snapshot.last_updated,
+        product_count: snapshot.product_count,
       });
-      // Trigger async refresh (non-blocking)
-      fetchKeywordMarketSnapshot(body.input_value)
-        .then((freshData) => {
-          if (freshData) {
-            cacheKeywordAnalysis(supabase, body.input_value, marketplace, freshData, inputType, page)
-              .then(() => console.log("CACHE_REFRESHED", { keyword: body.input_value }))
-              .catch((err) => console.error("CACHE_REFRESH_ERROR", err));
-          }
-        })
-        .catch((err) => console.error("ASYNC_REFRESH_ERROR", err));
-    }
-    
-    if (!keywordMarketData) {
-      // Cache miss - fetch from Rainforest
-      console.log("CACHE_MISS", { keyword: body.input_value });
-      
-      // Check if RAINFOREST_API_KEY is configured
-      if (!process.env.RAINFOREST_API_KEY) {
-        console.error("RAINFOREST_API_KEY not configured in environment");
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Rainforest API key not configured. Please contact support.",
-          },
-          { status: 500, headers: res.headers }
-        );
-      }
-      
-      let fetchError: Error | null = null; // Store error for later check
-      try {
-        keywordMarketData = await fetchKeywordMarketSnapshot(body.input_value, supabase, marketplace);
-        console.log("RAIN_DATA_RAW", {
-          has_data: !!keywordMarketData,
-          has_snapshot: !!keywordMarketData?.snapshot,
-          total_listings: keywordMarketData?.snapshot?.total_page1_listings || 0,
-          listings_count: keywordMarketData?.listings?.length || 0,
-          has_real_listings: (keywordMarketData?.listings?.length || 0) > 0,
-        });
-        
-        // TASK 3: Do NOT use fallback if real listings exist
-        if (keywordMarketData && keywordMarketData.listings && keywordMarketData.listings.length > 0) {
-          console.log("REAL_LISTINGS_FOUND", {
-            keyword: body.input_value,
-            listing_count: keywordMarketData.listings.length,
-            message: "Using real listings, NOT fallback estimates",
-          });
-        }
-      } catch (err) {
-        fetchError = err instanceof Error ? err : new Error(String(err));
-        // TASK 2: Classify error - processing_error vs zero_asins
-        const errorMessage = fetchError.message;
-        const isProcessingError = errorMessage.includes("Processing error") && errorMessage.includes("extracted");
-        
-        // TASK 5: Revenue aggregation failures must NOT trigger fallback or "zero ASINs"
-        const isRevenueAggregationError = errorMessage.includes("aggregateRevenueEstimates") || 
-                                         errorMessage.includes("REVENUE_AGGREGATION") ||
-                                         errorMessage.includes("revenue aggregation") ||
-                                         errorMessage.includes("REVENUE_AGGREGATION_ONLY");
-        
-          console.error("FETCH_KEYWORD_MARKET_EXCEPTION", {
-          keyword: body.input_value,
-          error: errorMessage,
-          stack: fetchError.stack,
-          error_type: isProcessingError ? "processing_error" : "api_error",
-          is_revenue_aggregation_error: isRevenueAggregationError,
-        });
-        
-        // TASK 5: Revenue aggregation errors should NOT block analyze
-        // Since revenue aggregation is wrapped in try/catch, it shouldn't throw
-        // But if it does, we should NOT use fallback
-        if (isRevenueAggregationError) {
-          console.warn("REVENUE_AGGREGATION_ERROR_IN_CATCH", {
-            keyword: body.input_value,
-            message: "Revenue aggregation error in catch - this shouldn't happen if properly wrapped",
-            error: errorMessage,
-          });
-          // TASK 5: Don't use fallback - revenue aggregation is optional
-          // Set keywordMarketData to null and let it check below
-          keywordMarketData = null;
-        } else if (isProcessingError) {
-          // Other processing errors - don't use fallback, let error propagate
-          console.error("PROCESSING_ERROR_NOT_ZERO_ASINS", {
-            keyword: body.input_value,
-            message: "Rainforest returned ASINs but processing failed - do NOT use fallback",
-          });
-          // Re-throw to be handled by outer error handler
-          throw err;
-        } else {
-          // Genuine API errors or zero ASINs - use fallback
-          const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
-          keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
-          console.log("USING_FALLBACK_MARKET_DATA", { 
-            keyword: body.input_value, 
-            reason: "api_error_or_zero_asins" 
-          });
-        }
-      }
-      
-      // TASK 2 & 5: Only use fallback if Rainforest truly returned ZERO ASINs
-      // TASK 5: Revenue aggregation failures must NOT trigger "zero ASINs" or fallback
-      if (!keywordMarketData || !keywordMarketData.listings || keywordMarketData.listings.length === 0) {
-        // TASK 5: Check if we had a revenue aggregation error (shouldn't use fallback in that case)
-        const hadRevenueAggregationError = fetchError && (
-          fetchError.message.includes("aggregateRevenueEstimates") || 
-          fetchError.message.includes("REVENUE_AGGREGATION") ||
-          fetchError.message.includes("revenue aggregation")
-        );
-        
-        if (!hadRevenueAggregationError) {
-          console.log("RAINFOREST_RETURNED_ZERO_ASINS", {
-            keyword: body.input_value,
-            has_data: !!keywordMarketData,
-            listings_count: keywordMarketData?.listings?.length || 0,
-            using_fallback: true,
-            reason: "zero_asins", // TASK 2: Explicit reason
-          });
-          const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
-          keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
-        } else {
-          // TASK 5: Revenue aggregation error - don't use fallback
-          console.error("REVENUE_AGGREGATION_ERROR_NO_FALLBACK", {
-            keyword: body.input_value,
-            message: "Revenue aggregation failed - should not use fallback, this indicates a bug",
-          });
-          // This shouldn't happen - revenue aggregation is wrapped and shouldn't throw
-          // But if it does, we should return an error, not fallback
-          throw new Error("Revenue aggregation failed but listings should have been returned");
-        }
-      } else {
-        console.log("REAL_LISTINGS_AVAILABLE", {
-          keyword: body.input_value,
-          listings_count: keywordMarketData.listings.length,
-          message: "Using real listings, skipping fallback",
-        });
-      }
-      
-      // TASK 6: Cache should store successful snapshot with listings
-      // Never cache an "empty" snapshot when Rainforest returned listings but processing crashed
-      if (keywordMarketData) {
-        const hasRealListings = keywordMarketData.listings && keywordMarketData.listings.length > 0;
-        if (hasRealListings) {
-          // Only cache if we have real listings (not fallback)
-          cacheKeywordAnalysis(supabase, body.input_value, marketplace, keywordMarketData, inputType, page)
-            .then(() => console.log("CACHE_STORED", { 
-              keyword: body.input_value,
-              listings_count: keywordMarketData.listings.length,
-            }))
-            .catch((error) => console.error("CACHE_STORE_ERROR", error));
-        } else {
-          console.log("SKIPPING_CACHE_FALLBACK_DATA", {
-            keyword: body.input_value,
-            reason: "Avoiding cache poisoning with fallback data",
-          });
-        }
-      }
+
+      // Increment search count
+      await incrementSearchCount(supabase, body.input_value, marketplace);
+
+      // Get products for this keyword
+      const products = await getKeywordProducts(supabase, body.input_value, marketplace);
+
+      // Compute aggregated metrics from products
+      const productsWithPrice = products.filter(p => p.price !== null && p.price > 0);
+      const avgPrice = productsWithPrice.length > 0
+        ? productsWithPrice.reduce((sum, p) => sum + (p.price || 0), 0) / productsWithPrice.length
+        : snapshot.average_price;
+
+      // Convert snapshot to KeywordMarketData format
+      keywordMarketData = {
+        snapshot: {
+          keyword: snapshot.keyword,
+          avg_price: avgPrice,
+          avg_reviews: 0, // Reviews not stored in snapshot
+          avg_rating: null, // Rating not stored in snapshot
+          avg_bsr: snapshot.average_bsr,
+          total_page1_listings: snapshot.product_count,
+          sponsored_count: 0, // Not stored in snapshot
+          dominance_score: 0, // Not stored in snapshot
+          fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 }, // Not stored in snapshot
+          est_total_monthly_revenue_min: snapshot.total_monthly_revenue,
+          est_total_monthly_revenue_max: snapshot.total_monthly_revenue,
+          est_total_monthly_units_min: snapshot.total_monthly_units,
+          est_total_monthly_units_max: snapshot.total_monthly_units,
+          search_demand: null, // Not stored in snapshot (will be computed if needed)
+        },
+        listings: products.map((p) => ({
+          asin: p.asin || '',
+          title: null,
+          price: p.price,
+          rating: null,
+          reviews: null,
+          is_sponsored: false,
+          position: p.rank,
+          brand: null,
+          image_url: null,
+          bsr: p.main_category_bsr,
+          main_category_bsr: p.main_category_bsr,
+          main_category: p.main_category,
+          fulfillment: null,
+          est_monthly_revenue: p.estimated_monthly_revenue,
+          est_monthly_units: p.estimated_monthly_units,
+          revenue_confidence: 'medium' as const,
+        })),
+      };
     } else {
-      console.log("CACHE_HIT", { 
+      // Snapshot doesn't exist - queue for processing
+      console.log("SNAPSHOT_MISS", {
         keyword: body.input_value,
-        total_listings: keywordMarketData.snapshot?.total_page1_listings || 0,
+        message: "Queueing keyword for background processing",
       });
+
+      // Queue keyword with default priority (5)
+      await queueKeyword(supabase, body.input_value, 5, user.id, marketplace);
+
+      // Return queued response - user gets immediate feedback
+      return NextResponse.json(
+        {
+          success: true,
+          status: "queued",
+          message: "Analysis queued. Ready in ~5–10 minutes.",
+          keyword: body.input_value,
+          queued_at: new Date().toISOString(),
+        },
+        { status: 202, headers: res.headers } // 202 Accepted
+      );
     }
-    
-    // GUARANTEE: market_snapshot MUST ALWAYS EXIST
-    // If somehow we still don't have data, create fallback
-    if (!keywordMarketData || !keywordMarketData.snapshot) {
-      console.error("FORCE_FALLBACK_MARKET_DATA", {
-        keyword: body.input_value,
-        has_data: !!keywordMarketData,
-        has_snapshot: !!keywordMarketData?.snapshot,
-      });
-      const { buildFallbackKeywordMarketData } = await import("@/lib/amazon/marketFallbacks");
-      keywordMarketData = buildFallbackKeywordMarketData(body.input_value);
-    }
-    
-    // TASK 2: Determine data quality status with proper error classification
-    const hasRealListings = keywordMarketData.listings && keywordMarketData.listings.length > 0;
-    const dataQuality = {
-      rainforest: hasRealListings ? "success" : "empty",
-      reason: hasRealListings 
-        ? null 
-        : "zero_asins", // TASK 2: Explicit reason (not "processing_error" here since we'd have thrown)
-      fallback_used: !hasRealListings,
-    };
-    
-    // Use the snapshot directly (already aggregated)
-    // GUARANTEED to exist after fallback logic above
+
+    // Use the snapshot (guaranteed to exist after snapshot check)
     const marketSnapshot = keywordMarketData.snapshot;
     const marketSnapshotJson = keywordMarketData.snapshot;
+    
+    const dataQuality = {
+      snapshot: snapshotStatus,
+      source: 'precomputed',
+      fallback_used: false,
+    };
     
     // Calculate Competitive Pressure Index (CPI) from Page 1 listings
     // CPI is seller-context aware and computed deterministically
     // CPI is computed ONCE per analysis and cached - never recalculated
+    // Note: For snapshot-based data, we need to compute CPI from product data
     if (keywordMarketData.listings && keywordMarketData.listings.length > 0) {
-      const cpiResult = calculateCPI({
-        listings: keywordMarketData.listings,
-        sellerStage: sellerProfile.stage as "new" | "existing" | "scaling",
-        sellerExperienceMonths: sellerProfile.experience_months,
-      });
-      
-      // Inject CPI into market snapshot with new structure
-      (marketSnapshot as any).cpi = {
-        score: cpiResult.score,
-        label: cpiResult.label,
-        breakdown: cpiResult.breakdown,
-      };
+      try {
+        const cpiResult = calculateCPI({
+          listings: keywordMarketData.listings,
+          sellerStage: sellerProfile.stage as "new" | "existing" | "scaling",
+          sellerExperienceMonths: sellerProfile.experience_months,
+        });
+        
+        // Inject CPI into market snapshot with new structure
+        (marketSnapshot as any).cpi = {
+          score: cpiResult.score,
+          label: cpiResult.label,
+          breakdown: cpiResult.breakdown,
+        };
+      } catch (cpiError) {
+        console.error("CPI calculation error:", cpiError);
+        (marketSnapshot as any).cpi = null;
+      }
     } else {
       // No Page 1 data → CPI = null
       (marketSnapshot as any).cpi = null;
@@ -1636,12 +1532,11 @@ ${body.input_value}`;
     }
 
     // 14. Return success response (ALWAYS 200, never 422)
-    const responseStatus = hasRealListings ? "complete" : "partial";
+    const responseStatus = "complete";
     
-    // Task 4: Add cache debug headers
-    const cacheHeaders: Record<string, string> = {
-      'x-sellerev-cache': cacheStatus || 'MISS',
-      'x-sellerev-cache-age': String(cacheAgeSeconds || 0),
+    // Add snapshot debug headers
+    const snapshotHeaders: Record<string, string> = {
+      'x-sellerev-snapshot': snapshotStatus,
     };
     
     console.log("RETURNING_SUCCESS", {
@@ -1649,8 +1544,7 @@ ${body.input_value}`;
       has_decision: !!decisionJson,
       has_analysisRunId: !!insertedRun.id,
       data_quality: dataQuality,
-      cache_status: cacheStatus,
-      cache_age_seconds: cacheAgeSeconds,
+      snapshot_status: snapshotStatus,
     });
     
     // Task 2: Insert market observation on every successful analyze
@@ -1731,7 +1625,7 @@ ${body.input_value}`;
               ...(snapshot.avg_rating === null ? ['avg_rating'] : []),
               ...(snapshot.avg_bsr === null ? ['avg_bsr'] : []),
             ],
-            fallback_used: !hasRealListings,
+            fallback_used: false,
           },
         });
       }
@@ -1752,7 +1646,7 @@ ${body.input_value}`;
         status: 200, 
         headers: {
           ...res.headers,
-          ...cacheHeaders, // Task 4: Add cache debug headers
+          ...snapshotHeaders,
         }
       }
     );
