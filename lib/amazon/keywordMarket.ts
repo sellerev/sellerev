@@ -140,36 +140,96 @@ function parseRating(item: any): number | null {
 
 /**
  * Extracts main category BSR from product data (handles various formats)
- * CRITICAL: Uses main category BSR (index 0 of bestsellers_rank array), NOT subcategories
+ * CRITICAL: Uses main category BSR (highest-level category, shortest path), NOT subcategories
+ * 
+ * Strategy:
+ * - If bestsellers_rank is an array, find the entry with the shortest category path (main category)
+ * - If multiple entries exist, choose the one with the shortest category string
+ * - Do not require category mapping tables
  * 
  * @param item - Product item from Rainforest API
  * @returns Object with rank and category, or null if not found
  */
 function extractMainCategoryBSR(item: any): { rank: number; category: string } | null {
-  // CRITICAL: Use main category BSR (index 0), NOT subcategory
-  // Try bestsellers_rank array first (Rainforest API format)
+  // DEBUG: Log what we're trying to extract
+  const debugInfo: any = {
+    has_bestsellers_rank: !!item.bestsellers_rank,
+    bestsellers_rank_type: typeof item.bestsellers_rank,
+    bestsellers_rank_is_array: Array.isArray(item.bestsellers_rank),
+  };
+  
+  // CRITICAL: Try bestsellers_rank array first (Rainforest API format)
   if (item.bestsellers_rank && Array.isArray(item.bestsellers_rank) && item.bestsellers_rank.length > 0) {
-    const mainBSR = item.bestsellers_rank[0];
-    if (mainBSR.rank !== undefined && mainBSR.rank !== null) {
-      const rank = parseInt(mainBSR.rank.toString().replace(/,/g, ""), 10);
-      if (!isNaN(rank) && rank > 0) {
-        // Extract category name, normalize it
-        const category = mainBSR.category || mainBSR.Category || mainBSR.category_name || null;
-        return {
-          rank,
-          category: category || 'default'
-        };
+    debugInfo.bestsellers_rank_length = item.bestsellers_rank.length;
+    debugInfo.bestsellers_rank_elements = item.bestsellers_rank.map((r: any, i: number) => ({
+      index: i,
+      rank: r?.rank,
+      category: r?.category,
+      category_path: r?.category_path,
+      link: r?.link,
+      keys: r ? Object.keys(r) : [],
+    }));
+    
+    // Find the main category (highest-level, shortest path)
+    // Strategy: Choose the entry with the shortest category string (main categories are shorter)
+    let mainBSR: any = null;
+    let shortestCategoryLength = Infinity;
+    
+    for (const bsrEntry of item.bestsellers_rank) {
+      // Check if this entry has a valid rank
+      if (bsrEntry?.rank !== undefined && bsrEntry?.rank !== null) {
+        const rank = parseInt(bsrEntry.rank.toString().replace(/,/g, ""), 10);
+        if (!isNaN(rank) && rank > 0) {
+          // Get category string (try multiple field names)
+          const categoryStr = bsrEntry.category || 
+                              bsrEntry.Category || 
+                              bsrEntry.category_name || 
+                              bsrEntry.category_path ||
+                              '';
+          
+          // Choose the entry with the shortest category string (main category)
+          // Main categories like "Home & Kitchen" are shorter than subcategories
+          const categoryLength = categoryStr.length;
+          if (categoryLength < shortestCategoryLength) {
+            shortestCategoryLength = categoryLength;
+            mainBSR = {
+              rank,
+              category: categoryStr || 'default',
+              original_entry: bsrEntry,
+            };
+          }
+        }
       }
     }
+    
+    if (mainBSR) {
+      debugInfo.extracted_bsr = mainBSR;
+      console.log("BSR_EXTRACTION_SUCCESS", {
+        asin: item.asin,
+        ...debugInfo,
+      });
+      
+      return {
+        rank: mainBSR.rank,
+        category: mainBSR.category,
+      };
+    } else {
+      debugInfo.reason = "No valid rank found in bestsellers_rank array";
+    }
+  } else {
+    debugInfo.reason = "bestsellers_rank is not an array or is empty";
   }
   
   // Fallback: try direct bsr field (if already parsed, but we don't have category)
-  // This is less ideal but better than nothing
   if (item.bsr !== undefined && item.bsr !== null) {
     const rank = parseInt(item.bsr.toString().replace(/,/g, ""), 10);
     if (!isNaN(rank) && rank > 0) {
-      // Try to get category from product.category or default
       const category = item.category || item.main_category || item.category_name || 'default';
+      debugInfo.extracted_bsr = { rank, category, source: 'direct_bsr_field' };
+      console.log("BSR_EXTRACTION_FALLBACK_DIRECT", {
+        asin: item.asin,
+        ...debugInfo,
+      });
       return {
         rank,
         category
@@ -182,12 +242,23 @@ function extractMainCategoryBSR(item: any): { rank: number; category: string } |
     const rank = parseInt(item.best_seller_rank.toString().replace(/,/g, ""), 10);
     if (!isNaN(rank) && rank > 0) {
       const category = item.category || item.main_category || 'default';
+      debugInfo.extracted_bsr = { rank, category, source: 'best_seller_rank_singular' };
+      console.log("BSR_EXTRACTION_FALLBACK_SINGULAR", {
+        asin: item.asin,
+        ...debugInfo,
+      });
       return {
         rank,
         category
       };
     }
   }
+  
+  // Log failure for debugging
+  console.log("BSR_EXTRACTION_FAILED", {
+    asin: item.asin,
+    ...debugInfo,
+  });
   
   return null;
 }
@@ -406,6 +477,45 @@ export async function fetchKeywordMarketSnapshot(
       return null; // TASK 2: This is genuine "zero_asins" case
     }
 
+    // DEBUG TASK: Log one full product object for inspection (Step 1 & 2)
+    if (searchResults.length > 0) {
+      const sampleProduct = searchResults[0];
+      console.log("SAMPLE_PRODUCT_FULL_OBJECT", {
+        keyword,
+        asin: sampleProduct.asin,
+        has_bestsellers_rank: !!sampleProduct.bestsellers_rank,
+        bestsellers_rank_type: typeof sampleProduct.bestsellers_rank,
+        bestsellers_rank_is_array: Array.isArray(sampleProduct.bestsellers_rank),
+        bestsellers_rank_length: Array.isArray(sampleProduct.bestsellers_rank) ? sampleProduct.bestsellers_rank.length : null,
+        bestsellers_rank_value: sampleProduct.bestsellers_rank,
+        full_product_object: JSON.stringify(sampleProduct, null, 2),
+        product_keys: Object.keys(sampleProduct),
+      });
+      
+      // Specifically inspect bestsellers_rank structure
+      if (sampleProduct.bestsellers_rank) {
+        console.log("BESTSELLERS_RANK_STRUCTURE", {
+          keyword,
+          bestsellers_rank: sampleProduct.bestsellers_rank,
+          is_array: Array.isArray(sampleProduct.bestsellers_rank),
+          first_element: Array.isArray(sampleProduct.bestsellers_rank) && sampleProduct.bestsellers_rank.length > 0
+            ? sampleProduct.bestsellers_rank[0]
+            : null,
+          all_elements: Array.isArray(sampleProduct.bestsellers_rank)
+            ? sampleProduct.bestsellers_rank.map((r: any, i: number) => ({
+                index: i,
+                element: r,
+                has_rank: r?.rank !== undefined,
+                rank_value: r?.rank,
+                has_category: r?.category !== undefined,
+                category_value: r?.category,
+                keys: r ? Object.keys(r) : [],
+              }))
+            : null,
+        });
+      }
+    }
+
     // Step 4: Parse and normalize each search result item
     // Normalize using single helper - all fields except ASIN are optional
     let parsedListings: ParsedListing[] = [];
@@ -427,6 +537,19 @@ export async function fetchKeywordMarketSnapshot(
       const main_category_bsr = mainBSRData ? mainBSRData.rank : null;
       const main_category = mainBSRData ? mainBSRData.category : null;
       const bsr = main_category_bsr; // Keep for backward compatibility
+      
+      // DEBUG: Log BSR extraction for first few items
+      if (index < 3) {
+        console.log("BSR_EXTRACTION_PER_ITEM", {
+          keyword,
+          index,
+          asin,
+          has_bestsellers_rank: !!item.bestsellers_rank,
+          mainBSRData,
+          main_category_bsr,
+          main_category,
+        });
+      }
       
       const fulfillment = parseFulfillment(item); // Nullable
       
