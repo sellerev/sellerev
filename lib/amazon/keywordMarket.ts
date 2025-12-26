@@ -10,6 +10,8 @@
  * - If data cannot be computed, omit it (do NOT fake it)
  */
 
+import { computePPCIndicators } from "./ppcIndicators";
+
 export interface ParsedListing {
   asin: string | null;
   title: string | null;
@@ -72,6 +74,13 @@ export interface KeywordMarketSnapshot {
       price_compression: number; // 0-15 points
       seller_fit_modifier: number; // -10 to +10 points
     };
+  } | null;
+  // PPC Indicators - heuristic assessment of advertising intensity
+  ppc?: {
+    sponsored_pct: number; // 0-100
+    ad_intensity_label: "Low" | "Medium" | "High";
+    signals: string[]; // Max 3 signal bullets
+    source: "heuristic_v1";
   } | null;
 }
 
@@ -500,6 +509,27 @@ export async function fetchKeywordMarketSnapshot(
         ? Math.round((top_brands[0].count / total_page1_listings) * 100)
         : 0;
 
+    // Compute PPC indicators
+    let ppcIndicators: { sponsored_pct: number; ad_intensity_label: "Low" | "Medium" | "High"; signals: string[]; source: "heuristic_v1" } | null = null;
+    try {
+      const ppcResult = computePPCIndicators(
+        listings,
+        total_page1_listings,
+        sponsored_count,
+        dominance_score,
+        avg_price
+      );
+      ppcIndicators = {
+        sponsored_pct: ppcResult.sponsored_pct,
+        ad_intensity_label: ppcResult.ad_intensity_label,
+        signals: ppcResult.signals,
+        source: "heuristic_v1",
+      };
+    } catch (error) {
+      console.error("Error computing PPC indicators:", error);
+      // Continue without PPC indicators if computation fails
+    }
+
     const snapshot: KeywordMarketSnapshot = {
       keyword,
       avg_price: avg_price !== null ? Math.round(avg_price * 100) / 100 : null,
@@ -510,6 +540,7 @@ export async function fetchKeywordMarketSnapshot(
       sponsored_count,
       dominance_score,
       fulfillment_mix: fulfillmentMix, // Always an object now (never null when listings exist)
+      ppc: ppcIndicators,
     };
 
     // TASK 4: Estimate revenue and units for each listing (30-day estimates) - wrapped in try/catch

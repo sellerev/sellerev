@@ -150,6 +150,13 @@ interface AnalysisResponse {
         seller_fit_modifier: number; // -10 to +10 points
       };
     } | null;
+    // PPC Indicators - heuristic assessment of advertising intensity
+    ppc?: {
+      sponsored_pct: number; // 0-100
+      ad_intensity_label: "Low" | "Medium" | "High";
+      signals: string[]; // Max 3 signal bullets
+      source: "heuristic_v1";
+    } | null;
     // FBA fee estimate (from SP-API or estimated)
     // New structure (from resolveFbaFees):
     fba_fees?: {
@@ -800,7 +807,7 @@ export default function AnalyzeForm({
                             <div className="text-xs text-gray-500 mb-0.5">Search Volume</div>
                             <div className="font-semibold text-gray-900">
                               {searchVolume 
-                                ? `${searchVolume}${snapshot?.search_volume?.source === 'modeled' ? ' (est.)' : ''}` 
+                                ? `${searchVolume} (est.)`
                                 : "12k–18k (est.)"} {/* Always show fallback, never "Not available" */}
                             </div>
                           </div>
@@ -860,7 +867,7 @@ export default function AnalyzeForm({
                         </div>
                         <div className="font-semibold text-gray-900">
                           {fulfillmentMix
-                            ? `FBA ${fulfillmentMix.fba}% · FBM ${fulfillmentMix.fbm}% · Amazon ${fulfillmentMix.amazon}%${fulfillmentMix.source === 'estimated' ? ' (est.)' : ''}`
+                            ? `FBA ${fulfillmentMix.fba}% · FBM ${fulfillmentMix.fbm}% · Amazon ${fulfillmentMix.amazon}%`
                             : "FBA 65% · FBM 25% · Amazon 10% (est.)"} {/* Always show, never "Not available" */}
                         </div>
                       </div>
@@ -871,6 +878,92 @@ export default function AnalyzeForm({
                           {snapshot?.sponsored_count !== undefined ? snapshot.sponsored_count : 0}
                         </div>
                       </div>
+                        </div>
+                      </div>
+                  );
+                })()}
+
+                  {/* ─────────────────────────────────────────────────────────── */}
+                  {/* PPC INDICATORS PANEL                                        */}
+                  {/* ─────────────────────────────────────────────────────────── */}
+                  {(() => {
+                    const snapshot = analysis.market_snapshot;
+                    const ppc = snapshot?.ppc;
+                    
+                    if (!ppc) {
+                      return null; // Don't show panel if PPC data not available
+                    }
+
+                    // Determine sponsored density label
+                    const sponsoredDensityLabel = ppc.sponsored_pct >= 50 
+                      ? "High" 
+                      : ppc.sponsored_pct >= 25 
+                        ? "Medium" 
+                        : "Low";
+
+                    // Color coding for intensity labels
+                    const intensityColor = ppc.ad_intensity_label === "High" 
+                      ? "text-red-700 bg-red-50 border-red-200"
+                      : ppc.ad_intensity_label === "Medium"
+                        ? "text-amber-700 bg-amber-50 border-amber-200"
+                        : "text-green-700 bg-green-50 border-green-200";
+
+                    const densityColor = sponsoredDensityLabel === "High"
+                      ? "text-red-700 bg-red-50 border-red-200"
+                      : sponsoredDensityLabel === "Medium"
+                        ? "text-amber-700 bg-amber-50 border-amber-200"
+                        : "text-green-700 bg-green-50 border-green-200";
+
+                    return (
+                      <div className="bg-white border rounded-lg p-6">
+                        <h2 className="text-xl font-semibold text-gray-900 mb-4">PPC Indicators</h2>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          {/* Sponsored Density */}
+                          <div>
+                            <div className="text-sm text-gray-600 mb-2">Sponsored Density</div>
+                            <div className={`inline-flex items-center px-3 py-1.5 rounded-lg border text-sm font-medium ${densityColor}`}>
+                              {sponsoredDensityLabel} ({ppc.sponsored_pct}%)
+                            </div>
+                            <div className="text-xs text-gray-500 mt-2">
+                              {snapshot?.sponsored_count || 0} of {snapshot?.total_page1_listings || 0} listings are sponsored
+                            </div>
+                          </div>
+
+                          {/* Likely Ad Intensity */}
+                          <div>
+                            <div className="text-sm text-gray-600 mb-2">Likely Ad Intensity</div>
+                            <div className={`inline-flex items-center px-3 py-1.5 rounded-lg border text-sm font-medium ${intensityColor}`}>
+                              {ppc.ad_intensity_label}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-2 italic">
+                              Heuristic assessment based on market signals
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Signals */}
+                        {ppc.signals && ppc.signals.length > 0 && (
+                          <div className="mt-4 pt-4 border-t">
+                            <div className="text-sm font-medium text-gray-700 mb-2">Key Signals:</div>
+                            <ul className="space-y-1.5">
+                              {ppc.signals.map((signal, idx) => (
+                                <li key={idx} className="flex items-start gap-2 text-sm text-gray-600">
+                                  <span className="text-gray-400 mt-0.5">•</span>
+                                  <span>{signal}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* Disclaimer */}
+                        <div className="mt-4 pt-4 border-t">
+                          <div className="text-xs text-gray-500 italic">
+                            Note: These indicators are heuristic estimates based on Page-1 data. 
+                            Actual CPC costs vary and are not provided without a calibrated model.
+                            Source: {ppc.source}
+                          </div>
                         </div>
                       </div>
                     );
