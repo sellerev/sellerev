@@ -3,6 +3,7 @@
 import { useState } from "react";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
+import FeasibilityCalculator from "./FeasibilityCalculator";
 
 /**
  * Sellerev Analyze Page - Core Product Component
@@ -1021,6 +1022,15 @@ export default function AnalyzeForm({
                   </div>
                   );
                 })()}
+
+                  {/* ─────────────────────────────────────────────────────────── */}
+                  {/* FEASIBILITY CALCULATOR                                     */}
+                  {/* ─────────────────────────────────────────────────────────── */}
+                  <FeasibilityCalculator
+                    defaultPrice={analysis.market_snapshot?.avg_price || null}
+                    categoryHint={null} // TODO: Extract category from keyword if available
+                    representativeAsin={analysis.market_snapshot?.representative_asin || null}
+                  />
                 </>
               ) : null}
             </div>
