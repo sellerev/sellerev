@@ -231,7 +231,13 @@ Available analysis data:
     contextParts.push(`=== MARKET DATA (CACHED - DO NOT ASSUME FRESH DATA) ===
 This is the only market data available. Do not invent additional data points.
 
-${JSON.stringify(rainforestData, null, 2)}`);
+${JSON.stringify(rainforestData, null, 2)}
+
+CRITICAL: Before making any claim about this data:
+- Check if the field exists in the JSON above
+- If a field is labeled "estimated" or "modeled", you MUST say so
+- If a field is null or missing, you MUST say "not available"
+- Never make unqualified claims like "All products are X" unless you can verify ALL listings`);
   } else {
     contextParts.push(`=== MARKET DATA ===
 No cached market data available for this analysis.
@@ -315,11 +321,32 @@ CPI: Not available (insufficient Page 1 data)`);
     const avgPrice = (marketSnapshot.avg_price as number) || null;
     const representativeAsin = (marketSnapshot.representative_asin as string) || "Not available";
     
+    // Build data availability notes
+    const dataAvailabilityNotes: string[] = [];
+    
+    // Check which fields are estimated vs observed
+    if (marketSnapshot.search_volume_source === "model_v2" || marketSnapshot.search_volume_source === "model_v1") {
+      dataAvailabilityNotes.push("- Search volume is MODELED (not from Amazon directly)");
+    }
+    if (marketSnapshot.revenue_estimate_source === "model_v2" || marketSnapshot.revenue_estimate_source === "model_v1") {
+      dataAvailabilityNotes.push("- Revenue estimates are MODELED (not from Amazon directly)");
+    }
+    if (marketSnapshot.fba_fees && typeof marketSnapshot.fba_fees === 'object') {
+      const fbaFees = marketSnapshot.fba_fees as any;
+      if (fbaFees.source === "estimated" || fbaFees.source === "heuristic") {
+        dataAvailabilityNotes.push("- FBA fees are ESTIMATED (not from Amazon SP-API)");
+      }
+    }
+    
+    const availabilityText = dataAvailabilityNotes.length > 0
+      ? `\n\nDATA AVAILABILITY NOTES:\n${dataAvailabilityNotes.join("\n")}\n\nBefore making claims about these metrics, you MUST cite them as "estimated" or "modeled" if noted above.`
+      : "";
+    
     contextParts.push(`=== MARKET SNAPSHOT (FOR MARGIN CALCULATIONS) ===
 Price Band: ${avgPrice !== null ? `$${avgPrice.toFixed(2)}` : "Not available"}
 Representative ASIN: ${representativeAsin}
 
-Use price band as the selling price for margin calculations.`);
+Use price band as the selling price for margin calculations.${availabilityText}`);
   }
 
   // Section 5: FBA Fees (new structure from resolveFbaFees or legacy structure)
