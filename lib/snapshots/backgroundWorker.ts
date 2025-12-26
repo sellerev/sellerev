@@ -5,6 +5,12 @@
  * This is the ONLY place where Rainforest API is called.
  * 
  * Run this as a separate process (cron job, queue worker, etc.)
+ * 
+ * The worker runs in an infinite loop:
+ * - Checks daily processing limit
+ * - Fetches pending keywords (up to 10)
+ * - Processes sequentially with rate limiting
+ * - Sleeps 60s between cycles
  */
 
 import {
@@ -20,6 +26,7 @@ import { processKeyword } from './keywordProcessor';
 const MAX_KEYWORDS_PER_DAY = 200;
 const WORKER_SLEEP_MS = 60_000; // 60 seconds between cycles
 const BATCH_SIZE = 10;
+const KEYWORD_PROCESSING_DELAY_MS = 2000; // 2 seconds between keyword processing
 
 /**
  * Main worker loop
@@ -118,7 +125,7 @@ export async function backgroundIngestionWorker(
           }
 
           // Small delay between keywords to avoid rate limiting
-          await sleep(2000);
+          await sleep(KEYWORD_PROCESSING_DELAY_MS);
 
         } catch (error) {
           console.error('Error processing keyword', {
