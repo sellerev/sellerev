@@ -1734,6 +1734,7 @@ ${body.input_value}`;
         data_quality: dataQuality, // Explains limitations
         estimated: isEstimated, // Explicit flag for UI state management
         dataSource: isEstimated ? "estimated" : "snapshot", // Explicit data source
+        snapshotType: isEstimated ? "estimated" : "snapshot", // Canonical snapshot type
         queued: isEstimated, // Background job is queued when using estimates
         message: isEstimated ? "Estimated market data. Refining with live data…" : undefined,
         analysisRunId: insertedRun.id,

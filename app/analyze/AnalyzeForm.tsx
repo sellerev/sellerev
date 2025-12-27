@@ -388,6 +388,7 @@ export default function AnalyzeForm({
   );
   // Track if current analysis is estimated (Tier-1) vs snapshot (Tier-2)
   const [isEstimated, setIsEstimated] = useState(false);
+  const [snapshotType, setSnapshotType] = useState<"estimated" | "snapshot">("snapshot");
 
   // Handler for margin snapshot updates from chat (Part G structure)
   const handleMarginSnapshotUpdate = (updatedSnapshot: AnalysisResponse['margin_snapshot']) => {
@@ -440,6 +441,7 @@ export default function AnalyzeForm({
     setAnalysis(null);
     setChatMessages([]); // Clear previous chat
     setIsEstimated(false); // Reset estimated flag
+    setSnapshotType("snapshot"); // Reset snapshot type
 
     try {
       console.log("ANALYZE_REQUEST_START", { inputValue: inputValue.trim() });
@@ -604,8 +606,9 @@ export default function AnalyzeForm({
         dataSource: data.dataSource || 'snapshot',
       });
 
-      // Store estimated flag for UI badges
+      // Store estimated flag and snapshot type for UI badges
       setIsEstimated(data.estimated === true || data.dataSource === 'estimated');
+      setSnapshotType(data.snapshotType === 'estimated' ? 'estimated' : 'snapshot');
 
       // Normalize and set analysis
       setAnalysis(normalizeAnalysis(analysisData));
@@ -803,17 +806,61 @@ export default function AnalyzeForm({
               {analysis.market_snapshot ? (
                 <>
                   {/* ─────────────────────────────────────────────────────────── */}
-                  {/* MARKET SNAPSHOT ROW - Raw Metrics Only                    */}
+                  {/* UNIFIED MARKET SNAPSHOT (CANONICAL - ONE ONLY)              */}
                   {/* ─────────────────────────────────────────────────────────── */}
                   {(() => {
                     const snapshot = analysis.market_snapshot;
-                    const page1Count = snapshot?.page1_count ?? snapshot?.total_page1_listings ?? 0;
-                    const hasListings = page1Count > 0;
-                    // Check if we have real listings (not fallback)
-                    const hasRealListings = hasListings && (snapshot?.listings?.length || 0) > 0;
+                    const listings = snapshot?.listings || [];
                     
-                    // Use locked contract format: search_volume { min, max } or fallback to search_demand
-                    let searchVolume: string | null = null;
+                    // Normalize listings to calculate metrics
+                    const normalizedListings = listings
+                      .filter((l: any) => {
+                        const normalized = normalizeListing(l);
+                        return normalized.asin && normalized.title;
+                      })
+                      .map((l: any) => ({
+                        ...normalizeListing(l),
+                        est_monthly_revenue: l.est_monthly_revenue ?? null,
+                        est_monthly_units: l.est_monthly_units ?? null,
+                      }));
+                    
+                    // Calculate metrics
+                    const page1Count = snapshot?.page1_count ?? snapshot?.total_page1_listings ?? listings.length || 0;
+                    const keyword = snapshot?.keyword ?? analysis.input_value ?? "";
+                    const avgPrice = snapshot?.avg_price ?? (normalizedListings.length > 0 
+                      ? normalizedListings.reduce((sum: number, l: any) => sum + (l.price || 0), 0) / normalizedListings.filter((l: any) => l.price > 0).length
+                      : null);
+                    
+                    // Average BSR (Tier-2 only)
+                    const bsrListings = normalizedListings.filter((l: any) => l.bsr !== null && l.bsr !== undefined && l.bsr > 0);
+                    const avgBSR = snapshot?.avg_bsr ?? (bsrListings.length > 0
+                      ? Math.round(bsrListings.reduce((sum: number, l: any) => sum + (l.bsr || 0), 0) / bsrListings.length)
+                      : null);
+                    
+                    // Monthly Units
+                    const monthlyUnits = snapshot?.est_total_monthly_units_min ?? snapshot?.est_total_monthly_units_max ?? 
+                      (normalizedListings.length > 0
+                        ? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_units || 0), 0)
+                        : 0);
+                    
+                    // Monthly Revenue
+                    const monthlyRevenue = snapshot?.est_total_monthly_revenue_min ?? snapshot?.est_total_monthly_revenue_max ??
+                      (normalizedListings.length > 0
+                        ? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0)
+                        : (avgPrice ? Math.round(monthlyUnits * avgPrice) : 0));
+                    
+                    // Average Rating
+                    const avgRating = snapshot?.avg_rating ?? (normalizedListings.length > 0
+                      ? normalizedListings
+                          .filter((l: any) => l.rating !== null && l.rating !== undefined && l.rating > 0)
+                          .reduce((sum: number, l: any, idx: number, arr: any[]) => {
+                            const total = sum + (l.rating || 0);
+                            return idx === arr.length - 1 ? total / arr.length : total;
+                          }, 0)
+                      : null);
+                    
+                    // Search Volume
+                    let searchVolume: string = "Estimating…";
                     if (snapshot?.search_volume && typeof snapshot.search_volume === 'object') {
                       const sv = snapshot.search_volume as { min: number; max: number };
                       const minK = sv.min >= 1000 ? Math.round(sv.min / 1000) : sv.min;
@@ -823,22 +870,20 @@ export default function AnalyzeForm({
                       searchVolume = snapshot.search_demand.search_volume_range;
                     }
                     
-                    const fulfillmentMix = snapshot?.fulfillment_mix;
-                    
                     return (
-                      <div className="bg-white border rounded-lg p-4 mb-6">
+                      <div className="bg-white border rounded-lg p-6 mb-6">
                         {/* Data Source Badge */}
-                        {isEstimated ? (
-                          <div className="mb-3 flex items-center gap-2">
+                        {snapshotType === "estimated" ? (
+                          <div className="mb-4 flex items-center gap-2">
                             <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
                               Estimated
                             </span>
                             <span className="text-xs text-gray-600">
-                              Based on initial market signals. Refining with live Amazon data.
+                              Initial estimates based on Page-1 visibility and listing position. Refining with live Amazon category data.
                             </span>
                           </div>
                         ) : (
-                          <div className="mb-3 flex items-center gap-2">
+                          <div className="mb-4 flex items-center gap-2">
                             <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
                               Live
                             </span>
@@ -847,95 +892,78 @@ export default function AnalyzeForm({
                             </span>
                           </div>
                         )}
-                        {!hasRealListings && (
-                          <div className="mb-2 text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded border border-amber-200">
-                            <span className="font-medium">Showing best available market data:</span> No Page-1 listings found. Metrics below are estimated using category defaults.
-                          </div>
-                        )}
-                        <div className="mb-2 text-xs text-gray-500">
-                          <span className="font-medium">Note:</span> Metrics labeled "(est.)" are modeled estimates, not Amazon-reported data.
-                        </div>
-                        <div className="grid grid-cols-8 gap-4 text-sm">
-                          {/* Search Volume - ALWAYS show (Step 3) */}
+                        
+                        <h2 className="text-xl font-semibold text-gray-900 mb-4">Market Snapshot</h2>
+                        
+                        {/* Canonical Metrics - Exact Order */}
+                        <div className="grid grid-cols-4 gap-6">
+                          {/* 1. Keyword */}
                           <div>
-                            <div className="text-xs text-gray-500 mb-0.5">Search Volume</div>
-                            <div className="font-semibold text-gray-900">
-                              {searchVolume 
-                                ? `${searchVolume} (est.)`
-                                : "12k–18k (est.)"} {/* Always show fallback, never "Not available" */}
+                            <div className="text-xs text-gray-500 mb-1">Keyword</div>
+                            <div className="text-lg font-semibold text-gray-900">{keyword || "—"}</div>
+                          </div>
+                          
+                          {/* 2. Number of Products */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Number of Products</div>
+                            <div className="text-lg font-semibold text-gray-900">{page1Count}</div>
+                          </div>
+                          
+                          {/* 3. Average Price */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Average Price</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {avgPrice !== null && avgPrice !== undefined ? formatCurrency(avgPrice) : "Estimating…"}
                             </div>
                           </div>
-                      {/* Page-1 Listings */}
-                      <div>
-                        <div className="text-xs text-gray-500 mb-0.5">Page-1 Listings</div>
-                        <div className="font-semibold text-gray-900">
-                          {snapshot?.page1_count ?? snapshot?.total_page1_listings ?? 0}
+                          
+                          {/* 4. Average BSR (Conditional - Tier-2 only) */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Average BSR</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {snapshotType === "snapshot" && avgBSR !== null && avgBSR !== undefined
+                                ? `#${avgBSR.toLocaleString()}`
+                                : snapshotType === "estimated"
+                                  ? "— (refining)"
+                                  : "Estimating…"}
+                            </div>
+                          </div>
+                          
+                          {/* 5. Monthly Units */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {monthlyUnits > 0 ? monthlyUnits.toLocaleString() : "Estimating…"}
+                            </div>
+                          </div>
+                          
+                          {/* 6. Monthly Revenue */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {monthlyRevenue > 0 ? formatCurrency(monthlyRevenue) : "Estimating…"}
+                            </div>
+                          </div>
+                          
+                          {/* 7. Average Rating */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Average Rating</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {avgRating !== null && avgRating !== undefined && !isNaN(avgRating)
+                                ? `${avgRating.toFixed(1)} ★`
+                                : "Estimating…"}
+                            </div>
+                          </div>
+                          
+                          {/* 8. Search Volume */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Search Volume</div>
+                            <div className="text-lg font-semibold text-gray-900">{searchVolume}</div>
+                          </div>
                         </div>
                       </div>
-                      {/* Avg Price */}
-                      <div>
-                        <div className="text-xs text-gray-500 mb-0.5">Avg Price</div>
-                        <div className="font-semibold text-gray-900">
-                          {snapshot?.avg_price !== null && snapshot?.avg_price !== undefined 
-                            ? formatCurrency(snapshot.avg_price) 
-                            : "Not available"}
-                        </div>
-                      </div>
-                      {/* Avg Reviews - ALWAYS show (Step 4) */}
-                      <div>
-                        <div className="text-xs text-gray-500 mb-0.5">Avg Reviews</div>
-                        <div className="font-semibold text-gray-900">
-                          {snapshot?.avg_reviews !== undefined && snapshot?.avg_reviews !== null && snapshot.avg_reviews > 0
-                            ? snapshot.avg_reviews.toLocaleString()
-                            : "<10 (new market)"} {/* Always show, never "Not available" */}
-                        </div>
-                      </div>
-                      {/* Avg Rating */}
-                      <div>
-                        <div className="text-xs text-gray-500 mb-0.5">Avg Rating</div>
-                        <div className="font-semibold text-gray-900">
-                          {snapshot?.avg_rating !== null && snapshot?.avg_rating !== undefined && typeof snapshot.avg_rating === 'number' && !isNaN(snapshot.avg_rating)
-                            ? `${snapshot.avg_rating.toFixed(1)} ★`
-                            : "Not available"}
-                        </div>
-                      </div>
-                      {/* Brand Dominance */}
-                      <div>
-                        <div className="text-xs text-gray-500 mb-0.5">Brand Dominance</div>
-                        <div className="font-semibold text-gray-900">
-                          {snapshot?.dominance_score !== undefined && snapshot?.dominance_score !== null
-                            ? `${Math.round(snapshot.dominance_score)}%`
-                            : "Not available"}
-                        </div>
-                      </div>
-                      {/* Fulfillment Mix - ALWAYS show when listings exist */}
-                      <div>
-                        <div className="text-xs text-gray-500 mb-0.5">
-                          Fulfillment Mix
-                          <span 
-                            className="ml-1 cursor-help text-gray-400"
-                            title="Shows how competitors fulfill orders. FBA-heavy markets favor Prime-eligible sellers."
-                          >
-                            ⓘ
-                          </span>
-                        </div>
-                        <div className="font-semibold text-gray-900">
-                          {fulfillmentMix
-                            ? `FBA ${fulfillmentMix.fba}% · FBM ${fulfillmentMix.fbm}% · Amazon ${fulfillmentMix.amazon}%`
-                            : "FBA 65% · FBM 25% · Amazon 10% (est.)"} {/* Always show, never "Not available" */}
-                        </div>
-                      </div>
-                      {/* Sponsored Count */}
-                      <div>
-                        <div className="text-xs text-gray-500 mb-0.5">Sponsored</div>
-                        <div className="font-semibold text-gray-900">
-                          {snapshot?.sponsored_count !== undefined ? snapshot.sponsored_count : 0}
-                        </div>
-                      </div>
-                        </div>
-                      </div>
-                  );
-                })()}
+                    );
+                  })()}
 
                   {/* ─────────────────────────────────────────────────────────── */}
                   {/* PPC INDICATORS PANEL                                        */}
@@ -1023,141 +1051,6 @@ export default function AnalyzeForm({
                     );
                   })()}
 
-                  {/* ─────────────────────────────────────────────────────────── */}
-                  {/* MARKET SNAPSHOT HERO SECTION (REVENUE-DRIVEN)               */}
-                  {/* ─────────────────────────────────────────────────────────── */}
-                  {(() => {
-                    const snapshot = analysis.market_snapshot;
-                    const listings = snapshot.listings || [];
-                    
-                    // Normalize listings using helper, preserving revenue fields
-                    const normalizedListings = [...listings]
-                      .filter((l: any) => {
-                        const normalized = normalizeListing(l);
-                        return normalized.asin && normalized.title;
-                      })
-                      .map((l: any) => ({
-                        ...normalizeListing(l),
-                        // Preserve revenue estimation fields from raw listing
-                        est_monthly_revenue: l.est_monthly_revenue ?? null,
-                        est_monthly_units: l.est_monthly_units ?? null,
-                        revenue_confidence: l.revenue_confidence ?? "low",
-                      }));
-                    
-                    // Calculate total 30-day Page-1 revenue
-                    const totalRevenue = normalizedListings
-                      .map((l: any) => l.est_monthly_revenue)
-                      .filter((r): r is number => r !== null && r !== undefined)
-                      .reduce((sum, r) => sum + r, 0) || snapshot.est_total_monthly_revenue_min || null;
-                    
-                    // Calculate total 30-day Page-1 units
-                    const totalUnits = normalizedListings
-                      .map((l: any) => l.est_monthly_units)
-                      .filter((u): u is number => u !== null && u !== undefined)
-                      .reduce((sum, u) => sum + u, 0) || snapshot.est_total_monthly_units_min || null;
-                    
-                    // Calculate average BSR from listings with BSR
-                    const bsrListings = normalizedListings.filter((l: any) => l.bsr !== null && l.bsr !== undefined);
-                    const avgBSR = bsrListings.length > 0
-                      ? Math.round(bsrListings.reduce((sum: number, l: any) => sum + (l.bsr || 0), 0) / bsrListings.length)
-                      : snapshot.avg_bsr || null;
-                    
-                    const avgPrice = snapshot.avg_price;
-                    
-                    // Calculate top-10 revenue (sort by revenue, take top 10, sum)
-                    const sortedByRevenue = [...normalizedListings]
-                      .filter((l: any) => l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined)
-                      .sort((a: any, b: any) => (b.est_monthly_revenue || 0) - (a.est_monthly_revenue || 0));
-                    const top10Revenue = sortedByRevenue
-                      .slice(0, 10)
-                      .reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0);
-                    const top10RevenueShare = totalRevenue && totalRevenue > 0
-                      ? Math.round((top10Revenue / totalRevenue) * 100)
-                      : null;
-                    
-                    // Calculate review barrier (average reviews of top 10 by revenue)
-                    const top10ByRevenue = sortedByRevenue.slice(0, 10);
-                    const top10Reviews = top10ByRevenue
-                      .map((l: any) => l.reviews)
-                      .filter((r): r is number => r !== null && r !== undefined && r > 0);
-                    const reviewBarrier = top10Reviews.length > 0
-                      ? Math.round(top10Reviews.reduce((sum, r) => sum + r, 0) / top10Reviews.length)
-                      : null;
-                    
-                    return (
-                      <div className="bg-white border rounded-lg p-6 mb-6">
-                        <h2 className="text-xl font-semibold text-gray-900 mb-4">Market Snapshot (Page 1)</h2>
-                        
-                        {/* Hero Metrics Row */}
-                        <div className="grid grid-cols-4 gap-6 mb-4">
-                          {/* 30-Day Page-1 Revenue */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">30-Day Page-1 Revenue</div>
-                            <div className="text-2xl font-semibold text-gray-900">
-                              {totalRevenue !== null ? formatCurrency(totalRevenue) : "—"}
-                            </div>
-                          </div>
-                          
-                          {/* 30-Day Page-1 Units */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">30-Day Page-1 Units</div>
-                            <div className="text-2xl font-semibold text-gray-900">
-                              {totalUnits !== null ? totalUnits.toLocaleString() : "—"}
-                            </div>
-                          </div>
-                          
-                          {/* Avg BSR */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Avg BSR</div>
-                            <div className="text-2xl font-semibold text-gray-900">
-                              {avgBSR !== null ? `#${avgBSR.toLocaleString()}` : "—"}
-                            </div>
-                          </div>
-                          
-                          {/* Avg Price */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Avg Price</div>
-                            <div className="text-2xl font-semibold text-gray-900">
-                              {avgPrice !== null ? formatCurrency(avgPrice) : "—"}
-                            </div>
-                          </div>
-                        </div>
-                        
-                        {/* Footer note */}
-                        <div className="text-xs text-gray-500 mt-2">
-                          Estimates based on Page-1 BSR sales modeling
-                        </div>
-                        
-                        {/* Market Concentration Sub-Row */}
-                        <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t">
-                          {/* Top-10 Revenue */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Top-10 Revenue</div>
-                            <div className="text-lg font-semibold text-gray-900">
-                              {top10Revenue > 0 ? formatCurrency(top10Revenue) : "—"}
-                            </div>
-                          </div>
-                          
-                          {/* Top-10 Revenue Share */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Top-10 Revenue Share</div>
-                            <div className="text-lg font-semibold text-gray-900">
-                              {top10RevenueShare !== null ? `${top10RevenueShare}%` : "—"}
-                            </div>
-                          </div>
-                          
-                          {/* Review Barrier */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Review Barrier</div>
-                            <div className="text-lg font-semibold text-gray-900">
-                              {reviewBarrier !== null ? reviewBarrier.toLocaleString() : "—"}
-                            </div>
-                            <div className="text-xs text-gray-400 mt-0.5">avg reviews (top 10 by revenue)</div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
 
                   {/* ─────────────────────────────────────────────────────────── */}
                   {/* PAGE 1 RESULTS - Amazon-Style Grid                          */}
