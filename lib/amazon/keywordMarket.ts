@@ -254,6 +254,13 @@ export function extractMainCategoryBSR(item: any): { rank: number; category: str
  * @returns Array of listings with invalid BSRs set to null
  */
 function detectAndRemoveDuplicateBSRs(listings: ParsedListing[]): ParsedListing[] {
+  // STEP 4: Enhanced logging for duplicate BSR detection
+  console.log("🔵 BSR_DUPLICATE_DETECTION_START", {
+    total_listings: listings.length,
+    listings_with_bsr: listings.filter(l => l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0).length,
+    timestamp: new Date().toISOString(),
+  });
+  
   // Count BSR occurrences
   const bsrCounts: Record<number, number> = {};
   
@@ -266,12 +273,35 @@ function detectAndRemoveDuplicateBSRs(listings: ParsedListing[]): ParsedListing[
   
   // Find BSRs that appear ≥ 5 times (invalid duplicates)
   const invalidBSRs = new Set<number>();
+  const duplicateDetails: Array<{ bsr: number; count: number }> = [];
+  
   for (const [bsrStr, count] of Object.entries(bsrCounts)) {
     if (count >= 5) {
       const bsr = parseInt(bsrStr, 10);
       invalidBSRs.add(bsr);
-      console.log(`[BSR Duplicate Detection] BSR ${bsr} appears ${count} times - marking as invalid`);
+      duplicateDetails.push({ bsr, count });
+      console.log(`🔵 BSR_DUPLICATE_DETECTED: BSR ${bsr} appears ${count} times - marking as invalid`);
     }
+  }
+  
+  // STEP 4: Enhanced logging for duplicate detection results
+  if (invalidBSRs.size > 0) {
+    console.log("🔵 BSR_DUPLICATE_DETECTION_RESULTS", {
+      invalid_bsr_count: invalidBSRs.size,
+      duplicate_details: duplicateDetails,
+      affected_listings: listings.filter(l => 
+        l.main_category_bsr !== null && 
+        l.main_category_bsr !== undefined && 
+        invalidBSRs.has(l.main_category_bsr)
+      ).length,
+      timestamp: new Date().toISOString(),
+    });
+  } else {
+    console.log("🔵 BSR_DUPLICATE_DETECTION_RESULTS", {
+      status: "no_duplicates_found",
+      unique_bsrs: Object.keys(bsrCounts).length,
+      timestamp: new Date().toISOString(),
+    });
   }
   
   // If no duplicates found, return listings unchanged
@@ -280,7 +310,7 @@ function detectAndRemoveDuplicateBSRs(listings: ParsedListing[]): ParsedListing[
   }
   
   // Remove invalid BSRs from listings
-  return listings.map(listing => {
+  const cleanedListings = listings.map(listing => {
     if (listing.main_category_bsr !== null && 
         listing.main_category_bsr !== undefined && 
         invalidBSRs.has(listing.main_category_bsr)) {
@@ -292,6 +322,15 @@ function detectAndRemoveDuplicateBSRs(listings: ParsedListing[]): ParsedListing[
     }
     return listing;
   });
+  
+  console.log("🔵 BSR_DUPLICATE_DETECTION_COMPLETE", {
+    original_listings_with_bsr: listings.filter(l => l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0).length,
+    cleaned_listings_with_bsr: cleanedListings.filter(l => l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0).length,
+    invalid_bsrs_removed: invalidBSRs.size,
+    timestamp: new Date().toISOString(),
+  });
+  
+  return cleanedListings;
 }
 
 /**

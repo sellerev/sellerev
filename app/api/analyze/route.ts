@@ -305,8 +305,19 @@ const MAX_ANALYSES_PER_PERIOD = 5;
 const USAGE_PERIOD_DAYS = 30;
 
 /**
- * Generate representative product cards from market snapshot stats
- * This is a guaranteed fallback to ensure products array is never empty
+ * STEP 4: Generate representative product cards from market snapshot stats
+ * 
+ * This is a guaranteed fallback to ensure products array is never empty.
+ * 
+ * Features:
+ * - Generates 4-6 synthetic products based on snapshot averages
+ * - Uses realistic price variance (±12%)
+ * - Includes proper logging for debugging
+ * - Never throws errors - always returns valid products
+ * 
+ * Logging:
+ * - SYNTHETIC_PRODUCTS_GENERATION_START: When generation begins
+ * - SYNTHETIC_PRODUCTS_GENERATION_COMPLETE: When generation finishes
  */
 function generateRepresentativeProducts(
   snapshot: {
@@ -334,6 +345,16 @@ function generateRepresentativeProducts(
   est_monthly_units: number | null;
   revenue_confidence: "low" | "medium";
 }> {
+  // STEP 4: Enhanced logging for synthetic product generation
+  console.log("🔵 SYNTHETIC_PRODUCTS_GENERATION_START", {
+    keyword,
+    snapshot_price: snapshot.avg_price,
+    snapshot_units_min: snapshot.est_total_monthly_units_min,
+    snapshot_units_max: snapshot.est_total_monthly_units_max,
+    total_page1_listings: snapshot.total_page1_listings,
+    timestamp: new Date().toISOString(),
+  });
+  
   // Generate 4-6 products based on snapshot.product_count
   const productCount = snapshot.total_page1_listings || 5;
   const placeholderCount = Math.min(6, Math.max(4, productCount));
@@ -350,7 +371,7 @@ function generateRepresentativeProducts(
   // Generate price variance (±10-15%)
   const priceVariance = avgPrice * 0.12; // 12% variance
   
-  return Array.from({ length: placeholderCount }, (_, idx) => {
+  const syntheticProducts = Array.from({ length: placeholderCount }, (_, idx) => {
     // Vary price around average (±10-15%)
     const priceOffset = (Math.random() - 0.5) * 2 * priceVariance;
     const price = Math.max(1, Math.round((avgPrice + priceOffset) * 100) / 100);
@@ -378,6 +399,24 @@ function generateRepresentativeProducts(
       revenue_confidence: "low" as const,
     };
   });
+  
+  // STEP 4: Enhanced logging for synthetic product generation completion
+  console.log("🔵 SYNTHETIC_PRODUCTS_GENERATION_COMPLETE", {
+    keyword,
+    generated_count: syntheticProducts.length,
+    avg_price: avgPrice,
+    avg_monthly_units: avgMonthlyUnits,
+    avg_monthly_revenue: avgMonthlyRevenue,
+    sample_product: syntheticProducts[0] ? {
+      asin: syntheticProducts[0].asin,
+      price: syntheticProducts[0].price,
+      est_monthly_units: syntheticProducts[0].est_monthly_units,
+      est_monthly_revenue: syntheticProducts[0].est_monthly_revenue,
+    } : null,
+    timestamp: new Date().toISOString(),
+  });
+  
+  return syntheticProducts;
 }
 
 interface AnalyzeRequestBody {
@@ -1830,12 +1869,109 @@ ${body.input_value}`;
       }));
     }
     
-    // Log final guarantee check
-    console.log("FINAL_RESPONSE_PRODUCTS_GUARANTEE", {
+    // STEP 4: Final validation - ensure products are always present
+    const finalProductCount = finalResponse.products?.length || 0;
+    const finalListingCount = finalResponse.decision?.market_snapshot?.listings?.length || 0;
+    
+    console.log("🔵 FINAL_RESPONSE_VALIDATION", {
       has_products: !!finalResponse.products,
-      product_count: finalResponse.products?.length || 0,
+      product_count: finalProductCount,
       has_listings: !!finalResponse.decision?.market_snapshot?.listings,
-      listings_count: finalResponse.decision?.market_snapshot?.listings?.length || 0,
+      listings_count: finalListingCount,
+      keyword: body.input_value,
+      timestamp: new Date().toISOString(),
+    });
+    
+    // STEP 4: Hard guarantee - products must never be empty
+    if (!finalResponse.products || finalResponse.products.length === 0) {
+      console.error("🔴 CRITICAL: Final response has no products - applying emergency fallback", {
+        keyword: body.input_value,
+        has_contract_response: !!contractResponse,
+        has_keyword_market: !!keywordMarket,
+        has_keyword_market_data: !!keywordMarketData,
+        timestamp: new Date().toISOString(),
+      });
+      
+      // Emergency fallback: generate from snapshot if available
+      if (keywordMarketData && keywordMarketData.snapshot) {
+        const emergencyProducts = generateRepresentativeProducts(
+          keywordMarketData.snapshot,
+          keywordMarketData.snapshot.keyword
+        );
+        
+        // Map to product format
+        finalResponse.products = emergencyProducts.map((l: any, idx: number) => ({
+          rank: idx + 1,
+          asin: l.asin || `ESTIMATED-${idx + 1}`,
+          title: l.title || "Estimated Page-1 Listing",
+          image_url: l.image_url || null,
+          price: l.price || 0,
+          rating: l.rating || 0,
+          review_count: l.reviews || 0,
+          bsr: l.bsr || null,
+          estimated_monthly_units: l.est_monthly_units || 0,
+          estimated_monthly_revenue: l.est_monthly_revenue || 0,
+          revenue_share_pct: 0,
+          fulfillment: l.fulfillment || "FBM",
+          brand: l.brand || null,
+          seller_country: "Unknown",
+        }));
+        
+        console.log("🔵 EMERGENCY_PRODUCTS_GENERATED", {
+          keyword: body.input_value,
+          generated_count: finalResponse.products.length,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        // Last resort: generate minimal products
+        console.error("🔴 CRITICAL: No snapshot available for emergency fallback", {
+          keyword: body.input_value,
+          timestamp: new Date().toISOString(),
+        });
+        
+        finalResponse.products = Array.from({ length: 4 }, (_, idx) => ({
+          rank: idx + 1,
+          asin: `FALLBACK-${idx + 1}`,
+          title: "Estimated Page-1 Listing",
+          image_url: null,
+          price: 25,
+          rating: 0,
+          review_count: 0,
+          bsr: null,
+          estimated_monthly_units: 150,
+          estimated_monthly_revenue: 3750,
+          revenue_share_pct: 0,
+          fulfillment: "FBM",
+          brand: null,
+          seller_country: "Unknown",
+        }));
+      }
+    }
+    
+    // STEP 4: Verify final state
+    const verifiedProductCount = finalResponse.products?.length || 0;
+    if (verifiedProductCount === 0) {
+      console.error("🔴 FATAL: Products array is still empty after all fallbacks", {
+        keyword: body.input_value,
+        timestamp: new Date().toISOString(),
+      });
+      // This should never happen, but if it does, return error
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Internal error: Unable to generate product data",
+          details: "Product generation failed after all fallback attempts",
+        },
+        { status: 500, headers: res.headers }
+      );
+    }
+    
+    console.log("✅ FINAL_RESPONSE_PRODUCTS_GUARANTEE", {
+      keyword: body.input_value,
+      final_product_count: verifiedProductCount,
+      final_listing_count: finalListingCount,
+      status: "SUCCESS",
+      timestamp: new Date().toISOString(),
     });
 
     // 13. Save to analysis_runs with verdict, confidence, and seller context snapshot
