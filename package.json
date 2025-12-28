@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "worker": "tsx scripts/run-background-worker.ts",
+    "worker": "echo '⚠️  Worker now runs automatically via Supabase CRON. See WORKER_CRON_SETUP.md'",
     "worker:once": "tsx scripts/run-worker-once.ts"
   },
   "dependencies": {

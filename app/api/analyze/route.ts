@@ -846,111 +846,94 @@ export async function POST(req: NextRequest) {
         })),
       };
     } else {
-      // Snapshot doesn't exist - generate Tier-1 instant estimate
-      console.log("SNAPSHOT_MISS", {
-        keyword: body.input_value,
-        message: "Generating instant estimate + queueing background snapshot",
-      });
+      // Step 2: No snapshot exists - create Tier-1 instantly (NO API calls, $0 cost)
+      const normalizedKeyword = body.input_value.toLowerCase().trim();
+      console.log("SNAPSHOT_MISS - Creating Tier-1 instantly", { keyword: normalizedKeyword });
 
-      // Queue keyword for background processing (Tier-2 snapshot)
-      await queueKeyword(supabase, body.input_value, 5, user.id, marketplace);
+      // Import Tier-1 builder
+      const { buildTier1Snapshot, tier1ToDbFormat } = await import("@/lib/snapshots/tier1Estimate");
 
-      // CRITICAL: Immediately create a Tier-1 snapshot so UI doesn't show "Estimating..."
-      // This ensures the UI always has data, even if it's an estimate
-      try {
-        const normalizedKeyword = body.input_value.toLowerCase().trim();
-        const { error: snapshotError } = await supabase
-          .from("keyword_snapshots")
-          .upsert({
-            keyword: normalizedKeyword,
-            marketplace: "amazon.com",
-            product_count: 48, // Default estimate
-            average_price: null,
-            average_bsr: null,
-            total_monthly_units: 10000, // Default estimate
-            total_monthly_revenue: 200000.00, // Default estimate
-            demand_level: "medium",
-            last_updated: new Date().toISOString()
-          }, {
-            onConflict: 'keyword,marketplace'
-          });
+      // Build Tier-1 snapshot using deterministic heuristic
+      const tier1Snapshot = buildTier1Snapshot(normalizedKeyword);
 
-        if (!snapshotError) {
-          console.log("✅ Created Tier-1 snapshot immediately for UI");
-          // Re-fetch the snapshot we just created
-          const { data: newSnapshot } = await supabase
-            .from("keyword_snapshots")
-            .select("*")
-            .eq("keyword", normalizedKeyword)
-            .eq("marketplace", marketplace)
-            .single();
-
-          if (newSnapshot) {
-            snapshot = newSnapshot;
-            snapshotStatus = 'hit';
-            console.log("✅ Using newly created snapshot");
-          }
-        }
-      } catch (snapshotCreateError) {
-        console.error("Failed to create immediate snapshot:", snapshotCreateError);
-        // Continue with instant estimate fallback
-      }
-
-      // Generate Tier-1 instant estimate using search results
-      try {
-        const { fetchSearchResults } = await import("@/lib/estimates/fetchSearchResults");
-        const { estimateMarketFromSearch } = await import("@/lib/estimates/instantMarketEstimate");
-
-        // Fetch search results (1 Rainforest credit)
-        const searchProducts = await fetchSearchResults(body.input_value);
-
-        // Generate instant estimate
-        const instantEstimate = estimateMarketFromSearch(searchProducts);
-
-        console.log("INSTANT_ESTIMATE_GENERATED", {
-          keyword: body.input_value,
-          productCount: instantEstimate.productCount,
-          totalUnits: instantEstimate.totalMonthlyUnits,
-          totalRevenue: instantEstimate.totalMonthlyRevenue,
+      // Insert Tier-1 snapshot into database
+      const dbSnapshot = tier1ToDbFormat(tier1Snapshot, marketplace);
+      const { error: insertError } = await supabase
+        .from("keyword_snapshots")
+        .upsert(dbSnapshot, {
+          onConflict: 'keyword,marketplace'
         });
 
-        // Convert to KeywordMarketData format for UI compatibility
-        keywordMarketData = {
-          snapshot: {
-            keyword: body.input_value,
-            avg_price: instantEstimate.averagePrice,
-            avg_reviews: 0, // Not available from search-only
-            avg_rating: null, // Not available from search-only
-            avg_bsr: null, // Not available from search-only (requires product API)
-            total_page1_listings: instantEstimate.productCount,
-            sponsored_count: searchProducts.filter(p => p.is_sponsored).length,
-            dominance_score: 0, // Not calculated for instant estimates
-            fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 }, // Not available from search-only
-            est_total_monthly_revenue_min: instantEstimate.totalMonthlyRevenue,
-            est_total_monthly_revenue_max: instantEstimate.totalMonthlyRevenue,
-            est_total_monthly_units_min: instantEstimate.totalMonthlyUnits,
-            est_total_monthly_units_max: instantEstimate.totalMonthlyUnits,
-            search_demand: null, // Will be computed in background snapshot
-          },
-          listings: searchProducts.map((p) => ({
-            asin: p.asin || '',
-            title: p.title || null,
-            price: p.price,
-            rating: p.rating || null,
-            reviews: p.reviews || null,
-            is_sponsored: p.is_sponsored || false,
-            position: p.position,
-            brand: null,
-            image_url: p.image_url || null,
-            bsr: null, // Not available from search-only
-            main_category_bsr: null,
-            main_category: null,
-            fulfillment: null,
-            est_monthly_revenue: null, // Will be calculated in background snapshot
-            est_monthly_units: null, // Will be calculated in background snapshot
-            revenue_confidence: 'low' as const, // Low confidence for estimates
-          })),
-        };
+      if (insertError) {
+        console.error("❌ Failed to insert Tier-1 snapshot:", insertError);
+        // Continue anyway - we'll use the in-memory snapshot
+      } else {
+        console.log("✅ Tier-1 snapshot inserted:", {
+          keyword: normalizedKeyword,
+          total_monthly_units: tier1Snapshot.total_monthly_units,
+          total_monthly_revenue: tier1Snapshot.total_monthly_revenue,
+        });
+      }
+
+      // Queue keyword for Tier-2 enrichment (background, non-blocking)
+      await queueKeyword(supabase, normalizedKeyword, 5, user.id, marketplace);
+      console.log("✅ Keyword queued for Tier-2 enrichment");
+
+      // Convert Tier-1 snapshot to KeywordMarketData format
+      keywordMarketData = {
+        snapshot: {
+          keyword: tier1Snapshot.keyword,
+          avg_price: tier1Snapshot.average_price,
+          avg_reviews: 0,
+          avg_rating: null,
+          avg_bsr: tier1Snapshot.average_bsr,
+          total_page1_listings: tier1Snapshot.product_count,
+          sponsored_count: 0,
+          dominance_score: 0,
+          fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 },
+          est_total_monthly_revenue_min: tier1Snapshot.total_monthly_revenue,
+          est_total_monthly_revenue_max: tier1Snapshot.total_monthly_revenue,
+          est_total_monthly_units_min: tier1Snapshot.total_monthly_units,
+          est_total_monthly_units_max: tier1Snapshot.total_monthly_units,
+          search_demand: null,
+        },
+        listings: [], // Tier-1 has no product listings
+      };
+    }
+
+    // CRITICAL: keywordMarketData must never be null at this point
+    if (!keywordMarketData) {
+      console.error("❌ FATAL: keywordMarketData is null - this should never happen");
+      // Emergency fallback - create Tier-1 on the fly
+      const { buildTier1Snapshot } = await import("@/lib/snapshots/tier1Estimate");
+      const normalizedKeyword = body.input_value.toLowerCase().trim();
+      const emergencyTier1 = buildTier1Snapshot(normalizedKeyword);
+      keywordMarketData = {
+        snapshot: {
+          keyword: emergencyTier1.keyword,
+          avg_price: emergencyTier1.average_price,
+          avg_reviews: 0,
+          avg_rating: null,
+          avg_bsr: emergencyTier1.average_bsr,
+          total_page1_listings: emergencyTier1.product_count,
+          sponsored_count: 0,
+          dominance_score: 0,
+          fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 },
+          est_total_monthly_revenue_min: emergencyTier1.total_monthly_revenue,
+          est_total_monthly_revenue_max: emergencyTier1.total_monthly_revenue,
+          est_total_monthly_units_min: emergencyTier1.total_monthly_units,
+          est_total_monthly_units_max: emergencyTier1.total_monthly_units,
+          search_demand: null,
+        },
+        listings: [],
+      };
+      snapshotStatus = 'estimated'; // Mark as estimated for emergency fallback
+    }
+
+    // Determine if this is Tier-1 (estimated) or Tier-2 (live) based on snapshot source
+    // Check if snapshot has product listings (Tier-2) or is empty (Tier-1)
+    const isTier1 = keywordMarketData.listings.length === 0;
+    snapshotStatus = isTier1 ? 'estimated' : 'hit';
 
         // Mark as estimated
         snapshotStatus = 'estimated';

@@ -1,14 +1,13 @@
 /**
- * One-Time Worker Execution (for cron jobs)
+ * ⚠️ DEPRECATED: This script is no longer needed.
  * 
- * Processes a single batch of keywords and exits.
- * Useful for cron jobs that don't want long-running processes.
+ * The worker now runs automatically via Supabase CRON every 2 minutes.
+ * See WORKER_CRON_SETUP.md for details.
  * 
- * Usage:
+ * This script is kept for manual testing/debugging only.
+ * 
+ * Usage (for testing only):
  *   tsx scripts/run-worker-once.ts
- * 
- * Cron example (runs every 5 minutes):
- *   */5 * * * * cd /Users/Shane/Sellerev && tsx scripts/run-worker-once.ts
  */
 
 import {

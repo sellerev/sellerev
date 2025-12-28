@@ -54,7 +54,7 @@ function calculateTier1Estimate(keyword: string): {
 
 Deno.serve(async (req) => {
   try {
-    const { keyword } = await req.json();
+    const { keyword, tier } = await req.json();
 
     if (!keyword) {
       return new Response(JSON.stringify({ success: false, error: "Missing keyword" }), { 
@@ -68,83 +68,169 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Normalize keyword (lowercase, trim) to match searchKeywordSnapshot logic
     const normalizedKeyword = keyword.toLowerCase().trim();
+    const isTier2 = tier === 'tier2' || tier === 2;
 
-    // Calculate Tier-1 estimate using deterministic heuristic
-    const estimate = calculateTier1Estimate(normalizedKeyword);
-
-    console.log(`📊 Calculating Tier-1 estimate for: ${normalizedKeyword}`, estimate);
-
-    // Upsert snapshot - CRITICAL: Must succeed or return error
-    const { data: upsertedData, error: upsertError } = await supabase
-      .from("keyword_snapshots")
-      .upsert({
-        keyword: normalizedKeyword,
-        marketplace: "amazon.com",
-        product_count: estimate.product_count,
-        average_price: estimate.average_price,
-        average_bsr: null, // Tier-1 doesn't have BSR data
-        total_monthly_units: estimate.total_monthly_units,
-        total_monthly_revenue: estimate.total_monthly_revenue,
-        demand_level: estimate.demand_level,
-        last_updated: new Date().toISOString()
-      }, {
-        onConflict: 'keyword,marketplace'
-      })
-      .select();
-
-    if (upsertError) {
-      console.error("❌ Failed to upsert snapshot:", upsertError);
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: upsertError.message,
-        details: upsertError 
-      }), { 
-        status: 500,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-
-    // Verify snapshot was actually written by reading it back
-    const { data: verifyData, error: verifyError } = await supabase
-      .from("keyword_snapshots")
-      .select("*")
-      .eq("keyword", normalizedKeyword)
-      .eq("marketplace", "amazon.com")
-      .single();
-
-    if (verifyError || !verifyData) {
-      console.error("❌ Snapshot write verification failed:", verifyError);
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: "Snapshot write verification failed",
-        details: verifyError?.message || "Snapshot not found after write"
-      }), { 
-        status: 500,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-
-    console.log(`✅ Snapshot verified for keyword: ${normalizedKeyword}`, {
-      total_monthly_units: verifyData.total_monthly_units,
-      total_monthly_revenue: verifyData.total_monthly_revenue,
-    });
-
-    // Return success ONLY if snapshot was written and verified
-    return new Response(JSON.stringify({ 
-      success: true, 
-      keyword: normalizedKeyword,
-      snapshot: {
-        total_monthly_units: verifyData.total_monthly_units,
-        total_monthly_revenue: verifyData.total_monthly_revenue,
-        product_count: verifyData.product_count,
-        average_price: verifyData.average_price,
+    if (isTier2) {
+      // Tier-2: Use Rainforest API for real data
+      console.log(`🔄 Tier-2 enrichment for: ${normalizedKeyword}`);
+      
+      const rainforestApiKey = Deno.env.get("RAINFOREST_API_KEY");
+      if (!rainforestApiKey) {
+        return new Response(JSON.stringify({ 
+          success: false, 
+          error: "RAINFOREST_API_KEY not configured" 
+        }), { 
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
       }
-    }), { 
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
+
+      // Fetch search results from Rainforest
+      const searchUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(normalizedKeyword)}&page=1`;
+      const searchResponse = await fetch(searchUrl);
+      
+      if (!searchResponse.ok) {
+        const errorText = await searchResponse.text();
+        console.error(`Rainforest search error: ${searchResponse.status}`, errorText.substring(0, 200));
+        return new Response(JSON.stringify({ 
+          success: false, 
+          error: `Rainforest API error: ${searchResponse.status}` 
+        }), { 
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      const searchData = await searchResponse.json();
+      const results = searchData.search_results || searchData.results || searchData.organic_results || [];
+      
+      if (results.length === 0) {
+        return new Response(JSON.stringify({ 
+          success: false, 
+          error: "No search results returned" 
+        }), { 
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      // Calculate metrics from real data
+      const prices = results
+        .map((r: any) => r.price?.value || r.price)
+        .filter((p: any) => p && typeof p === 'number' && p > 0);
+      const avgPrice = prices.length > 0 
+        ? prices.reduce((a: number, b: number) => a + b, 0) / prices.length 
+        : 25.00;
+
+      // Estimate units from position (conservative)
+      const unitsPerPosition = [
+        ...Array(10).fill(500),
+        ...Array(10).fill(200),
+        ...Array(28).fill(50),
+      ];
+      const totalUnits = unitsPerPosition.slice(0, Math.min(results.length, 48))
+        .reduce((a, b) => a + b, 0);
+      const totalRevenue = totalUnits * avgPrice;
+
+      const demandLevel = totalUnits > 8000 ? 'high' : totalUnits > 5000 ? 'medium' : 'low';
+
+      // Save Tier-2 snapshot
+      const { error: upsertError } = await supabase
+        .from("keyword_snapshots")
+        .upsert({
+          keyword: normalizedKeyword,
+          marketplace: "amazon.com",
+          product_count: results.length,
+          average_price: avgPrice,
+          average_bsr: null, // Would need product API calls for BSR
+          total_monthly_units: totalUnits,
+          total_monthly_revenue: Math.round(totalRevenue * 100) / 100,
+          demand_level: demandLevel,
+          last_updated: new Date().toISOString()
+        }, {
+          onConflict: 'keyword,marketplace'
+        });
+
+      if (upsertError) {
+        console.error("❌ Failed to save Tier-2 snapshot:", upsertError);
+        return new Response(JSON.stringify({ 
+          success: false, 
+          error: upsertError.message 
+        }), { 
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      console.log(`✅ Tier-2 snapshot saved: ${normalizedKeyword}`);
+      return new Response(JSON.stringify({ 
+        success: true, 
+        keyword: normalizedKeyword,
+        tier: 'tier2'
+      }), { 
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    } else {
+      // Tier-1: Deterministic heuristic (no API calls)
+      const estimate = calculateTier1Estimate(normalizedKeyword);
+      console.log(`📊 Tier-1 estimate for: ${normalizedKeyword}`, estimate);
+
+      const { error: upsertError } = await supabase
+        .from("keyword_snapshots")
+        .upsert({
+          keyword: normalizedKeyword,
+          marketplace: "amazon.com",
+          product_count: estimate.product_count,
+          average_price: estimate.average_price,
+          average_bsr: null,
+          total_monthly_units: estimate.total_monthly_units,
+          total_monthly_revenue: estimate.total_monthly_revenue,
+          demand_level: estimate.demand_level,
+          last_updated: new Date().toISOString()
+        }, {
+          onConflict: 'keyword,marketplace'
+        });
+
+      if (upsertError) {
+        console.error("❌ Failed to upsert Tier-1 snapshot:", upsertError);
+        return new Response(JSON.stringify({ 
+          success: false, 
+          error: upsertError.message 
+        }), { 
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      // Verify snapshot
+      const { data: verifyData, error: verifyError } = await supabase
+        .from("keyword_snapshots")
+        .select("*")
+        .eq("keyword", normalizedKeyword)
+        .eq("marketplace", "amazon.com")
+        .single();
+
+      if (verifyError || !verifyData) {
+        return new Response(JSON.stringify({ 
+          success: false, 
+          error: "Snapshot verification failed" 
+        }), { 
+          status: 500,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      return new Response(JSON.stringify({ 
+        success: true, 
+        keyword: normalizedKeyword,
+        tier: 'tier1'
+      }), { 
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
   } catch (err) {
     console.error("❌ process-keyword error:", err);
     return new Response(JSON.stringify({ 
