@@ -81,7 +81,8 @@ export function buildCopilotSystemPrompt(
   const { ai_context, seller_memory, session_context, structured_memories = [] } = context;
   
   // Get base prompt from chatSystemPrompt (single source of truth)
-  const basePrompt = buildChatSystemPrompt(analysisMode);
+  const normalizedMode = analysisMode === "asin" ? "ASIN" as const : analysisMode === "keyword" ? "KEYWORD" as const : null;
+  const basePrompt = buildChatSystemPrompt(normalizedMode);
   
   // Classify the question
   const questionClassification = classifyQuestion(session_context.user_question);

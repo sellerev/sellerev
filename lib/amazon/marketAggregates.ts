@@ -16,9 +16,9 @@ import { ParsedListing } from "./keywordMarket";
  * - Always returns a number (0 if no valid reviews)
  */
 export function computeAvgReviews(listings: ParsedListing[]): number {
-  const valid = listings
+  const valid: number[] = listings
     .map(l => l.reviews)
-    .filter(r => typeof r === 'number' && r > 0);
+    .filter((r): r is number => typeof r === 'number' && r > 0);
   
   if (!valid.length) return 0;
   

@@ -111,7 +111,7 @@ export async function upsertMemoriesWithMerge(
     // Find matching existing memory
     const existing = existingMemories.find((m) =>
       memoriesMatch(m, candidate)
-    );
+    ) || null;
 
     // Determine merge action
     const mergeResult = determineMergeAction(existing, candidate);

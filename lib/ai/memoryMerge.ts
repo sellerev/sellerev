@@ -162,7 +162,7 @@ export function determineMergeAction(
       action: 'update',
       memory: {
         ...candidate,
-        value: mergedValue,
+        value: mergedValue as string | number | boolean | Record<string, unknown> | null,
         confidence: candidate.confidence || existing.confidence,
       },
     };

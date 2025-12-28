@@ -33,26 +33,21 @@ export function calculateMarginSnapshotFromAssumptions(
   // If price is missing, return LOW confidence snapshot
   if (selling_price === null || selling_price <= 0) {
     return {
-      // Legacy fields
-      selling_price: 0,
-      cogs_assumed_low: 0,
-      cogs_assumed_high: 0,
-      fba_fees: null,
-      net_margin_low_pct: 0,
-      net_margin_high_pct: 0,
-      breakeven_price_low: 0,
-      breakeven_price_high: 0,
-      confidence: "estimated",
-      source: "assumption_engine",
-      // PART G fields
-      confidence_level: "LOW",
-      assumed_price: null,
-      estimated_cogs_range: null,
-      estimated_fba_fees: null,
-      estimated_margin_pct_range: null,
-      breakeven_price_range: null,
-      sourcing_model: "not_sure",
-      assumptions_used: ["Selling price unavailable"],
+      mode: "KEYWORD" as const,
+      confidence_tier: "ESTIMATED" as const,
+      confidence_reason: "Selling price unavailable",
+      assumed_price: 0,
+      price_source: "fallback" as const,
+      estimated_cogs_min: null,
+      estimated_cogs_max: null,
+      cogs_source: "assumption_engine" as const,
+      estimated_fba_fee: null,
+      fba_fee_source: "unknown" as const,
+      net_margin_min_pct: null,
+      net_margin_max_pct: null,
+      breakeven_price_min: null,
+      breakeven_price_max: null,
+      assumptions: ["Selling price unavailable"],
     };
   }
 
@@ -95,32 +90,20 @@ export function calculateMarginSnapshotFromAssumptions(
 
   // Build margin snapshot
   return {
-    // Legacy fields
-    selling_price,
-    cogs_assumed_low: cogsLow,
-    cogs_assumed_high: cogsHigh,
-    fba_fees: fba_fee,
-    net_margin_low_pct: Math.max(0, netMarginLowPct),
-    net_margin_high_pct: Math.max(0, netMarginHighPct),
-    breakeven_price_low: breakevenPriceLow,
-    breakeven_price_high: breakevenPriceHigh,
-    confidence: confidence_tier === 'EXACT' ? 'refined' : confidence_tier === 'REFINED' ? 'refined' : 'estimated',
-    source: source === 'sp_api' ? 'amazon_fees' : 'assumption_engine',
-    
-    // PART G fields
-    confidence_level: confidenceLevel,
+    mode: "KEYWORD" as const,
+    confidence_tier: confidenceLevel === "HIGH" ? "EXACT" as const : confidenceLevel === "MEDIUM" ? "REFINED" as const : "ESTIMATED" as const,
+    confidence_reason: assumptionsUsed.join("; "),
     assumed_price: selling_price,
-    estimated_cogs_range: cogs_low !== null && cogs_high !== null ? { low: cogsLow, high: cogsHigh } : null,
-    estimated_fba_fees: fba_fee,
-    estimated_margin_pct_range: {
-      low: Math.max(0, netMarginLowPct),
-      high: Math.max(0, netMarginHighPct),
-    },
-    breakeven_price_range: {
-      low: breakevenPriceLow,
-      high: breakevenPriceHigh,
-    },
-    sourcing_model: sourcingModel, // PART H: Passed from seller profile
-    assumptions_used: assumptionsUsed,
+    price_source: source === 'sp_api' ? 'page1_avg' as const : 'fallback' as const,
+    estimated_cogs_min: cogsLow,
+    estimated_cogs_max: cogsHigh,
+    cogs_source: source === 'user_override' ? 'user_override' as const : 'assumption_engine' as const,
+    estimated_fba_fee: fba_fee,
+    fba_fee_source: source === 'sp_api' ? 'sp_api' as const : 'category_estimate' as const,
+    net_margin_min_pct: Math.max(0, netMarginLowPct),
+    net_margin_max_pct: Math.max(0, netMarginHighPct),
+    breakeven_price_min: breakevenPriceLow,
+    breakeven_price_max: breakevenPriceHigh,
+    assumptions: assumptionsUsed,
   };
 }

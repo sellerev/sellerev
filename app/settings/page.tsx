@@ -48,7 +48,8 @@ export default function SettingsPage() {
       const { data: { user } } = await supabaseBrowser.auth.getUser();
       if (!user) return;
 
-      const { getPendingMemories } = await import("@/lib/ai/sellerMemoryStore");
+      // Memory functionality temporarily disabled - routes not required for MVP
+      // const { getPendingMemories } = await import("@/lib/ai/sellerMemoryStore");
       const { shouldAskUserToConfirm } = await import("@/lib/ai/memoryMerge");
       
       // We need to use server-side supabase for this

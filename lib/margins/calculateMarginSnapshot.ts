@@ -107,7 +107,7 @@ export function calculateMarginSnapshot({
     const cogsEstimate = estimateCogsRange({
       sourcing_model,
       category: category_hint,
-      avg_price,
+      price: avg_price,
     });
 
     const cogsLow = cogsEstimate.low;

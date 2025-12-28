@@ -50,7 +50,7 @@ export function updateSellerMemory(
     switch (update.type) {
       case "preference":
         if (update.field in updated.preferences) {
-          (updated.preferences as Record<string, unknown>)[update.field] = update.value;
+          (updated.preferences as unknown as Record<string, unknown>)[update.field] = update.value;
         } else {
           return {
             success: false,
@@ -62,7 +62,7 @@ export function updateSellerMemory(
 
       case "assumption":
         if (update.field in updated.saved_assumptions) {
-          (updated.saved_assumptions as Record<string, unknown>)[update.field] = update.value;
+          (updated.saved_assumptions as unknown as Record<string, unknown>)[update.field] = update.value;
         } else {
           return {
             success: false,
@@ -74,7 +74,7 @@ export function updateSellerMemory(
 
       case "profile":
         if (update.field in updated.seller_profile) {
-          (updated.seller_profile as Record<string, unknown>)[update.field] = update.value;
+          (updated.seller_profile as unknown as Record<string, unknown>)[update.field] = update.value;
         } else {
           return {
             success: false,

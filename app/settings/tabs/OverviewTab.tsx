@@ -25,7 +25,7 @@ export default function OverviewTab({ onReviewPending }: OverviewTabProps) {
 
       // Load confirmed memories
       const { getSellerMemories } = await import("@/lib/ai/sellerMemoryStore");
-      const { getPendingMemories } = await import("@/lib/ai/sellerMemoryStore");
+      // const { getPendingMemories } = await import("@/lib/ai/sellerMemoryStore"); // Temporarily disabled - not required for MVP
       const { shouldAskUserToConfirm } = await import("@/lib/ai/memoryMerge");
       
       // Use API route instead (client-side can't use server functions directly)

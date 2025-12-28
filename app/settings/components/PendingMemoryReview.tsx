@@ -33,7 +33,7 @@ export default function PendingMemoryReview({ onClose }: PendingMemoryReviewProp
         const { shouldAskUserToConfirm } = await import("@/lib/ai/memoryMerge");
         
         const filtered = (data.pending || []).filter((p: PendingMemory) =>
-          shouldAskUserToConfirm(p.memory_candidate, p.reason)
+          shouldAskUserToConfirm(p.memory_candidate as any, p.reason)
         );
         
         setPendingMemories(filtered);

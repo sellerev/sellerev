@@ -88,7 +88,7 @@ export function normalizeListing(raw: any): ParsedListing {
     main_category_bsr, // Main category BSR (top-level category only)
     main_category, // Main category name
     fulfillment: raw.fulfillment ?? raw.Fulfillment ?? null,
-    sponsored: !!raw.is_sponsored ?? !!raw.IsSponsored ?? false,
+    sponsored: !!raw.is_sponsored || !!raw.IsSponsored || false,
     organic_rank: raw.organic_rank ?? raw.position ?? raw.Position ?? null,
     brand: raw.brand ?? raw.Brand ?? null,
   };
