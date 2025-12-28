@@ -935,28 +935,6 @@ export async function POST(req: NextRequest) {
     const isTier1 = keywordMarketData.listings.length === 0;
     snapshotStatus = isTier1 ? 'estimated' : 'hit';
 
-        // Mark as estimated
-        snapshotStatus = 'estimated';
-      } catch (estimateError) {
-        console.error("INSTANT_ESTIMATE_ERROR", {
-          keyword: body.input_value,
-          error: estimateError instanceof Error ? estimateError.message : String(estimateError),
-        });
-        
-        // If instant estimate fails, fall back to queued response
-        return NextResponse.json(
-          {
-            success: true,
-            status: "queued",
-            message: "Analysis queued. Ready in ~5–10 minutes.",
-            keyword: body.input_value,
-            queued_at: new Date().toISOString(),
-          },
-          { status: 202, headers: res.headers }
-        );
-      }
-    }
-
     // Use the snapshot (guaranteed to exist after snapshot check)
     const marketSnapshot = keywordMarketData.snapshot;
     const marketSnapshotJson = keywordMarketData.snapshot;
