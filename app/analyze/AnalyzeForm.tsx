@@ -879,38 +879,42 @@ export default function AnalyzeForm({
                     const page1Count = aggregates?.page1_product_count ?? normalizedListings.length;
                     const keyword = snapshot?.keyword ?? analysis.input_value ?? "";
                     
-                    // Use aggregates from canonical array, fallback to calculated from listings
-                    const avgPrice = aggregates?.avg_price ?? (normalizedListings.length > 0 
-                      ? normalizedListings.reduce((sum: number, l: any) => sum + (l.price || 0), 0) / normalizedListings.filter((l: any) => l.price > 0).length
-                      : 0);
+                    // CRITICAL: Use aggregates from canonical Page-1 array (guaranteed to be numeric when listings exist)
+                    // If listings exist, aggregates must always be numeric (never "Estimating...")
+                    const hasListings = normalizedListings.length > 0;
                     
-                    // Average BSR - use aggregates or calculate from listings
+                    // Average Price - always numeric when listings exist
+                    const avgPrice = hasListings 
+                      ? (aggregates?.avg_price ?? (normalizedListings.filter((l: any) => l.price > 0).length > 0
+                          ? normalizedListings.reduce((sum: number, l: any) => sum + (l.price || 0), 0) / normalizedListings.filter((l: any) => l.price > 0).length
+                          : 0))
+                      : 0;
+                    
+                    // Average BSR - use aggregates or calculate from listings (null is valid when no BSRs available)
                     const bsrListings = normalizedListings.filter((l: any) => l.bsr !== null && l.bsr !== undefined && l.bsr > 0);
-                    const avgBSR = aggregates?.avg_bsr ?? (bsrListings.length > 0
-                      ? Math.round(bsrListings.reduce((sum: number, l: any) => sum + (l.bsr || 0), 0) / bsrListings.length)
-                      : null);
+                    const avgBSR = hasListings
+                      ? (aggregates?.avg_bsr ?? (bsrListings.length > 0
+                          ? Math.round(bsrListings.reduce((sum: number, l: any) => sum + (l.bsr || 0), 0) / bsrListings.length)
+                          : null))
+                      : null;
                     
-                    // Monthly Units - use aggregates or calculate from listings
-                    const monthlyUnits = aggregates?.total_monthly_units_est ?? 
-                      (normalizedListings.length > 0
-                        ? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_units || 0), 0)
-                        : 0);
+                    // Monthly Units - always numeric when listings exist
+                    const monthlyUnits = hasListings
+                      ? (aggregates?.total_monthly_units_est ?? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_units || 0), 0))
+                      : 0;
                     
-                    // Monthly Revenue - use aggregates or calculate from listings
-                    const monthlyRevenue = aggregates?.total_monthly_revenue_est ??
-                      (normalizedListings.length > 0
-                        ? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0)
-                        : (avgPrice ? Math.round(monthlyUnits * avgPrice) : 0));
+                    // Monthly Revenue - always numeric when listings exist
+                    const monthlyRevenue = hasListings
+                      ? (aggregates?.total_monthly_revenue_est ?? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0))
+                      : 0;
                     
-                    // Average Rating - use aggregates or calculate from listings
-                    const avgRating = aggregates?.avg_rating ?? (normalizedListings.length > 0
-                      ? normalizedListings
-                          .filter((l: any) => l.rating !== null && l.rating !== undefined && l.rating > 0)
-                          .reduce((sum: number, l: any, idx: number, arr: any[]) => {
-                            const total = sum + (l.rating || 0);
-                            return idx === arr.length - 1 ? total / arr.length : total;
-                          }, 0)
-                      : 0);
+                    // Average Rating - always numeric when listings exist
+                    const ratingsList = normalizedListings.filter((l: any) => l.rating !== null && l.rating !== undefined && l.rating > 0);
+                    const avgRating = hasListings
+                      ? (aggregates?.avg_rating ?? (ratingsList.length > 0
+                          ? ratingsList.reduce((sum: number, l: any) => sum + (l.rating || 0), 0) / ratingsList.length
+                          : 0))
+                      : 0;
                     
                     // Search Volume
                     let searchVolume: string = "Estimating…";
@@ -966,7 +970,7 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Price</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {avgPrice !== null && avgPrice !== undefined ? formatCurrency(avgPrice) : "Estimating…"}
+                              {hasListings ? formatCurrency(avgPrice) : "Estimating…"}
                             </div>
                           </div>
                           
@@ -974,7 +978,7 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average BSR</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {snapshotType === "snapshot" && avgBSR !== null && avgBSR !== undefined
+                              {hasListings && avgBSR !== null && avgBSR !== undefined
                                 ? `#${avgBSR.toLocaleString()}`
                                 : snapshotType === "estimated"
                                   ? "— (refining)"
@@ -986,7 +990,7 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {monthlyUnits > 0 ? monthlyUnits.toLocaleString() : "Estimating…"}
+                              {hasListings ? monthlyUnits.toLocaleString() : "Estimating…"}
                             </div>
                           </div>
                           
@@ -994,7 +998,7 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {monthlyRevenue > 0 ? formatCurrency(monthlyRevenue) : "Estimating…"}
+                              {hasListings ? formatCurrency(monthlyRevenue) : "Estimating…"}
                             </div>
                           </div>
                           
@@ -1002,9 +1006,7 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Rating</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {avgRating !== null && avgRating !== undefined && !isNaN(avgRating)
-                                ? `${avgRating.toFixed(1)} ★`
-                                : "Estimating…"}
+                              {hasListings && !isNaN(avgRating) ? `${avgRating.toFixed(1)} ★` : "Estimating…"}
                             </div>
                           </div>
                           

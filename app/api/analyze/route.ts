@@ -1345,6 +1345,58 @@ export async function POST(req: NextRequest) {
             brand: p.brand,
             seller_country: p.seller_country,
           }));
+          
+          // CRITICAL: Recompute aggregates synchronously from canonical Page-1 products
+          // This ensures aggregates are derived ONLY from the final canonical array
+          const pageOneProducts = contractResponse.products;
+          
+          // Calculate aggregates from canonical products
+          const pageOnePrices = pageOneProducts
+            .map((p: any) => p.price)
+            .filter((p: any): p is number => p !== null && p !== undefined && p > 0);
+          const avg_price = pageOnePrices.length > 0 
+            ? pageOnePrices.reduce((sum: number, p: number) => sum + p, 0) / pageOnePrices.length 
+            : 0;
+          
+          const pageOneRatings = pageOneProducts
+            .map((p: any) => p.rating)
+            .filter((r: any): r is number => r !== null && r !== undefined && r > 0);
+          const avg_rating = pageOneRatings.length > 0
+            ? pageOneRatings.reduce((sum: number, r: number) => sum + r, 0) / pageOneRatings.length
+            : 0;
+          
+          const pageOneBsrs = pageOneProducts
+            .map((p: any) => p.bsr)
+            .filter((b: any): b is number => b !== null && b !== undefined && b > 0);
+          const avg_bsr = pageOneBsrs.length > 0
+            ? pageOneBsrs.reduce((sum: number, b: number) => sum + b, 0) / pageOneBsrs.length
+            : null;
+          
+          const total_monthly_units_est = pageOneProducts.reduce((sum: number, p: any) => sum + (p.estimated_monthly_units || 0), 0);
+          const total_monthly_revenue_est = pageOneProducts.reduce((sum: number, p: any) => sum + (p.estimated_monthly_revenue || 0), 0);
+          
+          // Update summary with recalculated aggregates
+          if (contractResponse.summary) {
+            contractResponse.summary.avg_price = avg_price;
+            contractResponse.summary.avg_rating = avg_rating;
+            contractResponse.summary.avg_bsr = avg_bsr;
+            contractResponse.summary.total_monthly_units_est = total_monthly_units_est;
+            contractResponse.summary.total_monthly_revenue_est = total_monthly_revenue_est;
+            contractResponse.summary.page1_product_count = pageOneProducts.length;
+          }
+          
+          // Update aggregates_derived_from_page_one
+          contractResponse.aggregates_derived_from_page_one = {
+            avg_price,
+            avg_rating,
+            avg_bsr,
+            total_monthly_units_est,
+            total_monthly_revenue_est,
+            page1_product_count: pageOneProducts.length,
+          };
+          
+          // Also update page_one_listings to match products
+          contractResponse.page_one_listings = contractResponse.products;
         }
         
         // POST-BUILD GUARANTEE: Ensure contract response products are never empty
@@ -1367,6 +1419,55 @@ export async function POST(req: NextRequest) {
             brand: p.brand,
             seller_country: p.seller_country,
           }));
+          
+          // Recompute aggregates from canonical products for fallback case
+          const pageOneProducts = contractResponse.products;
+          
+          const pageOnePrices = pageOneProducts
+            .map((p: any) => p.price)
+            .filter((p: any): p is number => p !== null && p !== undefined && p > 0);
+          const avg_price = pageOnePrices.length > 0 
+            ? pageOnePrices.reduce((sum: number, p: number) => sum + p, 0) / pageOnePrices.length 
+            : 0;
+          
+          const pageOneRatings = pageOneProducts
+            .map((p: any) => p.rating)
+            .filter((r: any): r is number => r !== null && r !== undefined && r > 0);
+          const avg_rating = pageOneRatings.length > 0
+            ? pageOneRatings.reduce((sum: number, r: number) => sum + r, 0) / pageOneRatings.length
+            : 0;
+          
+          const pageOneBsrs = pageOneProducts
+            .map((p: any) => p.bsr)
+            .filter((b: any): b is number => b !== null && b !== undefined && b > 0);
+          const avg_bsr = pageOneBsrs.length > 0
+            ? pageOneBsrs.reduce((sum: number, b: number) => sum + b, 0) / pageOneBsrs.length
+            : null;
+          
+          const total_monthly_units_est = pageOneProducts.reduce((sum: number, p: any) => sum + (p.estimated_monthly_units || 0), 0);
+          const total_monthly_revenue_est = pageOneProducts.reduce((sum: number, p: any) => sum + (p.estimated_monthly_revenue || 0), 0);
+          
+          // Update summary
+          if (contractResponse.summary) {
+            contractResponse.summary.avg_price = avg_price;
+            contractResponse.summary.avg_rating = avg_rating;
+            contractResponse.summary.avg_bsr = avg_bsr;
+            contractResponse.summary.total_monthly_units_est = total_monthly_units_est;
+            contractResponse.summary.total_monthly_revenue_est = total_monthly_revenue_est;
+            contractResponse.summary.page1_product_count = pageOneProducts.length;
+          }
+          
+          // Update aggregates_derived_from_page_one
+          contractResponse.aggregates_derived_from_page_one = {
+            avg_price,
+            avg_rating,
+            avg_bsr,
+            total_monthly_units_est,
+            total_monthly_revenue_est,
+            page1_product_count: pageOneProducts.length,
+          };
+          
+          contractResponse.page_one_listings = contractResponse.products;
         }
         
         console.log("CONTRACT_RESPONSE_BUILT", {
@@ -1995,19 +2096,29 @@ ${body.input_value}`;
       finalResponse.page_one_listings = finalResponse.products || [];
     }
     
-    // Ensure aggregates_derived_from_page_one is always set
-    if (!finalResponse.aggregates_derived_from_page_one && finalResponse.page_one_listings && finalResponse.page_one_listings.length > 0) {
+    // CRITICAL: Ensure aggregates_derived_from_page_one is always computed from canonical Page-1 listings
+    // If listings exist, aggregates must be numeric values (never "Estimating...")
+    if (finalResponse.page_one_listings && finalResponse.page_one_listings.length > 0) {
+      // Recompute aggregates from canonical Page-1 listings to ensure correctness
       const pageOne = finalResponse.page_one_listings;
-      const prices = pageOne.map((p: any) => p.price).filter((p: any): p is number => p !== null && p > 0);
-      const ratings = pageOne.map((p: any) => p.rating).filter((r: any): r is number => r !== null && r > 0);
-      const bsrs = pageOne.map((p: any) => p.bsr).filter((b: any): b is number => b !== null && b > 0);
+      const prices = pageOne.map((p: any) => p.price).filter((p: any): p is number => p !== null && p !== undefined && p > 0);
+      const ratings = pageOne.map((p: any) => p.rating).filter((r: any): r is number => r !== null && r !== undefined && r > 0);
+      const bsrs = pageOne.map((p: any) => p.bsr).filter((b: any): b is number => b !== null && b !== undefined && b > 0);
       
+      // Calculate aggregates synchronously from canonical listings
+      const avg_price = prices.length > 0 ? prices.reduce((sum: number, p: number) => sum + p, 0) / prices.length : 0;
+      const avg_rating = ratings.length > 0 ? ratings.reduce((sum: number, r: number) => sum + r, 0) / ratings.length : 0;
+      const avg_bsr = bsrs.length > 0 ? bsrs.reduce((sum: number, b: number) => sum + b, 0) / bsrs.length : null;
+      const total_monthly_units_est = pageOne.reduce((sum: number, p: any) => sum + (p.estimated_monthly_units || 0), 0);
+      const total_monthly_revenue_est = pageOne.reduce((sum: number, p: any) => sum + (p.estimated_monthly_revenue || 0), 0);
+      
+      // Set aggregates (always numeric when listings exist)
       finalResponse.aggregates_derived_from_page_one = {
-        avg_price: prices.length > 0 ? prices.reduce((sum: number, p: number) => sum + p, 0) / prices.length : 0,
-        avg_rating: ratings.length > 0 ? ratings.reduce((sum: number, r: number) => sum + r, 0) / ratings.length : 0,
-        avg_bsr: bsrs.length > 0 ? bsrs.reduce((sum: number, b: number) => sum + b, 0) / bsrs.length : null,
-        total_monthly_units_est: pageOne.reduce((sum: number, p: any) => sum + (p.estimated_monthly_units || 0), 0),
-        total_monthly_revenue_est: pageOne.reduce((sum: number, p: any) => sum + (p.estimated_monthly_revenue || 0), 0),
+        avg_price,
+        avg_rating,
+        avg_bsr,
+        total_monthly_units_est,
+        total_monthly_revenue_est,
         page1_product_count: pageOne.length,
       };
     }
