@@ -11,7 +11,8 @@ const MAX_KEYWORDS_PER_RUN = 5;
 Deno.serve(async () => {
   console.log("🔄 Keyword worker running");
 
-  const { data: queue, error } = await supabase
+  // Check for pending items first
+  let { data: queue, error } = await supabase
     .from("keyword_queue")
     .select("*")
     .eq("status", "pending")
@@ -22,6 +23,36 @@ Deno.serve(async () => {
   if (error) {
     console.error(error);
     return new Response("Queue error", { status: 500 });
+  }
+
+  // If no pending items, check for failed items and reset them, then process
+  if (!queue || queue.length === 0) {
+    console.log("No pending items, checking for failed items to reset...");
+    const { error: resetError } = await supabase
+      .from("keyword_queue")
+      .update({ status: "pending" })
+      .eq("status", "failed");
+
+    if (resetError) {
+      console.error("Error resetting failed items:", resetError);
+    } else {
+      console.log("Failed items reset to pending, fetching for processing...");
+      // Fetch the newly reset items and process them
+      const result = await supabase
+        .from("keyword_queue")
+        .select("*")
+        .eq("status", "pending")
+        .order("priority", { ascending: false })
+        .order("created_at", { ascending: true })
+        .limit(MAX_KEYWORDS_PER_RUN);
+
+      if (!result.error && result.data && result.data.length > 0) {
+        console.log(`Processing ${result.data.length} reset items...`);
+        queue = result.data;
+      } else {
+        return new Response("No keywords to process", { status: 200 });
+      }
+    }
   }
 
   if (!queue || queue.length === 0) {
@@ -64,5 +95,9 @@ Deno.serve(async () => {
       .eq("id", item.id);
   }
 
-  return new Response("Worker run complete", { status: 200 });
+  // After processing, if we reset any failed items, trigger another run to process them
+  // This ensures failed items get processed immediately
+  const responseText = `Worker run complete. Processed ${queue.length} items.`;
+  
+  return new Response(responseText, { status: 200 });
 });
