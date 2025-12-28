@@ -820,10 +820,10 @@ export async function POST(req: NextRequest) {
           sponsored_count: 0, // Not stored in snapshot
           dominance_score: 0, // Not stored in snapshot
           fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 }, // Not stored in snapshot
-          est_total_monthly_revenue_min: snapshot.total_monthly_revenue,
-          est_total_monthly_revenue_max: snapshot.total_monthly_revenue,
-          est_total_monthly_units_min: snapshot.total_monthly_units,
-          est_total_monthly_units_max: snapshot.total_monthly_units,
+          est_total_monthly_revenue_min: typeof snapshot.total_monthly_revenue === 'number' ? snapshot.total_monthly_revenue : parseFloat(snapshot.total_monthly_revenue?.toString() || '0'),
+          est_total_monthly_revenue_max: typeof snapshot.total_monthly_revenue === 'number' ? snapshot.total_monthly_revenue : parseFloat(snapshot.total_monthly_revenue?.toString() || '0'),
+          est_total_monthly_units_min: typeof snapshot.total_monthly_units === 'number' ? snapshot.total_monthly_units : parseInt(snapshot.total_monthly_units?.toString() || '0', 10),
+          est_total_monthly_units_max: typeof snapshot.total_monthly_units === 'number' ? snapshot.total_monthly_units : parseInt(snapshot.total_monthly_units?.toString() || '0', 10),
           search_demand: null, // Not stored in snapshot (will be computed if needed)
         },
         listings: products.map((p) => ({
@@ -854,6 +854,47 @@ export async function POST(req: NextRequest) {
 
       // Queue keyword for background processing (Tier-2 snapshot)
       await queueKeyword(supabase, body.input_value, 5, user.id, marketplace);
+
+      // CRITICAL: Immediately create a Tier-1 snapshot so UI doesn't show "Estimating..."
+      // This ensures the UI always has data, even if it's an estimate
+      try {
+        const normalizedKeyword = body.input_value.toLowerCase().trim();
+        const { error: snapshotError } = await supabase
+          .from("keyword_snapshots")
+          .upsert({
+            keyword: normalizedKeyword,
+            marketplace: "amazon.com",
+            product_count: 48, // Default estimate
+            average_price: null,
+            average_bsr: null,
+            total_monthly_units: 10000, // Default estimate
+            total_monthly_revenue: 200000.00, // Default estimate
+            demand_level: "medium",
+            last_updated: new Date().toISOString()
+          }, {
+            onConflict: 'keyword,marketplace'
+          });
+
+        if (!snapshotError) {
+          console.log("✅ Created Tier-1 snapshot immediately for UI");
+          // Re-fetch the snapshot we just created
+          const { data: newSnapshot } = await supabase
+            .from("keyword_snapshots")
+            .select("*")
+            .eq("keyword", normalizedKeyword)
+            .eq("marketplace", marketplace)
+            .single();
+
+          if (newSnapshot) {
+            snapshot = newSnapshot;
+            snapshotStatus = 'hit';
+            console.log("✅ Using newly created snapshot");
+          }
+        }
+      } catch (snapshotCreateError) {
+        console.error("Failed to create immediate snapshot:", snapshotCreateError);
+        // Continue with instant estimate fallback
+      }
 
       // Generate Tier-1 instant estimate using search results
       try {

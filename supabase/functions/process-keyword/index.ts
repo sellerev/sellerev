@@ -14,10 +14,13 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
+    // Normalize keyword (lowercase, trim) to match searchKeywordSnapshot logic
+    const normalizedKeyword = keyword.toLowerCase().trim();
+
     // Write a Tier-1 snapshot immediately so UI populates
     // Map to correct keyword_snapshots schema
-    await supabase.from("keyword_snapshots").upsert({
-      keyword,
+    const { error } = await supabase.from("keyword_snapshots").upsert({
+      keyword: normalizedKeyword,
       marketplace: "amazon.com",
       product_count: 48,
       average_price: 20.75,
@@ -26,11 +29,25 @@ Deno.serve(async (req) => {
       total_monthly_revenue: 249000.00,
       demand_level: "high",
       last_updated: new Date().toISOString()
+    }, {
+      onConflict: 'keyword,marketplace'
     });
 
-    return new Response("Processed", { status: 200 });
+    if (error) {
+      console.error("Failed to upsert snapshot:", error);
+      return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    }
+
+    console.log(`✅ Snapshot written for keyword: ${normalizedKeyword}`);
+    return new Response(JSON.stringify({ success: true, keyword: normalizedKeyword }), { 
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   } catch (err) {
     console.error("process-keyword error", err);
-    return new Response("Error", { status: 500 });
+    return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { 
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 });
