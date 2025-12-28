@@ -60,7 +60,7 @@ export function normalizeCostOverrides({
 
   // Extract selling price from default snapshot or market snapshot
   const sellingPrice =
-    defaultMarginSnapshot.selling_price ||
+    defaultMarginSnapshot.assumed_price ||
     (response.market_snapshot?.avg_price as number) ||
     25.0; // Fallback
 
@@ -74,8 +74,8 @@ export function normalizeCostOverrides({
     cogsHigh = costOverrides.cogs;
   } else {
     // No COGS override - use default from snapshot
-    cogsLow = defaultMarginSnapshot.cogs_assumed_low;
-    cogsHigh = defaultMarginSnapshot.cogs_assumed_high;
+    cogsLow = defaultMarginSnapshot.estimated_cogs_min ?? 0;
+    cogsHigh = defaultMarginSnapshot.estimated_cogs_max ?? 0;
   }
 
   // Determine FBA fees
@@ -86,7 +86,7 @@ export function normalizeCostOverrides({
     fbaFeesValue = costOverrides.fba_fees;
   } else {
     // No FBA fees override - use default from snapshot
-    fbaFeesValue = defaultMarginSnapshot.fba_fees;
+    fbaFeesValue = defaultMarginSnapshot.estimated_fba_fee;
   }
 
   // Recalculate net margins
@@ -103,16 +103,24 @@ export function normalizeCostOverrides({
 
   // Return updated snapshot with confidence = "refined"
   return {
-    selling_price: sellingPrice,
-    cogs_assumed_low: cogsLow,
-    cogs_assumed_high: cogsHigh,
-    fba_fees: fbaFeesValue,
-    net_margin_low_pct: Math.max(0, netMarginLowPct), // Ensure non-negative
-    net_margin_high_pct: Math.max(0, netMarginHighPct), // Ensure non-negative
-    breakeven_price_low: breakevenPriceLow,
-    breakeven_price_high: breakevenPriceHigh,
-    confidence: "refined", // Always "refined" when using user overrides
-    source: defaultMarginSnapshot.source, // Preserve original source (amazon_fees or assumption_engine)
+    mode: defaultMarginSnapshot.mode,
+    confidence_tier: "REFINED",
+    confidence_reason: "User-provided cost overrides applied",
+    assumed_price: sellingPrice,
+    price_source: defaultMarginSnapshot.price_source,
+    estimated_cogs_min: cogsLow,
+    estimated_cogs_max: cogsHigh,
+    cogs_source: "user_override",
+    estimated_fba_fee: fbaFeesValue,
+    fba_fee_source: defaultMarginSnapshot.fba_fee_source,
+    net_margin_min_pct: Math.max(0, netMarginLowPct),
+    net_margin_max_pct: Math.max(0, netMarginHighPct),
+    breakeven_price_min: breakevenPriceLow,
+    breakeven_price_max: breakevenPriceHigh,
+    assumptions: [
+      ...defaultMarginSnapshot.assumptions,
+      "User-provided cost overrides applied",
+    ],
   };
 }
 

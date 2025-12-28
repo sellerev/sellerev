@@ -5,6 +5,6 @@
  */
 
 export { estimateMonthlySalesFromBSR } from './bsr-calculator';
-export { calculateProductRevenue, ProductRevenue } from './product-calculator';
-export { calculateMarketRevenue, MarketRevenue } from './market-calculator';
+export { calculateProductRevenue, type ProductRevenue } from './product-calculator';
+export { calculateMarketRevenue, type MarketRevenue } from './market-calculator';
 

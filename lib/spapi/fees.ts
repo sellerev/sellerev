@@ -9,7 +9,7 @@
  * Does NOT fetch: storage fees, PPC fees
  */
 
-import { createApiClient } from "@/lib/supabase/server-api";
+import { createClient } from "@/lib/supabase/server";
 import { getSpApiAccessToken } from "./auth";
 import { createHmac, createHash } from "crypto";
 
@@ -49,7 +49,7 @@ export async function getFbaFees(
   const normalizedAsin = asin.toUpperCase().trim();
   
   try {
-    const supabase = await createApiClient();
+    const supabase = await createClient();
     
     // Step 1: Check cache (24h TTL)
     const cutoffTime = new Date();

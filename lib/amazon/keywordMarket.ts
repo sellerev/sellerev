@@ -161,7 +161,7 @@ function parseRating(item: any): number | null {
  * 
  * Strategy: Find the entry with shortest category string (main categories are shorter)
  */
-function extractMainCategoryBSR(item: any): { rank: number; category: string } | null {
+export function extractMainCategoryBSR(item: any): { rank: number; category: string } | null {
   if (!item || !item.asin) {
     return null;
   }

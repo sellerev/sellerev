@@ -48,26 +48,21 @@ export function computeMarginSnapshot({
   // If price is missing, return LOW confidence snapshot
   if (price === null || price <= 0) {
     return {
-      // Legacy fields
-      selling_price: 0,
-      cogs_assumed_low: 0,
-      cogs_assumed_high: 0,
-      fba_fees: null,
-      net_margin_low_pct: 0,
-      net_margin_high_pct: 0,
-      breakeven_price_low: 0,
-      breakeven_price_high: 0,
-      confidence: "estimated",
-      source: "assumption_engine",
-      // PART G fields
-      confidence_level: "LOW",
-      assumed_price: null,
-      estimated_cogs_range: null,
-      estimated_fba_fees: null,
-      estimated_margin_pct_range: null,
-      breakeven_price_range: null,
-      sourcing_model: sourcingModel,
-      assumptions_used: ["Selling price unavailable"],
+      mode: analysisMode,
+      confidence_tier: "ESTIMATED",
+      confidence_reason: "Selling price unavailable",
+      assumed_price: 0,
+      price_source: "fallback",
+      estimated_cogs_min: null,
+      estimated_cogs_max: null,
+      cogs_source: "assumption_engine",
+      estimated_fba_fee: null,
+      fba_fee_source: "unknown",
+      net_margin_min_pct: null,
+      net_margin_max_pct: null,
+      breakeven_price_min: null,
+      breakeven_price_max: null,
+      assumptions: ["Selling price unavailable"],
     };
   }
 
@@ -125,34 +120,26 @@ export function computeMarginSnapshot({
     confidenceLevel = "MEDIUM";
   }
 
-  // Build margin snapshot with both legacy and PART G fields
+  // Build margin snapshot
+  const confidenceTier: "ESTIMATED" | "REFINED" | "EXACT" = confidenceLevel === "HIGH" ? "EXACT" : confidenceLevel === "MEDIUM" ? "REFINED" : "ESTIMATED";
+  const fbaFeeSourceValue: "sp_api" | "category_estimate" | "unknown" = !fbaFeeIsEstimated ? "sp_api" : "category_estimate";
+  const priceSource: "asin_price" | "page1_avg" | "fallback" = analysisMode === "ASIN" ? "asin_price" : "page1_avg";
+
   return {
-    // Legacy fields (for backward compatibility)
-    selling_price: price,
-    cogs_assumed_low: cogsLow,
-    cogs_assumed_high: cogsHigh,
-    fba_fees: fbaFeesValue,
-    net_margin_low_pct: Math.max(0, netMarginLowPct), // Ensure non-negative
-    net_margin_high_pct: Math.max(0, netMarginHighPct), // Ensure non-negative
-    breakeven_price_low: breakevenPriceLow,
-    breakeven_price_high: breakevenPriceHigh,
-    confidence: confidenceLevel === "HIGH" ? "refined" : "estimated",
-    source: fbaFeeIsEstimated ? "assumption_engine" : "amazon_fees",
-    
-    // PART G: New structured fields
-    confidence_level: confidenceLevel,
+    mode: analysisMode,
+    confidence_tier: confidenceTier,
+    confidence_reason: assumptionsUsed.join("; "),
     assumed_price: price,
-    estimated_cogs_range: { low: cogsLow, high: cogsHigh },
-    estimated_fba_fees: fbaFeesValue,
-    estimated_margin_pct_range: {
-      low: Math.max(0, netMarginLowPct),
-      high: Math.max(0, netMarginHighPct),
-    },
-    breakeven_price_range: {
-      low: breakevenPriceLow,
-      high: breakevenPriceHigh,
-    },
-    sourcing_model: sourcingModel,
-    assumptions_used: assumptionsUsed,
+    price_source: priceSource,
+    estimated_cogs_min: cogsLow,
+    estimated_cogs_max: cogsHigh,
+    cogs_source: "assumption_engine",
+    estimated_fba_fee: fbaFeesValue,
+    fba_fee_source: fbaFeeSourceValue,
+    net_margin_min_pct: Math.max(0, netMarginLowPct),
+    net_margin_max_pct: Math.max(0, netMarginHighPct),
+    breakeven_price_min: breakevenPriceLow,
+    breakeven_price_max: breakevenPriceHigh,
+    assumptions: assumptionsUsed,
   };
 }

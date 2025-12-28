@@ -143,17 +143,30 @@ export function calculateMarginSnapshot({
     const breakevenPriceLow = cogsLow + fbaFeesValue;
     const breakevenPriceHigh = cogsHigh + fbaFeesValue;
 
+    // Determine confidence tier and fee source
+    const confidenceTier: "ESTIMATED" | "REFINED" | "EXACT" = source === "amazon_fees" ? "REFINED" : "ESTIMATED";
+    const fbaFeeSource: "sp_api" | "category_estimate" | "unknown" = source === "amazon_fees" ? "sp_api" : "category_estimate";
+    const priceSource: "asin_price" | "page1_avg" | "fallback" = marginMode === "ASIN" ? "asin_price" : marginMode === "KEYWORD" ? "page1_avg" : "fallback";
+
     return {
-      selling_price: avg_price,
-      cogs_assumed_low: cogsLow,
-      cogs_assumed_high: cogsHigh,
-      fba_fees: fbaFeesValue,
-      net_margin_low_pct: Math.max(0, netMarginLowPct), // Ensure non-negative
-      net_margin_high_pct: Math.max(0, netMarginHighPct), // Ensure non-negative
-      breakeven_price_low: breakevenPriceLow,
-      breakeven_price_high: breakevenPriceHigh,
-      confidence: "estimated", // Always "estimated" unless user overrides later
-      source,
+      mode: marginMode || "KEYWORD",
+      confidence_tier: confidenceTier,
+      confidence_reason: source === "amazon_fees" ? "FBA fees from Amazon SP-API" : "FBA fees estimated by category",
+      assumed_price: avg_price,
+      price_source: priceSource,
+      estimated_cogs_min: cogsLow,
+      estimated_cogs_max: cogsHigh,
+      cogs_source: "assumption_engine",
+      estimated_fba_fee: fbaFeesValue,
+      fba_fee_source: fbaFeeSource,
+      net_margin_min_pct: Math.max(0, netMarginLowPct),
+      net_margin_max_pct: Math.max(0, netMarginHighPct),
+      breakeven_price_min: breakevenPriceLow,
+      breakeven_price_max: breakevenPriceHigh,
+      assumptions: [
+        `COGS: $${cogsLow.toFixed(2)}–$${cogsHigh.toFixed(2)} (estimated based on ${sourcing_model})`,
+        `FBA fee: $${fbaFeesValue.toFixed(2)} (${source === "amazon_fees" ? "Amazon SP-API" : "estimated by category"})`,
+      ],
     };
   } catch (error) {
     // Never throw - return safe defaults
@@ -164,18 +177,25 @@ export function calculateMarginSnapshot({
     const defaultCogsLow = (avg_price * 40) / 100;
     const defaultCogsHigh = (avg_price * 65) / 100;
     const defaultFbaFees = 10; // Default midpoint
+    const defaultNetMarginLowPct = Math.max(0, ((avg_price - defaultCogsHigh - defaultFbaFees) / avg_price) * 100);
+    const defaultNetMarginHighPct = Math.max(0, ((avg_price - defaultCogsLow - defaultFbaFees) / avg_price) * 100);
 
     return {
-      selling_price: avg_price,
-      cogs_assumed_low: defaultCogsLow,
-      cogs_assumed_high: defaultCogsHigh,
-      fba_fees: defaultFbaFees,
-      net_margin_low_pct: Math.max(0, ((avg_price - defaultCogsHigh - defaultFbaFees) / avg_price) * 100),
-      net_margin_high_pct: Math.max(0, ((avg_price - defaultCogsLow - defaultFbaFees) / avg_price) * 100),
-      breakeven_price_low: defaultCogsLow + defaultFbaFees,
-      breakeven_price_high: defaultCogsHigh + defaultFbaFees,
-      confidence: "estimated",
-      source: "assumption_engine",
+      mode: marginMode || "KEYWORD",
+      confidence_tier: "ESTIMATED",
+      confidence_reason: "Error occurred during calculation, using safe defaults",
+      assumed_price: avg_price,
+      price_source: marginMode === "ASIN" ? "asin_price" : marginMode === "KEYWORD" ? "page1_avg" : "fallback",
+      estimated_cogs_min: defaultCogsLow,
+      estimated_cogs_max: defaultCogsHigh,
+      cogs_source: "assumption_engine",
+      estimated_fba_fee: defaultFbaFees,
+      fba_fee_source: "unknown",
+      net_margin_min_pct: defaultNetMarginLowPct,
+      net_margin_max_pct: defaultNetMarginHighPct,
+      breakeven_price_min: defaultCogsLow + defaultFbaFees,
+      breakeven_price_max: defaultCogsHigh + defaultFbaFees,
+      assumptions: ["Error during calculation, using safe default estimates"],
     };
   }
 }

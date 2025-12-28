@@ -5,8 +5,8 @@
  * Cache entries are valid for 24 hours.
  */
 
-import { createApiClient } from "@/lib/supabase/server-api";
-import { FbaFeesEstimateResult } from "./fees";
+import { createClient } from "@/lib/supabase/server";
+import { FbaFeesResult } from "./fees";
 
 const CACHE_TTL_HOURS = 24;
 
@@ -31,9 +31,9 @@ export async function getCachedFee(
   marketplaceId: string,
   asin: string,
   price: number
-): Promise<FbaFeesEstimateResult | null> {
+): Promise<FbaFeesResult | null> {
   try {
-    const supabase = await createApiClient();
+    const supabase = await createClient();
     
     // Calculate cutoff time (24 hours ago)
     const cutoffTime = new Date();
@@ -58,11 +58,13 @@ export async function getCachedFee(
     }
     
     // Return cached result
+    // Map database "estimated" to type "estimate"
+    const source = data.source === "estimated" ? "estimate" : data.source;
     return {
-      total_fee: data.total_fee,
-      source: data.source as "sp_api" | "estimated",
-      asin_used: asin.toUpperCase(),
-      price_used: price,
+      referral_fee: 0, // Not stored in this cache format
+      fulfillment_fee: data.total_fee,
+      source: source as "sp_api" | "estimate",
+      confidence: source === "sp_api" ? "high" : "medium",
     };
   } catch (error) {
     // Fail silently - cache miss is not an error
@@ -82,14 +84,18 @@ export async function setCachedFee(
   marketplaceId: string,
   asin: string,
   price: number,
-  feeResult: FbaFeesEstimateResult
+  feeResult: FbaFeesResult
 ): Promise<void> {
   try {
-    const supabase = await createApiClient();
+    const supabase = await createClient();
     
     // Upsert cache entry (replace if exists for same marketplace/asin/price)
     // Round price to 2 decimal places for consistent storage
     const roundedPrice = parseFloat(price.toFixed(2));
+    
+    // Map type "estimate" to database "estimated"
+    const dbSource = feeResult.source === "estimate" ? "estimated" : feeResult.source;
+    const totalFee = feeResult.fulfillment_fee + (feeResult.referral_fee || 0);
     
     const { error } = await supabase
       .from("fee_cache")
@@ -98,8 +104,8 @@ export async function setCachedFee(
           marketplace_id: marketplaceId,
           asin: asin.toUpperCase(),
           price: roundedPrice,
-          total_fee: feeResult.total_fee,
-          source: feeResult.source,
+          total_fee: totalFee,
+          source: dbSource,
           created_at: new Date().toISOString(),
         },
         {

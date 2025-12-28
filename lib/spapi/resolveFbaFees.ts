@@ -9,7 +9,7 @@
  * Never blocks analysis if fees fail - always returns gracefully.
  */
 
-import { createApiClient } from "@/lib/supabase/server-api";
+import { createClient } from "@/lib/supabase/server";
 import { getFbaFees, FbaFeesResult } from "./getFbaFees";
 
 const CACHE_TTL_DAYS = 30;
@@ -26,7 +26,7 @@ export async function resolveFbaFees(
   price: number
 ): Promise<FbaFeesResult | null> {
   try {
-    const supabase = await createApiClient();
+    const supabase = await createClient();
     const normalizedAsin = asin.toUpperCase().trim();
 
     // Step 1: Check cache
