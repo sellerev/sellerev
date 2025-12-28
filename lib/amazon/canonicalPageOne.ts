@@ -56,11 +56,28 @@ export async function buildCanonicalPageOne(
   const TARGET_PRODUCT_COUNT = 49; // Amazon Page 1 typically shows ~49 products
   
   // Get snapshot totals
-  const totalUnits = snapshot.est_total_monthly_units_min ?? snapshot.est_total_monthly_units_max ?? 0;
-  const totalRevenue = snapshot.est_total_monthly_revenue_min ?? snapshot.est_total_monthly_revenue_max ?? 0;
+  // CRITICAL: If snapshot totals are 0 or missing, compute them using deterministic logic
+  // This ensures canonical products always have meaningful units/revenue values
   const avgPrice = snapshot.avg_price ?? 25;
   const avgRating = snapshot.avg_rating ?? 4.2;
   const avgReviews = snapshot.avg_reviews ?? 0;
+  
+  // Get totals from snapshot, but fallback to computation if 0 or missing
+  let totalUnits = snapshot.est_total_monthly_units_min ?? snapshot.est_total_monthly_units_max ?? null;
+  let totalRevenue = snapshot.est_total_monthly_revenue_min ?? snapshot.est_total_monthly_revenue_max ?? null;
+  
+  // Fallback: If totals are 0 or null, compute using deterministic logic (150 units per listing)
+  if (totalUnits === null || totalUnits <= 0) {
+    const estUnitsPerListing = 150;
+    const page1Count = snapshot.total_page1_listings || TARGET_PRODUCT_COUNT;
+    const computedTotalUnits = page1Count * estUnitsPerListing;
+    totalUnits = Math.round(computedTotalUnits * 0.7); // Use min (70% of base)
+  }
+  
+  // Fallback: If revenue is 0 or null, compute from units
+  if (totalRevenue === null || totalRevenue <= 0) {
+    totalRevenue = Math.round((totalUnits * avgPrice) * 100) / 100;
+  }
   
   // Filter organic listings only (exclude sponsored)
   const organicListings = listings.filter(l => !l.is_sponsored);
@@ -86,9 +103,9 @@ export async function buildCanonicalPageOne(
     const title = listing.title || `${keyword} - Product ${position}`;
     if (!listing.title) inferredFields.push('title');
     
-    // Image URL: use real if available, otherwise placeholder
-    const image_url = listing.image_url || "https://via.placeholder.com/300x300?text=Product+Image";
-    if (!listing.image_url) inferredFields.push('image_url');
+    // Image URL: use real if available (check both 'image' and 'image_url' for compatibility), otherwise use SVG placeholder
+    const image_url = (listing as any).image_url || (listing as any).image || getPlaceholderImageUrl(keyword, position);
+    if (!(listing as any).image_url && !(listing as any).image) inferredFields.push('image_url');
     
     // Price: use real if available, otherwise use tiered multiplier
     let price: number;
@@ -205,7 +222,7 @@ export async function buildCanonicalPageOne(
     const fulfillment: "FBA" | "FBM" | "AMZ" = "FBA";
     
     // Image URL: placeholder for generated listings
-    const image_url = "https://via.placeholder.com/300x300?text=Product+Image";
+    const image_url = getPlaceholderImageUrl(keyword, position);
     
     products.push({
       rank: position,
@@ -808,6 +825,19 @@ function generateRealisticRating(avgRating: number, position: number): number {
  * Generate realistic review count based on position, average, and rating
  * Higher ratings and top positions = more reviews
  */
+/**
+ * Generate a placeholder image URL using SVG data URL
+ * This ensures images always load without requiring external services
+ */
+function getPlaceholderImageUrl(keyword: string, position: number): string {
+  // Create an SVG placeholder image as a data URL
+  // This avoids dependency on external placeholder services
+  const svg = `<svg width="300" height="300" xmlns="http://www.w3.org/2000/svg"><rect width="300" height="300" fill="#f3f4f6"/><text x="50%" y="50%" font-family="Arial,sans-serif" font-size="14" fill="#9ca3af" text-anchor="middle" dy=".3em">No Image</text></svg>`;
+  
+  // Use encodeURIComponent for data URL (works in both Node.js and browser)
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 function generateRealisticReviews(avgReviews: number, position: number, rating: number): number {
   // Base multiplier from position (top positions have more reviews)
   // Tiers scaled for ~49 products
