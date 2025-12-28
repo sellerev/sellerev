@@ -51,18 +51,39 @@ export function buildTier1Snapshot(keyword: string): Tier1Snapshot {
 
 /**
  * Convert Tier-1 snapshot to database format
+ * Includes min/max estimates using deterministic logic:
+ * - est_units_per_listing = 150
+ * - total_units = page1_count * 150
+ * - units_min = total_units * 0.7
+ * - units_max = total_units * 1.3
+ * - revenue_min = units_min * avg_price
+ * - revenue_max = units_max * avg_price
  */
 export function tier1ToDbFormat(snapshot: Tier1Snapshot, marketplace: string = 'amazon.com') {
+  // Use specified deterministic logic for min/max calculation
+  const estUnitsPerListing = 150;
+  const page1Count = snapshot.product_count;
+  const totalUnits = page1Count * estUnitsPerListing;
+  const unitsMin = Math.round(totalUnits * 0.7);
+  const unitsMax = Math.round(totalUnits * 1.3);
+  const revenueMin = Math.round((unitsMin * snapshot.average_price) * 100) / 100;
+  const revenueMax = Math.round((unitsMax * snapshot.average_price) * 100) / 100;
+
   return {
     keyword: snapshot.keyword,
     marketplace,
     product_count: snapshot.product_count,
     average_price: snapshot.average_price,
     average_bsr: snapshot.average_bsr,
-    total_monthly_units: snapshot.total_monthly_units,
-    total_monthly_revenue: snapshot.total_monthly_revenue,
+    total_monthly_units: totalUnits, // Use calculated total
+    total_monthly_revenue: revenueMin, // Use min as base (will be updated when min/max columns exist)
     demand_level: snapshot.demand_level,
     last_updated: snapshot.last_updated,
+    // Store min/max values (will be added to schema if columns exist, otherwise ignored)
+    est_total_monthly_units_min: unitsMin,
+    est_total_monthly_units_max: unitsMax,
+    est_total_monthly_revenue_min: revenueMin,
+    est_total_monthly_revenue_max: revenueMax,
   };
 }
 

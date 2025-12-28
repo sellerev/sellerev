@@ -806,13 +806,40 @@ export async function POST(req: NextRequest) {
       const productsWithPrice = products.filter(p => p.price !== null && p.price > 0);
       const avgPrice = productsWithPrice.length > 0
         ? productsWithPrice.reduce((sum, p) => sum + (p.price || 0), 0) / productsWithPrice.length
-        : snapshot.average_price;
+        : (snapshot.average_price || 0);
+
+      // Compute min/max values using deterministic logic if snapshot doesn't have them
+      // Try to read from snapshot fields first (if they exist), otherwise compute
+      const page1Count = snapshot.product_count;
+      const finalAvgPrice = avgPrice > 0 ? avgPrice : (snapshot.average_price || 25);
+      
+      // Check if snapshot has min/max fields (from database columns or computed)
+      let unitsMin: number;
+      let unitsMax: number;
+      let revenueMin: number;
+      let revenueMax: number;
+      
+      if (snapshot.est_total_monthly_units_min !== undefined && snapshot.est_total_monthly_units_min !== null) {
+        // Snapshot has min/max fields - use them
+        unitsMin = snapshot.est_total_monthly_units_min;
+        unitsMax = snapshot.est_total_monthly_units_max ?? unitsMin;
+        revenueMin = snapshot.est_total_monthly_revenue_min ?? 0;
+        revenueMax = snapshot.est_total_monthly_revenue_max ?? revenueMin;
+      } else {
+        // Compute using deterministic logic: est_units_per_listing = 150
+        const estUnitsPerListing = 150;
+        const totalUnits = page1Count * estUnitsPerListing;
+        unitsMin = Math.round(totalUnits * 0.7);
+        unitsMax = Math.round(totalUnits * 1.3);
+        revenueMin = Math.round((unitsMin * finalAvgPrice) * 100) / 100;
+        revenueMax = Math.round((unitsMax * finalAvgPrice) * 100) / 100;
+      }
 
       // Convert snapshot to KeywordMarketData format
       keywordMarketData = {
         snapshot: {
           keyword: snapshot.keyword,
-          avg_price: avgPrice,
+          avg_price: avgPrice > 0 ? avgPrice : null,
           avg_reviews: 0, // Reviews not stored in snapshot
           avg_rating: null, // Rating not stored in snapshot
           avg_bsr: snapshot.average_bsr,
@@ -820,10 +847,10 @@ export async function POST(req: NextRequest) {
           sponsored_count: 0, // Not stored in snapshot
           dominance_score: 0, // Not stored in snapshot
           fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 }, // Not stored in snapshot
-          est_total_monthly_revenue_min: typeof snapshot.total_monthly_revenue === 'number' ? snapshot.total_monthly_revenue : parseFloat(snapshot.total_monthly_revenue?.toString() || '0'),
-          est_total_monthly_revenue_max: typeof snapshot.total_monthly_revenue === 'number' ? snapshot.total_monthly_revenue : parseFloat(snapshot.total_monthly_revenue?.toString() || '0'),
-          est_total_monthly_units_min: typeof snapshot.total_monthly_units === 'number' ? snapshot.total_monthly_units : parseInt(snapshot.total_monthly_units?.toString() || '0', 10),
-          est_total_monthly_units_max: typeof snapshot.total_monthly_units === 'number' ? snapshot.total_monthly_units : parseInt(snapshot.total_monthly_units?.toString() || '0', 10),
+          est_total_monthly_revenue_min: revenueMin,
+          est_total_monthly_revenue_max: revenueMax,
+          est_total_monthly_units_min: unitsMin,
+          est_total_monthly_units_max: unitsMax,
           search_demand: null, // Not stored in snapshot (will be computed if needed)
         },
         listings: products.map((p) => ({
@@ -856,7 +883,19 @@ export async function POST(req: NextRequest) {
       // Build Tier-1 snapshot using deterministic heuristic
       const tier1Snapshot = buildTier1Snapshot(normalizedKeyword);
 
-      // Insert Tier-1 snapshot into database
+      // Compute min/max values using deterministic logic
+      // est_units_per_listing = 150, total_units = page1_count * 150
+      // units_min = total_units * 0.7, units_max = total_units * 1.3
+      // revenue_min = units_min * avg_price, revenue_max = units_max * avg_price
+      const estUnitsPerListing = 150;
+      const page1Count = tier1Snapshot.product_count;
+      const totalUnits = page1Count * estUnitsPerListing;
+      const unitsMin = Math.round(totalUnits * 0.7);
+      const unitsMax = Math.round(totalUnits * 1.3);
+      const revenueMin = Math.round((unitsMin * tier1Snapshot.average_price) * 100) / 100;
+      const revenueMax = Math.round((unitsMax * tier1Snapshot.average_price) * 100) / 100;
+
+      // Insert Tier-1 snapshot into database with min/max fields
       const dbSnapshot = tier1ToDbFormat(tier1Snapshot, marketplace);
       const { error: insertError } = await supabase
         .from("keyword_snapshots")
@@ -870,8 +909,10 @@ export async function POST(req: NextRequest) {
       } else {
         console.log("✅ Tier-1 snapshot inserted:", {
           keyword: normalizedKeyword,
-          total_monthly_units: tier1Snapshot.total_monthly_units,
-          total_monthly_revenue: tier1Snapshot.total_monthly_revenue,
+          units_min: unitsMin,
+          units_max: unitsMax,
+          revenue_min: revenueMin,
+          revenue_max: revenueMax,
         });
       }
 
@@ -879,7 +920,7 @@ export async function POST(req: NextRequest) {
       await queueKeyword(supabase, normalizedKeyword, 5, user.id, marketplace);
       console.log("✅ Keyword queued for Tier-2 enrichment");
 
-      // Convert Tier-1 snapshot to KeywordMarketData format
+      // Convert Tier-1 snapshot to KeywordMarketData format with computed min/max
       keywordMarketData = {
         snapshot: {
           keyword: tier1Snapshot.keyword,
@@ -891,10 +932,10 @@ export async function POST(req: NextRequest) {
           sponsored_count: 0,
           dominance_score: 0,
           fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 },
-          est_total_monthly_revenue_min: tier1Snapshot.total_monthly_revenue,
-          est_total_monthly_revenue_max: tier1Snapshot.total_monthly_revenue,
-          est_total_monthly_units_min: tier1Snapshot.total_monthly_units,
-          est_total_monthly_units_max: tier1Snapshot.total_monthly_units,
+          est_total_monthly_revenue_min: revenueMin,
+          est_total_monthly_revenue_max: revenueMax,
+          est_total_monthly_units_min: unitsMin,
+          est_total_monthly_units_max: unitsMax,
           search_demand: null,
         },
         listings: [], // Tier-1 has no product listings
@@ -908,6 +949,16 @@ export async function POST(req: NextRequest) {
       const { buildTier1Snapshot } = await import("@/lib/snapshots/tier1Estimate");
       const normalizedKeyword = body.input_value.toLowerCase().trim();
       const emergencyTier1 = buildTier1Snapshot(normalizedKeyword);
+      
+      // Compute min/max values using deterministic logic
+      const estUnitsPerListing = 150;
+      const page1Count = emergencyTier1.product_count;
+      const totalUnits = page1Count * estUnitsPerListing;
+      const unitsMin = Math.round(totalUnits * 0.7);
+      const unitsMax = Math.round(totalUnits * 1.3);
+      const revenueMin = Math.round((unitsMin * emergencyTier1.average_price) * 100) / 100;
+      const revenueMax = Math.round((unitsMax * emergencyTier1.average_price) * 100) / 100;
+      
       keywordMarketData = {
         snapshot: {
           keyword: emergencyTier1.keyword,
@@ -919,10 +970,10 @@ export async function POST(req: NextRequest) {
           sponsored_count: 0,
           dominance_score: 0,
           fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 },
-          est_total_monthly_revenue_min: emergencyTier1.total_monthly_revenue,
-          est_total_monthly_revenue_max: emergencyTier1.total_monthly_revenue,
-          est_total_monthly_units_min: emergencyTier1.total_monthly_units,
-          est_total_monthly_units_max: emergencyTier1.total_monthly_units,
+          est_total_monthly_revenue_min: revenueMin,
+          est_total_monthly_revenue_max: revenueMax,
+          est_total_monthly_units_min: unitsMin,
+          est_total_monthly_units_max: unitsMax,
           search_demand: null,
         },
         listings: [],

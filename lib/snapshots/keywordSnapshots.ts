@@ -17,6 +17,11 @@ export interface KeywordSnapshot {
   last_updated: string;
   refresh_priority: number;
   search_count: number;
+  // Min/max fields for Tier-1 estimates (added in migration 20250129)
+  est_total_monthly_units_min?: number | null;
+  est_total_monthly_units_max?: number | null;
+  est_total_monthly_revenue_min?: number | null;
+  est_total_monthly_revenue_max?: number | null;
 }
 
 export interface KeywordProduct {
