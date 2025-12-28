@@ -1145,14 +1145,101 @@ export default function AnalyzeForm({
                         </div>
                       </div>
                     )}
-                    {normalizedListings.length === 0 ? (
-                      <div className="p-8 text-center bg-white border rounded-lg">
-                        <p className="text-gray-500 mb-2">No Page 1 listings returned</p>
-                        <p className="text-sm text-amber-600">Market data shown above is estimated</p>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {sortedListings.map((listing, idx: number) => {
+                    {(() => {
+                      // Check if we should show placeholder cards
+                      const shouldShowPlaceholders = normalizedListings.length === 0 && snapshotType === "estimated";
+                      
+                      if (shouldShowPlaceholders) {
+                        // Generate 4-6 placeholder cards using snapshot averages
+                        const placeholderCount = Math.min(6, Math.max(4, snapshot?.page1_count ?? snapshot?.total_page1_listings ?? 5));
+                        const avgPrice = snapshot?.avg_price ?? 0;
+                        const productCount = snapshot?.page1_count ?? snapshot?.total_page1_listings ?? placeholderCount;
+                        const totalMonthlyUnits = snapshot?.est_total_monthly_units_min ?? snapshot?.est_total_monthly_units_max ?? 0;
+                        const avgMonthlyUnits = productCount > 0 ? Math.round(totalMonthlyUnits / productCount) : 0;
+                        const avgMonthlyRevenue = avgPrice > 0 && avgMonthlyUnits > 0 ? avgPrice * avgMonthlyUnits : null;
+                        
+                        return (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            {Array.from({ length: placeholderCount }).map((_, idx: number) => {
+                              return (
+                                <div
+                                  key={`placeholder-${idx}`}
+                                  className="bg-white border-2 rounded-lg p-4 border-gray-200 opacity-75"
+                                >
+                                  {/* Image Placeholder */}
+                                  <div className="mb-3 flex justify-center">
+                                    <div className="w-32 h-32 bg-gray-100 rounded flex items-center justify-center">
+                                      <span className="text-xs text-gray-400">No image</span>
+                                    </div>
+                                  </div>
+                                  
+                                  {/* Title */}
+                                  <h3 className="text-sm font-medium text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
+                                    Estimated Page-1 Listing
+                                  </h3>
+                                  
+                                  {/* Price */}
+                                  <div className="mb-2">
+                                    <span className="text-lg font-semibold text-gray-900">
+                                      {avgPrice > 0 ? formatCurrency(avgPrice) : "—"}
+                                    </span>
+                                  </div>
+                                  
+                                  {/* Rating + Reviews - Omitted for placeholders */}
+                                  
+                                  {/* Revenue Block */}
+                                  {avgMonthlyRevenue !== null && avgMonthlyUnits > 0 && (
+                                    <div className="mt-3 pt-3 border-t border-gray-200 bg-gray-50 rounded -mx-4 px-4 py-3">
+                                      {/* Est. Monthly Revenue */}
+                                      <div className="mb-1.5">
+                                        <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Revenue</div>
+                                        <div className="text-xl font-bold text-gray-900">
+                                          {formatCurrency(avgMonthlyRevenue)}
+                                        </div>
+                                      </div>
+                                      
+                                      {/* Est. Monthly Units */}
+                                      <div className="mb-1.5">
+                                        <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Units</div>
+                                        <div className="text-sm font-semibold text-gray-700">
+                                          {avgMonthlyUnits.toLocaleString()}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                  
+                                  {/* Badges */}
+                                  <div className="flex flex-wrap gap-1 mt-2">
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800">
+                                      Estimated
+                                    </span>
+                                  </div>
+                                  
+                                  {/* ASIN Placeholder */}
+                                  <div className="mt-2 text-xs text-gray-400">
+                                    — —
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      }
+                      
+                      // Show empty state if not estimated
+                      if (normalizedListings.length === 0) {
+                        return (
+                          <div className="p-8 text-center bg-white border rounded-lg">
+                            <p className="text-gray-500 mb-2">No Page 1 listings returned</p>
+                            <p className="text-sm text-amber-600">Market data shown above is estimated</p>
+                          </div>
+                        );
+                      }
+                      
+                      // Show actual listings
+                      return (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                          {sortedListings.map((listing, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
                           const imageUrl = listing.image;
                           
@@ -1298,7 +1385,8 @@ export default function AnalyzeForm({
                           );
                         })}
                       </div>
-                    )}
+                      );
+                    })()}
                   </div>
                   );
                 })()}
