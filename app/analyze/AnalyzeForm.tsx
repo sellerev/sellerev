@@ -73,6 +73,52 @@ interface AnalysisResponse {
     top_asins?: string[];
     data_fetched_at?: string;
   };
+  // Canonical Page-1 array (explicit for UI - ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array)
+  page_one_listings?: Array<{
+    rank: number;
+    asin: string;
+    title: string;
+    image_url: string | null;
+    price: number;
+    rating: number;
+    review_count: number;
+    bsr: number | null;
+    estimated_monthly_units: number;
+    estimated_monthly_revenue: number;
+    revenue_share_pct: number;
+    fulfillment: "FBA" | "FBM" | "AMZ";
+    brand: string | null;
+    seller_country: "US" | "CN" | "Other" | "Unknown";
+  }>;
+  
+  // Aggregates derived from canonical Page-1 array (explicit for UI)
+  aggregates_derived_from_page_one?: {
+    avg_price: number;
+    avg_rating: number;
+    avg_bsr: number | null;
+    total_monthly_units_est: number;
+    total_monthly_revenue_est: number;
+    page1_product_count: number;
+  };
+  
+  // Products array (same as page_one_listings, kept for backward compatibility)
+  products?: Array<{
+    rank: number;
+    asin: string;
+    title: string;
+    image_url: string | null;
+    price: number;
+    rating: number;
+    review_count: number;
+    bsr: number | null;
+    estimated_monthly_units: number;
+    estimated_monthly_revenue: number;
+    revenue_share_pct: number;
+    fulfillment: "FBA" | "FBM" | "AMZ";
+    brand: string | null;
+    seller_country: "US" | "CN" | "Other" | "Unknown";
+  }>;
+  
   // Optional: Aggregated keyword market snapshot (when input_type === "keyword")
   // Matches KeywordMarketSnapshot from lib/amazon/keywordMarket.ts
   // Represents Page 1 results only
@@ -810,54 +856,61 @@ export default function AnalyzeForm({
                   {/* ─────────────────────────────────────────────────────────── */}
                   {(() => {
                     const snapshot = analysis.market_snapshot;
-                    const listings = snapshot?.listings || [];
+                    
+                    // Use canonical Page-1 array from API response (page_one_listings or products)
+                    // This ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array
+                    const pageOneListings = analysis.page_one_listings || analysis.products || snapshot?.listings || [];
                     
                     // Normalize listings to calculate metrics
-                    const normalizedListings = listings
+                    const normalizedListings = pageOneListings
                       .filter((l: any) => {
                         const normalized = normalizeListing(l);
                         return normalized.asin && normalized.title;
                       })
                       .map((l: any) => ({
                         ...normalizeListing(l),
-                        est_monthly_revenue: l.est_monthly_revenue ?? null,
-                        est_monthly_units: l.est_monthly_units ?? null,
+                        est_monthly_revenue: l.est_monthly_revenue ?? l.estimated_monthly_revenue ?? null,
+                        est_monthly_units: l.est_monthly_units ?? l.estimated_monthly_units ?? null,
                       }));
                     
-                    // Calculate metrics
-                    const page1Count = snapshot?.page1_count ?? snapshot?.total_page1_listings ?? (listings.length || 0);
+                    // Calculate metrics from canonical Page-1 array (NOT snapshot)
+                    // Use aggregates_derived_from_page_one if available, otherwise calculate from pageOneListings
+                    const aggregates = analysis.aggregates_derived_from_page_one;
+                    const page1Count = aggregates?.page1_product_count ?? normalizedListings.length;
                     const keyword = snapshot?.keyword ?? analysis.input_value ?? "";
-                    const avgPrice = snapshot?.avg_price ?? (normalizedListings.length > 0 
-                      ? normalizedListings.reduce((sum: number, l: any) => sum + (l.price || 0), 0) / normalizedListings.filter((l: any) => l.price > 0).length
-                      : null);
                     
-                    // Average BSR (Tier-2 only)
+                    // Use aggregates from canonical array, fallback to calculated from listings
+                    const avgPrice = aggregates?.avg_price ?? (normalizedListings.length > 0 
+                      ? normalizedListings.reduce((sum: number, l: any) => sum + (l.price || 0), 0) / normalizedListings.filter((l: any) => l.price > 0).length
+                      : 0);
+                    
+                    // Average BSR - use aggregates or calculate from listings
                     const bsrListings = normalizedListings.filter((l: any) => l.bsr !== null && l.bsr !== undefined && l.bsr > 0);
-                    const avgBSR = snapshot?.avg_bsr ?? (bsrListings.length > 0
+                    const avgBSR = aggregates?.avg_bsr ?? (bsrListings.length > 0
                       ? Math.round(bsrListings.reduce((sum: number, l: any) => sum + (l.bsr || 0), 0) / bsrListings.length)
                       : null);
                     
-                    // Monthly Units
-                    const monthlyUnits = snapshot?.est_total_monthly_units_min ?? snapshot?.est_total_monthly_units_max ?? 
+                    // Monthly Units - use aggregates or calculate from listings
+                    const monthlyUnits = aggregates?.total_monthly_units_est ?? 
                       (normalizedListings.length > 0
                         ? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_units || 0), 0)
                         : 0);
                     
-                    // Monthly Revenue
-                    const monthlyRevenue = snapshot?.est_total_monthly_revenue_min ?? snapshot?.est_total_monthly_revenue_max ??
+                    // Monthly Revenue - use aggregates or calculate from listings
+                    const monthlyRevenue = aggregates?.total_monthly_revenue_est ??
                       (normalizedListings.length > 0
                         ? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0)
                         : (avgPrice ? Math.round(monthlyUnits * avgPrice) : 0));
                     
-                    // Average Rating
-                    const avgRating = snapshot?.avg_rating ?? (normalizedListings.length > 0
+                    // Average Rating - use aggregates or calculate from listings
+                    const avgRating = aggregates?.avg_rating ?? (normalizedListings.length > 0
                       ? normalizedListings
                           .filter((l: any) => l.rating !== null && l.rating !== undefined && l.rating > 0)
                           .reduce((sum: number, l: any, idx: number, arr: any[]) => {
                             const total = sum + (l.rating || 0);
                             return idx === arr.length - 1 ? total / arr.length : total;
                           }, 0)
-                      : null);
+                      : 0);
                     
                     // Search Volume
                     let searchVolume: string = "Estimating…";
@@ -1057,10 +1110,13 @@ export default function AnalyzeForm({
                   {/* ─────────────────────────────────────────────────────────── */}
                   {(() => {
                     const snapshot = analysis.market_snapshot;
-                    const listings = snapshot.listings || [];
+                    
+                    // Use canonical Page-1 array from API response (page_one_listings or products)
+                    // This ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array
+                    const pageOneListings = analysis.page_one_listings || analysis.products || snapshot?.listings || [];
                     
                     // Normalize listings using helper, preserving revenue fields
-                    const normalizedListings = [...listings]
+                    const normalizedListings = [...pageOneListings]
                       .filter((l: any) => {
                         const normalized = normalizeListing(l);
                         return normalized.asin && normalized.title;

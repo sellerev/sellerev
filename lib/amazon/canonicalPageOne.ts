@@ -86,7 +86,8 @@ export async function buildCanonicalPageOne(
     const title = listing.title || `${keyword} - Product ${position}`;
     if (!listing.title) inferredFields.push('title');
     
-    const image_url = listing.image_url || null;
+    // Image URL: use real if available, otherwise placeholder
+    const image_url = listing.image_url || "https://via.placeholder.com/300x300?text=Product+Image";
     if (!listing.image_url) inferredFields.push('image_url');
     
     // Price: use real if available, otherwise use tiered multiplier
@@ -124,14 +125,14 @@ export async function buildCanonicalPageOne(
     // Revenue: units × price
     const monthlyRevenue = Math.round(monthlyUnits * price * 100) / 100;
     
-    // Fulfillment: use real if available, otherwise infer
+    // Fulfillment: use real if available, otherwise default to "FBA"
     let fulfillment: "FBA" | "FBM" | "AMZ";
     if (listing.fulfillment) {
       fulfillment = listing.fulfillment === "FBA" ? "FBA" : 
                     listing.fulfillment === "Amazon" ? "AMZ" : "FBM";
     } else {
-      // Infer based on position (top positions more likely FBA)
-      fulfillment = position <= 5 ? "FBA" : position <= 10 ? "FBM" : "FBM";
+      // Default to "FBA" for generated listings
+      fulfillment = "FBA";
       inferredFields.push('fulfillment');
     }
     
@@ -192,22 +193,27 @@ export async function buildCanonicalPageOne(
     // Revenue: units × price
     const monthlyRevenue = Math.round(monthlyUnits * price * 100) / 100;
     
-    // Rating: generate realistic based on position
+    // Rating: generate realistic based on position (default 4.1-4.5 for generated)
     const rating = generateRealisticRating(avgRating, position);
+    // Ensure rating is between 4.1-4.5 for generated listings
+    const finalRating = Math.max(4.1, Math.min(4.5, rating));
     
-    // Reviews: generate realistic based on position and rating
-    const review_count = generateRealisticReviews(avgReviews, position, rating);
+    // Reviews: generate realistic based on position and rating (default > 20)
+    const review_count = Math.max(21, generateRealisticReviews(avgReviews, position, finalRating));
     
-    // Fulfillment: infer based on position
-    const fulfillment: "FBA" | "FBM" | "AMZ" = position <= 5 ? "FBA" : position <= 10 ? "FBM" : "FBM";
+    // Fulfillment: default to "FBA" for generated listings
+    const fulfillment: "FBA" | "FBM" | "AMZ" = "FBA";
+    
+    // Image URL: placeholder for generated listings
+    const image_url = "https://via.placeholder.com/300x300?text=Product+Image";
     
     products.push({
       rank: position,
       asin: `INFERRED-${position}`,
       title: `${keyword} - Product ${position}`,
-      image_url: null,
+      image_url,
       price,
-      rating,
+      rating: finalRating,
       review_count,
       bsr: null,
       estimated_monthly_units: monthlyUnits,

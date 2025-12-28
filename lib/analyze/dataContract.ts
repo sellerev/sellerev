@@ -79,6 +79,34 @@ export interface KeywordAnalyzeResponse {
     brand: string | null;
     seller_country: SellerCountry;
   }>;
+  
+  // B-2) Canonical Page-1 Array (explicit for UI)
+  page_one_listings: Array<{
+    rank: number;
+    asin: string;
+    title: string;
+    image_url: string | null;
+    price: number;
+    rating: number;
+    review_count: number;
+    bsr: number | null;
+    estimated_monthly_units: number;
+    estimated_monthly_revenue: number;
+    revenue_share_pct: number;
+    fulfillment: Fulfillment;
+    brand: string | null;
+    seller_country: SellerCountry;
+  }>;
+  
+  // B-3) Aggregates Derived from Page-1 (explicit for UI)
+  aggregates_derived_from_page_one: {
+    avg_price: number;
+    avg_rating: number;
+    avg_bsr: number | null;
+    total_monthly_units_est: number;
+    total_monthly_revenue_est: number;
+    page1_product_count: number;
+  };
 
   // C) Market Structure Breakdown
   market_structure: {
@@ -337,16 +365,44 @@ export async function buildKeywordAnalyzeResponse(
     page1_density: snapshot.total_page1_listings,
   };
   
-  // Build summary
+  // Build summary - calculate aggregates from canonical Page-1 products (NOT snapshot)
+  // This ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array
+  const pageOneListings = products; // Canonical Page-1 array
+  
+  // Calculate aggregates from pageOneListings
+  const pageOnePrices = pageOneListings
+    .map(p => p.price)
+    .filter((p): p is number => p !== null && p > 0);
+  const avg_price = pageOnePrices.length > 0 
+    ? pageOnePrices.reduce((sum, p) => sum + p, 0) / pageOnePrices.length 
+    : 0;
+  
+  const pageOneRatings = pageOneListings
+    .map(p => p.rating)
+    .filter((r): r is number => r !== null && r > 0);
+  const avg_rating = pageOneRatings.length > 0
+    ? pageOneRatings.reduce((sum, r) => sum + r, 0) / pageOneRatings.length
+    : 0;
+  
+  const pageOneBsrs = pageOneListings
+    .map(p => p.bsr)
+    .filter((b): b is number => b !== null && b > 0);
+  const avg_bsr = pageOneBsrs.length > 0
+    ? pageOneBsrs.reduce((sum, b) => sum + b, 0) / pageOneBsrs.length
+    : null;
+  
+  const total_monthly_units_est = pageOneListings.reduce((sum, p) => sum + (p.estimated_monthly_units || 0), 0);
+  const total_monthly_revenue_est = pageOneListings.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
+  
   let summary = {
     search_volume_est: null, // TODO: Extract from search_demand if available
     search_volume_confidence: "low" as Confidence,
-    avg_price: snapshot.avg_price || 0,
-    avg_rating: snapshot.avg_rating || 0,
-    avg_bsr: calculateAvgBSR(products),
-    total_monthly_units_est: snapshot.est_total_monthly_units_min || 0,
-    total_monthly_revenue_est: snapshot.est_total_monthly_revenue_min || 0,
-    page1_product_count: snapshot.total_page1_listings,
+    avg_price,
+    avg_rating,
+    avg_bsr,
+    total_monthly_units_est,
+    total_monthly_revenue_est,
+    page1_product_count: pageOneListings.length, // Use actual count from canonical array
     sponsored_count: snapshot.sponsored_count || null,
   };
   
@@ -396,6 +452,16 @@ export async function buildKeywordAnalyzeResponse(
     signals,
   };
   
+  // Calculate aggregates from canonical Page-1 array
+  const aggregates_derived_from_page_one = {
+    avg_price: summary.avg_price,
+    avg_rating: summary.avg_rating,
+    avg_bsr: summary.avg_bsr,
+    total_monthly_units_est: summary.total_monthly_units_est,
+    total_monthly_revenue_est: summary.total_monthly_revenue_est,
+    page1_product_count: summary.page1_product_count,
+  };
+  
   return {
     keyword,
     marketplace,
@@ -408,7 +474,9 @@ export async function buildKeywordAnalyzeResponse(
     },
     confidence: "medium" as Confidence, // TODO: Calculate from data quality
     summary,
-    products,
+    products, // Canonical Page-1 array
+    page_one_listings: products, // Explicit canonical Page-1 array for UI (same as products) - ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array
+    aggregates_derived_from_page_one, // Aggregates calculated from canonical Page-1 array (NOT snapshot)
     market_structure: marketStructure,
     margin_snapshot: marginSnapshotContract,
     signals,
