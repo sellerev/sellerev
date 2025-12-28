@@ -1247,7 +1247,7 @@ export async function POST(req: NextRequest) {
     }> = [];
     
     try {
-      const { getSellerMemories, getPendingMemories } = await import("@/lib/ai/sellerMemoryStore");
+      const { getSellerMemories } = await import("@/lib/ai/sellerMemoryStore");
       const { shouldAskUserToConfirm, formatMemoryForConfirmation } = await import("@/lib/ai/memoryMerge");
       
       // Load confirmed memories
@@ -1259,7 +1259,11 @@ export async function POST(req: NextRequest) {
       }));
       
       // Load pending memories that should be confirmed
-      const pendingMemories = await getPendingMemories(supabase, user.id);
+      const { data: pendingMemoryData } = await supabase
+        .from("pending_memory")
+        .select("*")
+        .eq("user_id", user.id);
+      const pendingMemories = pendingMemoryData || [];
       pendingMemoriesForConfirmation = pendingMemories
         .filter((p) => shouldAskUserToConfirm(p.memory_candidate, p.reason))
         .map((p) => ({
@@ -1934,65 +1938,69 @@ Would you like me to:
           // Do this after closing the stream so it doesn't block the response
           if (finalMessage) {
             // Don't await - let it run in background
-            supabase.from("analysis_messages").insert([
-              {
-                analysis_run_id: body.analysisRunId,
-                user_id: user.id,
-                role: "user",
-                content: body.message,
-              },
-              {
-                analysis_run_id: body.analysisRunId,
-                user_id: user.id,
-                role: "assistant",
-                content: finalMessage,
-              },
-            ]).then(async (result: any) => {
-              console.log("Chat messages saved to database");
-              
-              // 17. Extract and store memories from user message (non-blocking, parallel)
-              // ────────────────────────────────────────────────────────────────
-              // Memory extraction runs in parallel - doesn't block the response
-              // Uses merge logic to determine what to save vs. what to ask user about
-              // ────────────────────────────────────────────────────────────────
+            (async () => {
               try {
-                const { extractMemoriesFromText } = await import("@/lib/ai/memoryExtraction");
-                const { upsertMemoriesWithMerge } = await import("@/lib/ai/sellerMemoryStore");
-                const { shouldAskUserToConfirm, formatMemoryForConfirmation } = await import("@/lib/ai/memoryMerge");
+                const result = await supabase.from("analysis_messages").insert([
+                  {
+                    analysis_run_id: body.analysisRunId,
+                    user_id: user.id,
+                    role: "user",
+                    content: body.message,
+                  },
+                  {
+                    analysis_run_id: body.analysisRunId,
+                    user_id: user.id,
+                    role: "assistant",
+                    content: finalMessage,
+                  },
+                ]);
                 
-                // Extract memories from user message
-                const extractedMemories = await extractMemoriesFromText(
-                  body.message,
-                  'explicit_user_statement'
-                );
+                console.log("Chat messages saved to database");
                 
-                if (extractedMemories.length > 0) {
-                  // Get the user message ID for source_reference
-                  const userMessageId = result.data?.[0]?.id || null;
+                // 17. Extract and store memories from user message (non-blocking, parallel)
+                // ────────────────────────────────────────────────────────────────
+                // Memory extraction runs in parallel - doesn't block the response
+                // Uses merge logic to determine what to save vs. what to ask user about
+                // ────────────────────────────────────────────────────────────────
+                try {
+                  const { extractMemoriesFromText } = await import("@/lib/ai/memoryExtraction");
+                  const { upsertMemoriesWithMerge } = await import("@/lib/ai/sellerMemoryStore");
+                  const { shouldAskUserToConfirm, formatMemoryForConfirmation } = await import("@/lib/ai/memoryMerge");
                   
-                  // Upsert memories with merge logic
-                  const mergeResult = await upsertMemoriesWithMerge(
-                    supabase,
-                    user.id,
-                    extractedMemories,
-                    userMessageId
+                  // Extract memories from user message
+                  const extractedMemories = await extractMemoriesFromText(
+                    body.message,
+                    'explicit_user_statement'
                   );
                   
-                  console.log(`Memory extraction: ${mergeResult.inserted} inserted, ${mergeResult.updated} updated, ${mergeResult.pending.length} pending`);
-                  
-                  // If there are pending memories that should be confirmed, we'll handle them
-                  // in the next chat response (they'll be checked when building context)
-                  if (mergeResult.pending.length > 0) {
-                    console.log(`Pending memories requiring confirmation: ${mergeResult.pending.length}`);
+                  if (extractedMemories.length > 0) {
+                    // Get the user message ID for source_reference
+                    const userMessageId = (result.data as any)?.[0]?.id || null;
+                    
+                    // Upsert memories with merge logic
+                    const mergeResult = await upsertMemoriesWithMerge(
+                      supabase,
+                      user.id,
+                      extractedMemories,
+                      userMessageId
+                    );
+                    
+                    console.log(`Memory extraction: ${mergeResult.inserted} inserted, ${mergeResult.updated} updated, ${mergeResult.pending.length} pending`);
+                    
+                    // If there are pending memories that should be confirmed, we'll handle them
+                    // in the next chat response (they'll be checked when building context)
+                    if (mergeResult.pending.length > 0) {
+                      console.log(`Pending memories requiring confirmation: ${mergeResult.pending.length}`);
+                    }
                   }
+                } catch (error) {
+                  // Memory extraction failures should not block chat
+                  console.error("Memory extraction error (non-blocking):", error);
                 }
-              } catch (error) {
-                // Memory extraction failures should not block chat
-                console.error("Memory extraction error (non-blocking):", error);
+              } catch (saveError) {
+                console.error("Failed to save chat messages:", saveError);
               }
-            }).catch((saveError) => {
-              console.error("Failed to save chat messages:", saveError);
-            });
+            })();
           }
         } catch (error) {
           console.error("Streaming error:", error);

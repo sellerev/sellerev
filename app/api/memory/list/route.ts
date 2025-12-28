@@ -7,7 +7,7 @@ import { createApiClient } from "@/lib/supabase/server-api";
  */
 export async function GET(req: NextRequest) {
   const res = new NextResponse();
-  const supabase = await createApiClient();
+  const supabase = createApiClient(req, res);
 
   // Auth check
   const {

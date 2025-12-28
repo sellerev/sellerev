@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
       console.error("Failed to check refresh quota:", quotaError);
     }
 
-    const currentRefreshCount = refreshCount || 0;
+    const currentRefreshCount = typeof refreshCount === 'number' ? refreshCount : 0;
     if (currentRefreshCount >= MAX_REFRESHES_PER_DAY) {
       return NextResponse.json(
         {

@@ -59,6 +59,10 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
       // Transform database record to match AnalysisResponse interface
       const response = analysisRun.response as Record<string, unknown>;
       
+      // Normalize risks to ensure stable contract (all 4 keys always present)
+      const normalizedRisks = normalizeRisks(response.risks as Record<string, { level: string; explanation: string }> | undefined);
+      
+      // Create analysis object with explicitly typed risks to satisfy TypeScript
       initialAnalysis = {
         analysis_run_id: analysisRun.id,
         created_at: analysisRun.created_at,
@@ -67,7 +71,7 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
         decision: response.decision as { verdict: "GO" | "CAUTION" | "NO_GO"; confidence: number },
         executive_summary: response.executive_summary as string,
         reasoning: response.reasoning as { primary_factors: string[]; seller_context_impact: string },
-        risks: normalizeRisks(response.risks as Record<string, { level: string; explanation: string }> | undefined),
+        risks: normalizedRisks,
         recommended_actions: response.recommended_actions as { must_do: string[]; should_do: string[]; avoid: string[] },
         assumptions_and_limits: response.assumptions_and_limits as string[],
         // Include market data if available (from rainforest_data column)
