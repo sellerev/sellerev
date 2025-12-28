@@ -159,7 +159,10 @@ export function buildCanonicalPageOne(
       price,
       rating,
       review_count,
-      bsr: listing.main_category_bsr || listing.bsr || null,
+      // BSR: use real if available and not marked invalid, otherwise null
+      bsr: (listing.main_category_bsr || listing.bsr) && !listing.bsr_invalid_reason
+        ? (listing.main_category_bsr || listing.bsr)
+        : null,
       estimated_monthly_units: monthlyUnits,
       estimated_monthly_revenue: monthlyRevenue,
       revenue_share_pct: 0, // Will be calculated after normalization

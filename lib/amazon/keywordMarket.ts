@@ -31,6 +31,7 @@ export interface ParsedListing {
   est_monthly_revenue?: number | null; // 30-day revenue estimate (modeled)
   est_monthly_units?: number | null; // 30-day units estimate (modeled)
   revenue_confidence?: "low" | "medium"; // Confidence level for revenue estimate
+  bsr_invalid_reason?: string | null; // Reason why BSR was marked invalid (e.g., "duplicate_bug")
 }
 
 export interface KeywordMarketSnapshot {
@@ -244,6 +245,57 @@ export function extractMainCategoryBSR(item: any): { rank: number; category: str
   }
   
   return null;
+}
+
+/**
+ * PHASE 1: Detect duplicate BSRs (non-disruptive utility)
+ * 
+ * Identifies broken Rainforest data where the same BSR appears across many products.
+ * Returns a Set of invalid BSR values that should be excluded.
+ * 
+ * Logic:
+ * - Extract all valid BSR values (1-300,000)
+ * - Count frequency
+ * - If a BSR appears ≥ 8 times → mark as invalid
+ * 
+ * @param listings - Array of parsed listings
+ * @returns Set of invalid BSR values
+ */
+export function detectDuplicateBSRs(listings: ParsedListing[]): Set<number> {
+  const invalidBSRs = new Set<number>();
+  
+  // Extract all valid BSR values (1-300,000)
+  const bsrCounts: Record<number, number> = {};
+  
+  for (const listing of listings) {
+    // Check both main_category_bsr and deprecated bsr field
+    const bsr = listing.main_category_bsr ?? listing.bsr;
+    
+    // Validate BSR range: 1-300,000
+    if (bsr !== null && bsr !== undefined && bsr >= 1 && bsr <= 300000) {
+      bsrCounts[bsr] = (bsrCounts[bsr] || 0) + 1;
+    }
+  }
+  
+  // Find BSRs that appear ≥ 8 times (invalid duplicates)
+  for (const [bsrStr, count] of Object.entries(bsrCounts)) {
+    if (count >= 8) {
+      const bsr = parseInt(bsrStr, 10);
+      invalidBSRs.add(bsr);
+      console.log(`🔵 BSR_DUPLICATE_DETECTED: BSR ${bsr} appears ${count} times - marking as invalid`);
+    }
+  }
+  
+  if (invalidBSRs.size > 0) {
+    console.log("🔵 BSR_DUPLICATE_DETECTION", {
+      invalid_bsr_count: invalidBSRs.size,
+      invalid_bsrs: Array.from(invalidBSRs),
+      total_listings: listings.length,
+      timestamp: new Date().toISOString(),
+    });
+  }
+  
+  return invalidBSRs;
 }
 
 /**
@@ -949,6 +1001,40 @@ export async function fetchKeywordMarketSnapshot(
     // Normalize using single helper - all fields except ASIN are optional
     let parsedListings: ParsedListing[] = [];
     try {
+      // PHASE 1: Detect duplicate BSRs before normalization (non-disruptive)
+      // This allows us to mark invalid BSRs during normalization
+      const tempListingsForDetection = searchResults.map((item: any, index: number) => {
+        const asin = item.asin ?? null;
+        const position = item.position ?? index + 1;
+        
+        // Extract BSR for duplicate detection
+        let mainBSRData = extractMultiSourceBSR(item);
+        if (!mainBSRData && asin && bsrDataMap[asin]) {
+          const cachedBSR = bsrDataMap[asin];
+          if (cachedBSR && cachedBSR.rank >= 1 && cachedBSR.rank <= 300000) {
+            mainBSRData = {
+              rank: cachedBSR.rank,
+              category: cachedBSR.category,
+            };
+          }
+        }
+        
+        const main_category_bsr = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000) 
+          ? mainBSRData.rank 
+          : null;
+        const bsr = main_category_bsr;
+        
+        return {
+          asin,
+          main_category_bsr,
+          bsr,
+        } as ParsedListing;
+      });
+      
+      // Detect duplicate BSRs
+      const invalidBSRs = detectDuplicateBSRs(tempListingsForDetection);
+      
+      // Now parse listings with duplicate detection applied
       parsedListings = searchResults.map((item: any, index: number) => {
       // Step 2: ASIN is required, everything else is optional
       const asin = item.asin ?? null;
@@ -979,13 +1065,23 @@ export async function fetchKeywordMarketSnapshot(
       
       // PRODUCTION HARDENING: Validate BSR (null, 0, or < 1 are invalid, must be ≤ 300,000)
       // Exclude from calculations but still allow listing to exist
-      const main_category_bsr = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000) 
+      let main_category_bsr = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000) 
         ? mainBSRData.rank 
         : null;
       const main_category = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000)
         ? mainBSRData.category
         : null;
-      const bsr = main_category_bsr; // Keep for backward compatibility
+      let bsr = main_category_bsr; // Keep for backward compatibility
+      
+      // PHASE 1: Apply duplicate BSR detection (non-disruptive)
+      // If BSR is in invalid set, mark it as null and add reason
+      let bsr_invalid_reason: string | null = null;
+      if (main_category_bsr !== null && invalidBSRs.has(main_category_bsr)) {
+        bsr_invalid_reason = "duplicate_bug";
+        main_category_bsr = null;
+        bsr = null;
+        console.log(`🔵 BSR_MARKED_INVALID: Listing ${asin} BSR ${mainBSRData?.rank} marked as invalid (duplicate_bug)`);
+      }
       
       const fulfillment = parseFulfillment(item); // Nullable
       
@@ -1020,6 +1116,8 @@ export async function fetchKeywordMarketSnapshot(
         // Add seller and is_prime for fulfillment mix computation
         seller, // Optional (nullable)
         is_prime, // Boolean
+        // PHASE 1: BSR invalid reason (if BSR was marked invalid)
+        bsr_invalid_reason, // Optional (nullable) - reason why BSR is invalid
       } as ParsedListing & { seller?: string | null; is_prime?: boolean };
     });
     } catch (parseError) {
