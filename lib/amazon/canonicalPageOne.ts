@@ -45,13 +45,14 @@ export interface CanonicalProduct {
  * @param rawRainforestData - Optional map of raw Rainforest API data by ASIN for multi-source BSR extraction
  * @returns Array of ~20 canonical products
  */
-export function buildCanonicalPageOne(
+export async function buildCanonicalPageOne(
   listings: ParsedListing[],
   snapshot: KeywordMarketSnapshot,
   keyword: string,
   marketplace: string = "US",
-  rawRainforestData?: Map<string, any>
-): CanonicalProduct[] {
+  rawRainforestData?: Map<string, any>,
+  supabase?: any
+): Promise<CanonicalProduct[]> {
   const TARGET_PRODUCT_COUNT = 20;
   
   // Get snapshot totals
@@ -248,7 +249,10 @@ export function buildCanonicalPageOne(
   const afterBsrExtraction = applyMultiSourceBsrExtraction(afterDuplicateDetection, rawRainforestData, mainCategory);
   
   // Apply Page-1 demand calibration using top BSR performance
-  return calibratePageOneUnits(afterBsrExtraction);
+  const afterCalibration = calibratePageOneUnits(afterBsrExtraction);
+  
+  // Apply ASIN-level historical blending
+  return await blendWithAsinHistory(afterCalibration, marketplace, supabase);
 }
 
 /**
@@ -583,6 +587,150 @@ function calibratePageOneUnits(products: CanonicalProduct[]): CanonicalProduct[]
   });
   
   return calibrated;
+}
+
+/**
+ * ASIN-Level Historical Blending
+ * 
+ * Blends current unit estimates with historical averages from asin_history table.
+ * Uses 60% current + 40% history for listings with ≥ 3 history points.
+ * 
+ * @param products - Canonical products (after calibration)
+ * @param marketplace - Marketplace identifier
+ * @param supabase - Optional Supabase client for querying history
+ * @returns Products with historically blended unit and revenue estimates
+ */
+async function blendWithAsinHistory(
+  products: CanonicalProduct[],
+  marketplace: string,
+  supabase?: any
+): Promise<CanonicalProduct[]> {
+  // Skip if no supabase client provided
+  if (!supabase) {
+    return products;
+  }
+  
+  // Extract ASINs from products (exclude synthetic ASINs)
+  const asins = products
+    .map(p => p.asin)
+    .filter(asin => asin && !asin.startsWith('ESTIMATED-') && !asin.startsWith('INFERRED-'));
+  
+  if (asins.length === 0) {
+    return products;
+  }
+  
+  try {
+    // Query asin_history for last 45 days, grouped by ASIN
+    const fortyFiveDaysAgo = new Date();
+    fortyFiveDaysAgo.setDate(fortyFiveDaysAgo.getDate() - 45);
+    
+    const { data: historyData, error } = await supabase
+      .from('asin_history')
+      .select('asin, estimated_monthly_units, recorded_at')
+      .in('asin', asins)
+      .gte('recorded_at', fortyFiveDaysAgo.toISOString())
+      .order('recorded_at', { ascending: false });
+    
+    if (error) {
+      // Table may not exist yet - skip gracefully
+      console.log("🔵 ASIN_HISTORY_BLEND_SKIPPED", {
+        reason: "query_error",
+        error: error.message,
+      });
+      return products;
+    }
+    
+    if (!historyData || historyData.length === 0) {
+      console.log("🔵 ASIN_HISTORY_BLEND_SKIPPED", {
+        reason: "no_history_data",
+        asin_count: asins.length,
+      });
+      return products;
+    }
+    
+    // Group by ASIN and compute average units
+    const historyByAsin = new Map<string, number[]>();
+    
+    for (const record of historyData) {
+      if (record.asin && record.estimated_monthly_units !== null && record.estimated_monthly_units !== undefined) {
+        const units = typeof record.estimated_monthly_units === 'number' 
+          ? record.estimated_monthly_units 
+          : parseFloat(record.estimated_monthly_units);
+        
+        if (!isNaN(units) && units > 0) {
+          if (!historyByAsin.has(record.asin)) {
+            historyByAsin.set(record.asin, []);
+          }
+          historyByAsin.get(record.asin)!.push(units);
+        }
+      }
+    }
+    
+    // Compute averages and filter to ASINs with ≥ 3 history points
+    const historyAverages = new Map<string, number>();
+    
+    for (const [asin, unitsArray] of historyByAsin.entries()) {
+      if (unitsArray.length >= 3) {
+        const avg = unitsArray.reduce((sum, u) => sum + u, 0) / unitsArray.length;
+        historyAverages.set(asin, avg);
+      }
+    }
+    
+    if (historyAverages.size === 0) {
+      console.log("🔵 ASIN_HISTORY_BLEND_SKIPPED", {
+        reason: "insufficient_history_points",
+        asins_with_history: historyByAsin.size,
+        required_points: 3,
+      });
+      return products;
+    }
+    
+    // Blend estimates: 60% current + 40% history
+    let blendedCount = 0;
+    
+    const blended = products.map(product => {
+      const historyAvg = historyAverages.get(product.asin);
+      
+      if (historyAvg === undefined) {
+        return product; // No history for this ASIN - leave unchanged
+      }
+      
+      // Blend: final_units = round(0.6 * current + 0.4 * history_avg)
+      const blendedUnits = Math.round(0.6 * product.estimated_monthly_units + 0.4 * historyAvg);
+      const blendedRevenue = Math.round(blendedUnits * product.price * 100) / 100;
+      
+      blendedCount++;
+      
+      return {
+        ...product,
+        estimated_monthly_units: blendedUnits,
+        estimated_monthly_revenue: blendedRevenue,
+      };
+    });
+    
+    // Recalculate revenue share percentages after blending
+    const finalTotalRevenue = blended.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    if (finalTotalRevenue > 0) {
+      blended.forEach(p => {
+        p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / finalTotalRevenue) * 100 * 100) / 100;
+      });
+    }
+    
+    console.log("🔵 ASIN_HISTORY_BLEND_COMPLETE", {
+      blended_count: blendedCount,
+      total_products: products.length,
+      asins_with_history: historyAverages.size,
+    });
+    
+    return blended;
+  } catch (error) {
+    // Gracefully handle any errors (table missing, etc.)
+    console.log("🔵 ASIN_HISTORY_BLEND_SKIPPED", {
+      reason: "exception",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return products;
+  }
 }
 
 /**

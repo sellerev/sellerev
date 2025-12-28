@@ -1269,11 +1269,13 @@ export async function POST(req: NextRequest) {
       });
       
       // Build canonical Page-1 products
-      const canonicalProducts = buildCanonicalPageOne(
+      const canonicalProducts = await buildCanonicalPageOne(
         keywordMarketData.listings || [],
         keywordMarketData.snapshot,
         body.input_value,
-        marketplace
+        marketplace,
+        undefined, // rawRainforestData
+        supabase // supabase client for history blending
       );
       
       console.log("🔵 CANONICAL_PAGE1_BUILD_COMPLETE", {
@@ -1862,11 +1864,13 @@ ${body.input_value}`;
     // If still empty, rebuild canonical products (absolute last resort - should never happen)
     if (finalListings.length === 0 && keywordMarketData) {
       console.error("🔴 CRITICAL: Final response has no listings - rebuilding canonical products");
-      const emergencyCanonical = buildCanonicalPageOne(
+      const emergencyCanonical = await buildCanonicalPageOne(
         [],
         keywordMarketData.snapshot,
         body.input_value,
-        marketplace
+        marketplace,
+        undefined, // rawRainforestData
+        supabase // supabase client for history blending
       );
       finalListings = emergencyCanonical.map((p: any) => ({
         asin: p.asin || null,
