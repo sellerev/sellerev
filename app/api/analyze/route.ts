@@ -775,7 +775,7 @@ export async function POST(req: NextRequest) {
     } = await import("@/lib/snapshots/keywordSnapshots");
 
     // Check for precomputed snapshot (READ-ONLY, no API calls)
-    const snapshot = await searchKeywordSnapshot(supabase, body.input_value, marketplace);
+    let snapshot = await searchKeywordSnapshot(supabase, body.input_value, marketplace);
     let keywordMarketData: KeywordMarketData | null = null;
     let snapshotStatus = 'miss';
 
