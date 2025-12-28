@@ -237,6 +237,62 @@ export function buildCanonicalPageOne(
     });
   }
   
+  // Apply BSR duplicate detection before returning
+  return applyBsrDuplicateDetection(products);
+}
+
+/**
+ * BSR Duplicate Detection
+ * 
+ * Scans Page-1 listings and identifies BSR values that appear ≥ 8 times.
+ * For any listing with a duplicated BSR, sets bsr = null.
+ * 
+ * This neutralizes Rainforest API bugs where the same BSR appears across many products.
+ * 
+ * @param products - Canonical products to scan
+ * @returns Products with duplicated BSRs nullified
+ */
+function applyBsrDuplicateDetection(products: CanonicalProduct[]): CanonicalProduct[] {
+  // Count BSR occurrences
+  const bsrCounts: Record<number, number> = {};
+  
+  for (const product of products) {
+    const bsr = product.bsr;
+    if (bsr !== null && bsr !== undefined && bsr > 0) {
+      bsrCounts[bsr] = (bsrCounts[bsr] || 0) + 1;
+    }
+  }
+  
+  // Find BSRs that appear ≥ 8 times (invalid duplicates)
+  const invalidBSRs = new Set<number>();
+  
+  for (const [bsrStr, count] of Object.entries(bsrCounts)) {
+    if (count >= 8) {
+      const bsr = parseInt(bsrStr, 10);
+      invalidBSRs.add(bsr);
+      console.log(`🔵 BSR_DUPLICATE_DETECTED: BSR ${bsr} appears ${count} times in canonical Page-1 - marking as invalid`);
+    }
+  }
+  
+  // Nullify duplicated BSRs (leave all other fields untouched)
+  if (invalidBSRs.size > 0) {
+    console.log("🔵 BSR_DUPLICATE_DETECTION_COMPLETE", {
+      invalid_bsr_count: invalidBSRs.size,
+      total_products: products.length,
+      affected_products: products.filter(p => p.bsr !== null && invalidBSRs.has(p.bsr)).length,
+    });
+    
+    return products.map(product => {
+      if (product.bsr !== null && invalidBSRs.has(product.bsr)) {
+        return {
+          ...product,
+          bsr: null, // Set bsr to null, leave all other fields untouched
+        };
+      }
+      return product;
+    });
+  }
+  
   return products;
 }
 
