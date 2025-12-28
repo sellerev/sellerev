@@ -9,6 +9,7 @@ import { buildMarginSnapshot } from "@/lib/margins/buildMarginSnapshot";
 import { buildKeywordAnalyzeResponse } from "@/lib/analyze/dataContract";
 import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
+import { buildCanonicalPageOne } from "@/lib/amazon/canonicalPageOne";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -1198,32 +1199,8 @@ export async function POST(req: NextRequest) {
       estimated: isEstimated,
     };
     
-    // Calculate Competitive Pressure Index (CPI) from Page 1 listings
-    // CPI is seller-context aware and computed deterministically
-    // CPI is computed ONCE per analysis and cached - never recalculated
-    // Note: For snapshot-based data, we need to compute CPI from product data
-    if (keywordMarketData.listings && keywordMarketData.listings.length > 0) {
-      try {
-        const cpiResult = calculateCPI({
-          listings: keywordMarketData.listings,
-          sellerStage: sellerProfile.stage as "new" | "existing" | "scaling",
-          sellerExperienceMonths: sellerProfile.experience_months,
-        });
-        
-        // Inject CPI into market snapshot with new structure
-        (marketSnapshot as any).cpi = {
-          score: cpiResult.score,
-          label: cpiResult.label,
-          breakdown: cpiResult.breakdown,
-        };
-      } catch (cpiError) {
-        console.error("CPI calculation error:", cpiError);
-        (marketSnapshot as any).cpi = null;
-      }
-    } else {
-      // No Page 1 data → CPI = null
-      (marketSnapshot as any).cpi = null;
-    }
+    // CPI calculation moved to after canonical Page-1 build
+    // (Will be calculated from canonical products after they're built)
 
     // 8. Build data contract response BEFORE AI call
     // This ensures we have the structured data to pass to AI via ai_context
@@ -1280,14 +1257,59 @@ export async function POST(req: NextRequest) {
     
     // Build contract-compliant response
     if (keywordMarketData) {
-      // FINAL GUARANTEE: Ensure listings are never empty before building contract
-      if (!keywordMarketData.listings || keywordMarketData.listings.length === 0) {
-        console.error("CRITICAL: listings empty before contract build - applying fallback");
-        keywordMarketData.listings = generateRepresentativeProducts(
-          keywordMarketData.snapshot,
-          keywordMarketData.snapshot.keyword
-        );
-      }
+      // CANONICAL PAGE-1 BUILDER: Replace raw listings with deterministic Page-1 reconstruction
+      // This ensures we always have ~20 product cards, even with 0, partial, or full listings
+      console.log("🔵 CANONICAL_PAGE1_BUILD_START", {
+        keyword: body.input_value,
+        raw_listings_count: keywordMarketData.listings?.length || 0,
+        snapshot_avg_price: keywordMarketData.snapshot?.avg_price,
+        snapshot_total_units: keywordMarketData.snapshot?.est_total_monthly_units_min,
+        snapshot_total_revenue: keywordMarketData.snapshot?.est_total_monthly_revenue_min,
+        timestamp: new Date().toISOString(),
+      });
+      
+      // Build canonical Page-1 products
+      const canonicalProducts = buildCanonicalPageOne(
+        keywordMarketData.listings || [],
+        keywordMarketData.snapshot,
+        body.input_value,
+        marketplace
+      );
+      
+      console.log("🔵 CANONICAL_PAGE1_BUILD_COMPLETE", {
+        keyword: body.input_value,
+        canonical_product_count: canonicalProducts.length,
+        inferred_count: canonicalProducts.filter(p => p.snapshot_inferred).length,
+        sample_product: canonicalProducts[0] ? {
+          rank: canonicalProducts[0].rank,
+          asin: canonicalProducts[0].asin,
+          price: canonicalProducts[0].price,
+          estimated_monthly_units: canonicalProducts[0].estimated_monthly_units,
+          estimated_monthly_revenue: canonicalProducts[0].estimated_monthly_revenue,
+          snapshot_inferred: canonicalProducts[0].snapshot_inferred,
+        } : null,
+        timestamp: new Date().toISOString(),
+      });
+      
+      // Replace listings with canonical products (convert to listing format for compatibility)
+      keywordMarketData.listings = canonicalProducts.map(p => ({
+        asin: p.asin,
+        title: p.title,
+        price: p.price,
+        rating: p.rating,
+        reviews: p.review_count,
+        is_sponsored: false,
+        position: p.rank,
+        brand: p.brand,
+        image_url: p.image_url,
+        bsr: p.bsr,
+        main_category_bsr: p.bsr,
+        main_category: null,
+        fulfillment: p.fulfillment === "FBA" ? "FBA" : p.fulfillment === "AMZ" ? "Amazon" : "FBM",
+        est_monthly_revenue: p.estimated_monthly_revenue,
+        est_monthly_units: p.estimated_monthly_units,
+        revenue_confidence: p.snapshot_inferred ? "low" as const : "medium" as const,
+      }));
       
       try {
         contractResponse = buildKeywordAnalyzeResponse(
@@ -1296,29 +1318,45 @@ export async function POST(req: NextRequest) {
           marginSnapshot
         );
         
+        // Replace products with canonical products (ensures consistency)
+        if (canonicalProducts.length > 0) {
+          contractResponse.products = canonicalProducts.map(p => ({
+            rank: p.rank,
+            asin: p.asin,
+            title: p.title,
+            image_url: p.image_url,
+            price: p.price,
+            rating: p.rating,
+            review_count: p.review_count,
+            bsr: p.bsr,
+            estimated_monthly_units: p.estimated_monthly_units,
+            estimated_monthly_revenue: p.estimated_monthly_revenue,
+            revenue_share_pct: p.revenue_share_pct,
+            fulfillment: p.fulfillment,
+            brand: p.brand,
+            seller_country: p.seller_country,
+          }));
+        }
+        
         // POST-BUILD GUARANTEE: Ensure contract response products are never empty
         if (!contractResponse?.products || contractResponse.products.length === 0) {
-          console.error("CRITICAL: contract response products empty - regenerating from snapshot");
-          const fallbackListings = generateRepresentativeProducts(
-            keywordMarketData.snapshot,
-            keywordMarketData.snapshot.keyword
-          );
-          // Map fallback listings to contract product format
-          contractResponse.products = fallbackListings.map((listing, idx) => ({
-            rank: idx + 1,
-            asin: listing.asin,
-            title: listing.title || "Estimated Page-1 Listing",
-            image_url: listing.image_url,
-            price: listing.price || 0,
-            rating: listing.rating || 0,
-            review_count: listing.reviews || 0,
-            bsr: listing.bsr,
-            estimated_monthly_units: listing.est_monthly_units || 0,
-            estimated_monthly_revenue: listing.est_monthly_revenue || 0,
-            revenue_share_pct: 0,
-            fulfillment: "FBM" as const,
-            brand: listing.brand,
-            seller_country: "Unknown" as const,
+          console.error("🔴 CRITICAL: contract response products empty after canonical build - this should never happen");
+          // This should never happen, but if it does, use canonical products directly
+          contractResponse.products = canonicalProducts.map(p => ({
+            rank: p.rank,
+            asin: p.asin,
+            title: p.title,
+            image_url: p.image_url,
+            price: p.price,
+            rating: p.rating,
+            review_count: p.review_count,
+            bsr: p.bsr,
+            estimated_monthly_units: p.estimated_monthly_units,
+            estimated_monthly_revenue: p.estimated_monthly_revenue,
+            revenue_share_pct: p.revenue_share_pct,
+            fulfillment: p.fulfillment,
+            brand: p.brand,
+            seller_country: p.seller_country,
           }));
         }
         
@@ -1328,6 +1366,36 @@ export async function POST(req: NextRequest) {
           has_summary: !!contractResponse?.summary,
           has_market_structure: !!contractResponse?.market_structure,
         });
+        
+        // Calculate CPI from canonical products (after canonical build)
+        if (keywordMarketData.listings && keywordMarketData.listings.length > 0) {
+          try {
+            const cpiResult = calculateCPI({
+              listings: keywordMarketData.listings, // Now contains canonical products
+              sellerStage: sellerProfile.stage as "new" | "existing" | "scaling",
+              sellerExperienceMonths: sellerProfile.experience_months,
+            });
+            
+            // Inject CPI into market snapshot
+            if (marketSnapshot) {
+              (marketSnapshot as any).cpi = {
+                score: cpiResult.score,
+                label: cpiResult.label,
+                breakdown: cpiResult.breakdown,
+              };
+            }
+          } catch (cpiError) {
+            console.error("CPI calculation error:", cpiError);
+            if (marketSnapshot) {
+              (marketSnapshot as any).cpi = null;
+            }
+          }
+        } else {
+          // No listings → CPI = null
+          if (marketSnapshot) {
+            (marketSnapshot as any).cpi = null;
+          }
+        }
       } catch (contractError) {
         console.error("CONTRACT_BUILD_ERROR", {
           error: contractError,
@@ -1746,12 +1814,12 @@ ${body.input_value}`;
     // Store AI decision separately from raw data contract
     // Note: contractResponse was built earlier (before AI call) with margin snapshot
     
-    // FINAL GUARANTEE: Ensure we have products/listings for the response
+    // FINAL GUARANTEE: Use canonical products for final response
+    // Canonical products are already built and guaranteed to have ~20 items
     let finalListings: any[] = [];
-    if (keywordMarket?.market_snapshot?.listings && keywordMarket.market_snapshot.listings.length > 0) {
-      finalListings = keywordMarket.market_snapshot.listings;
-    } else if (contractResponse?.products && contractResponse.products.length > 0) {
-      // Map contract products to listings format
+    
+    // Priority 1: Use canonical products from contract response (most reliable)
+    if (contractResponse?.products && contractResponse.products.length > 0) {
       finalListings = contractResponse.products.map((p: any) => ({
         asin: p.asin || null,
         title: p.title || null,
@@ -1768,8 +1836,11 @@ ${body.input_value}`;
         units_est: p.estimated_monthly_units || null,
         revenue_share: p.revenue_share_pct || null,
       }));
+    } else if (keywordMarket?.market_snapshot?.listings && keywordMarket.market_snapshot.listings.length > 0) {
+      // Priority 2: Use keywordMarket listings (should be canonical already)
+      finalListings = keywordMarket.market_snapshot.listings;
     } else if (keywordMarketData && keywordMarketData.listings && keywordMarketData.listings.length > 0) {
-      // Use raw keywordMarketData listings
+      // Priority 3: Use keywordMarketData listings (should be canonical already)
       finalListings = keywordMarketData.listings.map((l: any) => ({
         asin: l.asin || null,
         title: l.title || null,
@@ -1788,27 +1859,30 @@ ${body.input_value}`;
       }));
     }
     
-    // If still empty, generate from snapshot (absolute last resort)
+    // If still empty, rebuild canonical products (absolute last resort - should never happen)
     if (finalListings.length === 0 && keywordMarketData) {
-      console.error("CRITICAL: Final response has no listings - generating from snapshot");
-      finalListings = generateRepresentativeProducts(
+      console.error("🔴 CRITICAL: Final response has no listings - rebuilding canonical products");
+      const emergencyCanonical = buildCanonicalPageOne(
+        [],
         keywordMarketData.snapshot,
-        keywordMarketData.snapshot.keyword
-      ).map((l: any) => ({
-        asin: l.asin || null,
-        title: l.title || null,
-        brand: l.brand || null,
-        price: l.price || null,
-        rating: l.rating || null,
-        reviews: l.reviews || null,
-        bsr: l.bsr || null,
-        organic_rank: l.position || null,
-        fulfillment: l.fulfillment || null,
-        image: l.image_url || null,
-        is_sponsored: l.is_sponsored || false,
-        revenue_est: l.est_monthly_revenue || null,
-        units_est: l.est_monthly_units || null,
-        revenue_share: null,
+        body.input_value,
+        marketplace
+      );
+      finalListings = emergencyCanonical.map((p: any) => ({
+        asin: p.asin || null,
+        title: p.title || null,
+        brand: p.brand || null,
+        price: p.price || null,
+        rating: p.rating || null,
+        reviews: p.review_count || null,
+        bsr: p.bsr || null,
+        organic_rank: p.rank || null,
+        fulfillment: p.fulfillment || null,
+        image: p.image_url || null,
+        is_sponsored: false,
+        revenue_est: p.estimated_monthly_revenue || null,
+        units_est: p.estimated_monthly_units || null,
+        revenue_share: p.revenue_share_pct || null,
       }));
     }
     
