@@ -247,8 +247,201 @@ export function extractMainCategoryBSR(item: any): { rank: number; category: str
 }
 
 /**
- * Safely parses BSR (Best Seller Rank) - DEPRECATED: use extractMainCategoryBSR instead
- * @deprecated Use extractMainCategoryBSR for main category BSR extraction
+ * STEP 2: Detects duplicate BSR bug from Rainforest API
+ * If the same BSR appears ≥ 5 times across Page-1 listings, mark it as invalid
+ * 
+ * @param listings - Array of parsed listings
+ * @returns Array of listings with invalid BSRs set to null
+ */
+function detectAndRemoveDuplicateBSRs(listings: ParsedListing[]): ParsedListing[] {
+  // Count BSR occurrences
+  const bsrCounts: Record<number, number> = {};
+  
+  for (const listing of listings) {
+    const bsr = listing.main_category_bsr;
+    if (bsr !== null && bsr !== undefined && bsr > 0) {
+      bsrCounts[bsr] = (bsrCounts[bsr] || 0) + 1;
+    }
+  }
+  
+  // Find BSRs that appear ≥ 5 times (invalid duplicates)
+  const invalidBSRs = new Set<number>();
+  for (const [bsrStr, count] of Object.entries(bsrCounts)) {
+    if (count >= 5) {
+      const bsr = parseInt(bsrStr, 10);
+      invalidBSRs.add(bsr);
+      console.log(`[BSR Duplicate Detection] BSR ${bsr} appears ${count} times - marking as invalid`);
+    }
+  }
+  
+  // If no duplicates found, return listings unchanged
+  if (invalidBSRs.size === 0) {
+    return listings;
+  }
+  
+  // Remove invalid BSRs from listings
+  return listings.map(listing => {
+    if (listing.main_category_bsr !== null && 
+        listing.main_category_bsr !== undefined && 
+        invalidBSRs.has(listing.main_category_bsr)) {
+      return {
+        ...listing,
+        main_category_bsr: null,
+        bsr: null, // Also clear deprecated bsr field
+      };
+    }
+    return listing;
+  });
+}
+
+/**
+ * STEP 3: Multi-source BSR extraction with priority ordering
+ * 
+ * Extraction priority:
+ * 1. bestsellers_rank[] (prefer category-matched entries)
+ * 2. sales_rank.current_rank
+ * 3. buying_choice.bestsellers_rank
+ * 
+ * Validation rules:
+ * - BSR must be a number
+ * - Range: 1-300,000
+ * - Exclude any BSR flagged by duplicate detection (passed as invalidBSRs set)
+ * 
+ * @param item - Product item from Rainforest API
+ * @param invalidBSRs - Set of BSR values flagged as duplicates (optional)
+ * @param preferredCategory - Preferred category name for matching (optional)
+ * @returns Object with rank and category, or null if not found
+ */
+export function extractMultiSourceBSR(
+  item: any,
+  invalidBSRs?: Set<number>,
+  preferredCategory?: string
+): { rank: number; category: string } | null {
+  if (!item) {
+    return null;
+  }
+  
+  // Validation helper: BSR must be a number in range 1-300,000
+  const isValidBSR = (bsr: number | null | undefined): bsr is number => {
+    return typeof bsr === "number" && bsr >= 1 && bsr <= 300000;
+  };
+  
+  // Check if BSR is in invalid set
+  const isInvalidBSR = (bsr: number): boolean => {
+    return invalidBSRs ? invalidBSRs.has(bsr) : false;
+  };
+  
+  const candidateBSRs: { rank: number; source: string; categoryMatch: boolean; category: string }[] = [];
+  
+  // SOURCE 1: bestsellers_rank[] array (prefer category-matched entries)
+  if (item.bestsellers_rank && Array.isArray(item.bestsellers_rank)) {
+    for (const entry of item.bestsellers_rank) {
+      if (!entry || typeof entry !== 'object') continue;
+      
+      const rankValue = entry.rank ?? 
+                       entry.Rank ?? 
+                       entry.rank_value ?? 
+                       entry.value;
+      
+      if (rankValue !== undefined && rankValue !== null) {
+        const rank = parseInt(rankValue.toString().replace(/,/g, ""), 10);
+        
+        if (isValidBSR(rank) && !isInvalidBSR(rank)) {
+          const categoryStr = entry.category || 
+                              entry.Category || 
+                              entry.category_name || 
+                              entry.name ||
+                              entry.category_path ||
+                              'default';
+          
+          // Check if category matches preferred category (if provided)
+          const categoryMatch = preferredCategory 
+            ? categoryStr.toLowerCase().includes(preferredCategory.toLowerCase())
+            : false;
+          
+          candidateBSRs.push({
+            rank,
+            source: "bestsellers_rank",
+            categoryMatch,
+            category: categoryStr,
+          });
+        }
+      }
+    }
+  }
+  
+  // SOURCE 2: sales_rank.current_rank
+  if (item.sales_rank?.current_rank !== undefined && item.sales_rank.current_rank !== null) {
+    const rank = parseInt(item.sales_rank.current_rank.toString().replace(/,/g, ""), 10);
+    if (isValidBSR(rank) && !isInvalidBSR(rank)) {
+      const category = item.category || item.main_category || item.sales_rank?.category || 'default';
+      candidateBSRs.push({
+        rank,
+        source: "sales_rank",
+        categoryMatch: false,
+        category,
+      });
+    }
+  }
+  
+  // SOURCE 3: buying_choice.bestsellers_rank
+  if (item.buying_choice?.bestsellers_rank !== undefined && item.buying_choice.bestsellers_rank !== null) {
+    const bcBsr = item.buying_choice.bestsellers_rank;
+    
+    // Handle both number and array formats
+    if (typeof bcBsr === 'number') {
+      const rank = parseInt(bcBsr.toString().replace(/,/g, ""), 10);
+      if (isValidBSR(rank) && !isInvalidBSR(rank)) {
+        const category = item.category || item.main_category || 'default';
+        candidateBSRs.push({
+          rank,
+          source: "buying_choice",
+          categoryMatch: false,
+          category,
+        });
+      }
+    } else if (Array.isArray(bcBsr)) {
+      for (const entry of bcBsr) {
+        if (!entry || typeof entry !== 'object') continue;
+        const rankValue = entry.rank ?? entry.Rank ?? entry.rank_value ?? entry.value;
+        if (rankValue !== undefined && rankValue !== null) {
+          const rank = parseInt(rankValue.toString().replace(/,/g, ""), 10);
+          if (isValidBSR(rank) && !isInvalidBSR(rank)) {
+            const category = entry.category || entry.Category || entry.category_name || 'default';
+            candidateBSRs.push({
+              rank,
+              source: "buying_choice_array",
+              categoryMatch: false,
+              category,
+            });
+          }
+        }
+      }
+    }
+  }
+  
+  // If we have candidates, prioritize: category-match first, then lowest BSR (best rank)
+  if (candidateBSRs.length > 0) {
+    // Sort: category matches first, then by lowest BSR (best rank)
+    candidateBSRs.sort((a, b) => {
+      if (a.categoryMatch && !b.categoryMatch) return -1;
+      if (!a.categoryMatch && b.categoryMatch) return 1;
+      return a.rank - b.rank; // Lower BSR is better
+    });
+    
+    const best = candidateBSRs[0];
+    return {
+      rank: best.rank,
+      category: best.category,
+    };
+  }
+  
+  return null;
+}
+
+/**
+ * Safely parses BSR (Best Seller Rank) - DEPRECATED: use extractMainCategoryBSR or extractMultiSourceBSR instead
+ * @deprecated Use extractMainCategoryBSR or extractMultiSourceBSR for BSR extraction
  */
 function parseBSR(item: any): number | null {
   const mainBSR = extractMainCategoryBSR(item);
@@ -614,7 +807,8 @@ export async function fetchKeywordMarketSnapshot(
             }
 
             const asin = product.asin;
-            const bsrData = extractMainCategoryBSR(product);
+            // STEP 3: Use multi-source BSR extraction (more robust)
+            const bsrData = extractMultiSourceBSR(product);
             const price = parsePrice(product);
 
             // PRODUCTION HARDENING: Validate BSR (null, 0, or < 1 are invalid)
@@ -728,25 +922,28 @@ export async function fetchKeywordMarketSnapshot(
       const is_sponsored = item.is_sponsored ?? false; // Boolean, default false
       const position = item.position ?? index + 1; // Organic rank (1-indexed)
       
-      // CRITICAL: Extract main category BSR (top-level category only, not subcategories)
-      // First try from search result item, then from fetched/cached BSR data map
-      let mainBSRData = extractMainCategoryBSR(item);
+      // STEP 3: Multi-source BSR extraction (robust, checks multiple sources)
+      // Priority: 1) bestsellers_rank[], 2) sales_rank.current_rank, 3) buying_choice.bestsellers_rank
+      let mainBSRData = extractMultiSourceBSR(item);
       
       // If not found in search result, check our cached/fetched BSR data map
       if (!mainBSRData && asin && bsrDataMap[asin]) {
         const cachedBSR = bsrDataMap[asin];
-        mainBSRData = cachedBSR ? {
-          rank: cachedBSR.rank,
-          category: cachedBSR.category,
-        } : null;
+        // Validate cached BSR before using it
+        if (cachedBSR && cachedBSR.rank >= 1 && cachedBSR.rank <= 300000) {
+          mainBSRData = {
+            rank: cachedBSR.rank,
+            category: cachedBSR.category,
+          };
+        }
       }
       
-      // PRODUCTION HARDENING: Validate BSR (null, 0, or < 1 are invalid)
+      // PRODUCTION HARDENING: Validate BSR (null, 0, or < 1 are invalid, must be ≤ 300,000)
       // Exclude from calculations but still allow listing to exist
-      const main_category_bsr = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1) 
+      const main_category_bsr = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000) 
         ? mainBSRData.rank 
         : null;
-      const main_category = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1)
+      const main_category = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000)
         ? mainBSRData.category
         : null;
       const bsr = main_category_bsr; // Keep for backward compatibility
@@ -958,6 +1155,36 @@ export async function fetchKeywordMarketSnapshot(
       ppc: ppcIndicators,
     };
 
+    // STEP 2: BSR Duplicate Bug Detection
+    // Prevent Rainforest's known bug where the same BSR appears across many products
+    // This must run BEFORE unit/revenue estimation to prevent corrupted data
+    const listingsWithValidBSR = detectAndRemoveDuplicateBSRs(listings);
+    
+    // Log duplicate detection results
+    const invalidBSRCount = listings.filter(l => 
+      l.main_category_bsr !== null && 
+      l.main_category_bsr !== undefined && 
+      l.main_category_bsr > 0
+    ).length - listingsWithValidBSR.filter(l => 
+      l.main_category_bsr !== null && 
+      l.main_category_bsr !== undefined && 
+      l.main_category_bsr > 0
+    ).length;
+    
+    if (invalidBSRCount > 0) {
+      console.log("BSR_DUPLICATE_BUG_DETECTED", {
+        keyword,
+        invalid_bsr_count: invalidBSRCount,
+        total_listings: listings.length,
+        listings_with_valid_bsr: listingsWithValidBSR.filter(l => 
+          l.main_category_bsr !== null && 
+          l.main_category_bsr !== undefined && 
+          l.main_category_bsr > 0
+        ).length,
+        message: "Duplicate BSRs detected and marked as invalid - will use non-BSR estimation fallback",
+      });
+    }
+
     // FIX #2: BSR-based revenue and units estimation (NO position-based logic, NO fallbacks)
     // CRITICAL: All estimates come from main_category_bsr → monthly_units → monthly_revenue
     // If BSR or price is missing, exclude from estimates (no fallbacks)
@@ -967,7 +1194,7 @@ export async function fetchKeywordMarketSnapshot(
       // Import BSR-to-sales calculator
       const { estimateMonthlySalesFromBSR } = await import("@/lib/revenue/bsr-calculator");
       
-      listingsWithEstimates = listings.map((listing) => {
+      listingsWithEstimates = listingsWithValidBSR.map((listing) => {
         // CRITICAL: Only estimate if we have BOTH main_category_bsr AND price
         // No fallbacks, no position-based estimates, no hybrids
         if (
