@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
+import type { AnalysisResponse, RiskLevel } from "@/types/analysis";
 import AnalyzeForm from "./AnalyzeForm";
 
 interface AnalyzePageProps {
@@ -43,7 +44,7 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
   }
 
   // If an analysis ID is provided, load it from the database
-  let initialAnalysis = null;
+  let initialAnalysis: AnalysisResponse | null = null;
   let initialMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
 
   if (params.id) {
@@ -59,10 +60,20 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
       // Transform database record to match AnalysisResponse interface
       const response = analysisRun.response as Record<string, unknown>;
       
-      // Normalize risks to ensure stable contract (all 4 keys always present)
-      const normalizedRisks = normalizeRisks(response.risks as Record<string, { level: string; explanation: string }> | undefined);
+      // Define explicit Risks shape
+      type NormalizedRisks = {
+        competition: RiskLevel;
+        pricing: RiskLevel;
+        differentiation: RiskLevel;
+        operations: RiskLevel;
+      };
       
-      // Create analysis object with explicitly typed risks to satisfy TypeScript
+      // Force the normalizeRisks return type
+      const normalizedRisks: NormalizedRisks = normalizeRisks(
+        response.risks as Record<string, { level: string; explanation: string }> | undefined
+      );
+      
+      // Ensure initialAnalysis is explicitly typed
       initialAnalysis = {
         analysis_run_id: analysisRun.id,
         created_at: analysisRun.created_at,
@@ -95,7 +106,7 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
                 price_used: number;
               };
             }
-          : null,
+          : undefined,
       };
 
       // Fetch chat history for this analysis
