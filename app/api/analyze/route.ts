@@ -833,6 +833,31 @@ export async function POST(req: NextRequest) {
         unitsMax = Math.round(totalUnits * 1.3);
         revenueMin = Math.round((unitsMin * finalAvgPrice) * 100) / 100;
         revenueMax = Math.round((unitsMax * finalAvgPrice) * 100) / 100;
+        
+        // Update snapshot in database with computed min/max values for future reads
+        const { error: updateError } = await supabase
+          .from("keyword_snapshots")
+          .update({
+            est_total_monthly_units_min: unitsMin,
+            est_total_monthly_units_max: unitsMax,
+            est_total_monthly_revenue_min: revenueMin,
+            est_total_monthly_revenue_max: revenueMax,
+          })
+          .eq("keyword", snapshot.keyword)
+          .eq("marketplace", snapshot.marketplace);
+        
+        if (updateError) {
+          console.warn("Failed to update snapshot with min/max fields:", updateError);
+          // Continue anyway - values are computed and will be used in response
+        } else {
+          console.log("✅ Updated snapshot with min/max fields:", {
+            keyword: snapshot.keyword,
+            units_min: unitsMin,
+            units_max: unitsMax,
+            revenue_min: revenueMin,
+            revenue_max: revenueMax,
+          });
+        }
       }
 
       // Convert snapshot to KeywordMarketData format
@@ -1458,6 +1483,12 @@ ${body.input_value}`;
           avg_rating: avgRating, // number (never null, 0 if no ratings)
           fulfillment_mix: fulfillmentMixWithSource, // { fba, fbm, amazon, source } - ALWAYS present
           page1_count: snapshot.total_page1_listings || 0, // number (never null)
+          
+          // Monthly units and revenue estimates (ALWAYS present, never null)
+          est_total_monthly_units_min: snapshot.est_total_monthly_units_min ?? 0,
+          est_total_monthly_units_max: snapshot.est_total_monthly_units_max ?? 0,
+          est_total_monthly_revenue_min: snapshot.est_total_monthly_revenue_min ?? 0,
+          est_total_monthly_revenue_max: snapshot.est_total_monthly_revenue_max ?? 0,
           
           // Additional fields (optional but included for compatibility)
           marketplace: "US",
