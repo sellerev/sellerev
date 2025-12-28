@@ -245,7 +245,10 @@ export function buildCanonicalPageOne(
   const mainCategory = listings.length > 0 && listings[0]?.main_category 
     ? listings[0].main_category 
     : null;
-  return applyMultiSourceBsrExtraction(afterDuplicateDetection, rawRainforestData, mainCategory);
+  const afterBsrExtraction = applyMultiSourceBsrExtraction(afterDuplicateDetection, rawRainforestData, mainCategory);
+  
+  // Apply Page-1 demand calibration using top BSR performance
+  return calibratePageOneUnits(afterBsrExtraction);
 }
 
 /**
@@ -496,6 +499,90 @@ function extractBestBsr(
   
   const bestBSR = candidateBSRs[0].rank;
   return { bsr: bestBSR, main_category_bsr: bestBSR };
+}
+
+/**
+ * Page-1 Demand Calibration
+ * 
+ * Calibrates estimated monthly units using top BSR performance.
+ * Uses the top 3 BSRs to compute expected total units and adjusts all estimates proportionally.
+ * 
+ * Formula:
+ * - expectedTotalUnits = 600000 / pow(top3AvgBsr, 0.45)
+ * - factor = expectedTotalUnits / rawTotalUnits
+ * - factor clamped between 0.6 and 1.4
+ * 
+ * @param products - Canonical products (after BSR extraction)
+ * @returns Products with calibrated unit and revenue estimates
+ */
+function calibratePageOneUnits(products: CanonicalProduct[]): CanonicalProduct[] {
+  // Select listings with valid BSRs
+  const listingsWithValidBSR = products.filter(p => 
+    p.bsr !== null && 
+    p.bsr !== undefined && 
+    p.bsr >= 1 && 
+    p.bsr <= 300000
+  );
+  
+  // Skip calibration if fewer than 3 valid BSRs
+  if (listingsWithValidBSR.length < 3) {
+    console.log("🔵 PAGE1_CALIBRATION_SKIPPED", {
+      reason: "insufficient_valid_bsrs",
+      valid_bsr_count: listingsWithValidBSR.length,
+      required: 3,
+    });
+    return products;
+  }
+  
+  // Sort by BSR (lower is better) and get top 3
+  const sortedByBSR = [...listingsWithValidBSR].sort((a, b) => (a.bsr || 0) - (b.bsr || 0));
+  const top3 = sortedByBSR.slice(0, 3);
+  
+  // Compute top3AvgBsr
+  const top3AvgBsr = top3.reduce((sum, p) => sum + (p.bsr || 0), 0) / top3.length;
+  
+  // Compute expected total units using calibration formula
+  const expectedTotalUnits = 600000 / Math.pow(top3AvgBsr, 0.45);
+  
+  // Compute raw total units (sum of all estimated units)
+  const rawTotalUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  
+  // Compute calibration factor
+  let factor = expectedTotalUnits / rawTotalUnits;
+  
+  // Clamp factor between 0.6 and 1.4
+  factor = Math.max(0.6, Math.min(1.4, factor));
+  
+  // Apply factor evenly to all products
+  const calibrated = products.map(product => {
+    const adjustedUnits = Math.round(product.estimated_monthly_units * factor);
+    const adjustedRevenue = Math.round(adjustedUnits * product.price * 100) / 100;
+    
+    return {
+      ...product,
+      estimated_monthly_units: adjustedUnits,
+      estimated_monthly_revenue: adjustedRevenue,
+    };
+  });
+  
+  // Recalculate revenue share percentages after calibration
+  const finalTotalRevenue = calibrated.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  if (finalTotalRevenue > 0) {
+    calibrated.forEach(p => {
+      p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / finalTotalRevenue) * 100 * 100) / 100;
+    });
+  }
+  
+  console.log("🔵 PAGE1_CALIBRATION_COMPLETE", {
+    top3_avg_bsr: Math.round(top3AvgBsr),
+    expected_total_units: Math.round(expectedTotalUnits),
+    raw_total_units: Math.round(rawTotalUnits),
+    calibration_factor: factor.toFixed(3),
+    calibrated_total_units: Math.round(calibrated.reduce((sum, p) => sum + p.estimated_monthly_units, 0)),
+    calibrated_total_revenue: Math.round(calibrated.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0)),
+  });
+  
+  return calibrated;
 }
 
 /**
