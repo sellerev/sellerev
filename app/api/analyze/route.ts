@@ -7,6 +7,7 @@ import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
 import { resolveFbaFees } from "@/lib/spapi/resolveFbaFees";
 import { buildMarginSnapshot } from "@/lib/margins/buildMarginSnapshot";
 import { buildKeywordAnalyzeResponse } from "@/lib/analyze/dataContract";
+import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 
 // Sellerev production SYSTEM PROMPT
@@ -378,6 +379,7 @@ function validateRequestBody(body: any): body is AnalyzeRequestBody {
     body.input_value.trim().length > 0
   );
 }
+
 
 
 function validateDecisionContract(data: any): data is DecisionContract {
@@ -1086,7 +1088,6 @@ export async function POST(req: NextRequest) {
         asinSnapshot: null,
         marketSnapshot: marketSnapshot ? {
           avg_price: marketSnapshot.avg_price,
-          category: marketSnapshot.category,
         } : null,
         fbaFees,
         userOverrides: null,
@@ -1313,6 +1314,9 @@ ${body.input_value}`;
 
     console.log("AI_VALIDATED");
 
+    // 10.5. Normalize risks to ensure stable contract (all 4 keys always present)
+    const normalizedRisks = normalizeRisks(decisionJson.risks);
+
     // 11. Extract verdict and confidence for analytics
     const verdict = decisionJson.decision.verdict;
     let confidence = decisionJson.decision.confidence;
@@ -1350,7 +1354,15 @@ ${body.input_value}`;
     // 12a. Ensure numbers_used is populated from contract response if available
     if (contractResponse) {
       if (!decisionJson.numbers_used) {
-        decisionJson.numbers_used = {};
+        decisionJson.numbers_used = {
+          avg_price: null,
+          price_range: null,
+          median_reviews: null,
+          review_density_pct: null,
+          brand_concentration_pct: null,
+          competitor_count: null,
+          avg_rating: null,
+        };
       }
       // Map contract response to numbers_used format
       decisionJson.numbers_used.avg_price = contractResponse.summary.avg_price;
@@ -1439,7 +1451,6 @@ ${body.input_value}`;
           page1Listings: listings,
           sponsoredCount: snapshot.sponsored_count || 0,
           avgReviews: snapshot.avg_reviews || 0,
-          category: snapshot.category || undefined,
         });
         searchVolume = {
           ...estimated,
@@ -1448,7 +1459,7 @@ ${body.input_value}`;
       } else {
         // Use fallback estimator when no listings
         const { estimateSearchVolumeFallback } = await import("@/lib/amazon/marketFallbacks");
-        const fallback = estimateSearchVolumeFallback(0, snapshot.category || null);
+        const fallback = estimateSearchVolumeFallback(0, null);
         searchVolume = fallback;
       }
       
@@ -1534,7 +1545,7 @@ ${body.input_value}`;
         ...decisionJson.decision,
         executive_summary: decisionJson.executive_summary,
         reasoning: decisionJson.reasoning,
-        risks: decisionJson.risks,
+        risks: normalizedRisks,
         recommended_actions: decisionJson.recommended_actions,
         assumptions_and_limits: decisionJson.assumptions_and_limits,
         numbers_used: decisionJson.numbers_used,
@@ -1569,7 +1580,7 @@ ${body.input_value}`;
         } : null),
         
         // Include margin_snapshot in decision
-        margin_snapshot: decisionJson.margin_snapshot || contractResponse?.margin_snapshot || null,
+        margin_snapshot: contractResponse?.margin_snapshot || null,
       },
       
       // Data Contract (raw data layer - no scores/verdicts)
@@ -1586,22 +1597,20 @@ ${body.input_value}`;
     
     // Prepare rainforest_data (omit null fields to avoid database issues)
     // Note: This is Page 1 data only
-    let rainforestData = null;
+    let rainforestData: Record<string, unknown> | null = null;
     if (marketSnapshot) {
-      rainforestData = {
-        average_price: marketSnapshot.avg_price,
-        review_count_avg: marketSnapshot.avg_reviews,
-        average_rating: marketSnapshot.avg_rating,
+      const data: Record<string, unknown> = {
         competitor_count: marketSnapshot.total_page1_listings,
         dominance_score: marketSnapshot.dominance_score,
         sponsored_count: marketSnapshot.sponsored_count,
         data_fetched_at: new Date().toISOString(),
       };
       // Only include fields that are not null
-      if (rainforestData.average_price === null) delete rainforestData.average_price;
-      if (rainforestData.review_count_avg === null) delete rainforestData.review_count_avg;
-      if (rainforestData.average_rating === null) delete rainforestData.average_rating;
-      // dominance_score is always a number (0-100), so no need to delete
+      if (marketSnapshot.avg_price !== null) data.average_price = marketSnapshot.avg_price;
+      if (marketSnapshot.avg_reviews !== null) data.review_count_avg = marketSnapshot.avg_reviews;
+      if (marketSnapshot.avg_rating !== null) data.average_rating = marketSnapshot.avg_rating;
+      // dominance_score is always a number (0-100), so no need to conditionally add
+      rainforestData = data;
     }
 
     // 13. Clean and validate response before insert
@@ -1766,14 +1775,13 @@ ${body.input_value}`;
               ? Math.round((snapshot.sponsored_count / snapshot.total_page1_listings) * 100)
               : 0,
             total_listings: snapshot.total_page1_listings,
-            fulfillment_mix: snapshot.fulfillment_mix || null,
+            fulfillment_mix: snapshot.fulfillment_mix || undefined,
           },
           estimator_inputs_json: {
             page1_count: snapshot.total_page1_listings,
             avg_reviews: snapshot.avg_reviews,
             sponsored_count: snapshot.sponsored_count || 0,
             avg_price: snapshot.avg_price,
-            category: snapshot.category || undefined,
           },
           estimator_outputs_json: {
             search_volume: snapshot.search_demand ? (() => {

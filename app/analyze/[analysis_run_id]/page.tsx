@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import AnalyzeForm from "../AnalyzeForm";
 
 /**
@@ -82,19 +83,7 @@ export default async function AnalysisDetailPage({ params }: AnalysisDetailPageP
       primary_factors: string[];
       seller_context_impact: string;
     },
-    risks: (response.risks && typeof response.risks === 'object' && 'competition' in response.risks && 'pricing' in response.risks && 'differentiation' in response.risks && 'operations' in response.risks)
-      ? response.risks as {
-          competition: { level: "Low" | "Medium" | "High"; explanation: string };
-          pricing: { level: "Low" | "Medium" | "High"; explanation: string };
-          differentiation: { level: "Low" | "Medium" | "High"; explanation: string };
-          operations: { level: "Low" | "Medium" | "High"; explanation: string };
-        }
-      : {
-          competition: { level: "Low" as const, explanation: "Risk data unavailable" },
-          pricing: { level: "Low" as const, explanation: "Risk data unavailable" },
-          differentiation: { level: "Low" as const, explanation: "Risk data unavailable" },
-          operations: { level: "Low" as const, explanation: "Risk data unavailable" },
-        },
+    risks: normalizeRisks(response.risks as Record<string, { level: string; explanation: string }> | undefined),
     recommended_actions: response.recommended_actions as {
       must_do: string[];
       should_do: string[];

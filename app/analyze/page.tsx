@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import AnalyzeForm from "./AnalyzeForm";
 
 interface AnalyzePageProps {
@@ -66,7 +67,7 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
         decision: response.decision as { verdict: "GO" | "CAUTION" | "NO_GO"; confidence: number },
         executive_summary: response.executive_summary as string,
         reasoning: response.reasoning as { primary_factors: string[]; seller_context_impact: string },
-        risks: response.risks as Record<string, { level: "Low" | "Medium" | "High"; explanation: string }>,
+        risks: normalizeRisks(response.risks as Record<string, { level: string; explanation: string }> | undefined),
         recommended_actions: response.recommended_actions as { must_do: string[]; should_do: string[]; avoid: string[] },
         assumptions_and_limits: response.assumptions_and_limits as string[],
         // Include market data if available (from rainforest_data column)
