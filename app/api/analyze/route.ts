@@ -1314,10 +1314,17 @@ export async function POST(req: NextRequest) {
       }));
       
       try {
-        contractResponse = buildKeywordAnalyzeResponse(
+        // Convert marketplace domain to Marketplace type (default to "US")
+        // For now, marketplace is hardcoded to "amazon.com" which maps to "US"
+        const marketplaceCode: "US" | "CA" | "UK" | "EU" | "AU" = "US";
+        
+        contractResponse = await buildKeywordAnalyzeResponse(
           body.input_value,
           keywordMarketData,
-          marginSnapshot
+          marginSnapshot,
+          marketplaceCode,
+          "USD",
+          supabase // supabase client for keyword history blending
         );
         
         // Replace products with canonical products (ensures consistency)

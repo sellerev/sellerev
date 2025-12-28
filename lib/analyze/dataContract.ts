@@ -239,13 +239,14 @@ function calculateTop5AvgReviews(products: Array<{ review_count: number }>): num
 // KEYWORD ANALYZE MAPPER
 // ============================================================================
 
-export function buildKeywordAnalyzeResponse(
+export async function buildKeywordAnalyzeResponse(
   keyword: string,
   marketData: KeywordMarketData,
   marginSnapshot: MarginSnapshot,
   marketplace: Marketplace = "US",
-  currency: Currency = "USD"
-): KeywordAnalyzeResponse {
+  currency: Currency = "USD",
+  supabase?: any
+): Promise<KeywordAnalyzeResponse> {
   // Guard against null/undefined inputs
   if (!marketData) {
     throw new Error("marketData is required but was null or undefined");
@@ -337,7 +338,7 @@ export function buildKeywordAnalyzeResponse(
   };
   
   // Build summary
-  const summary = {
+  let summary = {
     search_volume_est: null, // TODO: Extract from search_demand if available
     search_volume_confidence: "low" as Confidence,
     avg_price: snapshot.avg_price || 0,
@@ -348,6 +349,9 @@ export function buildKeywordAnalyzeResponse(
     page1_product_count: snapshot.total_page1_listings,
     sponsored_count: snapshot.sponsored_count || null,
   };
+  
+  // Apply keyword-level historical blending
+  summary = await blendWithKeywordHistory(summary, keyword, marketplace, supabase);
   
   // Build signals (placeholder - needs actual calculation logic)
   const signals = {
@@ -410,5 +414,161 @@ export function buildKeywordAnalyzeResponse(
     signals,
     ai_context: aiContext,
   };
+}
+
+/**
+ * Keyword-Level Historical Blending
+ * 
+ * Blends current market summary totals with historical averages from keyword_history table.
+ * Uses 70% current + 30% history for keywords with ≥ 3 history rows.
+ * 
+ * @param summary - Market summary with current estimates
+ * @param keyword - Search keyword
+ * @param marketplace - Marketplace identifier
+ * @param supabase - Optional Supabase client for querying history
+ * @returns Summary with historically blended unit and revenue estimates
+ */
+async function blendWithKeywordHistory(
+  summary: {
+    search_volume_est: null;
+    search_volume_confidence: Confidence;
+    avg_price: number;
+    avg_rating: number;
+    avg_bsr: number | null;
+    total_monthly_units_est: number;
+    total_monthly_revenue_est: number;
+    page1_product_count: number;
+    sponsored_count: number | null;
+  },
+  keyword: string,
+  marketplace: string,
+  supabase?: any
+): Promise<typeof summary> {
+  // Skip if no supabase client provided
+  if (!supabase) {
+    return summary;
+  }
+  
+  // Skip if current estimates are zero or invalid
+  const currentUnits = summary.total_monthly_units_est || 0;
+  const currentRevenue = summary.total_monthly_revenue_est || 0;
+  
+  if (currentUnits <= 0 || currentRevenue <= 0) {
+    return summary;
+  }
+  
+  try {
+    // Query keyword_history for last 30 days
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    const { data: historyData, error } = await supabase
+      .from('keyword_history')
+      .select('total_monthly_units, total_monthly_revenue, recorded_at')
+      .eq('keyword', keyword)
+      .eq('marketplace', marketplace)
+      .gte('recorded_at', thirtyDaysAgo.toISOString())
+      .order('recorded_at', { ascending: false });
+    
+    if (error) {
+      // Table may not exist yet - skip gracefully
+      console.log("🔵 KEYWORD_HISTORY_BLEND_SKIPPED", {
+        reason: "query_error",
+        keyword,
+        marketplace,
+        error: error.message,
+      });
+      return summary;
+    }
+    
+    if (!historyData || historyData.length === 0) {
+      console.log("🔵 KEYWORD_HISTORY_BLEND_SKIPPED", {
+        reason: "no_history_data",
+        keyword,
+        marketplace,
+      });
+      return summary;
+    }
+    
+    // Filter valid history entries
+    const validHistory = historyData.filter((record: any) => {
+      const units = typeof record.total_monthly_units === 'number' 
+        ? record.total_monthly_units 
+        : parseFloat(record.total_monthly_units);
+      const revenue = typeof record.total_monthly_revenue === 'number' 
+        ? record.total_monthly_revenue 
+        : parseFloat(record.total_monthly_revenue);
+      
+      return !isNaN(units) && units > 0 && !isNaN(revenue) && revenue > 0;
+    });
+    
+    // Skip if fewer than 3 history rows
+    if (validHistory.length < 3) {
+      console.log("🔵 KEYWORD_HISTORY_BLEND_SKIPPED", {
+        reason: "insufficient_history_rows",
+        keyword,
+        marketplace,
+        history_rows: validHistory.length,
+        required: 3,
+      });
+      return summary;
+    }
+    
+    // Compute averages
+    const historyAvgUnits = validHistory.reduce((sum: number, r: any) => {
+      const units = typeof r.total_monthly_units === 'number' 
+        ? r.total_monthly_units 
+        : parseFloat(r.total_monthly_units);
+      return sum + units;
+    }, 0) / validHistory.length;
+    
+    const historyAvgRevenue = validHistory.reduce((sum: number, r: any) => {
+      const revenue = typeof r.total_monthly_revenue === 'number' 
+        ? r.total_monthly_revenue 
+        : parseFloat(r.total_monthly_revenue);
+      return sum + revenue;
+    }, 0) / validHistory.length;
+    
+    // Blend: 70% current + 30% history
+    let blendedUnits = Math.round(0.7 * currentUnits + 0.3 * historyAvgUnits);
+    let blendedRevenue = Math.round(0.7 * currentRevenue + 0.3 * historyAvgRevenue);
+    
+    // Apply clamps: min = 50% of current, max = calibration upper bound
+    // For max, we'll use 1.4x current (same as calibration factor max)
+    const minUnits = Math.round(0.5 * currentUnits);
+    const maxUnits = Math.round(1.4 * currentUnits);
+    const minRevenue = Math.round(0.5 * currentRevenue);
+    const maxRevenue = Math.round(1.4 * currentRevenue);
+    
+    blendedUnits = Math.max(minUnits, Math.min(maxUnits, blendedUnits));
+    blendedRevenue = Math.max(minRevenue, Math.min(maxRevenue, blendedRevenue));
+    
+    console.log("🔵 KEYWORD_HISTORY_BLEND_COMPLETE", {
+      keyword,
+      marketplace,
+      current_units: currentUnits,
+      history_avg_units: Math.round(historyAvgUnits),
+      blended_units: blendedUnits,
+      current_revenue: currentRevenue,
+      history_avg_revenue: Math.round(historyAvgRevenue),
+      blended_revenue: blendedRevenue,
+      history_rows: validHistory.length,
+    });
+    
+    return {
+      ...summary,
+      total_monthly_units_est: blendedUnits,
+      total_monthly_revenue_est: blendedRevenue,
+    };
+  } catch (error) {
+    // Gracefully handle any errors (table missing, etc.)
+    console.log("🔵 KEYWORD_HISTORY_BLEND_SKIPPED", {
+      reason: "exception",
+      keyword,
+      marketplace,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return summary;
+  }
 }
 
