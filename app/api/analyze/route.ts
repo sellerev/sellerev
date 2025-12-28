@@ -850,13 +850,15 @@ export async function POST(req: NextRequest) {
           console.warn("Failed to update snapshot with min/max fields:", updateError);
           // Continue anyway - values are computed and will be used in response
         } else {
-          console.log("✅ Updated snapshot with min/max fields:", {
-            keyword: snapshot.keyword,
-            units_min: unitsMin,
-            units_max: unitsMax,
-            revenue_min: revenueMin,
-            revenue_max: revenueMax,
-          });
+        console.log("✅ Updated snapshot with min/max fields:", {
+          keyword: snapshot.keyword,
+          page1_count: page1Count,
+          avg_price: finalAvgPrice,
+          units_min: unitsMin,
+          units_max: unitsMax,
+          revenue_min: revenueMin,
+          revenue_max: revenueMax,
+        });
         }
       }
 
@@ -1485,10 +1487,11 @@ ${body.input_value}`;
           page1_count: snapshot.total_page1_listings || 0, // number (never null)
           
           // Monthly units and revenue estimates (ALWAYS present, never null)
+          // Use computed values from keywordMarketData.snapshot which has our calculated min/max
           est_total_monthly_units_min: snapshot.est_total_monthly_units_min ?? 0,
-          est_total_monthly_units_max: snapshot.est_total_monthly_units_max ?? 0,
+          est_total_monthly_units_max: snapshot.est_total_monthly_units_max ?? snapshot.est_total_monthly_units_min ?? 0,
           est_total_monthly_revenue_min: snapshot.est_total_monthly_revenue_min ?? 0,
-          est_total_monthly_revenue_max: snapshot.est_total_monthly_revenue_max ?? 0,
+          est_total_monthly_revenue_max: snapshot.est_total_monthly_revenue_max ?? snapshot.est_total_monthly_revenue_min ?? 0,
           
           // Additional fields (optional but included for compatibility)
           marketplace: "US",
@@ -1538,8 +1541,29 @@ ${body.input_value}`;
         confidence_downgrades: decisionJson.confidence_downgrades || [],
         
         // Include market_snapshot in decision for frontend access
-        // Use keywordMarket if available (new structure), otherwise use legacy
-        market_snapshot: keywordMarket?.market_snapshot || (contractResponse?.market_snapshot ? {
+        // Merge keywordMarket and contractResponse to ensure products are included
+        market_snapshot: keywordMarket?.market_snapshot ? {
+          ...keywordMarket.market_snapshot,
+          // Ensure listings include products from contractResponse if keywordMarket listings are empty
+          listings: keywordMarket.market_snapshot.listings?.length > 0 
+            ? keywordMarket.market_snapshot.listings 
+            : (contractResponse?.products?.map((p: any) => ({
+                asin: p.asin || null,
+                title: p.title || null,
+                brand: p.brand || null,
+                price: p.price || null,
+                rating: p.rating || null,
+                reviews: p.review_count || null,
+                bsr: p.bsr || null,
+                organic_rank: p.rank || null,
+                fulfillment: p.fulfillment || null,
+                image: p.image_url || null,
+                is_sponsored: false,
+                revenue_est: p.estimated_monthly_revenue || null,
+                units_est: p.estimated_monthly_units || null,
+                revenue_share: p.revenue_share_pct || null,
+              })) || []),
+        } : (contractResponse?.market_snapshot ? {
           ...contractResponse.market_snapshot,
           listings: contractResponse.products || [], // Map products to listings for UI
         } : null),
