@@ -825,7 +825,7 @@ export default function AnalyzeForm({
                       }));
                     
                     // Calculate metrics
-                    const page1Count = snapshot?.page1_count ?? snapshot?.total_page1_listings ?? listings.length || 0;
+                    const page1Count = snapshot?.page1_count ?? snapshot?.total_page1_listings ?? (listings.length || 0);
                     const keyword = snapshot?.keyword ?? analysis.input_value ?? "";
                     const avgPrice = snapshot?.avg_price ?? (normalizedListings.length > 0 
                       ? normalizedListings.reduce((sum: number, l: any) => sum + (l.price || 0), 0) / normalizedListings.filter((l: any) => l.price > 0).length
