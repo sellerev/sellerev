@@ -1,3 +1,4 @@
+console.log("🚨 KEYWORD WORKER STARTED");
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -152,3 +153,4 @@ Deno.serve(async () => {
   
   return new Response(responseText, { status: 200 });
 });
+return new Response("WORKER_FINISHED", { status: 200 });
