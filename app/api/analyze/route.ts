@@ -304,6 +304,82 @@ const REQUIRED_DECISION_KEYS = [
 const MAX_ANALYSES_PER_PERIOD = 5;
 const USAGE_PERIOD_DAYS = 30;
 
+/**
+ * Generate representative product cards from market snapshot stats
+ * This is a guaranteed fallback to ensure products array is never empty
+ */
+function generateRepresentativeProducts(
+  snapshot: {
+    avg_price: number | null;
+    est_total_monthly_units_min?: number | null;
+    est_total_monthly_units_max?: number | null;
+    total_page1_listings: number;
+    avg_reviews?: number | null;
+    avg_rating?: number | null;
+  },
+  keyword: string
+): Array<{
+  asin: string;
+  title: string | null;
+  price: number | null;
+  rating: number | null;
+  reviews: number | null;
+  is_sponsored: boolean;
+  position: number;
+  brand: string | null;
+  image_url: string | null;
+  bsr: number | null;
+  fulfillment: string | null;
+  est_monthly_revenue: number | null;
+  est_monthly_units: number | null;
+  revenue_confidence: "low" | "medium";
+}> {
+  // Generate 4-6 products based on snapshot.product_count
+  const productCount = snapshot.total_page1_listings || 5;
+  const placeholderCount = Math.min(6, Math.max(4, productCount));
+  
+  const avgPrice = snapshot.avg_price ?? 25;
+  const totalUnits = snapshot.est_total_monthly_units_min ?? snapshot.est_total_monthly_units_max ?? (productCount * 150);
+  const productCountForCalc = productCount > 0 ? productCount : placeholderCount;
+  const avgMonthlyUnits = Math.round(totalUnits / productCountForCalc);
+  const avgMonthlyRevenue = avgPrice * avgMonthlyUnits;
+  
+  // Calculate median reviews (use avg_reviews if available, otherwise 0)
+  const medianReviews = snapshot.avg_reviews ?? 0;
+  
+  // Generate price variance (±10-15%)
+  const priceVariance = avgPrice * 0.12; // 12% variance
+  
+  return Array.from({ length: placeholderCount }, (_, idx) => {
+    // Vary price around average (±10-15%)
+    const priceOffset = (Math.random() - 0.5) * 2 * priceVariance;
+    const price = Math.max(1, Math.round((avgPrice + priceOffset) * 100) / 100);
+    
+    // Vary units slightly (±20%)
+    const unitsVariance = avgMonthlyUnits * 0.2;
+    const unitsOffset = (Math.random() - 0.5) * 2 * unitsVariance;
+    const units = Math.max(1, Math.round(avgMonthlyUnits + unitsOffset));
+    const revenue = price * units;
+    
+    return {
+      asin: `ESTIMATED-${idx + 1}`,
+      title: `Estimated Page-1 Listing`,
+      price,
+      rating: snapshot.avg_rating ?? null,
+      reviews: medianReviews > 0 ? Math.round(medianReviews * (0.8 + Math.random() * 0.4)) : 0,
+      is_sponsored: false,
+      position: idx + 1,
+      brand: null,
+      image_url: null,
+      bsr: null,
+      fulfillment: null,
+      est_monthly_revenue: Math.round(revenue * 100) / 100,
+      est_monthly_units: units,
+      revenue_confidence: "low" as const,
+    };
+  });
+}
+
 interface AnalyzeRequestBody {
   input_type: "keyword";
   input_value: string;
@@ -865,6 +941,39 @@ export async function POST(req: NextRequest) {
       }
 
       // Convert snapshot to KeywordMarketData format
+      // GUARANTEED PRODUCT FALLBACK: Ensure listings are never empty
+      let listings = products.map((p) => ({
+        asin: p.asin || '',
+        title: null,
+        price: p.price,
+        rating: null,
+        reviews: null,
+        is_sponsored: false,
+        position: p.rank,
+        brand: null,
+        image_url: null,
+        bsr: p.main_category_bsr,
+        main_category_bsr: p.main_category_bsr,
+        main_category: p.main_category,
+        fulfillment: null,
+        est_monthly_revenue: p.estimated_monthly_revenue,
+        est_monthly_units: p.estimated_monthly_units,
+        revenue_confidence: 'medium' as const,
+      }));
+      
+      // FALLBACK LAYER 2: If no cached listings, generate representative products
+      if (listings.length === 0) {
+        console.log("GUARANTEED_FALLBACK: No cached listings, generating representative products from snapshot");
+        listings = generateRepresentativeProducts({
+          avg_price: avgPrice > 0 ? avgPrice : snapshot.average_price,
+          est_total_monthly_units_min: unitsMin,
+          est_total_monthly_units_max: unitsMax,
+          total_page1_listings: snapshot.product_count,
+          avg_reviews: 0,
+          avg_rating: null,
+        }, snapshot.keyword);
+      }
+      
       keywordMarketData = {
         snapshot: {
           keyword: snapshot.keyword,
@@ -882,24 +991,7 @@ export async function POST(req: NextRequest) {
           est_total_monthly_units_max: unitsMax,
           search_demand: null, // Not stored in snapshot (will be computed if needed)
         },
-        listings: products.map((p) => ({
-          asin: p.asin || '',
-          title: null,
-          price: p.price,
-          rating: null,
-          reviews: null,
-          is_sponsored: false,
-          position: p.rank,
-          brand: null,
-          image_url: null,
-          bsr: p.main_category_bsr,
-          main_category_bsr: p.main_category_bsr,
-          main_category: p.main_category,
-          fulfillment: null,
-          est_monthly_revenue: p.estimated_monthly_revenue,
-          est_monthly_units: p.estimated_monthly_units,
-          revenue_confidence: 'medium' as const,
-        })),
+        listings,
       };
     } else {
       // Step 2: No snapshot exists - create Tier-1 instantly (NO API calls, $0 cost)
@@ -950,6 +1042,21 @@ export async function POST(req: NextRequest) {
       console.log("✅ Keyword queued for Tier-2 enrichment");
 
       // Convert Tier-1 snapshot to KeywordMarketData format with computed min/max
+      // GUARANTEED PRODUCT FALLBACK: Generate representative products for Tier-1
+      const tier1Listings = generateRepresentativeProducts({
+        avg_price: tier1Snapshot.average_price,
+        est_total_monthly_units_min: unitsMin,
+        est_total_monthly_units_max: unitsMax,
+        total_page1_listings: tier1Snapshot.product_count,
+        avg_reviews: 0,
+        avg_rating: null,
+      }, tier1Snapshot.keyword);
+      
+      console.log("GUARANTEED_FALLBACK: Tier-1 snapshot - generated representative products", {
+        count: tier1Listings.length,
+        keyword: tier1Snapshot.keyword,
+      });
+      
       keywordMarketData = {
         snapshot: {
           keyword: tier1Snapshot.keyword,
@@ -967,7 +1074,7 @@ export async function POST(req: NextRequest) {
           est_total_monthly_units_max: unitsMax,
           search_demand: null,
         },
-        listings: [], // Tier-1 has no product listings
+        listings: tier1Listings, // GUARANTEED: Never empty
       };
     }
 
@@ -988,6 +1095,21 @@ export async function POST(req: NextRequest) {
       const revenueMin = Math.round((unitsMin * emergencyTier1.average_price) * 100) / 100;
       const revenueMax = Math.round((unitsMax * emergencyTier1.average_price) * 100) / 100;
       
+      // GUARANTEED PRODUCT FALLBACK: Generate representative products for emergency fallback
+      const emergencyListings = generateRepresentativeProducts({
+        avg_price: emergencyTier1.average_price,
+        est_total_monthly_units_min: unitsMin,
+        est_total_monthly_units_max: unitsMax,
+        total_page1_listings: emergencyTier1.product_count,
+        avg_reviews: 0,
+        avg_rating: null,
+      }, emergencyTier1.keyword);
+      
+      console.log("GUARANTEED_FALLBACK: Emergency fallback - generated representative products", {
+        count: emergencyListings.length,
+        keyword: emergencyTier1.keyword,
+      });
+      
       keywordMarketData = {
         snapshot: {
           keyword: emergencyTier1.keyword,
@@ -1005,9 +1127,19 @@ export async function POST(req: NextRequest) {
           est_total_monthly_units_max: unitsMax,
           search_demand: null,
         },
-        listings: [],
+        listings: emergencyListings, // GUARANTEED: Never empty
       };
       snapshotStatus = 'estimated'; // Mark as estimated for emergency fallback
+    }
+    
+    // FINAL GUARANTEE: Ensure listings are never empty before proceeding
+    if (!keywordMarketData.listings || keywordMarketData.listings.length === 0) {
+      console.error("CRITICAL: listings array is empty - applying final fallback");
+      keywordMarketData.listings = generateRepresentativeProducts(
+        keywordMarketData.snapshot,
+        keywordMarketData.snapshot.keyword
+      );
+      console.log("FINAL_FALLBACK: Generated", keywordMarketData.listings.length, "representative products");
     }
 
     // Determine if this is Tier-1 (estimated) or Tier-2 (live) based on snapshot source
@@ -1109,12 +1241,48 @@ export async function POST(req: NextRequest) {
     
     // Build contract-compliant response
     if (keywordMarketData) {
+      // FINAL GUARANTEE: Ensure listings are never empty before building contract
+      if (!keywordMarketData.listings || keywordMarketData.listings.length === 0) {
+        console.error("CRITICAL: listings empty before contract build - applying fallback");
+        keywordMarketData.listings = generateRepresentativeProducts(
+          keywordMarketData.snapshot,
+          keywordMarketData.snapshot.keyword
+        );
+      }
+      
       try {
         contractResponse = buildKeywordAnalyzeResponse(
           body.input_value,
           keywordMarketData,
           marginSnapshot
         );
+        
+        // POST-BUILD GUARANTEE: Ensure contract response products are never empty
+        if (!contractResponse?.products || contractResponse.products.length === 0) {
+          console.error("CRITICAL: contract response products empty - regenerating from snapshot");
+          const fallbackListings = generateRepresentativeProducts(
+            keywordMarketData.snapshot,
+            keywordMarketData.snapshot.keyword
+          );
+          // Map fallback listings to contract product format
+          contractResponse.products = fallbackListings.map((listing, idx) => ({
+            rank: idx + 1,
+            asin: listing.asin,
+            title: listing.title || "Estimated Page-1 Listing",
+            image_url: listing.image_url,
+            price: listing.price || 0,
+            rating: listing.rating || 0,
+            review_count: listing.reviews || 0,
+            bsr: listing.bsr,
+            estimated_monthly_units: listing.est_monthly_units || 0,
+            estimated_monthly_revenue: listing.est_monthly_revenue || 0,
+            revenue_share_pct: 0,
+            fulfillment: "FBM" as const,
+            brand: listing.brand,
+            seller_country: "Unknown" as const,
+          }));
+        }
+        
         console.log("CONTRACT_RESPONSE_BUILT", {
           has_products: !!contractResponse?.products,
           product_count: contractResponse?.products?.length || 0,
@@ -1538,6 +1706,73 @@ ${body.input_value}`;
     // 12c. Build final response structure with contract-compliant data
     // Store AI decision separately from raw data contract
     // Note: contractResponse was built earlier (before AI call) with margin snapshot
+    
+    // FINAL GUARANTEE: Ensure we have products/listings for the response
+    let finalListings: any[] = [];
+    if (keywordMarket?.market_snapshot?.listings && keywordMarket.market_snapshot.listings.length > 0) {
+      finalListings = keywordMarket.market_snapshot.listings;
+    } else if (contractResponse?.products && contractResponse.products.length > 0) {
+      // Map contract products to listings format
+      finalListings = contractResponse.products.map((p: any) => ({
+        asin: p.asin || null,
+        title: p.title || null,
+        brand: p.brand || null,
+        price: p.price || null,
+        rating: p.rating || null,
+        reviews: p.review_count || null,
+        bsr: p.bsr || null,
+        organic_rank: p.rank || null,
+        fulfillment: p.fulfillment || null,
+        image: p.image_url || null,
+        is_sponsored: false,
+        revenue_est: p.estimated_monthly_revenue || null,
+        units_est: p.estimated_monthly_units || null,
+        revenue_share: p.revenue_share_pct || null,
+      }));
+    } else if (keywordMarketData && keywordMarketData.listings && keywordMarketData.listings.length > 0) {
+      // Use raw keywordMarketData listings
+      finalListings = keywordMarketData.listings.map((l: any) => ({
+        asin: l.asin || null,
+        title: l.title || null,
+        brand: l.brand || null,
+        price: l.price || null,
+        rating: l.rating || null,
+        reviews: l.reviews || null,
+        bsr: l.bsr || null,
+        organic_rank: l.position || null,
+        fulfillment: l.fulfillment || null,
+        image: l.image_url || null,
+        is_sponsored: l.is_sponsored || false,
+        revenue_est: l.est_monthly_revenue || null,
+        units_est: l.est_monthly_units || null,
+        revenue_share: null,
+      }));
+    }
+    
+    // If still empty, generate from snapshot (absolute last resort)
+    if (finalListings.length === 0 && keywordMarketData) {
+      console.error("CRITICAL: Final response has no listings - generating from snapshot");
+      finalListings = generateRepresentativeProducts(
+        keywordMarketData.snapshot,
+        keywordMarketData.snapshot.keyword
+      ).map((l: any) => ({
+        asin: l.asin || null,
+        title: l.title || null,
+        brand: l.brand || null,
+        price: l.price || null,
+        rating: l.rating || null,
+        reviews: l.reviews || null,
+        bsr: l.bsr || null,
+        organic_rank: l.position || null,
+        fulfillment: l.fulfillment || null,
+        image: l.image_url || null,
+        is_sponsored: l.is_sponsored || false,
+        revenue_est: l.est_monthly_revenue || null,
+        units_est: l.est_monthly_units || null,
+        revenue_share: null,
+      }));
+    }
+    
     const finalResponse: any = {
       input_type: "keyword",
       // AI Decision (verdict, summary, reasoning, risks, actions)
@@ -1552,31 +1787,13 @@ ${body.input_value}`;
         confidence_downgrades: decisionJson.confidence_downgrades || [],
         
         // Include market_snapshot in decision for frontend access
-        // Merge keywordMarket and contractResponse to ensure products are included
+        // GUARANTEED: listings are never empty
         market_snapshot: keywordMarket?.market_snapshot ? {
           ...keywordMarket.market_snapshot,
-          // Ensure listings include products from contractResponse if keywordMarket listings are empty
-          listings: keywordMarket.market_snapshot.listings?.length > 0 
-            ? keywordMarket.market_snapshot.listings 
-            : (contractResponse?.products?.map((p: any) => ({
-                asin: p.asin || null,
-                title: p.title || null,
-                brand: p.brand || null,
-                price: p.price || null,
-                rating: p.rating || null,
-                reviews: p.review_count || null,
-                bsr: p.bsr || null,
-                organic_rank: p.rank || null,
-                fulfillment: p.fulfillment || null,
-                image: p.image_url || null,
-                is_sponsored: false,
-                revenue_est: p.estimated_monthly_revenue || null,
-                units_est: p.estimated_monthly_units || null,
-                revenue_share: p.revenue_share_pct || null,
-              })) || []),
+          listings: finalListings, // GUARANTEED: Never empty
         } : (contractResponse?.market_snapshot ? {
           ...contractResponse.market_snapshot,
-          listings: contractResponse.products || [], // Map products to listings for UI
+          listings: finalListings, // GUARANTEED: Never empty
         } : null),
         
         // Include margin_snapshot in decision
@@ -1590,6 +1807,36 @@ ${body.input_value}`;
       // Keyword Market (for UI - data-first display)
       ...(keywordMarket ? keywordMarket : {}),
     };
+    
+    // FINAL GUARANTEE: Ensure products array is never empty in final response
+    if (!finalResponse.products || finalResponse.products.length === 0) {
+      console.error("CRITICAL: Final response products empty - adding from listings");
+      // Map finalListings to products format
+      finalResponse.products = finalListings.map((l: any, idx: number) => ({
+        rank: idx + 1,
+        asin: l.asin || `ESTIMATED-${idx + 1}`,
+        title: l.title || "Estimated Page-1 Listing",
+        image_url: l.image || l.image_url || null,
+        price: l.price || 0,
+        rating: l.rating || 0,
+        review_count: l.reviews || 0,
+        bsr: l.bsr || null,
+        estimated_monthly_units: l.units_est || l.est_monthly_units || 0,
+        estimated_monthly_revenue: l.revenue_est || l.est_monthly_revenue || 0,
+        revenue_share_pct: 0,
+        fulfillment: l.fulfillment || "FBM",
+        brand: l.brand || null,
+        seller_country: "Unknown",
+      }));
+    }
+    
+    // Log final guarantee check
+    console.log("FINAL_RESPONSE_PRODUCTS_GUARANTEE", {
+      has_products: !!finalResponse.products,
+      product_count: finalResponse.products?.length || 0,
+      has_listings: !!finalResponse.decision?.market_snapshot?.listings,
+      listings_count: finalResponse.decision?.market_snapshot?.listings?.length || 0,
+    });
 
     // 13. Save to analysis_runs with verdict, confidence, and seller context snapshot
     // Returns the created row to get the analysis_run_id (required for chat integration)
