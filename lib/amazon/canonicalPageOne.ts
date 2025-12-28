@@ -2,7 +2,7 @@
  * Canonical Page-1 Builder
  * 
  * Reconstructs a deterministic Page-1 product set from available data.
- * Always returns ~20 product cards, even with 0, partial, or full listings.
+ * Always returns ~49 product cards, even with 0, partial, or full listings (matching Amazon Page 1).
  * 
  * Features:
  * - Power-law position decay for unit distribution
@@ -43,7 +43,7 @@ export interface CanonicalProduct {
  * @param keyword - Search keyword
  * @param marketplace - Marketplace identifier
  * @param rawRainforestData - Optional map of raw Rainforest API data by ASIN for multi-source BSR extraction
- * @returns Array of ~20 canonical products
+ * @returns Array of ~49 canonical products (matching Amazon Page 1)
  */
 export async function buildCanonicalPageOne(
   listings: ParsedListing[],
@@ -53,7 +53,7 @@ export async function buildCanonicalPageOne(
   rawRainforestData?: Map<string, any>,
   supabase?: any
 ): Promise<CanonicalProduct[]> {
-  const TARGET_PRODUCT_COUNT = 20;
+  const TARGET_PRODUCT_COUNT = 49; // Amazon Page 1 typically shows ~49 products
   
   // Get snapshot totals
   const totalUnits = snapshot.est_total_monthly_units_min ?? snapshot.est_total_monthly_units_max ?? 0;
@@ -117,8 +117,8 @@ export async function buildCanonicalPageOne(
       inferredFields.push('review_count');
     }
     
-    // Units: calculate using power-law position decay
-    const positionWeight = Math.pow(21 - position, 1.35);
+    // Units: calculate using power-law position decay (for 49 products, use 50 - position)
+    const positionWeight = Math.pow(TARGET_PRODUCT_COUNT + 1 - position, 1.35);
     const totalWeight = calculateTotalPositionWeight(TARGET_PRODUCT_COUNT);
     const monthlyUnits = Math.round((totalUnits * positionWeight) / totalWeight);
     
@@ -182,8 +182,8 @@ export async function buildCanonicalPageOne(
   for (let i = existingCount; i < TARGET_PRODUCT_COUNT; i++) {
     const position = i + 1;
     
-    // Power-law position decay
-    const positionWeight = Math.pow(21 - position, 1.35);
+    // Power-law position decay (for 49 products, use 50 - position)
+    const positionWeight = Math.pow(TARGET_PRODUCT_COUNT + 1 - position, 1.35);
     const totalWeight = calculateTotalPositionWeight(TARGET_PRODUCT_COUNT);
     const monthlyUnits = Math.round((totalUnits * positionWeight) / totalWeight);
     
@@ -745,7 +745,7 @@ async function blendWithAsinHistory(
 function calculateTotalPositionWeight(count: number): number {
   let total = 0;
   for (let i = 1; i <= count; i++) {
-    total += Math.pow(21 - i, 1.35);
+    total += Math.pow(count + 1 - i, 1.35);
   }
   return total;
 }
@@ -759,18 +759,19 @@ function calculateTotalPositionWeight(count: number): number {
 function applyPriceTierMultiplier(avgPrice: number, position: number): number {
   let multiplier: number;
   
-  if (position <= 3) {
-    // Top 3: premium (110-120% of average)
-    multiplier = 1.1 + (position - 1) * 0.033; // 1.1, 1.133, 1.166
-  } else if (position <= 7) {
-    // Positions 4-7: above average (100-110% of average)
-    multiplier = 1.0 + ((7 - position) / 4) * 0.1; // 1.075, 1.05, 1.025, 1.0
-  } else if (position <= 12) {
-    // Positions 8-12: average to below average (90-100% of average)
-    multiplier = 0.9 + ((12 - position) / 5) * 0.1; // 0.98, 0.96, 0.94, 0.92, 0.9
+  // Tiers scaled for ~49 products: top ~10%, next ~20%, next ~30%, bottom ~40%
+  if (position <= 5) {
+    // Top 5: premium (110-120% of average)
+    multiplier = 1.1 + ((position - 1) / 4) * 0.1; // 1.1 to 1.2
+  } else if (position <= 15) {
+    // Positions 6-15: above average (100-110% of average)
+    multiplier = 1.0 + ((15 - position) / 10) * 0.1; // 1.1 to 1.0
+  } else if (position <= 30) {
+    // Positions 16-30: average to below average (90-100% of average)
+    multiplier = 0.9 + ((30 - position) / 15) * 0.1; // 1.0 to 0.9
   } else {
-    // Positions 13-20: discount (80-90% of average)
-    multiplier = 0.8 + ((20 - position) / 8) * 0.1; // 0.8875, 0.875, ..., 0.8
+    // Positions 31-49: discount (80-90% of average)
+    multiplier = 0.8 + ((49 - position) / 19) * 0.1; // 0.9 to 0.8
   }
   
   return Math.round(avgPrice * multiplier * 100) / 100;
@@ -783,16 +784,17 @@ function applyPriceTierMultiplier(avgPrice: number, position: number): number {
 function generateRealisticRating(avgRating: number, position: number): number {
   // Top positions: slightly above average
   // Lower positions: slightly below average
+  // Tiers scaled for ~49 products
   let adjustment = 0;
   
-  if (position <= 3) {
-    adjustment = 0.15; // Top 3: +0.15
-  } else if (position <= 7) {
-    adjustment = 0.05; // Positions 4-7: +0.05
-  } else if (position <= 12) {
-    adjustment = -0.05; // Positions 8-12: -0.05
+  if (position <= 5) {
+    adjustment = 0.15; // Top 5: +0.15
+  } else if (position <= 15) {
+    adjustment = 0.05; // Positions 6-15: +0.05
+  } else if (position <= 30) {
+    adjustment = -0.05; // Positions 16-30: -0.05
   } else {
-    adjustment = -0.15; // Positions 13-20: -0.15
+    adjustment = -0.15; // Positions 31-49: -0.15
   }
   
   // Add small random variance (±0.1)
@@ -808,16 +810,17 @@ function generateRealisticRating(avgRating: number, position: number): number {
  */
 function generateRealisticReviews(avgReviews: number, position: number, rating: number): number {
   // Base multiplier from position (top positions have more reviews)
+  // Tiers scaled for ~49 products
   let positionMultiplier: number;
   
-  if (position <= 3) {
-    positionMultiplier = 1.5; // Top 3: 1.5x
-  } else if (position <= 7) {
-    positionMultiplier = 1.2; // Positions 4-7: 1.2x
-  } else if (position <= 12) {
-    positionMultiplier = 0.9; // Positions 8-12: 0.9x
+  if (position <= 5) {
+    positionMultiplier = 1.5; // Top 5: 1.5x
+  } else if (position <= 15) {
+    positionMultiplier = 1.2; // Positions 6-15: 1.2x
+  } else if (position <= 30) {
+    positionMultiplier = 0.9; // Positions 16-30: 0.9x
   } else {
-    positionMultiplier = 0.6; // Positions 13-20: 0.6x
+    positionMultiplier = 0.6; // Positions 31-49: 0.6x
   }
   
   // Rating boost (higher ratings = more reviews)
