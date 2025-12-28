@@ -10,6 +10,7 @@ import { buildKeywordAnalyzeResponse } from "@/lib/analyze/dataContract";
 import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import { buildCanonicalPageOne } from "@/lib/amazon/canonicalPageOne";
+import { ParsedListing } from "@/lib/amazon/keywordMarket";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -320,6 +321,18 @@ const USAGE_PERIOD_DAYS = 30;
  * - SYNTHETIC_PRODUCTS_GENERATION_START: When generation begins
  * - SYNTHETIC_PRODUCTS_GENERATION_COMPLETE: When generation finishes
  */
+/**
+ * Generate representative product cards from market snapshot stats
+ * 
+ * Returns listings that match the canonical ParsedListing interface exactly.
+ * These are fallback listings used when real listings are missing.
+ * 
+ * Canonical contract rules:
+ * - title, brand, rating, reviews, image_url must be null (not strings/numbers)
+ * - main_category and main_category_bsr must always exist (null allowed)
+ * - revenue_confidence must be "medium" (never "low")
+ * - Shape must be identical to real listings so UI never breaks
+ */
 function generateRepresentativeProducts(
   snapshot: {
     avg_price: number | null;
@@ -330,22 +343,7 @@ function generateRepresentativeProducts(
     avg_rating?: number | null;
   },
   keyword: string
-): Array<{
-  asin: string;
-  title: string | null;
-  price: number | null;
-  rating: number | null;
-  reviews: number | null;
-  is_sponsored: boolean;
-  position: number;
-  brand: string | null;
-  image_url: string | null;
-  bsr: number | null;
-  fulfillment: string | null;
-  est_monthly_revenue: number | null;
-  est_monthly_units: number | null;
-  revenue_confidence: "low" | "medium";
-}> {
+): ParsedListing[] {
   // STEP 4: Enhanced logging for synthetic product generation
   console.log("🔵 SYNTHETIC_PRODUCTS_GENERATION_START", {
     keyword,
@@ -384,21 +382,23 @@ function generateRepresentativeProducts(
     const revenue = price * units;
     
     return {
-      asin: `ESTIMATED-${idx + 1}`,
-      title: `Estimated Page-1 Listing`,
+      asin: `ESTIMATED-${idx + 1}`, // Non-null string (required for ParsedListing)
+      title: null, // Must be null, not string (canonical contract)
       price,
-      rating: snapshot.avg_rating ?? null,
-      reviews: medianReviews > 0 ? Math.round(medianReviews * (0.8 + Math.random() * 0.4)) : 0,
+      rating: null, // Must be null, not number (canonical contract)
+      reviews: null, // Must be null, not number (canonical contract)
       is_sponsored: false,
       position: idx + 1,
-      brand: null,
-      image_url: null,
+      brand: null, // Must be null, not string (canonical contract)
+      image_url: null, // Must be null, not string (canonical contract)
       bsr: null,
-      fulfillment: null,
+      main_category_bsr: null, // Required field, must exist (canonical contract)
+      main_category: null, // Required field, must exist (canonical contract)
+      fulfillment: null, // "FBA" | "FBM" | "Amazon" | null
       est_monthly_revenue: Math.round(revenue * 100) / 100,
       est_monthly_units: units,
-      revenue_confidence: "low" as const,
-    };
+      revenue_confidence: "medium" as const, // Must be "medium", never "low" (canonical contract)
+    } as ParsedListing;
   });
   
   // STEP 4: Enhanced logging for synthetic product generation completion
@@ -982,7 +982,7 @@ export async function POST(req: NextRequest) {
 
       // Convert snapshot to KeywordMarketData format
       // GUARANTEED PRODUCT FALLBACK: Ensure listings are never empty
-      let listings = products.map((p) => ({
+      let listings: ParsedListing[] = products.map((p) => ({
         asin: p.asin || '',
         title: null,
         price: p.price,
@@ -999,7 +999,7 @@ export async function POST(req: NextRequest) {
         est_monthly_revenue: p.estimated_monthly_revenue,
         est_monthly_units: p.estimated_monthly_units,
         revenue_confidence: 'medium' as const,
-      }));
+      } as ParsedListing));
       
       // FALLBACK LAYER 2: If no cached listings, generate representative products
       if (listings.length === 0) {
