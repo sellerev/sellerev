@@ -42,13 +42,15 @@ export interface CanonicalProduct {
  * @param snapshot - Market snapshot with aggregated data
  * @param keyword - Search keyword
  * @param marketplace - Marketplace identifier
+ * @param rawRainforestData - Optional map of raw Rainforest API data by ASIN for multi-source BSR extraction
  * @returns Array of ~20 canonical products
  */
 export function buildCanonicalPageOne(
   listings: ParsedListing[],
   snapshot: KeywordMarketSnapshot,
   keyword: string,
-  marketplace: string = "US"
+  marketplace: string = "US",
+  rawRainforestData?: Map<string, any>
 ): CanonicalProduct[] {
   const TARGET_PRODUCT_COUNT = 20;
   
@@ -237,8 +239,13 @@ export function buildCanonicalPageOne(
     });
   }
   
-  // Apply BSR duplicate detection before returning
-  return applyBsrDuplicateDetection(products);
+  // Apply BSR duplicate detection, then multi-source extraction
+  const afterDuplicateDetection = applyBsrDuplicateDetection(products);
+  // Extract main category from listings if available (for category matching)
+  const mainCategory = listings.length > 0 && listings[0]?.main_category 
+    ? listings[0].main_category 
+    : null;
+  return applyMultiSourceBsrExtraction(afterDuplicateDetection, rawRainforestData, mainCategory);
 }
 
 /**
@@ -294,6 +301,201 @@ function applyBsrDuplicateDetection(products: CanonicalProduct[]): CanonicalProd
   }
   
   return products;
+}
+
+/**
+ * Multi-Source BSR Extraction
+ * 
+ * Attempts to recover valid BSRs from multiple Rainforest API sources when BSR is null.
+ * Only extracts if current BSR is null (does not override valid existing BSRs).
+ * 
+ * Extraction priority:
+ * 1. bestsellers_rank[] (prefer category-matched entries, choose lowest rank)
+ * 2. sales_rank.current_rank
+ * 3. buying_choice.bestsellers_rank (number or array)
+ * 
+ * @param products - Canonical products (after duplicate detection)
+ * @param rawRainforestData - Optional map of raw Rainforest API data by ASIN
+ * @param mainCategory - Main category name for category matching
+ * @returns Products with recovered BSRs where possible
+ */
+function applyMultiSourceBsrExtraction(
+  products: CanonicalProduct[],
+  rawRainforestData?: Map<string, any>,
+  mainCategory?: string | null
+): CanonicalProduct[] {
+  // If no raw data available, return products unchanged
+  if (!rawRainforestData || rawRainforestData.size === 0) {
+    return products;
+  }
+  
+  // Validation helper: BSR must be a number in range 1-300,000
+  const isValidBSR = (bsr: number | null | undefined): bsr is number => {
+    return typeof bsr === "number" && bsr >= 1 && bsr <= 300000;
+  };
+  
+  let recoveredCount = 0;
+  
+  const result = products.map(product => {
+    // Only attempt extraction if BSR is currently null
+    if (product.bsr !== null) {
+      return product; // Don't override valid existing BSR
+    }
+    
+    // Get raw Rainforest data for this ASIN
+    const rawData = rawRainforestData.get(product.asin);
+    if (!rawData) {
+      return product; // No raw data available for this ASIN
+    }
+    
+    // Extract best BSR using multi-source priority
+    const extracted = extractBestBsr(rawData, mainCategory || null);
+    
+    if (extracted.bsr !== null) {
+      recoveredCount++;
+      return {
+        ...product,
+        bsr: extracted.bsr, // Recovered BSR
+      };
+    }
+    
+    return product; // No valid BSR found in raw data
+  });
+  
+  // Log recovery results if any BSRs were recovered
+  if (recoveredCount > 0) {
+    console.log("🔵 BSR_MULTI_SOURCE_EXTRACTION_COMPLETE", {
+      recovered_count: recoveredCount,
+      total_products: products.length,
+    });
+  }
+  
+  return result;
+}
+
+/**
+ * Extract best BSR from raw Rainforest API data using multi-source priority
+ * 
+ * Priority order:
+ * 1. bestsellers_rank[] (prefer category-matched, choose lowest rank)
+ * 2. sales_rank.current_rank
+ * 3. buying_choice.bestsellers_rank (number or array)
+ * 
+ * @param item - Raw Rainforest API item data
+ * @param mainCategory - Main category name for category matching (optional)
+ * @returns Object with bsr and main_category_bsr (both same value or null)
+ */
+function extractBestBsr(
+  item: any,
+  mainCategory: string | null
+): { bsr: number | null; main_category_bsr: number | null } {
+  if (!item) {
+    return { bsr: null, main_category_bsr: null };
+  }
+  
+  // Validation helper: BSR must be a number in range 1-300,000
+  const isValidBSR = (bsr: number | null | undefined): bsr is number => {
+    return typeof bsr === "number" && bsr >= 1 && bsr <= 300000;
+  };
+  
+  const candidateBSRs: { rank: number; source: string; categoryMatch: boolean }[] = [];
+  
+  // SOURCE A: bestsellers_rank[] array (prefer category-matched entries, choose lowest rank)
+  if (item.bestsellers_rank && Array.isArray(item.bestsellers_rank)) {
+    for (const entry of item.bestsellers_rank) {
+      if (!entry || typeof entry !== 'object') continue;
+      
+      const rankValue = entry.rank ?? 
+                       entry.Rank ?? 
+                       entry.rank_value ?? 
+                       entry.value;
+      
+      if (rankValue !== undefined && rankValue !== null) {
+        const rank = parseInt(rankValue.toString().replace(/,/g, ""), 10);
+        
+        if (isValidBSR(rank)) {
+          const categoryStr = entry.category || 
+                              entry.Category || 
+                              entry.category_name || 
+                              entry.name ||
+                              entry.category_path ||
+                              '';
+          
+          // Check if category matches main category (if provided)
+          const categoryMatch = mainCategory 
+            ? categoryStr.toLowerCase().includes(mainCategory.toLowerCase())
+            : false;
+          
+          candidateBSRs.push({
+            rank,
+            source: "bestsellers_rank",
+            categoryMatch,
+          });
+        }
+      }
+    }
+  }
+  
+  // SOURCE B: sales_rank.current_rank
+  if (item.sales_rank?.current_rank !== undefined && item.sales_rank.current_rank !== null) {
+    const rank = parseInt(item.sales_rank.current_rank.toString().replace(/,/g, ""), 10);
+    if (isValidBSR(rank)) {
+      candidateBSRs.push({
+        rank,
+        source: "sales_rank",
+        categoryMatch: false,
+      });
+    }
+  }
+  
+  // SOURCE C: buying_choice.bestsellers_rank (accept number or array)
+  if (item.buying_choice?.bestsellers_rank !== undefined && item.buying_choice.bestsellers_rank !== null) {
+    const bcBsr = item.buying_choice.bestsellers_rank;
+    
+    // Handle number format
+    if (typeof bcBsr === 'number') {
+      const rank = parseInt(bcBsr.toString().replace(/,/g, ""), 10);
+      if (isValidBSR(rank)) {
+        candidateBSRs.push({
+          rank,
+          source: "buying_choice",
+          categoryMatch: false,
+        });
+      }
+    } 
+    // Handle array format
+    else if (Array.isArray(bcBsr)) {
+      for (const entry of bcBsr) {
+        if (!entry || typeof entry !== 'object') continue;
+        const rankValue = entry.rank ?? entry.Rank ?? entry.rank_value ?? entry.value;
+        if (rankValue !== undefined && rankValue !== null) {
+          const rank = parseInt(rankValue.toString().replace(/,/g, ""), 10);
+          if (isValidBSR(rank)) {
+            candidateBSRs.push({
+              rank,
+              source: "buying_choice_array",
+              categoryMatch: false,
+            });
+          }
+        }
+      }
+    }
+  }
+  
+  // Select best BSR: prefer category-matched, then lowest rank
+  if (candidateBSRs.length === 0) {
+    return { bsr: null, main_category_bsr: null };
+  }
+  
+  // Sort: category-matched first, then by rank (lowest first)
+  candidateBSRs.sort((a, b) => {
+    if (a.categoryMatch && !b.categoryMatch) return -1;
+    if (!a.categoryMatch && b.categoryMatch) return 1;
+    return a.rank - b.rank; // Lower rank is better
+  });
+  
+  const bestBSR = candidateBSRs[0].rank;
+  return { bsr: bestBSR, main_category_bsr: bestBSR };
 }
 
 /**
