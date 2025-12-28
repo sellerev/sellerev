@@ -67,7 +67,7 @@ Deno.serve(async () => {
       .update({ status: "processing" })
       .eq("id", item.id);
 
-    // Call your existing processor
+    // Call process-keyword function
     const res = await fetch(
       `${Deno.env.get("SUPABASE_URL")}/functions/v1/process-keyword`,
       {
@@ -80,18 +80,69 @@ Deno.serve(async () => {
       }
     );
 
-    if (!res.ok) {
+    // Parse response to check if snapshot was actually written
+    let responseData: any = null;
+    try {
+      const responseText = await res.text();
+      responseData = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error(`Failed to parse response for ${item.keyword}:`, parseError);
+    }
+
+    // CRITICAL: Only mark as completed if:
+    // 1. HTTP status is OK (200)
+    // 2. Response indicates success
+    // 3. Snapshot was actually written
+    if (!res.ok || !responseData?.success) {
+      const errorMsg = responseData?.error || `HTTP ${res.status}`;
+      console.error(`❌ Failed to process ${item.keyword}:`, errorMsg);
+      
       await supabase
         .from("keyword_queue")
-        .update({ status: "failed" })
+        .update({ 
+          status: "failed",
+          error_message: errorMsg.substring(0, 500),
+          completed_at: new Date().toISOString()
+        })
         .eq("id", item.id);
 
       continue;
     }
 
+    // Verify snapshot exists in database before marking as completed
+    const normalizedKeyword = item.keyword.toLowerCase().trim();
+    const { data: snapshotCheck, error: checkError } = await supabase
+      .from("keyword_snapshots")
+      .select("keyword, total_monthly_units, total_monthly_revenue")
+      .eq("keyword", normalizedKeyword)
+      .eq("marketplace", "amazon.com")
+      .single();
+
+    if (checkError || !snapshotCheck) {
+      console.error(`❌ Snapshot verification failed for ${item.keyword}:`, checkError);
+      await supabase
+        .from("keyword_queue")
+        .update({ 
+          status: "failed",
+          error_message: "Snapshot not found after processing",
+          completed_at: new Date().toISOString()
+        })
+        .eq("id", item.id);
+      continue;
+    }
+
+    // Snapshot verified - mark as completed
+    console.log(`✅ Successfully processed ${item.keyword}`, {
+      total_monthly_units: snapshotCheck.total_monthly_units,
+      total_monthly_revenue: snapshotCheck.total_monthly_revenue,
+    });
+
     await supabase
       .from("keyword_queue")
-      .update({ status: "completed" })
+      .update({ 
+        status: "completed",
+        completed_at: new Date().toISOString()
+      })
       .eq("id", item.id);
   }
 
