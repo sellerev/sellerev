@@ -858,34 +858,22 @@ export default function AnalyzeForm({
                     const snapshot = analysis.market_snapshot;
                     
                     // ═══════════════════════════════════════════════════════════════════════════
-                    // ROUTE LISTINGS BASED ON dataSource
+                    // UI MUST NOT SECOND-GUESS DATA
+                    // Always use canonical Page-1 listings when available
                     // ═══════════════════════════════════════════════════════════════════════════
-                    const dataSource = (analysis as any).dataSource || snapshotType;
                     let pageOneListings: any[] = [];
                     
-                    if (dataSource === "market") {
-                      // Market data: Use canonical Page-1 output (page_one_listings or products)
-                      pageOneListings = analysis.page_one_listings || analysis.products || [];
-                      
-                      // HARD ASSERTION: Market dataSource must have listings
-                      if (pageOneListings.length === 0) {
-                        console.error("🔴 MARKET DATASOURCE WITH ZERO LISTINGS — ROUTING BUG", {
-                          dataSource,
-                          has_page_one_listings: !!analysis.page_one_listings,
-                          page_one_listings_count: analysis.page_one_listings?.length || 0,
-                          has_products: !!analysis.products,
-                          products_count: analysis.products?.length || 0,
-                          has_snapshot_listings: !!snapshot?.listings,
-                          snapshot_listings_count: snapshot?.listings?.length || 0,
-                          timestamp: new Date().toISOString(),
-                        });
-                      }
-                    } else if (dataSource === "snapshot" || dataSource === "estimated") {
-                      // Snapshot data: Use snapshot listings
-                      pageOneListings = snapshot?.listings || [];
-                    } else {
-                      // Fallback: Try canonical first, then snapshot
-                      pageOneListings = analysis.page_one_listings || analysis.products || snapshot?.listings || [];
+                    // Priority 1: Use canonical page_one_listings
+                    if (analysis.page_one_listings && analysis.page_one_listings.length > 0) {
+                      pageOneListings = analysis.page_one_listings;
+                    }
+                    // Priority 2: Use products (same as page_one_listings)
+                    else if (analysis.products && analysis.products.length > 0) {
+                      pageOneListings = analysis.products;
+                    }
+                    // Priority 3: Fallback to snapshot listings (for backward compatibility)
+                    else if (snapshot?.listings && snapshot.listings.length > 0) {
+                      pageOneListings = snapshot.listings;
                     }
                     
                     // Normalize listings to calculate metrics
@@ -1155,34 +1143,22 @@ export default function AnalyzeForm({
                     const snapshot = analysis.market_snapshot;
                     
                     // ═══════════════════════════════════════════════════════════════════════════
-                    // ROUTE LISTINGS BASED ON dataSource
+                    // UI MUST NOT SECOND-GUESS DATA
+                    // Always use canonical Page-1 listings when available
                     // ═══════════════════════════════════════════════════════════════════════════
-                    // dataSource is already declared above (line 1145) - reuse it
                     let pageOneListings: any[] = [];
                     
-                    if (dataSource === "market") {
-                      // Market data: Use canonical Page-1 output (page_one_listings or products)
-                      pageOneListings = analysis.page_one_listings || analysis.products || [];
-                      
-                      // HARD ASSERTION: Market dataSource must have listings
-                      if (pageOneListings.length === 0) {
-                        console.error("🔴 MARKET DATASOURCE WITH ZERO LISTINGS — ROUTING BUG", {
-                          dataSource,
-                          has_page_one_listings: !!analysis.page_one_listings,
-                          page_one_listings_count: analysis.page_one_listings?.length || 0,
-                          has_products: !!analysis.products,
-                          products_count: analysis.products?.length || 0,
-                          has_snapshot_listings: !!snapshot?.listings,
-                          snapshot_listings_count: snapshot?.listings?.length || 0,
-                          timestamp: new Date().toISOString(),
-                        });
-                      }
-                    } else if (dataSource === "snapshot" || dataSource === "estimated") {
-                      // Snapshot data: Use snapshot listings
-                      pageOneListings = snapshot?.listings || [];
-                    } else {
-                      // Fallback: Try canonical first, then snapshot
-                      pageOneListings = analysis.page_one_listings || analysis.products || snapshot?.listings || [];
+                    // Priority 1: Use canonical page_one_listings
+                    if (analysis.page_one_listings && analysis.page_one_listings.length > 0) {
+                      pageOneListings = analysis.page_one_listings;
+                    }
+                    // Priority 2: Use products (same as page_one_listings)
+                    else if (analysis.products && analysis.products.length > 0) {
+                      pageOneListings = analysis.products;
+                    }
+                    // Priority 3: Fallback to snapshot listings (for backward compatibility)
+                    else if (snapshot?.listings && snapshot.listings.length > 0) {
+                      pageOneListings = snapshot.listings;
                     }
                     
                     // ═══════════════════════════════════════════════════════════════════════════

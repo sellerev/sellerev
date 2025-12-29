@@ -36,7 +36,82 @@ export interface CanonicalProduct {
 }
 
 /**
- * Build canonical Page-1 product set (PURE TRANSFORM)
+ * Build keyword Page-1 product set (PERMISSIVE)
+ * 
+ * KEYWORD CANONICAL RULES:
+ * - DO NOT reject synthetic ASINs
+ * - DO NOT require historical data
+ * - DO NOT filter sponsored listings
+ * - DO NOT return empty if listings exist
+ * - Always return Page-1 rows if listings exist
+ * 
+ * @param listings - Raw listings from keyword search results
+ * @returns Array of canonical products (always non-empty if listings exist)
+ */
+export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct[] {
+  if (!Array.isArray(listings) || listings.length === 0) {
+    return [];
+  }
+
+  // Calculate total revenue for revenue share percentages
+  const totalRevenue = listings.reduce((sum, l) => {
+    const revenue = l.est_monthly_revenue || (l.est_monthly_units && l.price ? l.est_monthly_units * l.price : 0);
+    return sum + (revenue || 0);
+  }, 0);
+
+  const products = listings.map((l, i) => {
+    const bsr = l.bsr ?? l.main_category_bsr ?? null;
+    
+    // Estimate units from BSR if not already present
+    const estimatedUnits = l.est_monthly_units ?? 
+      (bsr && bsr > 0 ? Math.round(600000 / Math.pow(bsr, 0.45)) : null) ?? 
+      0;
+    
+    // Estimate revenue from units and price if not already present
+    const estimatedRevenue = l.est_monthly_revenue ?? 
+      (estimatedUnits && l.price ? Math.round(estimatedUnits * l.price) : null) ?? 
+      0;
+    
+    // Calculate revenue share percentage
+    const revenueSharePct = totalRevenue > 0 && estimatedRevenue > 0 
+      ? Math.round((estimatedRevenue / totalRevenue) * 100 * 100) / 100 
+      : 0;
+
+    return {
+      rank: i + 1,
+      asin: l.asin ?? `KEYWORD-${i + 1}`, // Allow synthetic ASINs for keywords
+      title: l.title ?? "Unknown product",
+      price: l.price ?? 0,
+      rating: l.rating ?? 0,
+      review_count: l.reviews ?? 0,
+      bsr,
+      estimated_monthly_units: estimatedUnits,
+      estimated_monthly_revenue: estimatedRevenue,
+      revenue_share_pct: revenueSharePct,
+      image_url: l.image_url ?? l.image ?? null,
+      fulfillment: (l.fulfillment === "FBA" ? "FBA" : l.fulfillment === "AMZ" || l.fulfillment === "Amazon" ? "AMZ" : "FBM") as "FBA" | "FBM" | "AMZ",
+      brand: l.brand ?? null,
+      seller_country: "Unknown" as const,
+      snapshot_inferred: false,
+    };
+  });
+
+  console.log("✅ KEYWORD PAGE-1 COUNT", products.length);
+  if (products.length > 0) {
+    console.log("📦 SAMPLE PRODUCT", products[0]);
+  }
+
+  return products;
+}
+
+/**
+ * Build ASIN Page-1 product set (STRICT)
+ * 
+ * ASIN CANONICAL RULES:
+ * - Requires valid ASINs
+ * - Requires historical data validation
+ * - Filters invalid listings
+ * - Strict validation and calibration
  * 
  * @param listings - Existing listings that MUST include units_est, revenue_est, bsr, image
  * @param snapshot - Market snapshot with aggregated data (for calibration only)
@@ -46,7 +121,7 @@ export interface CanonicalProduct {
  * @param supabase - Optional Supabase client (for historical blending)
  * @returns Array of canonical products (same as input, transformed)
  */
-export async function buildCanonicalPageOne(
+export async function buildAsinPageOne(
   listings: ParsedListing[],
   snapshot: KeywordMarketSnapshot,
   keyword: string,
@@ -234,10 +309,11 @@ async function blendWithAsinHistory(
     return products;
   }
   
-  // Extract ASINs from products (exclude synthetic ASINs - though we shouldn't have any now)
+  // Extract ASINs from products (exclude synthetic ASINs for ASIN analysis only)
+  // Note: This function is for ASIN analysis, so synthetic ASINs should be filtered
   const asins = products
     .map(p => p.asin)
-    .filter(asin => asin && !asin.startsWith('ESTIMATED-') && !asin.startsWith('INFERRED-'));
+    .filter(asin => asin && !asin.startsWith('ESTIMATED-') && !asin.startsWith('INFERRED-') && !asin.startsWith('KEYWORD-'));
   
   if (asins.length === 0) {
     return products;

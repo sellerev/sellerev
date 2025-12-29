@@ -9,7 +9,7 @@ import { buildMarginSnapshot } from "@/lib/margins/buildMarginSnapshot";
 import { buildKeywordAnalyzeResponse } from "@/lib/analyze/dataContract";
 import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
-import { buildCanonicalPageOne } from "@/lib/amazon/canonicalPageOne";
+import { buildKeywordPageOne, buildAsinPageOne } from "@/lib/amazon/canonicalPageOne";
 import { ParsedListing } from "@/lib/amazon/keywordMarket";
 
 // Sellerev production SYSTEM PROMPT
@@ -1407,44 +1407,9 @@ export async function POST(req: NextRequest) {
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // ENFORCE: Canonical Page-1 MUST run when dataSource === "market"
+    // REMOVED: Fatal invariants for keyword analysis
+    // Keyword analysis is permissive and must not hard-fail
     // ═══════════════════════════════════════════════════════════════════════════
-    if (dataSource === "market") {
-      if (!keywordMarketData) {
-        console.error("🔴 FATAL: dataSource === 'market' but keywordMarketData is null before canonical build", {
-          keyword: body.input_value,
-          dataSource,
-          rawRainforestListings_count: rawRainforestListings.length,
-          timestamp: new Date().toISOString(),
-        });
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Market data routing error: keywordMarketData is null",
-            details: "dataSource is 'market' but keywordMarketData was not set before canonical build",
-          },
-          { status: 500, headers: res.headers }
-        );
-      }
-      
-      if (!keywordMarketData.listings || keywordMarketData.listings.length === 0) {
-        console.error("🔴 FATAL: dataSource === 'market' but keywordMarketData.listings is empty before canonical build", {
-          keyword: body.input_value,
-          dataSource,
-          rawRainforestListings_count: rawRainforestListings.length,
-          has_keywordMarketData: !!keywordMarketData,
-          timestamp: new Date().toISOString(),
-        });
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Market data routing error: Listings array is empty",
-            details: "dataSource is 'market' but keywordMarketData.listings is empty before canonical build",
-          },
-          { status: 500, headers: res.headers }
-        );
-      }
-    }
     
     // Build contract-compliant response
     if (keywordMarketData) {
@@ -1483,61 +1448,48 @@ export async function POST(req: NextRequest) {
       });
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // ENFORCE: Canonical Page-1 MUST run when dataSource === "market"
+      // ROUTE CANONICAL LOGIC BY INPUT TYPE
       // ═══════════════════════════════════════════════════════════════════════════
       
-      // Build canonical Page-1 products
-      const canonicalProducts = await buildCanonicalPageOne(
-        keywordMarketData.listings || [],
-        keywordMarketData.snapshot,
-        body.input_value,
-        marketplace,
-        undefined, // rawRainforestData
-        supabase // supabase client for history blending
-      );
+      const rawListings = keywordMarketData.listings || [];
+      let pageOneProducts: any[] = [];
       
-      // ═══════════════════════════════════════════════════════════════════════════
-      // ASSERTION: If dataSource === "market", validate canonical output
-      // ═══════════════════════════════════════════════════════════════════════════
-      if (dataSource === "market") {
-        // Assert: canonical Page-1 was called (we just called it above)
-        if (canonicalProducts.length === 0) {
-          console.error("🔴 FATAL: dataSource === 'market' but canonicalProducts.length === 0", {
+      if (body.input_type === "keyword") {
+        // Keyword analysis: Use permissive canonical builder
+        console.log("✅ KEYWORD CANONICAL BUILD START", {
+          keyword: body.input_value,
+          raw_listings_count: rawListings.length,
+        });
+        
+        pageOneProducts = buildKeywordPageOne(rawListings);
+        
+        console.log("✅ KEYWORD PAGE-1 COUNT", pageOneProducts.length);
+        if (pageOneProducts.length > 0) {
+          console.log("📦 SAMPLE PRODUCT", pageOneProducts[0]);
+        }
+        
+        // Keyword analysis must NEVER hard-fail due to imperfect data
+        if (rawListings.length > 0 && pageOneProducts.length === 0) {
+          console.error("❌ KEYWORD CANONICAL FAILURE — SHOULD NEVER BE EMPTY", {
             keyword: body.input_value,
-            dataSource,
-            rawRainforestListings_count: rawRainforestListings.length,
-            input_listings_count: keywordMarketData.listings?.length || 0,
+            raw_listings_count: rawListings.length,
+            page_one_products_count: pageOneProducts.length,
             timestamp: new Date().toISOString(),
           });
         }
-        
-        // Check for synthetic ASINs in canonical output (should never happen for market data)
-        const syntheticAsins = canonicalProducts.filter(p => 
-          p.asin && (p.asin.startsWith('ESTIMATED-') || p.asin.startsWith('INFERRED-'))
+      } else {
+        // ASIN analysis: Use strict canonical builder
+        pageOneProducts = await buildAsinPageOne(
+          rawListings,
+          keywordMarketData.snapshot,
+          body.input_value,
+          marketplace,
+          undefined, // rawRainforestData
+          supabase // supabase client for history blending
         );
-        
-        if (syntheticAsins.length > 0) {
-          console.error("🔴 FATAL: Estimated products generated while dataSource === 'market'", {
-            keyword: body.input_value,
-            dataSource,
-            synthetic_count: syntheticAsins.length,
-            synthetic_asins: syntheticAsins.map(p => p.asin).slice(0, 5),
-            rawRainforestListings_count: rawRainforestListings.length,
-            canonical_product_count: canonicalProducts.length,
-            timestamp: new Date().toISOString(),
-          });
-        }
-        
-        // Assert: rawRainforestListings must exist
-        if (rawRainforestListings.length === 0) {
-          console.error("🔴 FATAL: dataSource === 'market' but rawRainforestListings.length === 0 after canonical build", {
-            keyword: body.input_value,
-            dataSource,
-            canonical_product_count: canonicalProducts.length,
-            timestamp: new Date().toISOString(),
-          });
-        }
       }
+      
+      const canonicalProducts = pageOneProducts;
       
       console.log("🔵 CANONICAL_PAGE1_BUILD_COMPLETE", {
         keyword: body.input_value,
@@ -2259,14 +2211,16 @@ ${body.input_value}`;
     // If still empty, rebuild canonical products (absolute last resort - should never happen)
     if (finalListings.length === 0 && keywordMarketData) {
       console.error("🔴 CRITICAL: Final response has no listings - rebuilding canonical products");
-      const emergencyCanonical = await buildCanonicalPageOne(
-        [],
-        keywordMarketData.snapshot,
-        body.input_value,
-        marketplace,
-        undefined, // rawRainforestData
+      const emergencyCanonical = body.input_type === "keyword"
+        ? buildKeywordPageOne(keywordMarketData.listings || [])
+        : await buildAsinPageOne(
+          keywordMarketData.listings || [],
+          keywordMarketData.snapshot,
+          body.input_value,
+          marketplace,
+          undefined, // rawRainforestData
         supabase // supabase client for history blending
-      );
+        );
       finalListings = emergencyCanonical.map((p: any) => ({
         asin: p.asin || null,
         title: p.title || null,
