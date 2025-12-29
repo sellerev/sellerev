@@ -1318,9 +1318,8 @@ export default function AnalyzeForm({
                         })}
                     </div>
                   </div>
-                  </div>
                   );
-                })()}
+                  })()}
 
                   {/* ─────────────────────────────────────────────────────────── */}
                   {/* FEASIBILITY CALCULATOR                                     */}
