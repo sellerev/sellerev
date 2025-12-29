@@ -1111,6 +1111,20 @@ export default function AnalyzeForm({
                   {/* PAGE 1 RESULTS - Amazon-Style Grid                          */}
                   {/* ─────────────────────────────────────────────────────────── */}
                   {(() => {
+                    // ═══════════════════════════════════════════════════════════════════════════
+                    // GUARD: Do NOT render Page-1 if dataSource is "snapshot"
+                    // Snapshot is allowed ONLY for empty-state UI, not analysis
+                    // ═══════════════════════════════════════════════════════════════════════════
+                    const dataSource = (analysis as any).dataSource || snapshotType;
+                    if (dataSource === "snapshot" || dataSource === "estimated") {
+                      return (
+                        <div className="p-8 text-center">
+                          <p className="text-gray-500 mb-2">Market data is estimated</p>
+                          <p className="text-sm text-gray-400">Page 1 results require real market data</p>
+                        </div>
+                      );
+                    }
+                    
                     const snapshot = analysis.market_snapshot;
                     
                     // Use canonical Page-1 array from API response (page_one_listings or products)

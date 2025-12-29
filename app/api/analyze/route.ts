@@ -883,25 +883,93 @@ export async function POST(req: NextRequest) {
       profile_updated_at: sellerProfile.updated_at || null,
     });
 
-    // 7. SNAPSHOT-FIRST ARCHITECTURE: Read from precomputed snapshots (NO API calls)
+    // 7. MARKET-FIRST ARCHITECTURE: Fetch real Rainforest listings FIRST
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: If real Rainforest listings exist, NEVER use snapshot-based Page-1
+    // ═══════════════════════════════════════════════════════════════════════════
     const marketplace = "amazon.com"; // Amazon marketplace
-    const {
-      searchKeywordSnapshot,
-      getKeywordProducts,
-      incrementSearchCount,
-      queueKeyword,
-    } = await import("@/lib/snapshots/keywordSnapshots");
-
-    // Check for precomputed snapshot (READ-ONLY, no API calls)
-    let snapshot = await searchKeywordSnapshot(supabase, body.input_value, marketplace);
     let keywordMarketData: KeywordMarketData | null = null;
     let snapshotStatus = 'miss';
+    let dataSource: "market" | "snapshot" = "snapshot"; // Default to snapshot, switch to market if real listings exist
+    
+    // STEP 1: Try to fetch real Rainforest listings FIRST
+    console.log("🔵 MARKET_FETCH_START", {
+      keyword: body.input_value,
+      timestamp: new Date().toISOString(),
+    });
+    
+    try {
+      const realMarketData = await fetchKeywordMarketSnapshot(
+        body.input_value,
+        supabase,
+        "US"
+      );
+      
+      // CRITICAL: If real listings exist, use them and NEVER use snapshot-based Page-1
+      if (realMarketData && realMarketData.listings && realMarketData.listings.length > 0) {
+        // Check if listings have real ASINs (not ESTIMATED-X or INFERRED-X)
+        const hasRealAsins = realMarketData.listings.some(
+          (l: any) => l.asin && 
+          !l.asin.startsWith('ESTIMATED-') && 
+          !l.asin.startsWith('INFERRED-') &&
+          /^B0[A-Z0-9]{8}$/i.test(l.asin)
+        );
+        
+        if (hasRealAsins) {
+          console.log("✅ REAL_MARKET_DATA_FOUND", {
+            keyword: body.input_value,
+            listing_count: realMarketData.listings.length,
+            real_asins: realMarketData.listings.filter((l: any) => l.asin && /^B0[A-Z0-9]{8}$/i.test(l.asin)).length,
+            timestamp: new Date().toISOString(),
+          });
+          
+          keywordMarketData = realMarketData;
+          dataSource = "market";
+          snapshotStatus = 'market'; // Mark as real market data
+          
+          // SKIP snapshot lookup entirely when real listings exist
+          // This ensures snapshot-based Page-1 generation NEVER runs
+        } else {
+          console.warn("⚠️ MARKET_DATA_HAS_SYNTHETIC_ASINS", {
+            keyword: body.input_value,
+            listing_count: realMarketData.listings.length,
+            timestamp: new Date().toISOString(),
+          });
+          // Fall through to snapshot lookup
+        }
+      } else {
+        console.log("ℹ️ NO_REAL_MARKET_DATA", {
+          keyword: body.input_value,
+          timestamp: new Date().toISOString(),
+        });
+        // Fall through to snapshot lookup
+      }
+    } catch (error) {
+      console.error("❌ MARKET_FETCH_ERROR", {
+        keyword: body.input_value,
+        error: error instanceof Error ? error.message : String(error),
+        timestamp: new Date().toISOString(),
+      });
+      // Fall through to snapshot lookup
+    }
+    
+    // STEP 2: Only use snapshot if NO real market data exists
+    if (!keywordMarketData || dataSource !== "market") {
+      const {
+        searchKeywordSnapshot,
+        getKeywordProducts,
+        incrementSearchCount,
+        queueKeyword,
+      } = await import("@/lib/snapshots/keywordSnapshots");
+      
+      // Check for precomputed snapshot (READ-ONLY, no API calls)
+      let snapshot = await searchKeywordSnapshot(supabase, body.input_value, marketplace);
 
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:778',message:'Snapshot lookup result',data:{has_snapshot:!!snapshot,keyword:body.input_value,marketplace},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:778',message:'Snapshot lookup result',data:{has_snapshot:!!snapshot,keyword:body.input_value,marketplace},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
 
-    if (snapshot) {
+      if (snapshot) {
       // Snapshot exists - use it (pure database read)
       snapshotStatus = 'hit';
       console.log("SNAPSHOT_HIT", {
@@ -1182,22 +1250,19 @@ export async function POST(req: NextRequest) {
       console.log("FINAL_FALLBACK: Generated", keywordMarketData.listings.length, "representative products");
     }
 
-    // Determine if this is Tier-1 (estimated) or Tier-2 (live) based on snapshot source
-    // Check if snapshot has product listings (Tier-2) or is empty (Tier-1)
-    const isTier1 = keywordMarketData.listings.length === 0;
-    snapshotStatus = isTier1 ? 'estimated' : 'hit';
-
-    // Use the snapshot (guaranteed to exist after snapshot check)
-    const marketSnapshot = keywordMarketData.snapshot;
-    const marketSnapshotJson = keywordMarketData.snapshot;
-    
-    const isEstimated = snapshotStatus === 'estimated';
+    // Determine data source: market (real) vs snapshot (estimated)
+    // CRITICAL: If dataSource is "market", listings are real and must be used
+    const isEstimated = dataSource === "snapshot" && (snapshotStatus === 'estimated' || snapshotStatus === 'miss');
     const dataQuality = {
       snapshot: snapshotStatus,
-      source: isEstimated ? 'estimated' : 'precomputed',
+      source: dataSource === "market" ? "market" : (isEstimated ? 'estimated' : 'precomputed'),
       fallback_used: false,
       estimated: isEstimated,
     };
+    
+    // Use the snapshot (guaranteed to exist after snapshot check)
+    const marketSnapshot = keywordMarketData.snapshot;
+    const marketSnapshotJson = keywordMarketData.snapshot;
     
     // CPI calculation moved to after canonical Page-1 build
     // (Will be calculated from canonical products after they're built)
@@ -2529,8 +2594,8 @@ ${body.input_value}`;
         status: responseStatus, // "complete" or "partial"
         data_quality: dataQuality, // Explains limitations
         estimated: isEstimated, // Explicit flag for UI state management
-        dataSource: isEstimated ? "estimated" : "snapshot", // Explicit data source
-        snapshotType: isEstimated ? "estimated" : "snapshot", // Canonical snapshot type
+        dataSource: dataSource, // "market" if real listings, "snapshot" if estimated/precomputed
+        snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"), // Canonical snapshot type
         queued: isEstimated, // Background job is queued when using estimates
         message: isEstimated ? "Estimated market data. Refining with live data…" : undefined,
         analysisRunId: insertedRun.id,

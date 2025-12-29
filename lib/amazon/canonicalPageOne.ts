@@ -57,6 +57,24 @@ export async function buildCanonicalPageOne(
   // Filter organic listings only (exclude sponsored)
   const organicListings = listings.filter(l => !l.is_sponsored);
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CRITICAL: Reject synthetic listings (ESTIMATED-X, INFERRED-X)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const syntheticAsins = organicListings.filter(l => 
+    l.asin && (l.asin.startsWith('ESTIMATED-') || l.asin.startsWith('INFERRED-'))
+  );
+  
+  if (syntheticAsins.length > 0) {
+    console.error("🔴 CANONICAL_PAGE1_ERROR: Synthetic listings detected - this is a routing bug", {
+      keyword,
+      synthetic_count: syntheticAsins.length,
+      synthetic_asins: syntheticAsins.map(l => l.asin).slice(0, 5),
+      timestamp: new Date().toISOString(),
+    });
+    // Return empty array - do NOT process synthetic listings
+    return [];
+  }
+  
   // CRITICAL: Only process listings that have required data
   // Must have: units_est OR est_monthly_units, revenue_est OR est_monthly_revenue
   const validListings = organicListings.filter(listing => {
