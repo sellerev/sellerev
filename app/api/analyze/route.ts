@@ -891,6 +891,7 @@ export async function POST(req: NextRequest) {
     let keywordMarketData: KeywordMarketData | null = null;
     let snapshotStatus = 'miss';
     let dataSource: "market" | "snapshot" = "snapshot"; // Default to snapshot, switch to market if real listings exist
+    let rawRainforestListings: any[] = []; // Track raw Rainforest listings for assertions
     
     // STEP 1: Try to fetch real Rainforest listings FIRST
     console.log("🔵 MARKET_FETCH_START", {
@@ -924,6 +925,7 @@ export async function POST(req: NextRequest) {
           });
           
           keywordMarketData = realMarketData;
+          rawRainforestListings = [...realMarketData.listings]; // Store raw listings for assertions
           dataSource = "market";
           snapshotStatus = 'market'; // Mark as real market data
           
@@ -1070,7 +1072,25 @@ export async function POST(req: NextRequest) {
       } as ParsedListing));
       
       // FALLBACK LAYER 2: If no cached listings, generate representative products
+      // BUT: Do NOT generate if dataSource === "market" (should never reach here)
       if (listings.length === 0) {
+        if (dataSource === "market") {
+          console.error("🔴 FATAL: dataSource === 'market' but snapshot branch generated estimated products", {
+            keyword: body.input_value,
+            dataSource,
+            rawRainforestListings_count: rawRainforestListings.length,
+            timestamp: new Date().toISOString(),
+          });
+          return NextResponse.json(
+            {
+              success: false,
+              error: "Market data routing error: Snapshot branch should not run for market data",
+              details: "dataSource is 'market' but code reached snapshot fallback",
+            },
+            { status: 500, headers: res.headers }
+          );
+        }
+        
         console.log("GUARANTEED_FALLBACK: No cached listings, generating representative products from snapshot");
         listings = generateRepresentativeProducts({
           avg_price: avgPrice > 0 ? avgPrice : snapshot.average_price,
@@ -1187,10 +1207,55 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ENFORCE INVARIANTS: NO FALLBACKS FOR MARKET ANALYSIS
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: If dataSource === "market", we MUST have rawRainforestListings
+    if (dataSource === "market") {
+      if (rawRainforestListings.length === 0) {
+        console.error("🔴 FATAL: dataSource === 'market' but rawRainforestListings.length === 0", {
+          keyword: body.input_value,
+          dataSource,
+          rawRainforestListings_count: rawRainforestListings.length,
+          has_keywordMarketData: !!keywordMarketData,
+          keywordMarketData_listings_count: keywordMarketData?.listings?.length || 0,
+          timestamp: new Date().toISOString(),
+        });
+        // Return error - do NOT fallback to estimated products
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Market data routing error: No raw Rainforest listings found",
+            details: "dataSource is 'market' but no real listings were fetched",
+          },
+          { status: 500, headers: res.headers }
+        );
+      }
+    }
+    
     // CRITICAL: keywordMarketData must never be null at this point
+    // BUT: Do NOT generate estimated products if dataSource === "market"
     if (!keywordMarketData) {
+      if (dataSource === "market") {
+        console.error("🔴 FATAL: dataSource === 'market' but keywordMarketData is null", {
+          keyword: body.input_value,
+          dataSource,
+          rawRainforestListings_count: rawRainforestListings.length,
+          timestamp: new Date().toISOString(),
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Market data routing error: keywordMarketData is null",
+            details: "dataSource is 'market' but keywordMarketData was not set",
+          },
+          { status: 500, headers: res.headers }
+        );
+      }
+      
+      // Only allow fallback for snapshot/estimated dataSource
       console.error("❌ FATAL: keywordMarketData is null - this should never happen");
-      // Emergency fallback - create Tier-1 on the fly
+      // Emergency fallback - create Tier-1 on the fly (ONLY for snapshot/estimated)
       const { buildTier1Snapshot } = await import("@/lib/snapshots/tier1Estimate");
       const normalizedKeyword = body.input_value.toLowerCase().trim();
       const emergencyTier1 = buildTier1Snapshot(normalizedKeyword);
@@ -1242,7 +1307,27 @@ export async function POST(req: NextRequest) {
     }
     
     // FINAL GUARANTEE: Ensure listings are never empty before proceeding
+    // BUT: Do NOT generate estimated products if dataSource === "market"
     if (!keywordMarketData.listings || keywordMarketData.listings.length === 0) {
+      if (dataSource === "market") {
+        console.error("🔴 FATAL: dataSource === 'market' but listings array is empty", {
+          keyword: body.input_value,
+          dataSource,
+          rawRainforestListings_count: rawRainforestListings.length,
+          has_keywordMarketData: !!keywordMarketData,
+          timestamp: new Date().toISOString(),
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Market data routing error: Listings array is empty",
+            details: "dataSource is 'market' but keywordMarketData.listings is empty",
+          },
+          { status: 500, headers: res.headers }
+        );
+      }
+      
+      // Only allow fallback for snapshot/estimated dataSource
       console.error("CRITICAL: listings array is empty - applying final fallback");
       keywordMarketData.listings = generateRepresentativeProducts(
         keywordMarketData.snapshot,
@@ -1321,13 +1406,55 @@ export async function POST(req: NextRequest) {
       });
     }
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ENFORCE: Canonical Page-1 MUST run when dataSource === "market"
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (dataSource === "market") {
+      if (!keywordMarketData) {
+        console.error("🔴 FATAL: dataSource === 'market' but keywordMarketData is null before canonical build", {
+          keyword: body.input_value,
+          dataSource,
+          rawRainforestListings_count: rawRainforestListings.length,
+          timestamp: new Date().toISOString(),
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Market data routing error: keywordMarketData is null",
+            details: "dataSource is 'market' but keywordMarketData was not set before canonical build",
+          },
+          { status: 500, headers: res.headers }
+        );
+      }
+      
+      if (!keywordMarketData.listings || keywordMarketData.listings.length === 0) {
+        console.error("🔴 FATAL: dataSource === 'market' but keywordMarketData.listings is empty before canonical build", {
+          keyword: body.input_value,
+          dataSource,
+          rawRainforestListings_count: rawRainforestListings.length,
+          has_keywordMarketData: !!keywordMarketData,
+          timestamp: new Date().toISOString(),
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Market data routing error: Listings array is empty",
+            details: "dataSource is 'market' but keywordMarketData.listings is empty before canonical build",
+          },
+          { status: 500, headers: res.headers }
+        );
+      }
+    }
+    
     // Build contract-compliant response
     if (keywordMarketData) {
       // CANONICAL PAGE-1 BUILDER: Replace raw listings with deterministic Page-1 reconstruction
-      // This ensures we always have ~20 product cards, even with 0, partial, or full listings
+      // CRITICAL: This MUST run when dataSource === "market"
       console.log("🔵 CANONICAL_PAGE1_BUILD_START", {
         keyword: body.input_value,
+        dataSource,
         raw_listings_count: keywordMarketData.listings?.length || 0,
+        rawRainforestListings_count: rawRainforestListings.length,
         snapshot_avg_price: keywordMarketData.snapshot?.avg_price,
         snapshot_total_units: keywordMarketData.snapshot?.est_total_monthly_units_min,
         snapshot_total_revenue: keywordMarketData.snapshot?.est_total_monthly_revenue_min,
@@ -1355,6 +1482,10 @@ export async function POST(req: NextRequest) {
         timestamp: new Date().toISOString(),
       });
       
+      // ═══════════════════════════════════════════════════════════════════════════
+      // ENFORCE: Canonical Page-1 MUST run when dataSource === "market"
+      // ═══════════════════════════════════════════════════════════════════════════
+      
       // Build canonical Page-1 products
       const canonicalProducts = await buildCanonicalPageOne(
         keywordMarketData.listings || [],
@@ -1364,6 +1495,49 @@ export async function POST(req: NextRequest) {
         undefined, // rawRainforestData
         supabase // supabase client for history blending
       );
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // ASSERTION: If dataSource === "market", validate canonical output
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (dataSource === "market") {
+        // Assert: canonical Page-1 was called (we just called it above)
+        if (canonicalProducts.length === 0) {
+          console.error("🔴 FATAL: dataSource === 'market' but canonicalProducts.length === 0", {
+            keyword: body.input_value,
+            dataSource,
+            rawRainforestListings_count: rawRainforestListings.length,
+            input_listings_count: keywordMarketData.listings?.length || 0,
+            timestamp: new Date().toISOString(),
+          });
+        }
+        
+        // Check for synthetic ASINs in canonical output (should never happen for market data)
+        const syntheticAsins = canonicalProducts.filter(p => 
+          p.asin && (p.asin.startsWith('ESTIMATED-') || p.asin.startsWith('INFERRED-'))
+        );
+        
+        if (syntheticAsins.length > 0) {
+          console.error("🔴 FATAL: Estimated products generated while dataSource === 'market'", {
+            keyword: body.input_value,
+            dataSource,
+            synthetic_count: syntheticAsins.length,
+            synthetic_asins: syntheticAsins.map(p => p.asin).slice(0, 5),
+            rawRainforestListings_count: rawRainforestListings.length,
+            canonical_product_count: canonicalProducts.length,
+            timestamp: new Date().toISOString(),
+          });
+        }
+        
+        // Assert: rawRainforestListings must exist
+        if (rawRainforestListings.length === 0) {
+          console.error("🔴 FATAL: dataSource === 'market' but rawRainforestListings.length === 0 after canonical build", {
+            keyword: body.input_value,
+            dataSource,
+            canonical_product_count: canonicalProducts.length,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
       
       console.log("🔵 CANONICAL_PAGE1_BUILD_COMPLETE", {
         keyword: body.input_value,
@@ -2224,7 +2398,30 @@ ${body.input_value}`;
     });
     
     // STEP 4: Hard guarantee - products must never be empty
+    // BUT: Do NOT generate estimated products if dataSource === "market"
     if (!finalResponse.products || finalResponse.products.length === 0) {
+      if (dataSource === "market") {
+        console.error("🔴 FATAL: dataSource === 'market' but finalResponse.products is empty", {
+          keyword: body.input_value,
+          dataSource,
+          rawRainforestListings_count: rawRainforestListings.length,
+          has_contract_response: !!contractResponse,
+          has_keyword_market: !!keywordMarket,
+          has_keyword_market_data: !!keywordMarketData,
+          keywordMarketData_listings_count: keywordMarketData?.listings?.length || 0,
+          timestamp: new Date().toISOString(),
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Market data routing error: Final response has no products",
+            details: "dataSource is 'market' but finalResponse.products is empty",
+          },
+          { status: 500, headers: res.headers }
+        );
+      }
+      
+      // Only allow fallback for snapshot/estimated dataSource
       console.error("🔴 CRITICAL: Final response has no products - applying emergency fallback", {
         keyword: body.input_value,
         has_contract_response: !!contractResponse,
