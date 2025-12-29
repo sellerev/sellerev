@@ -94,6 +94,9 @@ export async function buildCanonicalPageOne(
     const listing = organicListings[i];
     const position = i + 1;
     
+    // Get full_listing_object if it exists (for hydration)
+    const fullListingObject = (listing as any).full_listing_object || listing;
+    
     // Use real data where available, infer where missing
     const inferredFields: string[] = [];
     
@@ -104,8 +107,15 @@ export async function buildCanonicalPageOne(
     if (!listing.title) inferredFields.push('title');
     
     // Image URL: use real if available (check both 'image' and 'image_url' for compatibility), otherwise use SVG placeholder
-    const image_url = (listing as any).image_url || (listing as any).image || getPlaceholderImageUrl(keyword, position);
-    if (!(listing as any).image_url && !(listing as any).image) inferredFields.push('image_url');
+    // HYDRATE: If null, try full_listing_object.image
+    let image_url = (listing as any).image_url || (listing as any).image || null;
+    if (image_url === null && fullListingObject) {
+      image_url = fullListingObject.image || fullListingObject.image_url || null;
+    }
+    if (image_url === null) {
+      image_url = getPlaceholderImageUrl(keyword, position);
+      inferredFields.push('image_url');
+    }
     
     // Price: use real if available, otherwise use tiered multiplier
     let price: number;
@@ -134,13 +144,31 @@ export async function buildCanonicalPageOne(
       inferredFields.push('review_count');
     }
     
-    // Units: calculate using power-law position decay (for 49 products, use 50 - position)
-    const positionWeight = Math.pow(TARGET_PRODUCT_COUNT + 1 - position, 1.35);
-    const totalWeight = calculateTotalPositionWeight(TARGET_PRODUCT_COUNT);
-    const monthlyUnits = Math.round((totalUnits * positionWeight) / totalWeight);
+    // Units: HYDRATE from full_listing_object.units_est if null, otherwise calculate using power-law
+    let monthlyUnits: number;
+    if (listing.est_monthly_units !== null && listing.est_monthly_units !== undefined && listing.est_monthly_units > 0) {
+      monthlyUnits = listing.est_monthly_units;
+    } else if (fullListingObject && (fullListingObject.units_est !== null && fullListingObject.units_est !== undefined && fullListingObject.units_est > 0)) {
+      monthlyUnits = fullListingObject.units_est;
+    } else {
+      // Calculate using power-law position decay (for 49 products, use 50 - position)
+      const positionWeight = Math.pow(TARGET_PRODUCT_COUNT + 1 - position, 1.35);
+      const totalWeight = calculateTotalPositionWeight(TARGET_PRODUCT_COUNT);
+      monthlyUnits = Math.round((totalUnits * positionWeight) / totalWeight);
+      inferredFields.push('estimated_monthly_units');
+    }
     
-    // Revenue: units × price
-    const monthlyRevenue = Math.round(monthlyUnits * price * 100) / 100;
+    // Revenue: HYDRATE from full_listing_object.revenue_est if null, otherwise calculate
+    let monthlyRevenue: number;
+    if (listing.est_monthly_revenue !== null && listing.est_monthly_revenue !== undefined && listing.est_monthly_revenue > 0) {
+      monthlyRevenue = listing.est_monthly_revenue;
+    } else if (fullListingObject && (fullListingObject.revenue_est !== null && fullListingObject.revenue_est !== undefined && fullListingObject.revenue_est > 0)) {
+      monthlyRevenue = fullListingObject.revenue_est;
+    } else {
+      // Revenue: units × price
+      monthlyRevenue = Math.round(monthlyUnits * price * 100) / 100;
+      inferredFields.push('estimated_monthly_revenue');
+    }
     
     // Fulfillment: use real if available, otherwise default to "FBA"
     let fulfillment: "FBA" | "FBM" | "AMZ";
@@ -180,10 +208,18 @@ export async function buildCanonicalPageOne(
       price,
       rating,
       review_count,
-      // BSR: use real if available and not marked invalid, otherwise null
-      bsr: (listing.main_category_bsr || listing.bsr) && !listing.bsr_invalid_reason
-        ? (listing.main_category_bsr || listing.bsr)
-        : null,
+      // BSR: HYDRATE from full_listing_object.bsr if null, otherwise use real if available and not marked invalid
+      bsr: (() => {
+        // First try listing BSR
+        if ((listing.main_category_bsr || listing.bsr) && !listing.bsr_invalid_reason) {
+          return (listing.main_category_bsr || listing.bsr);
+        }
+        // Then try full_listing_object.bsr
+        if (fullListingObject && fullListingObject.bsr !== null && fullListingObject.bsr !== undefined) {
+          return fullListingObject.bsr;
+        }
+        return null;
+      })(),
       estimated_monthly_units: monthlyUnits,
       estimated_monthly_revenue: monthlyRevenue,
       revenue_share_pct: 0, // Will be calculated after normalization
@@ -278,13 +314,91 @@ export async function buildCanonicalPageOne(
   const finalProducts = await blendWithAsinHistory(afterCalibration, marketplace, supabase);
   
   // ═══════════════════════════════════════════════════════════════════════════
+  // HYDRATE NULL FIELDS FROM FULL_LISTING_OBJECT
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Final hydration pass: if any canonical fields are null, try to hydrate from original listing data
+  const hydratedProducts = finalProducts.map((product, index) => {
+    // Find the original listing for this product (match by ASIN or position)
+    const originalListing = organicListings.find(
+      (l, idx) => (l.asin && l.asin === product.asin) || idx === index
+    );
+    
+    if (!originalListing) {
+      return product; // No original listing to hydrate from
+    }
+    
+    // Get full_listing_object if it exists (for hydration)
+    const fullListingObject = (originalListing as any).full_listing_object || originalListing;
+    
+    // Hydrate null fields from full_listing_object
+    // CRITICAL: Only hydrate if the canonical field is null/undefined/0, preserving calculated values
+    const hydrated: CanonicalProduct = { ...product };
+    
+    // Hydrate estimated_units if null or zero (indicating it was calculated/inferred)
+    const needsUnitsHydration = hydrated.estimated_monthly_units === null || 
+                                 hydrated.estimated_monthly_units === undefined || 
+                                 hydrated.estimated_monthly_units === 0;
+    
+    if (needsUnitsHydration && fullListingObject) {
+      // Priority: full_listing_object.units_est > originalListing.est_monthly_units
+      if (fullListingObject.units_est !== null && fullListingObject.units_est !== undefined && fullListingObject.units_est > 0) {
+        hydrated.estimated_monthly_units = fullListingObject.units_est;
+      } else if (originalListing.est_monthly_units !== null && originalListing.est_monthly_units !== undefined && originalListing.est_monthly_units > 0) {
+        hydrated.estimated_monthly_units = originalListing.est_monthly_units;
+      }
+    }
+    
+    // Hydrate estimated_revenue if null or zero (indicating it was calculated/inferred)
+    const needsRevenueHydration = hydrated.estimated_monthly_revenue === null || 
+                                  hydrated.estimated_monthly_revenue === undefined || 
+                                  hydrated.estimated_monthly_revenue === 0;
+    
+    if (needsRevenueHydration && fullListingObject) {
+      // Priority: full_listing_object.revenue_est > originalListing.est_monthly_revenue
+      if (fullListingObject.revenue_est !== null && fullListingObject.revenue_est !== undefined && fullListingObject.revenue_est > 0) {
+        hydrated.estimated_monthly_revenue = fullListingObject.revenue_est;
+      } else if (originalListing.est_monthly_revenue !== null && originalListing.est_monthly_revenue !== undefined && originalListing.est_monthly_revenue > 0) {
+        hydrated.estimated_monthly_revenue = originalListing.est_monthly_revenue;
+      }
+    }
+    
+    // Hydrate image_url if null (always hydrate if missing)
+    if ((hydrated.image_url === null || hydrated.image_url === undefined || hydrated.image_url.startsWith('data:image/svg+xml')) && fullListingObject) {
+      // Priority: full_listing_object.image > full_listing_object.image_url > originalListing fields
+      if (fullListingObject.image && !fullListingObject.image.startsWith('data:image/svg+xml')) {
+        hydrated.image_url = fullListingObject.image;
+      } else if (fullListingObject.image_url && !fullListingObject.image_url.startsWith('data:image/svg+xml')) {
+        hydrated.image_url = fullListingObject.image_url;
+      } else if (originalListing.image_url && !originalListing.image_url.startsWith('data:image/svg+xml')) {
+        hydrated.image_url = originalListing.image_url;
+      } else if ((originalListing as any).image && !(originalListing as any).image.startsWith('data:image/svg+xml')) {
+        hydrated.image_url = (originalListing as any).image;
+      }
+    }
+    
+    // Hydrate bsr if null (always hydrate if missing)
+    if (hydrated.bsr === null || hydrated.bsr === undefined) {
+      // Priority: full_listing_object.bsr > originalListing.main_category_bsr > originalListing.bsr
+      if (fullListingObject && fullListingObject.bsr !== null && fullListingObject.bsr !== undefined) {
+        hydrated.bsr = fullListingObject.bsr;
+      } else if (originalListing.main_category_bsr !== null && originalListing.main_category_bsr !== undefined) {
+        hydrated.bsr = originalListing.main_category_bsr;
+      } else if (originalListing.bsr !== null && originalListing.bsr !== undefined) {
+        hydrated.bsr = originalListing.bsr;
+      }
+    }
+    
+    return hydrated;
+  });
+  
+  // ═══════════════════════════════════════════════════════════════════════════
   // STEP 3 — CONFIRM CANONICAL PAGE-1 OUTPUT
   // ═══════════════════════════════════════════════════════════════════════════
   // Log the output returned from the canonical Page-1 builder
-  const first5Output = finalProducts.slice(0, 5);
+  const first5Output = hydratedProducts.slice(0, 5);
   console.log("🔍 STEP_3_CANONICAL_PAGE1_OUTPUT", {
     keyword,
-    total_products: finalProducts.length,
+    total_products: hydratedProducts.length,
     first_5_products: first5Output.map((product: CanonicalProduct, idx: number) => ({
       index: idx + 1,
       asin: product.asin || null,
@@ -296,7 +410,7 @@ export async function buildCanonicalPageOne(
     timestamp: new Date().toISOString(),
   });
   
-  return finalProducts;
+  return hydratedProducts;
 }
 
 /**
