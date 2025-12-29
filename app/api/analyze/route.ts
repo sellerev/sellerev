@@ -1454,8 +1454,12 @@ export async function POST(req: NextRequest) {
       const rawListings = keywordMarketData.listings || [];
       let pageOneProducts: any[] = [];
       
+      console.log("🔵 INPUT_TYPE_RECEIVED", body.input_type);
+      console.log("🔵 RAW_LISTINGS_LENGTH_BEFORE_CANONICAL", rawListings.length);
+      
       if (body.input_type === "keyword") {
         // Keyword analysis: Use permissive canonical builder
+        console.log("🔵 CALLING_CANONICAL_BUILDER: keyword (buildKeywordPageOne)");
         console.log("✅ KEYWORD CANONICAL BUILD START", {
           keyword: body.input_value,
           raw_listings_count: rawListings.length,
@@ -1479,6 +1483,7 @@ export async function POST(req: NextRequest) {
         }
       } else {
         // ASIN analysis: Use strict canonical builder
+        console.log("🔵 CALLING_CANONICAL_BUILDER: asin (buildAsinPageOne)");
         pageOneProducts = await buildAsinPageOne(
           rawListings,
           keywordMarketData.snapshot,
@@ -1488,6 +1493,8 @@ export async function POST(req: NextRequest) {
           supabase // supabase client for history blending
         );
       }
+      
+      console.log("🔵 PAGE_ONE_PRODUCTS_LENGTH_AFTER_CANONICAL", pageOneProducts.length);
       
       const canonicalProducts = pageOneProducts;
       
