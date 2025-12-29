@@ -857,9 +857,36 @@ export default function AnalyzeForm({
                   {(() => {
                     const snapshot = analysis.market_snapshot;
                     
-                    // Use canonical Page-1 array from API response (page_one_listings or products)
-                    // This ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array
-                    const pageOneListings = analysis.page_one_listings || analysis.products || snapshot?.listings || [];
+                    // ═══════════════════════════════════════════════════════════════════════════
+                    // ROUTE LISTINGS BASED ON dataSource
+                    // ═══════════════════════════════════════════════════════════════════════════
+                    const dataSource = (analysis as any).dataSource || snapshotType;
+                    let pageOneListings: any[] = [];
+                    
+                    if (dataSource === "market") {
+                      // Market data: Use canonical Page-1 output (page_one_listings or products)
+                      pageOneListings = analysis.page_one_listings || analysis.products || [];
+                      
+                      // HARD ASSERTION: Market dataSource must have listings
+                      if (pageOneListings.length === 0) {
+                        console.error("🔴 MARKET DATASOURCE WITH ZERO LISTINGS — ROUTING BUG", {
+                          dataSource,
+                          has_page_one_listings: !!analysis.page_one_listings,
+                          page_one_listings_count: analysis.page_one_listings?.length || 0,
+                          has_products: !!analysis.products,
+                          products_count: analysis.products?.length || 0,
+                          has_snapshot_listings: !!snapshot?.listings,
+                          snapshot_listings_count: snapshot?.listings?.length || 0,
+                          timestamp: new Date().toISOString(),
+                        });
+                      }
+                    } else if (dataSource === "snapshot" || dataSource === "estimated") {
+                      // Snapshot data: Use snapshot listings
+                      pageOneListings = snapshot?.listings || [];
+                    } else {
+                      // Fallback: Try canonical first, then snapshot
+                      pageOneListings = analysis.page_one_listings || analysis.products || snapshot?.listings || [];
+                    }
                     
                     // Normalize listings to calculate metrics
                     const normalizedListings = pageOneListings
@@ -1127,9 +1154,36 @@ export default function AnalyzeForm({
                     
                     const snapshot = analysis.market_snapshot;
                     
-                    // Use canonical Page-1 array from API response (page_one_listings or products)
-                    // This ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array
-                    const pageOneListings = analysis.page_one_listings || analysis.products || snapshot?.listings || [];
+                    // ═══════════════════════════════════════════════════════════════════════════
+                    // ROUTE LISTINGS BASED ON dataSource
+                    // ═══════════════════════════════════════════════════════════════════════════
+                    const dataSource = (analysis as any).dataSource || snapshotType;
+                    let pageOneListings: any[] = [];
+                    
+                    if (dataSource === "market") {
+                      // Market data: Use canonical Page-1 output (page_one_listings or products)
+                      pageOneListings = analysis.page_one_listings || analysis.products || [];
+                      
+                      // HARD ASSERTION: Market dataSource must have listings
+                      if (pageOneListings.length === 0) {
+                        console.error("🔴 MARKET DATASOURCE WITH ZERO LISTINGS — ROUTING BUG", {
+                          dataSource,
+                          has_page_one_listings: !!analysis.page_one_listings,
+                          page_one_listings_count: analysis.page_one_listings?.length || 0,
+                          has_products: !!analysis.products,
+                          products_count: analysis.products?.length || 0,
+                          has_snapshot_listings: !!snapshot?.listings,
+                          snapshot_listings_count: snapshot?.listings?.length || 0,
+                          timestamp: new Date().toISOString(),
+                        });
+                      }
+                    } else if (dataSource === "snapshot" || dataSource === "estimated") {
+                      // Snapshot data: Use snapshot listings
+                      pageOneListings = snapshot?.listings || [];
+                    } else {
+                      // Fallback: Try canonical first, then snapshot
+                      pageOneListings = analysis.page_one_listings || analysis.products || snapshot?.listings || [];
+                    }
                     
                     // ═══════════════════════════════════════════════════════════════════════════
                     // STEP 5 — CONFIRM UI MAPPING
