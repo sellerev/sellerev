@@ -54,44 +54,16 @@ export async function buildCanonicalPageOne(
   rawRainforestData?: Map<string, any>,
   supabase?: any
 ): Promise<CanonicalProduct[]> {
-  // Filter organic listings only (exclude sponsored)
-  const organicListings = listings.filter(l => !l.is_sponsored);
-  
   // ═══════════════════════════════════════════════════════════════════════════
-  // CRITICAL: Reject synthetic listings (ESTIMATED-X, INFERRED-X)
+  // TEMP: DISABLE ALL FILTERING - accept all listings
   // ═══════════════════════════════════════════════════════════════════════════
-  const syntheticAsins = organicListings.filter(l => 
-    l.asin && (l.asin.startsWith('ESTIMATED-') || l.asin.startsWith('INFERRED-'))
-  );
+  console.log("🧪 CANONICAL INPUT COUNT", listings.length);
   
-  if (syntheticAsins.length > 0) {
-    console.error("🔴 CANONICAL_PAGE1_ERROR: Synthetic listings detected - this is a routing bug", {
-      keyword,
-      synthetic_count: syntheticAsins.length,
-      synthetic_asins: syntheticAsins.map(l => l.asin).slice(0, 5),
-      timestamp: new Date().toISOString(),
-    });
-    // Return empty array - do NOT process synthetic listings
-    return [];
-  }
-  
-  // CRITICAL: Only process listings that have required data
-  // Must have: units_est OR est_monthly_units, revenue_est OR est_monthly_revenue
-  const validListings = organicListings.filter(listing => {
-    const hasUnits = (listing as any).units_est !== null && (listing as any).units_est !== undefined && (listing as any).units_est > 0 ||
-                     listing.est_monthly_units !== null && listing.est_monthly_units !== undefined && listing.est_monthly_units > 0;
-    const hasRevenue = (listing as any).revenue_est !== null && (listing as any).revenue_est !== undefined && (listing as any).revenue_est > 0 ||
-                       listing.est_monthly_revenue !== null && listing.est_monthly_revenue !== undefined && listing.est_monthly_revenue > 0;
-    return hasUnits && hasRevenue;
-  });
-  
-  if (validListings.length === 0) {
-    console.warn("🔴 CANONICAL_PAGE1: No valid listings with units_est and revenue_est - returning empty array");
-    return [];
-  }
+  // TEMP: accept all listings (no filtering)
+  const rawListings = listings;
   
   // Convert to CanonicalProduct format, preserving ALL original fields
-  const products: CanonicalProduct[] = validListings.map((listing, index) => {
+  const products: CanonicalProduct[] = rawListings.map((listing, index) => {
     // Get full_listing_object if it exists
     const fullListingObject = (listing as any).full_listing_object || listing;
     
@@ -212,6 +184,8 @@ export async function buildCanonicalPageOne(
     })),
     timestamp: new Date().toISOString(),
   });
+  
+  console.log("🧪 CANONICAL OUTPUT COUNT", finalProducts.length);
   
   return finalProducts;
 }
