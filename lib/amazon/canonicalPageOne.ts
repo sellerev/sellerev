@@ -88,7 +88,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       estimated_monthly_units: estimatedUnits,
       estimated_monthly_revenue: estimatedRevenue,
       revenue_share_pct: revenueSharePct,
-      image_url: l.image_url ?? l.image ?? null,
+      image_url: l.image_url ?? null,
       fulfillment: (l.fulfillment === "FBA" ? "FBA" : l.fulfillment === "AMZ" || l.fulfillment === "Amazon" ? "AMZ" : "FBM") as "FBA" | "FBM" | "AMZ",
       brand: l.brand ?? null,
       seller_country: "Unknown" as const,
