@@ -1127,18 +1127,9 @@ export default function AnalyzeForm({
                   {/* ─────────────────────────────────────────────────────────── */}
                   {(() => {
                     // ═══════════════════════════════════════════════════════════════════════════
-                    // GUARD: Do NOT render Page-1 if dataSource is "snapshot"
-                    // Snapshot is allowed ONLY for empty-state UI, not analysis
+                    // UI IS DUMB RENDERER - NO BLOCKING GUARDS
                     // ═══════════════════════════════════════════════════════════════════════════
-                    const dataSource = (analysis as any).dataSource || snapshotType;
-                    if (dataSource === "snapshot" || dataSource === "estimated") {
-                      return (
-                        <div className="p-8 text-center">
-                          <p className="text-gray-500 mb-2">Market data is estimated</p>
-                          <p className="text-sm text-gray-400">Page 1 results require real market data</p>
-                        </div>
-                      );
-                    }
+                    // Canonical Page-1 is final authority - render whatever is available
                     
                     const snapshot = analysis.market_snapshot;
                     

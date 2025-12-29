@@ -1469,16 +1469,11 @@ export async function POST(req: NextRequest) {
         
         console.log("✅ KEYWORD PAGE-1 COUNT", pageOneProducts.length);
         if (pageOneProducts.length > 0) {
-          console.log("📦 SAMPLE PRODUCT", pageOneProducts[0]);
-        }
-        
-        // Keyword analysis must NEVER hard-fail due to imperfect data
-        if (rawListings.length > 0 && pageOneProducts.length === 0) {
-          console.error("❌ KEYWORD CANONICAL FAILURE — SHOULD NEVER BE EMPTY", {
+          console.log("📦 SAMPLE CANONICAL PRODUCT", pageOneProducts[0]);
+        } else {
+          console.log("❌ KEYWORD CANONICAL EMPTY (NON-FATAL)", {
             keyword: body.input_value,
             raw_listings_count: rawListings.length,
-            page_one_products_count: pageOneProducts.length,
-            timestamp: new Date().toISOString(),
           });
         }
       } else {
@@ -1498,197 +1493,34 @@ export async function POST(req: NextRequest) {
       
       const canonicalProducts = pageOneProducts;
       
-      console.log("🔵 CANONICAL_PAGE1_BUILD_COMPLETE", {
-        keyword: body.input_value,
-        canonical_product_count: canonicalProducts.length,
-        inferred_count: canonicalProducts.filter(p => p.snapshot_inferred).length,
-        sample_product: canonicalProducts[0] ? {
-          rank: canonicalProducts[0].rank,
-          asin: canonicalProducts[0].asin,
-          price: canonicalProducts[0].price,
-          estimated_monthly_units: canonicalProducts[0].estimated_monthly_units,
-          estimated_monthly_revenue: canonicalProducts[0].estimated_monthly_revenue,
-          snapshot_inferred: canonicalProducts[0].snapshot_inferred,
-        } : null,
-        timestamp: new Date().toISOString(),
-      });
-      
-      // Replace listings with canonical products (convert to listing format for compatibility)
-      keywordMarketData.listings = canonicalProducts.map(p => ({
-        asin: p.asin,
-        title: p.title,
-        price: p.price,
-        rating: p.rating,
-        reviews: p.review_count,
-        is_sponsored: false,
-        position: p.rank,
-        brand: p.brand,
-        image_url: p.image_url,
-        bsr: p.bsr,
-        main_category_bsr: p.bsr,
-        main_category: null,
-        fulfillment: p.fulfillment === "FBA" ? "FBA" : p.fulfillment === "AMZ" ? "Amazon" : "FBM",
-        est_monthly_revenue: p.estimated_monthly_revenue,
-        est_monthly_units: p.estimated_monthly_units,
-        revenue_confidence: p.snapshot_inferred ? "low" as const : "medium" as const,
-      }));
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CANONICAL PAGE-1 IS FINAL AUTHORITY - NO CONVERSION, NO REBUILDING
+      // ═══════════════════════════════════════════════════════════════════════════
+      // For keyword analysis: Pass canonical products directly to data contract
+      // DO NOT convert back to listings, DO NOT rebuild products
       
       try {
         // Convert marketplace domain to Marketplace type (default to "US")
-        // For now, marketplace is hardcoded to "amazon.com" which maps to "US"
         const marketplaceCode: "US" | "CA" | "UK" | "EU" | "AU" = "US";
         
+        // Pass canonical products directly to data contract builder
+        // This ensures canonical products are the final authority
         contractResponse = await buildKeywordAnalyzeResponse(
           body.input_value,
           keywordMarketData,
           marginSnapshot,
           marketplaceCode,
           "USD",
-          supabase // supabase client for keyword history blending
+          supabase, // supabase client for keyword history blending
+          canonicalProducts // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
         );
         
-        // Replace products with canonical products (ensures consistency)
-        if (canonicalProducts.length > 0) {
-          contractResponse.products = canonicalProducts.map(p => ({
-            rank: p.rank,
-            asin: p.asin,
-            title: p.title,
-            image_url: p.image_url,
-            price: p.price,
-            rating: p.rating,
-            review_count: p.review_count,
-            bsr: p.bsr,
-            estimated_monthly_units: p.estimated_monthly_units,
-            estimated_monthly_revenue: p.estimated_monthly_revenue,
-            revenue_share_pct: p.revenue_share_pct,
-            fulfillment: p.fulfillment,
-            brand: p.brand,
-            seller_country: p.seller_country,
-          }));
-          
-          // CRITICAL: Recompute aggregates synchronously from canonical Page-1 products
-          // This ensures aggregates are derived ONLY from the final canonical array
-          const pageOneProducts = contractResponse.products;
-          
-          // Calculate aggregates from canonical products
-          const pageOnePrices = pageOneProducts
-            .map((p: any) => p.price)
-            .filter((p: any): p is number => p !== null && p !== undefined && p > 0);
-          const avg_price = pageOnePrices.length > 0 
-            ? pageOnePrices.reduce((sum: number, p: number) => sum + p, 0) / pageOnePrices.length 
-            : 0;
-          
-          const pageOneRatings = pageOneProducts
-            .map((p: any) => p.rating)
-            .filter((r: any): r is number => r !== null && r !== undefined && r > 0);
-          const avg_rating = pageOneRatings.length > 0
-            ? pageOneRatings.reduce((sum: number, r: number) => sum + r, 0) / pageOneRatings.length
-            : 0;
-          
-          const pageOneBsrs = pageOneProducts
-            .map((p: any) => p.bsr)
-            .filter((b: any): b is number => b !== null && b !== undefined && b > 0);
-          const avg_bsr = pageOneBsrs.length > 0
-            ? pageOneBsrs.reduce((sum: number, b: number) => sum + b, 0) / pageOneBsrs.length
-            : null;
-          
-          const total_monthly_units_est = pageOneProducts.reduce((sum: number, p: any) => sum + (p.estimated_monthly_units || 0), 0);
-          const total_monthly_revenue_est = pageOneProducts.reduce((sum: number, p: any) => sum + (p.estimated_monthly_revenue || 0), 0);
-          
-          // Update summary with recalculated aggregates
-          if (contractResponse.summary) {
-            contractResponse.summary.avg_price = avg_price;
-            contractResponse.summary.avg_rating = avg_rating;
-            contractResponse.summary.avg_bsr = avg_bsr;
-            contractResponse.summary.total_monthly_units_est = total_monthly_units_est;
-            contractResponse.summary.total_monthly_revenue_est = total_monthly_revenue_est;
-            contractResponse.summary.page1_product_count = pageOneProducts.length;
-          }
-          
-          // Update aggregates_derived_from_page_one
-          contractResponse.aggregates_derived_from_page_one = {
-            avg_price,
-            avg_rating,
-            avg_bsr,
-            total_monthly_units_est,
-            total_monthly_revenue_est,
-            page1_product_count: pageOneProducts.length,
-          };
-          
-          // Also update page_one_listings to match products
-          contractResponse.page_one_listings = contractResponse.products;
-        }
-        
-        // POST-BUILD GUARANTEE: Ensure contract response products are never empty
-        if (!contractResponse?.products || contractResponse.products.length === 0) {
-          console.error("🔴 CRITICAL: contract response products empty after canonical build - this should never happen");
-          // This should never happen, but if it does, use canonical products directly
-          contractResponse.products = canonicalProducts.map(p => ({
-            rank: p.rank,
-            asin: p.asin,
-            title: p.title,
-            image_url: p.image_url,
-            price: p.price,
-            rating: p.rating,
-            review_count: p.review_count,
-            bsr: p.bsr,
-            estimated_monthly_units: p.estimated_monthly_units,
-            estimated_monthly_revenue: p.estimated_monthly_revenue,
-            revenue_share_pct: p.revenue_share_pct,
-            fulfillment: p.fulfillment,
-            brand: p.brand,
-            seller_country: p.seller_country,
-          }));
-          
-          // Recompute aggregates from canonical products for fallback case
-          const pageOneProducts = contractResponse.products;
-          
-          const pageOnePrices = pageOneProducts
-            .map((p: any) => p.price)
-            .filter((p: any): p is number => p !== null && p !== undefined && p > 0);
-          const avg_price = pageOnePrices.length > 0 
-            ? pageOnePrices.reduce((sum: number, p: number) => sum + p, 0) / pageOnePrices.length 
-            : 0;
-          
-          const pageOneRatings = pageOneProducts
-            .map((p: any) => p.rating)
-            .filter((r: any): r is number => r !== null && r !== undefined && r > 0);
-          const avg_rating = pageOneRatings.length > 0
-            ? pageOneRatings.reduce((sum: number, r: number) => sum + r, 0) / pageOneRatings.length
-            : 0;
-          
-          const pageOneBsrs = pageOneProducts
-            .map((p: any) => p.bsr)
-            .filter((b: any): b is number => b !== null && b !== undefined && b > 0);
-          const avg_bsr = pageOneBsrs.length > 0
-            ? pageOneBsrs.reduce((sum: number, b: number) => sum + b, 0) / pageOneBsrs.length
-            : null;
-          
-          const total_monthly_units_est = pageOneProducts.reduce((sum: number, p: any) => sum + (p.estimated_monthly_units || 0), 0);
-          const total_monthly_revenue_est = pageOneProducts.reduce((sum: number, p: any) => sum + (p.estimated_monthly_revenue || 0), 0);
-          
-          // Update summary
-          if (contractResponse.summary) {
-            contractResponse.summary.avg_price = avg_price;
-            contractResponse.summary.avg_rating = avg_rating;
-            contractResponse.summary.avg_bsr = avg_bsr;
-            contractResponse.summary.total_monthly_units_est = total_monthly_units_est;
-            contractResponse.summary.total_monthly_revenue_est = total_monthly_revenue_est;
-            contractResponse.summary.page1_product_count = pageOneProducts.length;
-          }
-          
-          // Update aggregates_derived_from_page_one
-          contractResponse.aggregates_derived_from_page_one = {
-            avg_price,
-            avg_rating,
-            avg_bsr,
-            total_monthly_units_est,
-            total_monthly_revenue_est,
-            page1_product_count: pageOneProducts.length,
-          };
-          
-          contractResponse.page_one_listings = contractResponse.products;
-        }
+        // Canonical products are already set in contractResponse - no replacement needed
+        console.log("✅ CANONICAL_PAGE1_INJECTED_INTO_CONTRACT", {
+          canonical_count: canonicalProducts.length,
+          contract_products_count: contractResponse.products?.length || 0,
+          contract_page_one_listings_count: contractResponse.page_one_listings?.length || 0,
+        });
         
         console.log("CONTRACT_RESPONSE_BUILT", {
           has_products: !!contractResponse?.products,
@@ -1697,11 +1529,12 @@ export async function POST(req: NextRequest) {
           has_market_structure: !!contractResponse?.market_structure,
         });
         
-        // Calculate CPI from canonical products (after canonical build)
-        if (keywordMarketData.listings && keywordMarketData.listings.length > 0) {
+        // Calculate CPI from original raw listings (before canonical build)
+        // CPI is competitive analysis, not Page-1 display, so use original data
+        if (rawListings && rawListings.length > 0) {
           try {
             const cpiResult = calculateCPI({
-              listings: keywordMarketData.listings, // Now contains canonical products
+              listings: rawListings, // Use original listings for competitive analysis
               sellerStage: sellerProfile.stage as "new" | "existing" | "scaling",
               sellerExperienceMonths: sellerProfile.experience_months,
             });

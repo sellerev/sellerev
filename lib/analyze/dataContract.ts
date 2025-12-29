@@ -13,6 +13,7 @@
 
 import { KeywordMarketData, ParsedListing } from "@/lib/amazon/keywordMarket";
 import { MarginSnapshot } from "@/types/margin";
+import { CanonicalProduct } from "@/lib/amazon/canonicalPageOne";
 
 // ============================================================================
 // TYPE DEFINITIONS (EXACT CONTRACT SCHEMAS)
@@ -273,7 +274,8 @@ export async function buildKeywordAnalyzeResponse(
   marginSnapshot: MarginSnapshot,
   marketplace: Marketplace = "US",
   currency: Currency = "USD",
-  supabase?: any
+  supabase?: any,
+  canonicalProducts?: CanonicalProduct[] // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
 ): Promise<KeywordAnalyzeResponse> {
   // Guard against null/undefined inputs
   if (!marketData) {
@@ -285,52 +287,81 @@ export async function buildKeywordAnalyzeResponse(
   
   const { snapshot, listings } = marketData;
   
-  // Guard against missing snapshot or listings
+  // Guard against missing snapshot
   if (!snapshot) {
     throw new Error("marketData.snapshot is required but was null or undefined");
   }
-  if (!Array.isArray(listings)) {
-    throw new Error("marketData.listings must be an array");
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CANONICAL PAGE-1 IS FINAL AUTHORITY
+  // ═══════════════════════════════════════════════════════════════════════════
+  // If canonical products are provided, use them directly - DO NOT rebuild
+  let products: KeywordAnalyzeResponse["products"];
+  
+  if (canonicalProducts && canonicalProducts.length > 0) {
+    // Use canonical products directly - they are the final authority
+    // NO filtering, NO rebuilding, NO conversion
+    products = canonicalProducts.map(p => ({
+      rank: p.rank,
+      asin: p.asin,
+      title: p.title,
+      image_url: p.image_url,
+      price: p.price,
+      rating: p.rating,
+      review_count: p.review_count,
+      bsr: p.bsr,
+      estimated_monthly_units: p.estimated_monthly_units,
+      estimated_monthly_revenue: p.estimated_monthly_revenue,
+      revenue_share_pct: p.revenue_share_pct,
+      fulfillment: p.fulfillment,
+      brand: p.brand,
+      seller_country: p.seller_country,
+    }));
+  } else {
+    // Fallback: Build from listings (legacy path, should not be used for keyword analysis)
+    if (!Array.isArray(listings)) {
+      throw new Error("marketData.listings must be an array when canonical products are not provided");
+    }
+    
+    // Filter organic listings only (exclude sponsored)
+    const organicListings = listings.filter(l => !l.is_sponsored);
+    
+    // Limit to top 20
+    const top20 = organicListings.slice(0, 20);
+    
+    // Calculate revenue share percentages
+    const totalRevenue = top20.reduce((sum, p) => {
+      return sum + (p.est_monthly_revenue || 0);
+    }, 0);
+    
+    // Build products array
+    products = top20.map((listing, index) => {
+      const revenue = listing.est_monthly_revenue || 0;
+      const revenueShare = totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0;
+      
+      return {
+        rank: listing.position || index + 1,
+        asin: listing.asin || "",
+        title: listing.title || "",
+        image_url: listing.image_url || null,
+        price: listing.price || 0,
+        rating: listing.rating || 0,
+        review_count: listing.reviews || 0,
+        bsr: listing.bsr || null,
+        estimated_monthly_units: listing.est_monthly_units || 0,
+        estimated_monthly_revenue: revenue,
+        revenue_share_pct: Math.round(revenueShare * 100) / 100,
+        fulfillment: normalizeFulfillment(listing.fulfillment),
+        brand: listing.brand || null,
+        seller_country: inferSellerCountry(listing),
+      };
+    });
   }
   
-  // Filter organic listings only (exclude sponsored)
-  const organicListings = listings.filter(l => !l.is_sponsored);
-  
-  // Limit to top 20
-  const top20 = organicListings.slice(0, 20);
-  
-  // Calculate revenue share percentages
-  const totalRevenue = top20.reduce((sum, p) => {
-    return sum + (p.est_monthly_revenue || 0);
-  }, 0);
-  
-  // Build products array
-  const products = top20.map((listing, index) => {
-    const revenue = listing.est_monthly_revenue || 0;
-    const revenueShare = totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0;
-    
-    return {
-      rank: listing.position || index + 1, // Use position from listing if available
-      asin: listing.asin || "",
-      title: listing.title || "",
-      image_url: listing.image_url || null,
-      price: listing.price || 0,
-      rating: listing.rating || 0,
-      review_count: listing.reviews || 0,
-      bsr: listing.bsr || null, // BSR from ParsedListing
-      estimated_monthly_units: listing.est_monthly_units || 0,
-      estimated_monthly_revenue: revenue,
-      revenue_share_pct: Math.round(revenueShare * 100) / 100,
-      fulfillment: normalizeFulfillment(listing.fulfillment), // Use fulfillment from ParsedListing
-      brand: listing.brand || null,
-      seller_country: inferSellerCountry(listing),
-    };
-  });
-  
-  // Calculate price band
-  const prices = top20
+  // Calculate price band from products (canonical or fallback)
+  const prices = products
     .map(p => p.price)
-    .filter((p): p is number => p !== null && p > 0);
+    .filter((p): p is number => p !== null && p !== undefined && p > 0);
   
   const priceMin = prices.length > 0 ? Math.min(...prices) : 0;
   const priceMax = prices.length > 0 ? Math.max(...prices) : 0;
@@ -348,10 +379,10 @@ export async function buildKeywordAnalyzeResponse(
         amazon_pct: 0,
       };
   
-  // Build market structure
+  // Build market structure from products (canonical or fallback)
   const marketStructure = {
     brand_dominance_pct: snapshot.dominance_score || 0,
-    top_3_brand_share_pct: calculateTop3BrandShare(top20),
+    top_3_brand_share_pct: calculateTop3BrandShare(products),
     price_band: {
       min: priceMin,
       max: priceMax,
@@ -367,7 +398,7 @@ export async function buildKeywordAnalyzeResponse(
   
   // Build summary - calculate aggregates from canonical Page-1 products (NOT snapshot)
   // This ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array
-  const pageOneListings = products; // Canonical Page-1 array
+  const pageOneListings = products; // Canonical Page-1 array (final authority)
   
   // Calculate aggregates from pageOneListings
   const pageOnePrices = pageOneListings
