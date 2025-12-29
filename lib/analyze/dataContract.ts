@@ -396,6 +396,39 @@ export async function buildKeywordAnalyzeResponse(
     page1_density: snapshot.total_page1_listings,
   };
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MARKET SNAPSHOT AGGREGATION FROM CANONICAL PRODUCTS
+  // ═══════════════════════════════════════════════════════════════════════════
+  // If canonical products are provided, aggregate totals for market snapshot
+  if (canonicalProducts && canonicalProducts.length > 0) {
+    // Compute totals from canonical products (ignore zero/missing values)
+    const productsWithUnits = canonicalProducts.filter(p => p.estimated_monthly_units > 0);
+    const totalMonthlyUnits = productsWithUnits.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    
+    const productsWithRevenue = canonicalProducts.filter(p => p.estimated_monthly_revenue > 0);
+    const totalMonthlyRevenue = productsWithRevenue.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    
+    const productsWithBSR = canonicalProducts.filter(p => p.bsr !== null && p.bsr > 0);
+    const averageBSR = productsWithBSR.length > 0
+      ? Math.round(productsWithBSR.reduce((sum, p) => sum + (p.bsr || 0), 0) / productsWithBSR.length)
+      : null;
+    
+    // Assign to market snapshot (mutate snapshot object)
+    if (snapshot) {
+      (snapshot as any).monthly_units = totalMonthlyUnits;
+      (snapshot as any).monthly_revenue = totalMonthlyRevenue;
+      if (averageBSR !== null) {
+        snapshot.avg_bsr = averageBSR;
+      }
+    }
+    
+    console.log("📈 MARKET SNAPSHOT AGGREGATED", {
+      total_monthly_units: totalMonthlyUnits,
+      total_monthly_revenue: totalMonthlyRevenue,
+      average_bsr: averageBSR,
+    });
+  }
+  
   // Build summary - calculate aggregates from canonical Page-1 products (NOT snapshot)
   // This ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array
   const pageOneListings = products; // Canonical Page-1 array (final authority)
