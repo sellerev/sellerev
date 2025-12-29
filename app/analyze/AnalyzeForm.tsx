@@ -1256,9 +1256,31 @@ export default function AnalyzeForm({
                               
                               {/* Revenue Block */}
                               {(() => {
-                                const listingWithRevenue = listing as any;
-                                const revenue = listingWithRevenue.est_monthly_revenue || listingWithRevenue.estimated_monthly_revenue;
-                                const units = listingWithRevenue.est_monthly_units || listingWithRevenue.estimated_monthly_units;
+                                // Use canonical field: estimated_monthly_revenue
+                                const revenue = (listing as any).estimated_monthly_revenue;
+                                const units = (listing as any).estimated_monthly_units;
+                                
+                                // Log sample revenue for debugging
+                                if (typeof revenue === 'number' && revenue > 0) {
+                                  console.log("🔵 PRODUCT_CARD_REVENUE", {
+                                    asin: listing.asin,
+                                    estimated_monthly_revenue: revenue,
+                                  });
+                                }
+                                
+                                // Format revenue: round to nearest dollar, format with thousands separators, append "/ mo"
+                                const formatRevenue = (value: number | null | undefined): string => {
+                                  if (value === null || value === undefined || typeof value !== 'number' || isNaN(value) || value <= 0) {
+                                    return "—";
+                                  }
+                                  const rounded = Math.round(value);
+                                  return new Intl.NumberFormat("en-US", {
+                                    style: "currency",
+                                    currency: "USD",
+                                    minimumFractionDigits: 0,
+                                    maximumFractionDigits: 0,
+                                  }).format(rounded) + " / mo";
+                                };
                                 
                                 if (revenue === null && units === null) {
                                   return null;
@@ -1270,7 +1292,7 @@ export default function AnalyzeForm({
                                     <div className="mb-1.5">
                                       <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Revenue</div>
                                       <div className="text-xl font-bold text-gray-900">
-                                        {revenue !== null && revenue !== undefined ? formatCurrency(revenue) : "—"}
+                                        {formatRevenue(revenue)}
                                       </div>
                                     </div>
                                     

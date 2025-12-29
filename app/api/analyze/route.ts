@@ -1411,6 +1411,11 @@ export async function POST(req: NextRequest) {
     // Keyword analysis is permissive and must not hard-fail
     // ═══════════════════════════════════════════════════════════════════════════
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CANONICAL PRODUCTS (FINAL AUTHORITY) - Declare at function scope
+    // ═══════════════════════════════════════════════════════════════════════════
+    let canonicalProducts: any[] = [];
+    
     // Build contract-compliant response
     if (keywordMarketData) {
       // CANONICAL PAGE-1 BUILDER: Replace raw listings with deterministic Page-1 reconstruction
@@ -1491,7 +1496,8 @@ export async function POST(req: NextRequest) {
       
       console.log("🔵 PAGE_ONE_PRODUCTS_LENGTH_AFTER_CANONICAL", pageOneProducts.length);
       
-      const canonicalProducts = pageOneProducts;
+      // Assign to function-scope variable (final authority)
+      canonicalProducts = pageOneProducts;
       
       // ═══════════════════════════════════════════════════════════════════════════
       // CANONICAL PAGE-1 IS FINAL AUTHORITY - NO CONVERSION, NO REBUILDING
@@ -2079,6 +2085,12 @@ ${body.input_value}`;
       }));
     }
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // UNCONDITIONALLY ASSIGN CANONICAL PRODUCTS TO RESPONSE
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Canonical products are the final authority - always assign them unconditionally
+    console.log("✅ FINAL RESPONSE CANONICAL COUNT", canonicalProducts.length);
+    
     const finalResponse: any = {
       input_type: "keyword",
       // AI Decision (verdict, summary, reasoning, risks, actions)
@@ -2110,8 +2122,9 @@ ${body.input_value}`;
       // Merge contract response if it exists
       ...(contractResponse ? contractResponse : {}),
       
-      // Explicitly include canonical Page-1 array and aggregates (ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array)
-      page_one_listings: contractResponse?.page_one_listings || contractResponse?.products || [],
+      // CANONICAL PRODUCTS ARE FINAL AUTHORITY - UNCONDITIONALLY ASSIGN
+      page_one_listings: canonicalProducts,
+      products: canonicalProducts,
       aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
       
       // Keyword Market (for UI - data-first display)
