@@ -53,29 +53,39 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     return [];
   }
 
-  // Calculate total revenue for revenue share percentages
-  const totalRevenue = listings.reduce((sum, l) => {
-    const revenue = l.est_monthly_revenue || (l.est_monthly_units && l.price ? l.est_monthly_units * l.price : 0);
-    return sum + (revenue || 0);
-  }, 0);
-
   const products = listings.map((l, i) => {
     const bsr = l.bsr ?? l.main_category_bsr ?? null;
     
-    // Estimate units from BSR if not already present
-    const estimatedUnits = l.est_monthly_units ?? 
-      (bsr && bsr > 0 ? Math.round(600000 / Math.pow(bsr, 0.45)) : null) ?? 
-      0;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ESTIMATION LOGIC: Units and Revenue per ASIN
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Step 1: Estimate units from BSR if not already present
+    let estimatedUnits: number;
+    if (l.est_monthly_units !== null && l.est_monthly_units !== undefined) {
+      // Use existing estimate
+      estimatedUnits = l.est_monthly_units;
+    } else if (bsr !== null && bsr > 0) {
+      // Estimate from BSR: units = round(600000 / Math.pow(bsr, 0.45))
+      const rawUnits = Math.round(600000 / Math.pow(bsr, 0.45));
+      // Clamp to reasonable range: min 10, max 50000
+      estimatedUnits = Math.max(10, Math.min(50000, rawUnits));
+    } else {
+      // Cannot estimate - default to 0 (interface requires number)
+      estimatedUnits = 0;
+    }
     
-    // Estimate revenue from units and price if not already present
-    const estimatedRevenue = l.est_monthly_revenue ?? 
-      (estimatedUnits && l.price ? Math.round(estimatedUnits * l.price) : null) ?? 
-      0;
-    
-    // Calculate revenue share percentage
-    const revenueSharePct = totalRevenue > 0 && estimatedRevenue > 0 
-      ? Math.round((estimatedRevenue / totalRevenue) * 100 * 100) / 100 
-      : 0;
+    // Step 2: Estimate revenue from units and price if not already present
+    let estimatedRevenue: number;
+    if (l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined) {
+      // Use existing estimate
+      estimatedRevenue = l.est_monthly_revenue;
+    } else if (estimatedUnits > 0 && l.price && l.price > 0) {
+      // Calculate revenue: revenue = units × price (rounded to nearest integer)
+      estimatedRevenue = Math.round(estimatedUnits * l.price);
+    } else {
+      // Cannot estimate - default to 0 (interface requires number)
+      estimatedRevenue = 0;
+    }
 
     return {
       rank: i + 1,
@@ -87,7 +97,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       bsr,
       estimated_monthly_units: estimatedUnits,
       estimated_monthly_revenue: estimatedRevenue,
-      revenue_share_pct: revenueSharePct,
+      revenue_share_pct: 0, // Will be calculated after all products are built
       image_url: l.image_url ?? null,
       fulfillment: (l.fulfillment === "FBA" ? "FBA" : l.fulfillment === "Amazon" ? "AMZ" : "FBM") as "FBA" | "FBM" | "AMZ",
       brand: l.brand ?? null,
@@ -96,9 +106,34 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     };
   });
 
+  // Calculate total revenue from estimated values for revenue share percentages
+  const totalRevenue = products.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
+  
+  // Calculate revenue share percentages using estimated revenues
+  products.forEach(p => {
+    if (totalRevenue > 0 && p.estimated_monthly_revenue > 0) {
+      p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / totalRevenue) * 100 * 100) / 100;
+    } else {
+      p.revenue_share_pct = 0;
+    }
+  });
+
   console.log("✅ KEYWORD PAGE-1 COUNT", products.length);
   if (products.length > 0) {
     console.log("📦 SAMPLE PRODUCT", products[0]);
+  }
+  
+  // Log estimation statistics
+  const estimatedCount = products.filter(p => p.estimated_monthly_units > 0 || p.estimated_monthly_revenue > 0).length;
+  if (estimatedCount > 0) {
+    console.log("📊 ESTIMATION APPLIED", {
+      total_products: products.length,
+      products_with_estimates: estimatedCount,
+      sample_asin: products[0]?.asin,
+      sample_bsr: products[0]?.bsr,
+      sample_units: products[0]?.estimated_monthly_units,
+      sample_revenue: products[0]?.estimated_monthly_revenue,
+    });
   }
 
   return products;
