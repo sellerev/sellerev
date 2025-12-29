@@ -50,9 +50,10 @@ Frontend Rendering
 - Two-column layout: 70% analysis blocks, 30% chat sidebar
 - Pre-analysis state: Input form only
 - Post-analysis state: All blocks + chat visible
-- Data source routing: Selects listings based on `dataSource` flag
-  - `dataSource === "market"` → Uses `analysis.page_one_listings`
-  - `dataSource === "snapshot"` → Uses `analysis.market_snapshot.listings`
+- Data routing: Always uses canonical Page-1 listings when available
+  - Priority 1: `analysis.page_one_listings` (canonical)
+  - Priority 2: `analysis.products` (same as page_one_listings)
+  - Priority 3: `analysis.market_snapshot.listings` (backward compatibility)
 
 **State Variables:**
 - `inputValue`: User-entered keyword
@@ -137,31 +138,65 @@ Frontend Rendering
 - `lib/snapshots/keywordSnapshots.ts`: Snapshot lookup
 - `lib/snapshots/tier1Estimate.ts`: Tier-1 instant estimates
 
-#### Step 4: Canonical Page-1 Builder
+#### Step 4: Canonical Page-1 Builder (Type-Specific Routing)
 
 **Location:** `lib/amazon/canonicalPageOne.ts`
 
 **Purpose:** Transforms raw listings into standardized Page-1 product set
 
-**Current State:** TEMPORARILY DISABLED - Pass-through mode (no filtering)
+**Architecture:** Two separate builders based on input type
 
-**Normal Operations:**
-- Filters organic listings (excludes sponsored)
-- Validates ASINs (rejects synthetic ESTIMATED-X)
-- Sorts by revenue (descending)
-- Re-ranks products
-- Calculates revenue share percentages
-- Applies BSR duplicate detection
-- Applies Page-1 demand calibration
-- Blends with ASIN-level historical data
+**1. Keyword Analysis: `buildKeywordPageOne()` (PERMISSIVE)**
+- **Input:** `ParsedListing[]` from keyword search
+- **Output:** `CanonicalProduct[]`
+- **Rules:**
+  - DO NOT reject synthetic ASINs (allows `KEYWORD-X` patterns)
+  - DO NOT require historical data
+  - DO NOT filter sponsored listings
+  - DO NOT return empty if listings exist
+  - Always returns Page-1 rows when listings exist
+- **Operations:**
+  - Estimates units from BSR if missing: `units = 600000 / pow(bsr, 0.45)`
+  - Estimates revenue from units × price if missing
+  - Calculates revenue share percentages
+  - Maps fulfillment types (`"Amazon"` → `"AMZ"`)
+  - Never hard-fails due to imperfect data
 
-**Input:** `ParsedListing[]`
-**Output:** `CanonicalProduct[]`
+**2. ASIN Analysis: `buildAsinPageOne()` (STRICT)**
+- **Input:** `ParsedListing[]`, `KeywordMarketSnapshot`, keyword, marketplace, supabase
+- **Output:** `CanonicalProduct[]`
+- **Rules:**
+  - Requires valid ASINs (rejects synthetic)
+  - Requires historical data validation (if available)
+  - Filters invalid listings
+  - Strict validation and calibration
+- **Operations:**
+  - Filters organic listings (excludes sponsored)
+  - Validates ASINs (rejects synthetic ESTIMATED-X/INFERRED-X)
+  - Sorts by revenue (descending)
+  - Re-ranks products
+  - Calculates revenue share percentages
+  - Applies BSR duplicate detection
+  - Applies Page-1 demand calibration
+  - Blends with ASIN-level historical data
 
 **Key Fields:**
 - `rank`, `asin`, `title`, `image_url`, `price`, `rating`, `review_count`
 - `bsr`, `estimated_monthly_units`, `estimated_monthly_revenue`
 - `revenue_share_pct`, `fulfillment`, `brand`, `seller_country`
+
+**Routing Logic:**
+```typescript
+if (input_type === "keyword") {
+  pageOneProducts = buildKeywordPageOne(rawListings);
+} else {
+  pageOneProducts = await buildAsinPageOne(rawListings, snapshot, ...);
+}
+```
+
+**Critical Rules:**
+- Keyword analysis: Permissive, never hard-fails, allows synthetic ASINs
+- ASIN analysis: Strict, validates ASINs, applies calibration and historical blending
 
 #### Step 5: Data Contract Builder
 
@@ -374,15 +409,24 @@ ANALYSIS REQUEST:
 ```
 Raw Listings (ParsedListing[])
     ↓
-buildCanonicalPageOne()
-    ├─→ Filter organic (exclude sponsored)
-    ├─→ Validate ASINs (reject synthetic)
-    ├─→ Sort by revenue (descending)
-    ├─→ Re-rank
-    ├─→ Calculate revenue share %
-    ├─→ BSR duplicate detection
-    ├─→ Page-1 demand calibration
-    └─→ ASIN-level historical blending
+Route by input_type
+    ├─→ input_type === "keyword"
+    │    └─→ buildKeywordPageOne()
+    │         ├─→ Estimate units from BSR (if missing)
+    │         ├─→ Estimate revenue (units × price)
+    │         ├─→ Calculate revenue share %
+    │         └─→ Allow synthetic ASINs (KEYWORD-X)
+    │
+    └─→ input_type === "asin" (or other)
+         └─→ buildAsinPageOne()
+              ├─→ Filter organic (exclude sponsored)
+              ├─→ Validate ASINs (reject synthetic)
+              ├─→ Sort by revenue (descending)
+              ├─→ Re-rank
+              ├─→ Calculate revenue share %
+              ├─→ BSR duplicate detection
+              ├─→ Page-1 demand calibration
+              └─→ ASIN-level historical blending
     ↓
 Canonical Products (CanonicalProduct[])
     ↓
@@ -400,11 +444,13 @@ Response Assembly
 
 ```
 API Response
-    ├─→ dataSource: "market"
-    │    └─→ pageOneListings = analysis.page_one_listings
-    │
-    └─→ dataSource: "snapshot" | "estimated"
-         └─→ pageOneListings = analysis.market_snapshot.listings
+    ↓
+Priority Order:
+    1. analysis.page_one_listings (canonical Page-1 products)
+    2. analysis.products (same as page_one_listings)
+    3. analysis.market_snapshot.listings (backward compatibility)
+
+Note: UI must NOT second-guess data - always uses canonical listings when available
 ```
 
 ---
@@ -445,20 +491,28 @@ API Response
 
 ## 🔐 Key Invariants & Guards
 
-### Market Data Routing
-- **Invariant**: If `dataSource === "market"`, then `rawRainforestListings.length > 0`
-- **Guard**: Canonical Page-1 MUST run when `dataSource === "market"`
-- **Guard**: No estimated products generated when `dataSource === "market"`
-- **Assertion**: If `dataSource === "market"` and `listings.length === 0` → ERROR
+### Canonical Page-1 Routing
+- **Routing Rule**: Route canonical logic by `input_type`:
+  - `input_type === "keyword"` → `buildKeywordPageOne()` (permissive)
+  - Otherwise → `buildAsinPageOne()` (strict)
 
-### Canonical Page-1
-- **Invariant**: Canonical products must have real ASINs (not ESTIMATED-X)
-- **Guard**: Synthetic ASINs rejected (returns empty array)
-- **Guard**: Only processes listings with `units_est` and `revenue_est`
+### Keyword Analysis (Permissive)
+- **Invariant**: Keyword analysis must NEVER hard-fail due to imperfect data
+- **Rule**: Always returns Page-1 rows if listings exist (never empty)
+- **Rule**: Allows synthetic ASINs (`KEYWORD-X` patterns)
+- **Rule**: Estimates units/revenue from BSR when missing
+- **Log Only**: If `rawListings.length > 0` but `pageOneProducts.length === 0` → log error (don't throw)
+
+### ASIN Analysis (Strict)
+- **Invariant**: ASIN canonical products must have valid ASINs (not ESTIMATED-X/INFERRED-X)
+- **Guard**: Synthetic ASINs rejected (filters out)
+- **Guard**: Only processes listings with proper validation
+- **Guard**: Applies calibration and historical blending
 
 ### UI Rendering
-- **Guard**: Page-1 grid hidden if `dataSource === "snapshot"` or `"estimated"`
-- **Assertion**: If `dataSource === "market"` and `pageOneListings.length === 0` → ERROR
+- **Rule**: UI must NOT second-guess data - always uses canonical `page_one_listings` when available
+- **Priority**: `page_one_listings` → `products` → `market_snapshot.listings`
+- **Rule**: Never falls back to snapshot listings when canonical listings exist
 
 ---
 
@@ -471,16 +525,21 @@ API Response
 - `🔍 STEP_4_API_RESPONSE`: Final API response shape
 - `🔍 STEP_5_UI_COMPONENT_RECEIVED`: UI component received data
 
+### Keyword Canonical Logs
+- `✅ KEYWORD CANONICAL BUILD START`: Start of keyword canonical build
+- `✅ KEYWORD PAGE-1 COUNT`: Count of keyword canonical products
+- `📦 SAMPLE PRODUCT`: Sample product from keyword canonical output
+- `❌ KEYWORD CANONICAL FAILURE — SHOULD NEVER BE EMPTY`: Error when keyword build returns empty (non-fatal)
+
 ### Debug Logs
 - `🧪 RAW INPUT LISTINGS`: First 3 listings
 - `🧪 CANONICAL INPUT COUNT`: Input count
 - `🧪 CANONICAL OUTPUT COUNT`: Output count
-- `🧪 CANONICAL FORCED OUTPUT COUNT`: Forced pass-through count
+- `🧪 CANONICAL FORCED OUTPUT COUNT`: Forced pass-through count (ASIN mode)
 
 ### Error Logs
-- `🔴 FATAL`: Critical routing errors
+- `🔴 FATAL`: Critical routing errors (ASIN mode only)
 - `🔴 CANONICAL_PAGE1_ERROR`: Canonical builder errors
-- `🔴 MARKET DATASOURCE WITH ZERO LISTINGS`: UI routing bug
 
 ---
 
@@ -529,25 +588,26 @@ API Response
 ## 🔄 Future Enhancements
 
 ### Planned Improvements
-1. **ASIN Analysis**: Support for direct ASIN input (currently keyword-only)
+1. **ASIN Analysis**: Enhanced ASIN analysis with strict canonical validation
 2. **Historical Blending**: Enhanced keyword-level history blending
 3. **Search Volume**: Integration with SP-API search volume data
 4. **Calibration Refinement**: Improved BSR-to-sales model
-5. **Filter Re-introduction**: Re-add canonical Page-1 filters incrementally
+5. **ASIN Filtering**: Enhanced ASIN canonical filters (currently in pass-through mode)
 
 ---
 
 ## 📝 Notes
 
 ### Current State
-- **Canonical Page-1**: Temporarily in pass-through mode (no filtering)
+- **Canonical Page-1**: Split into keyword (permissive) and ASIN (strict) builders
+- **Keyword Analysis**: Fully permissive - always returns Page-1 products when listings exist
+- **ASIN Analysis**: Currently in pass-through mode (strict logic placeholders ready)
 - **Market-First Architecture**: Fully implemented
-- **UI Routing**: Fixed to use `dataSource` flag correctly
-- **Fallback Prevention**: Enforced for market data
+- **UI Routing**: Simplified - always uses canonical `page_one_listings` when available
 
 ### Known Issues
-- Canonical Page-1 filtering disabled for debugging
-- Some synthetic ASINs may pass through (ESTIMATED-X)
+- ASIN canonical filtering disabled (pass-through mode for backward compatibility)
+- Keyword analysis allows synthetic ASINs (`KEYWORD-X`) - this is intentional and permissive
 - Historical blending may be incomplete for new keywords
 
 ---
@@ -556,10 +616,12 @@ API Response
 
 The Analyze feature is a sophisticated product analysis system that:
 1. **Fetches** real market data (Rainforest API) or falls back to snapshots
-2. **Transforms** raw listings into canonical Page-1 products
+2. **Transforms** raw listings into canonical Page-1 products using type-specific builders:
+   - Keyword analysis: Permissive builder that always returns results
+   - ASIN analysis: Strict builder with validation and calibration
 3. **Builds** structured data contracts for AI consumption
 4. **Generates** AI decisions with numeric grounding
 5. **Renders** results in a comprehensive UI with chat support
 
-The architecture prioritizes real data over estimates, enforces strict routing invariants, and provides a complete analysis experience for Amazon FBA sellers.
+The architecture prioritizes real data over estimates, routes canonical logic by input type (keyword vs ASIN), and provides a complete analysis experience for Amazon FBA sellers. Keyword analysis is designed to be permissive and never fail due to imperfect data, while ASIN analysis maintains strict validation for precision.
 
