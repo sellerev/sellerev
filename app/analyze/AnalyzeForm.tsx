@@ -1117,6 +1117,29 @@ export default function AnalyzeForm({
                     // This ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array
                     const pageOneListings = analysis.page_one_listings || analysis.products || snapshot?.listings || [];
                     
+                    // ═══════════════════════════════════════════════════════════════════════════
+                    // STEP 5 — CONFIRM UI MAPPING
+                    // ═══════════════════════════════════════════════════════════════════════════
+                    // Log the listing object as received by the component
+                    const first5UI = pageOneListings.slice(0, 5);
+                    console.log("🔍 STEP_5_UI_COMPONENT_RECEIVED", {
+                      total_listings: pageOneListings.length,
+                      first_5_listings: first5UI.map((listing: any, idx: number) => ({
+                        index: idx + 1,
+                        asin: listing.asin || null,
+                        title: listing.title || null,
+                        image_url: listing.image_url || null,
+                        price: listing.price || null,
+                        rating: listing.rating || null,
+                        reviews: listing.reviews || listing.review_count || null,
+                        estimated_units: listing.est_monthly_units || listing.estimated_monthly_units || null,
+                        estimated_revenue: listing.est_monthly_revenue || listing.estimated_monthly_revenue || null,
+                        bsr: listing.bsr || listing.main_category_bsr || null,
+                        full_listing_object: listing,
+                      })),
+                      timestamp: new Date().toISOString(),
+                    });
+                    
                     // Normalize listings using helper, preserving revenue fields
                     const normalizedListings = [...pageOneListings]
                       .filter((l: any) => {

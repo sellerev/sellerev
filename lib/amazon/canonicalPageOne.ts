@@ -275,7 +275,28 @@ export async function buildCanonicalPageOne(
   const afterCalibration = calibratePageOneUnits(afterBsrExtraction);
   
   // Apply ASIN-level historical blending
-  return await blendWithAsinHistory(afterCalibration, marketplace, supabase);
+  const finalProducts = await blendWithAsinHistory(afterCalibration, marketplace, supabase);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 3 — CONFIRM CANONICAL PAGE-1 OUTPUT
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Log the output returned from the canonical Page-1 builder
+  const first5Output = finalProducts.slice(0, 5);
+  console.log("🔍 STEP_3_CANONICAL_PAGE1_OUTPUT", {
+    keyword,
+    total_products: finalProducts.length,
+    first_5_products: first5Output.map((product: CanonicalProduct, idx: number) => ({
+      index: idx + 1,
+      asin: product.asin || null,
+      estimated_units: product.estimated_monthly_units || null,
+      estimated_revenue: product.estimated_monthly_revenue || null,
+      bsr: product.bsr || null,
+      image_url: product.image_url || null,
+    })),
+    timestamp: new Date().toISOString(),
+  });
+  
+  return finalProducts;
 }
 
 /**

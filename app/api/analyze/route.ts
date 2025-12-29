@@ -1268,6 +1268,27 @@ export async function POST(req: NextRequest) {
         timestamp: new Date().toISOString(),
       });
       
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP 2 — CONFIRM CANONICAL PAGE-1 INPUT
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Log the input passed into the canonical Page-1 builder
+      const inputListings = keywordMarketData.listings || [];
+      const first5Input = inputListings.slice(0, 5);
+      console.log("🔍 STEP_2_CANONICAL_PAGE1_INPUT", {
+        keyword: body.input_value,
+        total_listings: inputListings.length,
+        first_5_listings: first5Input.map((listing: any, idx: number) => ({
+          index: idx + 1,
+          asin: listing.asin || null,
+          price: listing.price || null,
+          rating: listing.rating || null,
+          reviews: listing.reviews || null,
+          bsr: listing.main_category_bsr || listing.bsr || null,
+          image_url: listing.image_url || listing.image || null,
+        })),
+        timestamp: new Date().toISOString(),
+      });
+      
       // Build canonical Page-1 products
       const canonicalProducts = await buildCanonicalPageOne(
         keywordMarketData.listings || [],
@@ -2479,6 +2500,28 @@ ${body.input_value}`;
     // #region agent log
     fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:1637',message:'Returning success response',data:{has_insertedRun:!!insertedRun,analysisRunId:insertedRun?.id,has_finalResponse:!!finalResponse,has_decision:!!finalResponse?.decision,responseStatus},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
     // #endregion
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 4 — CONFIRM API RESPONSE SHAPE
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Log the exact JSON returned by /api/analyze to the frontend
+    const apiProducts = finalResponse?.products || finalResponse?.page_one_listings || [];
+    const first5Api = apiProducts.slice(0, 5);
+    console.log("🔍 STEP_4_API_RESPONSE", {
+      keyword: body.input_value,
+      total_products: apiProducts.length,
+      first_5_products: first5Api.map((product: any, idx: number) => ({
+        index: idx + 1,
+        asin: product.asin || null,
+        image_url: product.image_url || null,
+        estimated_units: product.estimated_monthly_units || null,
+        estimated_revenue: product.estimated_monthly_revenue || null,
+      })),
+      has_image_url: first5Api.some((p: any) => p.image_url !== null && p.image_url !== undefined),
+      has_estimated_units: first5Api.some((p: any) => p.estimated_monthly_units !== null && p.estimated_monthly_units !== undefined),
+      has_estimated_revenue: first5Api.some((p: any) => p.estimated_monthly_revenue !== null && p.estimated_monthly_revenue !== undefined),
+      timestamp: new Date().toISOString(),
+    });
 
     return NextResponse.json(
       {

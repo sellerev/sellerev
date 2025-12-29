@@ -634,6 +634,35 @@ export async function fetchKeywordMarketSnapshot(
       return null;
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 1 — CONFIRM RAW DATA (NO TRANSFORMS)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Log the raw Rainforest response immediately after it is fetched
+    // Extract first 5 products from all possible locations
+    const allRawProducts: any[] = [];
+    if (Array.isArray(raw.search_results)) allRawProducts.push(...raw.search_results);
+    if (Array.isArray(raw.organic_results)) allRawProducts.push(...raw.organic_results);
+    if (Array.isArray(raw.ads)) allRawProducts.push(...raw.ads);
+    if (Array.isArray(raw.results)) allRawProducts.push(...raw.results);
+    
+    const first5Raw = allRawProducts.slice(0, 5);
+    console.log("🔍 STEP_1_RAW_RAINFOREST_DATA", {
+      keyword,
+      total_products_found: allRawProducts.length,
+      first_5_products: first5Raw.map((item: any, idx: number) => ({
+        index: idx + 1,
+        asin: item.asin || null,
+        title: item.title || null,
+        price: item.price?.value || item.price?.raw || item.price || null,
+        rating: item.rating || null,
+        reviews: item.reviews?.count || item.reviews || null,
+        image_url: item.image || null,
+        bestsellers_rank: item.bestsellers_rank || null,
+        sales_rank: item.sales_rank?.current_rank || item.sales_rank || null,
+      })),
+      timestamp: new Date().toISOString(),
+    });
+
     // Log FULL raw response for debugging (Step 1)
     console.log("RAW_KEYWORD_RESULTS_FULL", {
       keyword,
