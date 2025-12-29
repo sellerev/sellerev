@@ -1163,9 +1163,19 @@ export default function AnalyzeForm({
                     
                     console.log("🔵 UI_PAGE_ONE_LISTINGS_ARRAY", pageOneListings);
                     console.log("🔵 UI_PAGE_ONE_LISTINGS_LENGTH_BEFORE_RENDER", pageOneListings.length);
+                    console.log("🔵 ANALYSIS_PAGE_ONE_LISTINGS", analysis.page_one_listings?.length || 0);
+                    console.log("🔵 ANALYSIS_PRODUCTS", analysis.products?.length || 0);
+                    console.log("🔵 SNAPSHOT_LISTINGS", snapshot?.listings?.length || 0);
                     
                     // TEMPORARY: Bypass ALL filters, sorts, and conditions - render unconditionally
-                    const cardsToRender = pageOneListings;
+                    // Always use whatever listings we have, with fallback priority
+                    const cardsToRender = pageOneListings.length > 0 
+                      ? pageOneListings 
+                      : (analysis.products?.length > 0 
+                        ? analysis.products 
+                        : (snapshot?.listings || []));
+                    console.log("🔵 CARDS_TO_RENDER_LENGTH", cardsToRender.length);
+                    console.log("🔵 CARDS_TO_RENDER_SAMPLE", cardsToRender[0]);
                 
                 return (
                   <div>
