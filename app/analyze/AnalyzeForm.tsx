@@ -1171,7 +1171,7 @@ export default function AnalyzeForm({
                     // Always use whatever listings we have, with fallback priority
                     const cardsToRender = pageOneListings.length > 0 
                       ? pageOneListings 
-                      : (analysis.products?.length > 0 
+                      : ((analysis.products && analysis.products.length > 0)
                         ? analysis.products 
                         : (snapshot?.listings || []));
                     console.log("🔵 CARDS_TO_RENDER_LENGTH", cardsToRender.length);
