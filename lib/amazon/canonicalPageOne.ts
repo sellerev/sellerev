@@ -55,139 +55,19 @@ export async function buildCanonicalPageOne(
   supabase?: any
 ): Promise<CanonicalProduct[]> {
   // ═══════════════════════════════════════════════════════════════════════════
-  // TEMP: DISABLE ALL FILTERING - accept all listings
+  // 🧨 FORCE OUTPUT - NO FILTERS, NO ASIN LOGIC
   // ═══════════════════════════════════════════════════════════════════════════
-  console.log("🧪 CANONICAL INPUT COUNT", listings.length);
+  console.log("🧪 RAW INPUT LISTINGS", listings.slice(0, 3));
   
-  // TEMP: accept all listings (no filtering)
-  const rawListings = listings;
+  // TEMP: Force output - pass through all listings with zero filtering
+  const result = listings.map((l, i) => ({
+    ...l,
+    canonical_rank: i + 1,
+  })) as any;
   
-  // Convert to CanonicalProduct format, preserving ALL original fields
-  const products: CanonicalProduct[] = rawListings.map((listing, index) => {
-    // Get full_listing_object if it exists
-    const fullListingObject = (listing as any).full_listing_object || listing;
-    
-    // Extract units: priority: units_est > est_monthly_units
-    const estimated_monthly_units = (fullListingObject.units_est !== null && fullListingObject.units_est !== undefined && fullListingObject.units_est > 0)
-      ? fullListingObject.units_est
-      : (listing.est_monthly_units !== null && listing.est_monthly_units !== undefined && listing.est_monthly_units > 0)
-        ? listing.est_monthly_units
-        : 0; // Should never happen due to filter, but provide fallback
-    
-    // Extract revenue: priority: revenue_est > est_monthly_revenue
-    const estimated_monthly_revenue = (fullListingObject.revenue_est !== null && fullListingObject.revenue_est !== undefined && fullListingObject.revenue_est > 0)
-      ? fullListingObject.revenue_est
-      : (listing.est_monthly_revenue !== null && listing.est_monthly_revenue !== undefined && listing.est_monthly_revenue > 0)
-        ? listing.est_monthly_revenue
-        : 0; // Should never happen due to filter, but provide fallback
-    
-    // Extract image_url: preserve original, never overwrite
-    const image_url = (listing as any).image_url || 
-                      (listing as any).image || 
-                      (fullListingObject.image_url || fullListingObject.image || null);
-    
-    // Extract bsr: preserve original, never overwrite
-    const bsr = listing.main_category_bsr || 
-                listing.bsr || 
-                (fullListingObject.bsr !== null && fullListingObject.bsr !== undefined ? fullListingObject.bsr : null);
-    
-    // Extract other fields, preserving originals
-    const asin = listing.asin || '';
-    const title = listing.title || '';
-    const price = listing.price || 0;
-    const rating = listing.rating || 0;
-    const review_count = listing.reviews || 0;
-    
-    // Fulfillment: preserve original
-    let fulfillment: "FBA" | "FBM" | "AMZ";
-    if (listing.fulfillment === "FBA" || listing.fulfillment === "FBM" || listing.fulfillment === "Amazon") {
-      fulfillment = listing.fulfillment === "Amazon" ? "AMZ" : listing.fulfillment as "FBA" | "FBM";
-    } else {
-      fulfillment = "FBA"; // Default only if missing
-    }
-    
-    const brand = listing.brand || null;
-    
-    // Seller country: infer from brand if available
-    let seller_country: "US" | "CN" | "Other" | "Unknown";
-    if (brand) {
-      const brandLower = brand.toLowerCase();
-      if (brandLower.includes("cn") || brandLower.includes("china") || 
-          brandLower.includes("shenzhen") || brandLower.includes("guangzhou")) {
-        seller_country = "CN";
-      } else {
-        seller_country = "US";
-      }
-    } else {
-      seller_country = "Unknown";
-    }
-    
-    return {
-      rank: index + 1, // Will be re-ranked after sorting
-      asin,
-      title,
-      image_url,
-      price,
-      rating,
-      review_count,
-      bsr, // PRESERVED - never nulled
-      estimated_monthly_units, // PRESERVED - never nulled
-      estimated_monthly_revenue, // PRESERVED - never nulled
-      revenue_share_pct: 0, // Will be calculated after sorting
-      fulfillment,
-      brand,
-      seller_country,
-      snapshot_inferred: false, // All data comes from original listings
-      snapshot_inferred_fields: undefined,
-    };
-  });
+  console.log("🧪 CANONICAL FORCED OUTPUT COUNT", listings.length);
   
-  // Sort by revenue descending (most valuable first)
-  products.sort((a, b) => b.estimated_monthly_revenue - a.estimated_monthly_revenue);
-  
-  // Re-rank after sorting
-  products.forEach((product, index) => {
-    product.rank = index + 1;
-  });
-  
-  // Calculate revenue share percentages
-  const totalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  if (totalRevenue > 0) {
-    products.forEach(p => {
-      p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / totalRevenue) * 100 * 100) / 100;
-    });
-  }
-  
-  // Apply BSR duplicate detection (only nulls duplicate BSRs, preserves all other fields)
-  const afterDuplicateDetection = applyBsrDuplicateDetection(products);
-  
-  // Apply Page-1 demand calibration (only adjusts units/revenue proportionally, never nulls)
-  const afterCalibration = calibratePageOneUnits(afterDuplicateDetection);
-  
-  // Apply ASIN-level historical blending (only blends, never nulls)
-  const finalProducts = await blendWithAsinHistory(afterCalibration, marketplace, supabase);
-  
-  // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 3 — CONFIRM CANONICAL PAGE-1 OUTPUT
-  // ═══════════════════════════════════════════════════════════════════════════
-  const first5Output = finalProducts.slice(0, 5);
-  console.log("🔍 STEP_3_CANONICAL_PAGE1_OUTPUT", {
-    keyword,
-    total_products: finalProducts.length,
-    first_5_products: first5Output.map((product: CanonicalProduct, idx: number) => ({
-      index: idx + 1,
-      asin: product.asin || null,
-      estimated_units: product.estimated_monthly_units || null,
-      estimated_revenue: product.estimated_monthly_revenue || null,
-      bsr: product.bsr || null,
-      image_url: product.image_url || null,
-    })),
-    timestamp: new Date().toISOString(),
-  });
-  
-  console.log("🧪 CANONICAL OUTPUT COUNT", finalProducts.length);
-  
-  return finalProducts;
+  return result;
 }
 
 /**
