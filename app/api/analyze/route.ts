@@ -1184,6 +1184,7 @@ export async function POST(req: NextRequest) {
         },
         listings: tier1Listings, // GUARANTEED: Never empty
       };
+      }
     }
 
     // CRITICAL: keywordMarketData must never be null at this point
