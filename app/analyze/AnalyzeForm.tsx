@@ -1157,7 +1157,7 @@ export default function AnalyzeForm({
                     // ═══════════════════════════════════════════════════════════════════════════
                     // ROUTE LISTINGS BASED ON dataSource
                     // ═══════════════════════════════════════════════════════════════════════════
-                    const dataSource = (analysis as any).dataSource || snapshotType;
+                    // dataSource is already declared above (line 1145) - reuse it
                     let pageOneListings: any[] = [];
                     
                     if (dataSource === "market") {
