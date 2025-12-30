@@ -55,6 +55,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
 
   const products = listings.map((l, i) => {
     const bsr = l.bsr ?? l.main_category_bsr ?? null;
+    const rank = i + 1;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // ESTIMATION LOGIC: Units and Revenue per ASIN
@@ -67,11 +68,14 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     } else if (bsr !== null && bsr > 0) {
       // Estimate from BSR: units = round(600000 / Math.pow(bsr, 0.45))
       const rawUnits = Math.round(600000 / Math.pow(bsr, 0.45));
-      // Clamp to reasonable range: min 10, max 50000
-      estimatedUnits = Math.max(10, Math.min(50000, rawUnits));
+      // Clamp to reasonable range: min 50, max 50000
+      estimatedUnits = Math.max(50, Math.min(50000, rawUnits));
     } else {
-      // Cannot estimate - default to 0 (interface requires number)
-      estimatedUnits = 0;
+      // Fallback: Estimate units using rank position
+      // units = Math.round(3000 / rank)
+      const rawUnits = Math.round(3000 / rank);
+      // Clamp to reasonable range: min 50, max 50000
+      estimatedUnits = Math.max(50, Math.min(50000, rawUnits));
     }
     
     // Step 2: Estimate revenue from units and price if not already present
@@ -87,9 +91,22 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       estimatedRevenue = 0;
     }
 
+    const asin = l.asin ?? `KEYWORD-${i + 1}`;
+    
+    // Log sample estimate for first product
+    if (i === 0) {
+      console.log("📊 KEYWORD ESTIMATE SAMPLE", {
+        asin,
+        rank,
+        bsr,
+        units: estimatedUnits,
+        revenue: estimatedRevenue,
+      });
+    }
+    
     return {
       rank: i + 1,
-      asin: l.asin ?? `KEYWORD-${i + 1}`, // Allow synthetic ASINs for keywords
+      asin, // Allow synthetic ASINs for keywords
       title: l.title ?? "Unknown product",
       price: l.price ?? 0,
       rating: l.rating ?? 0,
