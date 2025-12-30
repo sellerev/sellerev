@@ -1192,6 +1192,20 @@ export default function AnalyzeForm({
                       {cardsToRender.map((listing: any, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
                           const imageUrl = listing.image_url || listing.image;
+                          // Rank = Page-1 position (array index + 1)
+                          const rank = idx + 1;
+                          // BSR from canonical product
+                          const bsr = listing.bsr;
+                          // Fulfillment from canonical product (map AMZ → FBA)
+                          const fulfillment = listing.fulfillment === "AMZ" ? "FBA" : (listing.fulfillment === "FBA" ? "FBA" : (listing.fulfillment === "FBM" ? "FBM" : null));
+                          
+                          // Debug logging (non-blocking)
+                          console.log("🧪 CARD META", {
+                            asin: listing.asin,
+                            rank,
+                            bsr,
+                            fulfillment,
+                          });
                           
                           return (
                             <div
@@ -1252,11 +1266,9 @@ export default function AnalyzeForm({
                               </div>
                               
                               {/* BSR */}
-                              {listing.bsr !== null && (
-                                <div className="mb-2 text-xs text-gray-500">
-                                  BSR: #{listing.bsr.toLocaleString()}
-                                </div>
-                              )}
+                              <div className="mb-2 text-xs text-gray-500">
+                                BSR: {bsr !== null && bsr > 0 ? `#${bsr.toLocaleString()}` : "—"}
+                              </div>
                               
                               {/* Revenue Block */}
                               {(() => {
@@ -1320,18 +1332,18 @@ export default function AnalyzeForm({
                                     Sponsored
                                   </span>
                                 )}
-                                {listing.fulfillment && (
+                                {/* Rank = Page-1 position (always shown) */}
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                                  Rank #{rank}
+                                </span>
+                                {/* Fulfillment badge */}
+                                {fulfillment && (
                                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                    listing.fulfillment === 'FBA' ? 'bg-blue-100 text-blue-800' :
-                                    listing.fulfillment === 'FBM' ? 'bg-gray-100 text-gray-800' :
+                                    fulfillment === 'FBA' ? 'bg-blue-100 text-blue-800' :
+                                    fulfillment === 'FBM' ? 'bg-gray-100 text-gray-800' :
                                     'bg-yellow-100 text-yellow-800'
                                   }`}>
-                                    {listing.fulfillment}
-                                  </span>
-                                )}
-                                {listing.organic_rank !== null && (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                                    Rank #{listing.organic_rank}
+                                    {fulfillment}
                                   </span>
                                 )}
                               </div>
