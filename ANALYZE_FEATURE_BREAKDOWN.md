@@ -66,9 +66,16 @@ Frontend Rendering
 
 **UI Sections:**
 1. **Input Form**: Keyword search input with validation
-2. **Market Snapshot**: Aggregated metrics (avg price, reviews, BSR, etc.)
+2. **Market Snapshot**: Aggregated metrics (avg price, reviews, monthly units/revenue, etc.)
 3. **PPC Indicators**: Ad intensity assessment
 4. **Page 1 Results**: Product grid (Amazon-style cards)
+   - **Card Display:**
+     - Rank #X (Page-1 position, not BSR)
+     - FBA / FBM badge
+     - Estimated Monthly Revenue
+     - Estimated Monthly Units
+     - Price, Rating, Reviews
+     - **Note:** BSR is NOT displayed on keyword Page-1 cards (only in ASIN analysis)
 5. **AI Verdict**: GO/CAUTION/NO_GO decision with reasoning
 6. **Chat Sidebar**: Contextual Q&A about the analysis
 
@@ -155,10 +162,16 @@ Frontend Rendering
   - DO NOT filter sponsored listings
   - DO NOT return empty if listings exist
   - Always returns Page-1 rows when listings exist
-- **Operations:**
-  - Estimates units from BSR if missing: `units = 600000 / pow(bsr, 0.45)`
-  - Estimates revenue from units × price if missing
-  - Calculates revenue share percentages
+- **Estimation Logic:**
+  - **Units Estimation:**
+    - If `est_monthly_units` exists → use it
+    - If BSR exists and > 0 → `units = round(600000 / pow(bsr, 0.45))`, clamped to min 50, max 50,000
+    - If BSR is missing → rank-based fallback: `units = round(3000 / rank)`, clamped to min 50, max 50,000
+    - **Result:** All products get non-zero units (never 0)
+  - **Revenue Estimation:**
+    - If `est_monthly_revenue` exists → use it
+    - Otherwise → `revenue = round(estimatedUnits × price)`
+  - Calculates revenue share percentages from total revenue
   - Maps fulfillment types (`"Amazon"` → `"AMZ"`)
   - Never hard-fails due to imperfect data
 
@@ -226,6 +239,12 @@ if (input_type === "keyword") {
 ```
 
 **Key Features:**
+- **Canonical Products Input:** If `canonicalProducts` provided, uses them directly (no rebuilding)
+- **Market Snapshot Aggregation:** 
+  - Sums `estimated_monthly_units` from canonical products (filters > 0)
+  - Sums `estimated_monthly_revenue` from canonical products (filters > 0)
+  - Calculates average BSR from canonical products (filters null/0)
+  - Assigns totals to `snapshot.monthly_units`, `snapshot.monthly_revenue`, `snapshot.avg_bsr`
 - Aggregates computed from canonical Page-1 products (not snapshot)
 - Ensures UI, aggregates, and cards all derive from ONE canonical array
 - Keyword-level historical blending (if Supabase available)
@@ -320,6 +339,13 @@ ANALYSIS REQUEST:
 
 #### Step 9: Response Assembly
 
+**Critical: Canonical Products Assignment**
+- Canonical products are **unconditionally assigned** to final response:
+  - `finalResponse.page_one_listings = canonicalProducts`
+  - `finalResponse.products = canonicalProducts`
+- No conditionals, no fallbacks - canonical products always win
+- Response structure nests under `decision` key for frontend
+
 **Final Response Structure:**
 ```typescript
 {
@@ -412,7 +438,7 @@ Raw Listings (ParsedListing[])
 Route by input_type
     ├─→ input_type === "keyword"
     │    └─→ buildKeywordPageOne()
-    │         ├─→ Estimate units from BSR (if missing)
+    │         ├─→ Estimate units: BSR-based OR rank-based fallback
     │         ├─→ Estimate revenue (units × price)
     │         ├─→ Calculate revenue share %
     │         └─→ Allow synthetic ASINs (KEYWORD-X)
@@ -431,6 +457,11 @@ Route by input_type
 Canonical Products (CanonicalProduct[])
     ↓
 Data Contract Builder
+    ├─→ Use canonical products directly (no rebuilding)
+    ├─→ Aggregate market snapshot totals from canonical products
+    │    ├─→ Sum estimated_monthly_units (filter > 0)
+    │    ├─→ Sum estimated_monthly_revenue (filter > 0)
+    │    └─→ Calculate average BSR (filter null/0)
     ├─→ Compute aggregates from canonical products
     ├─→ Build market structure
     └─→ Generate ai_context
@@ -513,6 +544,8 @@ Note: UI must NOT second-guess data - always uses canonical listings when availa
 - **Rule**: UI must NOT second-guess data - always uses canonical `page_one_listings` when available
 - **Priority**: `page_one_listings` → `products` → `market_snapshot.listings`
 - **Rule**: Never falls back to snapshot listings when canonical listings exist
+- **Rule**: Extract canonical fields from API response: `page_one_listings`, `products`, `aggregates_derived_from_page_one` must be copied from `data.decision` to `analysisData`
+- **Page-1 Cards**: Display Rank (positional), FBA/FBM, Revenue, Units - BSR not shown for keyword analysis
 
 ---
 
@@ -528,8 +561,16 @@ Note: UI must NOT second-guess data - always uses canonical listings when availa
 ### Keyword Canonical Logs
 - `✅ KEYWORD CANONICAL BUILD START`: Start of keyword canonical build
 - `✅ KEYWORD PAGE-1 COUNT`: Count of keyword canonical products
-- `📦 SAMPLE PRODUCT`: Sample product from keyword canonical output
-- `❌ KEYWORD CANONICAL FAILURE — SHOULD NEVER BE EMPTY`: Error when keyword build returns empty (non-fatal)
+- `📦 SAMPLE CANONICAL PRODUCT`: Sample product from keyword canonical output
+- `📊 KEYWORD ESTIMATE SAMPLE`: Sample estimate (asin, rank, bsr, units, revenue) for first product
+- `📊 ESTIMATION APPLIED`: Estimation statistics (total products, products with estimates, sample values)
+- `❌ KEYWORD CANONICAL EMPTY (NON-FATAL)`: Warning when keyword build returns empty (non-fatal)
+
+### Market Snapshot Logs
+- `📈 MARKET SNAPSHOT AGGREGATED`: Market snapshot totals aggregated from canonical products (total_monthly_units, total_monthly_revenue, average_bsr)
+
+### API Response Logs
+- `✅ FINAL RESPONSE CANONICAL COUNT`: Count of canonical products in final API response
 
 ### Debug Logs
 - `🧪 RAW INPUT LISTINGS`: First 3 listings
@@ -545,17 +586,24 @@ Note: UI must NOT second-guess data - always uses canonical listings when availa
 
 ## 📊 Key Metrics & Calculations
 
-### Revenue Estimation
-- **BSR-to-Sales Model**: `units = 600000 / pow(bsr, 0.45)`
-- **Revenue**: `units * price`
-- **Calibration**: Top 3 BSRs used to calibrate total units
+### Revenue Estimation (Keyword Analysis)
+- **Units Estimation (Priority Order):**
+  1. Use existing `est_monthly_units` if present
+  2. If BSR exists: `units = round(600000 / pow(bsr, 0.45))`, clamped to min 50, max 50,000
+  3. If BSR missing: rank-based fallback `units = round(3000 / rank)`, clamped to min 50, max 50,000
+- **Revenue Estimation:**
+  - Use existing `est_monthly_revenue` if present
+  - Otherwise: `revenue = round(estimatedUnits × price)`
+- **Result:** All keyword products have non-zero units/revenue estimates
 
 ### Market Aggregates
+- **Computed From:** Canonical Page-1 products (single source of truth)
 - **Average Price**: Mean of all Page-1 prices
 - **Average Rating**: Mean of all Page-1 ratings
-- **Average BSR**: Mean of all Page-1 BSRs
-- **Total Monthly Units**: Sum of all `estimated_monthly_units`
-- **Total Monthly Revenue**: Sum of all `estimated_monthly_revenue`
+- **Average BSR**: Mean of all Page-1 BSRs (for ASIN analysis; not displayed in keyword UI)
+- **Total Monthly Units**: Sum of `estimated_monthly_units` where units > 0
+- **Total Monthly Revenue**: Sum of `estimated_monthly_revenue` where revenue > 0
+- **Market Snapshot Aggregation:** Totals are assigned directly to `snapshot.monthly_units` and `snapshot.monthly_revenue`
 
 ### Competitive Metrics
 - **Brand Dominance**: % of listings belonging to top brand
@@ -600,10 +648,19 @@ Note: UI must NOT second-guess data - always uses canonical listings when availa
 
 ### Current State
 - **Canonical Page-1**: Split into keyword (permissive) and ASIN (strict) builders
-- **Keyword Analysis**: Fully permissive - always returns Page-1 products when listings exist
+- **Keyword Analysis**: 
+  - Fully permissive - always returns Page-1 products when listings exist
+  - Units/revenue estimation: BSR-based with rank fallback (guarantees non-zero values)
+  - Market snapshot totals aggregated from canonical products
 - **ASIN Analysis**: Currently in pass-through mode (strict logic placeholders ready)
 - **Market-First Architecture**: Fully implemented
-- **UI Routing**: Simplified - always uses canonical `page_one_listings` when available
+- **UI Routing**: 
+  - Always uses canonical `page_one_listings` when available
+  - Extracts `page_one_listings`, `products`, and `aggregates_derived_from_page_one` from API response
+- **Page-1 Card Display:**
+  - Shows Rank (Page-1 position), FBA/FBM, Revenue, Units
+  - BSR removed from keyword Page-1 cards (only in ASIN analysis)
+  - Helper note explains category rank available in ASIN analysis
 
 ### Known Issues
 - ASIN canonical filtering disabled (pass-through mode for backward compatibility)
@@ -617,11 +674,13 @@ Note: UI must NOT second-guess data - always uses canonical listings when availa
 The Analyze feature is a sophisticated product analysis system that:
 1. **Fetches** real market data (Rainforest API) or falls back to snapshots
 2. **Transforms** raw listings into canonical Page-1 products using type-specific builders:
-   - Keyword analysis: Permissive builder that always returns results
+   - Keyword analysis: Permissive builder with BSR-based or rank-based unit estimation (guarantees non-zero estimates)
    - ASIN analysis: Strict builder with validation and calibration
-3. **Builds** structured data contracts for AI consumption
-4. **Generates** AI decisions with numeric grounding
-5. **Renders** results in a comprehensive UI with chat support
+3. **Aggregates** market snapshot totals from canonical products (units, revenue, BSR)
+4. **Builds** structured data contracts for AI consumption (canonical products passed directly)
+5. **Assigns** canonical products unconditionally to API response
+6. **Generates** AI decisions with numeric grounding
+7. **Renders** results in a comprehensive UI with chat support (Rank, FBA/FBM, Revenue, Units - no BSR on keyword cards)
 
-The architecture prioritizes real data over estimates, routes canonical logic by input type (keyword vs ASIN), and provides a complete analysis experience for Amazon FBA sellers. Keyword analysis is designed to be permissive and never fail due to imperfect data, while ASIN analysis maintains strict validation for precision.
+The architecture prioritizes real data over estimates, routes canonical logic by input type (keyword vs ASIN), and provides a complete analysis experience for Amazon FBA sellers. Keyword analysis is designed to be permissive and never fail due to imperfect data, with guaranteed non-zero revenue/unit estimates through BSR-based or rank-based fallback. ASIN analysis maintains strict validation for precision. The UI displays clean, confident data with rank-based positioning (not BSR) for keyword analysis.
 
