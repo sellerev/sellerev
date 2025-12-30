@@ -1177,6 +1177,9 @@ export default function AnalyzeForm({
                     <div className="flex items-center justify-between mb-4">
                       <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
                     </div>
+                    <div className="mb-3 text-xs text-gray-500 italic">
+                      Revenue and sales are estimated from live search position. Category rank is available in ASIN analysis.
+                    </div>
                     {selectedListing && (
                       <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                         <div className="text-sm text-blue-900">
@@ -1194,8 +1197,6 @@ export default function AnalyzeForm({
                           const imageUrl = listing.image_url || listing.image;
                           // Rank = Page-1 position (array index + 1)
                           const rank = idx + 1;
-                          // BSR from canonical product
-                          const bsr = listing.bsr;
                           // Fulfillment from canonical product (map AMZ → FBA)
                           const fulfillment = listing.fulfillment === "AMZ" ? "FBA" : (listing.fulfillment === "FBA" ? "FBA" : (listing.fulfillment === "FBM" ? "FBM" : null));
                           
@@ -1203,7 +1204,6 @@ export default function AnalyzeForm({
                           console.log("🧪 CARD META", {
                             asin: listing.asin,
                             rank,
-                            bsr,
                             fulfillment,
                           });
                           
@@ -1263,11 +1263,6 @@ export default function AnalyzeForm({
                                     ({(listing.reviews || listing.review_count || 0).toLocaleString()})
                                   </span>
                                 ) : null}
-                              </div>
-                              
-                              {/* BSR */}
-                              <div className="mb-2 text-xs text-gray-500">
-                                BSR: {bsr !== null && bsr > 0 ? `#${bsr.toLocaleString()}` : "—"}
                               </div>
                               
                               {/* Revenue Block */}
