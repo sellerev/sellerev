@@ -636,6 +636,10 @@ export default function AnalyzeForm({
         margin_snapshot: marginSnapshot && typeof marginSnapshot === 'object' && !Array.isArray(marginSnapshot) && marginSnapshot !== null
           ? marginSnapshot
           : undefined,
+        // Extract canonical Page-1 products from decision (final authority)
+        page_one_listings: data.decision.page_one_listings ?? [],
+        products: data.decision.products ?? [],
+        aggregates_derived_from_page_one: data.decision.aggregates_derived_from_page_one,
       };
       
       // Log market snapshot counts for debugging
