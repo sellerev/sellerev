@@ -568,6 +568,120 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2.3: PAGE-LEVEL DEMAND NORMALIZATION (Helium-10 Style)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Normalize demand at Page-1 level, then distribute by rank
+  // Prevents unrealistic totals from bottom-up per-ASIN estimates
+  
+  // Compute total estimated units from current allocation
+  const totalEstimatedUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  
+  // Compute targetPageOneUnits ceiling using existing signals
+  // Reuse organicCount, reviewDispersion, sponsoredDensity already calculated
+  const organicCountForTarget = deduplicatedListings.filter(l => !l.is_sponsored).length;
+  
+  // Calculate category velocity signal (using review dispersion as proxy)
+  // Higher review dispersion = more established market = higher velocity
+  const categoryVelocityMultiplier = reviewDispersion > 2000 
+    ? 1.2 
+    : reviewDispersion > 1000 
+    ? 1.0 
+    : 0.8;
+  
+  // Base target calculation using organic count and sponsored density
+  const baseTarget = organicCountForTarget * 200; // Conservative base: 200 units per organic listing
+  const sponsoredAdjustment = sponsoredDensity > 30 ? 1.15 : 1.0; // Slight boost if high sponsored density
+  
+  // Calculate target range
+  const targetMinimum = Math.max(
+    totalEstimatedUnits * 0.6, // Never go below 60% of current
+    organicCountForTarget * 100 // Minimum floor based on organic count
+  );
+  const targetMaximum = totalEstimatedUnits * 1.4;
+  
+  // Choose midpoint as targetPageOneUnits
+  const targetPageOneUnits = Math.round(
+    Math.max(
+      targetMinimum,
+      Math.min(
+        targetMaximum,
+        (baseTarget * categoryVelocityMultiplier * sponsoredAdjustment + totalEstimatedUnits) / 2
+      )
+    )
+  );
+  
+  // Separate organic and sponsored products for rank-based allocation
+  const organicProducts = products.filter(p => p.organic_rank !== null);
+  const sponsoredProducts = products.filter(p => p.organic_rank === null);
+  
+  // Sort organic products by organic_rank (1, 2, 3...)
+  const sortedOrganic = [...organicProducts].sort((a, b) => (a.organic_rank ?? 0) - (b.organic_rank ?? 0));
+  
+  // Calculate rank weights using exponential decay: rankWeight = exp(-0.35 * (rank - 1))
+  const organicWeights = sortedOrganic.map((p, index) => {
+    const rank = p.organic_rank ?? (index + 1);
+    return {
+      product: p,
+      rank,
+      weight: Math.exp(-0.35 * (rank - 1)),
+    };
+  });
+  
+  // Normalize organic weights to sum to 1.0
+  const totalOrganicWeight = organicWeights.reduce((sum, w) => sum + w.weight, 0);
+  organicWeights.forEach(w => {
+    w.weight = w.weight / totalOrganicWeight;
+  });
+  
+  // Allocate 85% of target to organic (sponsored capped at 15%)
+  const organicTargetUnits = Math.round(targetPageOneUnits * 0.85);
+  const sponsoredTargetUnits = Math.round(targetPageOneUnits * 0.15);
+  
+  // Re-allocate organic units using rank weights
+  organicWeights.forEach(w => {
+    const allocatedUnits = Math.max(1, Math.round(organicTargetUnits * w.weight));
+    const allocatedRevenue = Math.round(allocatedUnits * w.product.price);
+    
+    w.product.estimated_monthly_units = allocatedUnits;
+    w.product.estimated_monthly_revenue = allocatedRevenue;
+  });
+  
+  // Allocate sponsored units (equal distribution, capped at 15% total)
+  if (sponsoredProducts.length > 0) {
+    const sponsoredUnitsPerProduct = Math.max(1, Math.round(sponsoredTargetUnits / sponsoredProducts.length));
+    sponsoredProducts.forEach(p => {
+      p.estimated_monthly_units = sponsoredUnitsPerProduct;
+      p.estimated_monthly_revenue = Math.round(sponsoredUnitsPerProduct * p.price);
+    });
+  }
+  
+  // Recalculate revenue share percentages after re-allocation
+  const totalUnitsAfter = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const totalRevenueAfter = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  
+  if (totalRevenueAfter > 0) {
+    products.forEach(p => {
+      if (p.estimated_monthly_revenue > 0) {
+        p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / totalRevenueAfter) * 100 * 100) / 100;
+      } else {
+        p.revenue_share_pct = 0;
+      }
+    });
+  }
+  
+  // Calculate sponsored share for logging
+  const sponsoredUnits = sponsoredProducts.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const sponsoredShare = totalUnitsAfter > 0 ? (sponsoredUnits / totalUnitsAfter) * 100 : 0;
+  
+  console.log("📈 PAGE-LEVEL DEMAND NORMALIZED", {
+    targetPageOneUnits,
+    totalUnitsAfter,
+    sponsoredShare: sponsoredShare.toFixed(1) + "%",
+    organicCount: organicProducts.length,
+    sponsoredCount: sponsoredProducts.length,
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2.4: POSITION-BASED REVENUE DISTRIBUTION (Helium-10 Style)
   // ═══════════════════════════════════════════════════════════════════════════
   // Normalize revenue distribution to resemble Helium 10 behavior
