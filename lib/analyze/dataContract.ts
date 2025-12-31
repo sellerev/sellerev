@@ -14,6 +14,7 @@
 import { KeywordMarketData, ParsedListing } from "@/lib/amazon/keywordMarket";
 import { MarginSnapshot } from "@/types/margin";
 import { CanonicalProduct } from "@/lib/amazon/canonicalPageOne";
+import { calculateReviewDispersionFromListings } from "@/lib/amazon/calibration";
 
 // ============================================================================
 // TYPE DEFINITIONS (EXACT CONTRACT SCHEMAS)
@@ -22,6 +23,7 @@ import { CanonicalProduct } from "@/lib/amazon/canonicalPageOne";
 export type Marketplace = "US" | "CA" | "UK" | "EU" | "AU";
 export type Currency = "USD" | "CAD" | "GBP" | "EUR";
 export type Confidence = "low" | "medium" | "high";
+export type CalibrationConfidence = "Low" | "Medium" | "High";
 export type Fulfillment = "FBA" | "FBM" | "AMZ";
 export type SellerCountry = "US" | "CN" | "Other" | "Unknown";
 export type PriceTightness = "tight" | "moderate" | "wide";
@@ -49,6 +51,7 @@ export interface KeywordAnalyzeResponse {
     search_volume: "modeled" | "sqp" | "third_party";
   };
   confidence: Confidence;
+  confidence_reason: string; // Trust layer: explains why confidence level
 
   // A) Page-1 Summary Metrics
   summary: {
@@ -490,6 +493,83 @@ export async function buildKeywordAnalyzeResponse(
     operational_complexity: "medium" as OperationalComplexity,
   };
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TRUST LAYER: Calculate confidence and reason
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Calculate confidence from market signals (same logic as calibration)
+  const listingCount = products.length;
+  const reviewDispersion = calculateReviewDispersionFromListings(
+    products.map(p => ({ reviews: p.review_count }))
+  );
+  const sponsoredDensity = snapshot.sponsored_count && snapshot.total_page1_listings > 0
+    ? (snapshot.sponsored_count / snapshot.total_page1_listings) * 100
+    : 0;
+
+  // Calculate confidence score (0-100)
+  let confidenceScore = 0;
+  const confidenceReasons: string[] = [];
+
+  // Listing count factor (0-40 points)
+  if (listingCount >= 15) {
+    confidenceScore += 40;
+    confidenceReasons.push("Strong listing coverage (15+ products)");
+  } else if (listingCount >= 8) {
+    confidenceScore += 25;
+    confidenceReasons.push("Moderate listing coverage (8-14 products)");
+  } else if (listingCount >= 5) {
+    confidenceScore += 10;
+    confidenceReasons.push("Limited listing coverage (5-7 products)");
+  } else {
+    confidenceReasons.push("Sparse listing coverage (< 5 products)");
+  }
+
+  // Review dispersion factor (0-30 points)
+  if (reviewDispersion > 1000) {
+    confidenceScore += 30;
+    confidenceReasons.push("High review diversity indicates established market");
+  } else if (reviewDispersion > 500) {
+    confidenceScore += 20;
+    confidenceReasons.push("Moderate review diversity");
+  } else if (reviewDispersion > 0) {
+    confidenceScore += 10;
+    confidenceReasons.push("Low review diversity - market may be new");
+  } else {
+    confidenceReasons.push("No review data available");
+  }
+
+  // Sponsored density factor (0-30 points)
+  if (sponsoredDensity < 20) {
+    confidenceScore += 30;
+    confidenceReasons.push("Low sponsored density suggests organic competition");
+  } else if (sponsoredDensity < 40) {
+    confidenceScore += 15;
+    confidenceReasons.push("Moderate sponsored density");
+  } else {
+    confidenceScore += 5;
+    confidenceReasons.push("High sponsored density may indicate paid competition");
+  }
+
+  // Determine confidence level
+  let confidence: Confidence;
+  if (confidenceScore >= 70) {
+    confidence = "high";
+  } else if (confidenceScore >= 40) {
+    confidence = "medium";
+  } else {
+    confidence = "low";
+  }
+
+  const confidenceReason = confidenceReasons.join(". ") + ".";
+
+  console.log("🎯 CONFIDENCE CALCULATED", {
+    confidence_score: confidenceScore,
+    confidence_level: confidence,
+    listing_count: listingCount,
+    review_dispersion: reviewDispersion,
+    sponsored_density: sponsoredDensity.toFixed(1) + "%",
+    confidence_reason: confidenceReason,
+  });
+  
   // Build margin snapshot (from MarginSnapshot type)
   // Guard against null/undefined marginSnapshot
   if (!marginSnapshot) {
@@ -545,7 +625,8 @@ export async function buildKeywordAnalyzeResponse(
       estimation_model: "sellerev_bsr_v1",
       search_volume: "modeled",
     },
-    confidence: "medium" as Confidence, // TODO: Calculate from data quality
+    confidence,
+    confidence_reason: confidenceReason,
     summary,
     products, // Canonical Page-1 array
     page_one_listings: products, // Explicit canonical Page-1 array for UI (same as products) - ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array

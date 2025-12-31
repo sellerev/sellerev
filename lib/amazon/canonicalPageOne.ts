@@ -16,6 +16,7 @@
 
 import { ParsedListing, KeywordMarketSnapshot } from "./keywordMarket";
 import { estimatePageOneDemand } from "./pageOneDemand";
+import { calibrateMarketTotals, calculateReviewDispersionFromListings, validateInvariants } from "./calibration";
 
 export interface CanonicalProduct {
   rank: number;
@@ -80,11 +81,39 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     avgPrice,
   });
 
-  const totalPage1Units = pageOneDemand.total_monthly_units_est;
-  const totalPage1Revenue = pageOneDemand.total_monthly_revenue_est;
+  let totalPage1Units = pageOneDemand.total_monthly_units_est;
+  let totalPage1Revenue = pageOneDemand.total_monthly_revenue_est;
 
-  console.log("📊 PAGE-1 TOTAL UNITS", totalPage1Units);
-  console.log("📊 PAGE-1 TOTAL REVENUE", totalPage1Revenue);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CALIBRATION LAYER: Normalize into trusted bands
+  // ═══════════════════════════════════════════════════════════════════════════
+  const organicListings = listings.filter(l => !l.is_sponsored);
+  const sponsoredCount = listings.filter(l => l.is_sponsored).length;
+  const sponsoredDensity = listings.length > 0
+    ? (sponsoredCount / listings.length) * 100
+    : 0;
+
+  const reviewDispersion = calculateReviewDispersionFromListings(listings);
+  
+  const priceMin = prices.length > 0 ? Math.min(...prices) : 0;
+  const priceMax = prices.length > 0 ? Math.max(...prices) : 0;
+
+  const calibrated = calibrateMarketTotals({
+    raw_units: totalPage1Units,
+    raw_revenue: totalPage1Revenue,
+    category,
+    price_band: { min: priceMin, max: priceMax },
+    listing_count: organicListings.length,
+    review_dispersion: reviewDispersion,
+    sponsored_density: sponsoredDensity,
+  });
+
+  // Use calibrated values
+  totalPage1Units = calibrated.calibrated_units;
+  totalPage1Revenue = calibrated.calibrated_revenue;
+
+  console.log("📊 PAGE-1 TOTAL UNITS (calibrated)", totalPage1Units);
+  console.log("📊 PAGE-1 TOTAL REVENUE (calibrated)", totalPage1Revenue);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: ALLOCATE DEMAND ACROSS PRODUCTS
@@ -218,7 +247,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 3: VALIDATION - Ensure sum matches total
+  // STEP 3: INVARIANT VALIDATION
   // ═══════════════════════════════════════════════════════════════════════════
   const sumUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
   const sumRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
@@ -237,6 +266,20 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     revenue_diff: revenueDiff,
     revenue_diff_pct: revenueDiffPct.toFixed(2) + "%",
   });
+
+  // Validate all invariants (logs violations but never throws)
+  const invariantResult = validateInvariants(
+    totalPage1Units,
+    totalPage1Revenue,
+    products.map(p => ({
+      asin: p.asin,
+      estimated_monthly_units: p.estimated_monthly_units,
+      estimated_monthly_revenue: p.estimated_monthly_revenue,
+      price: p.price,
+      brand: p.brand,
+      revenue_share_pct: p.revenue_share_pct,
+    }))
+  );
 
   console.log("✅ KEYWORD PAGE-1 COUNT", products.length);
   if (products.length > 0) {
