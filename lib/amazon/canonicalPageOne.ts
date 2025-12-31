@@ -788,35 +788,36 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   // ═══════════════════════════════════════════════════════════════════════════
   // Log metrics to compare Sellerev outputs against Helium-10 ranges
   // Do NOT modify estimation logic - this is observation only
-  const totalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  // Use calibration-prefixed variable names to avoid scope conflicts
+  const calibrationTotalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
   
   // Calculate top 3 revenue share
-  const sortedByRevenue = [...products]
+  const calibrationSortedByRevenue = [...products]
     .sort((a, b) => b.estimated_monthly_revenue - a.estimated_monthly_revenue);
-  const top3Revenue = sortedByRevenue.slice(0, 3).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  const top3Pct = totalRevenue > 0 ? (top3Revenue / totalRevenue) * 100 : 0;
+  const calibrationTop3Revenue = calibrationSortedByRevenue.slice(0, 3).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const calibrationTop3Pct = calibrationTotalRevenue > 0 ? (calibrationTop3Revenue / calibrationTotalRevenue) * 100 : 0;
   
   // Calculate top 10 revenue share
-  const top10Revenue = sortedByRevenue.slice(0, 10).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  const top10Pct = totalRevenue > 0 ? (top10Revenue / totalRevenue) * 100 : 0;
+  const calibrationTop10Revenue = calibrationSortedByRevenue.slice(0, 10).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const calibrationTop10Pct = calibrationTotalRevenue > 0 ? (calibrationTop10Revenue / calibrationTotalRevenue) * 100 : 0;
   
   // Calculate median product revenue
-  const revenues = products
+  const calibrationRevenues = products
     .map(p => p.estimated_monthly_revenue)
     .filter(r => r > 0)
     .sort((a, b) => a - b);
-  const medianRevenue = revenues.length > 0
-    ? (revenues.length % 2 === 0
-        ? (revenues[Math.floor(revenues.length / 2) - 1] + revenues[Math.floor(revenues.length / 2)]) / 2
-        : revenues[Math.floor(revenues.length / 2)])
+  const calibrationMedianRevenue = calibrationRevenues.length > 0
+    ? (calibrationRevenues.length % 2 === 0
+        ? (calibrationRevenues[Math.floor(calibrationRevenues.length / 2) - 1] + calibrationRevenues[Math.floor(calibrationRevenues.length / 2)]) / 2
+        : calibrationRevenues[Math.floor(calibrationRevenues.length / 2)])
     : 0;
   
   // Log calibration metrics (keyword not available in this context)
   console.log("📊 CALIBRATION METRICS (Helium-10 Comparison)", {
-    total_revenue: Math.round(totalRevenue),
-    top3_pct: Math.round(top3Pct * 100) / 100,
-    top10_pct: Math.round(top10Pct * 100) / 100,
-    median_revenue: Math.round(medianRevenue),
+    total_revenue: Math.round(calibrationTotalRevenue),
+    top3_pct: Math.round(calibrationTop3Pct * 100) / 100,
+    top10_pct: Math.round(calibrationTop10Pct * 100) / 100,
+    median_revenue: Math.round(calibrationMedianRevenue),
     note: "Keyword available in dataContract.ts logging",
   });
 
