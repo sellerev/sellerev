@@ -64,34 +64,48 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   // STEP 0: ASIN DEDUPLICATION (BEFORE ANY ESTIMATION)
   // ═══════════════════════════════════════════════════════════════════════════
   // Core rule: One ASIN = one canonical product
-  // HELIUM-10 BEHAVIOR: Use the BEST (lowest number) rank an ASIN holds on Page-1
+  // Selection priority:
+  // 1. Organic listings over sponsored listings
+  // 2. Best (lowest) rank among listings of the same type
   // 
   // For each ASIN:
-  // - If it appears multiple times: canonical rank = LOWEST rank number
-  // - Example: rank 3 beats rank 8 (better visibility)
+  // - If it appears multiple times: keep organic if available, else keep best rank
+  // - If both are same type: keep the one with LOWEST rank number
+  // - Example: organic rank 8 beats sponsored rank 3
+  // - Example: organic rank 3 beats organic rank 8
   const rawCount = listings.length;
   const asinMap = new Map<string, { 
     listing: ParsedListing; 
     bestRank: number; // Best (lowest) rank this ASIN appears at
     allRanks: number[]; // Track all ranks for logging
     appearanceCount: number; // Track how many times ASIN appeared (for algorithm boost insight)
+    isOrganic: boolean; // Track if the canonical listing is organic
   }>();
   
-  // Track all instances to find best rank per ASIN
+  // Track all instances to find best canonical instance per ASIN
   listings.forEach((listing, index) => {
     const asin = listing.asin || `KEYWORD-${index + 1}`;
     const currentRank = listing.position || index + 1;
+    const isOrganic = !listing.is_sponsored;
     
     if (asinMap.has(asin)) {
       const existing = asinMap.get(asin)!;
       existing.allRanks.push(currentRank);
       existing.appearanceCount += 1; // Increment appearance count
       
-      // Keep the instance with the BEST (lowest) rank
-      // Lower rank number = better visibility = canonical rank
-      if (currentRank < existing.bestRank) {
+      // Selection logic:
+      // 1. Prefer organic over sponsored
+      // 2. If same type, prefer better (lower) rank
+      const shouldReplace = 
+        // Case 1: Current is organic, existing is sponsored → always replace
+        (isOrganic && !existing.isOrganic) ||
+        // Case 2: Both same type, current has better (lower) rank → replace
+        (isOrganic === existing.isOrganic && currentRank < existing.bestRank);
+      
+      if (shouldReplace) {
         existing.bestRank = currentRank;
-        existing.listing = listing; // Update to best-ranked instance
+        existing.listing = listing; // Update to best canonical instance
+        existing.isOrganic = isOrganic; // Update organic status
       }
     } else {
       asinMap.set(asin, { 
@@ -99,6 +113,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
         bestRank: currentRank,
         allRanks: [currentRank],
         appearanceCount: 1, // First appearance
+        isOrganic, // Track if this instance is organic
       });
     }
   });
@@ -111,7 +126,10 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
         asin,
         rank: value.bestRank,
         all_ranks: value.allRanks.sort((a, b) => a - b),
-        selection_reason: `Best (lowest) rank selected from ${value.allRanks.length} appearances`,
+        is_organic: value.isOrganic,
+        selection_reason: value.isOrganic 
+          ? `Organic listing with best rank selected from ${value.allRanks.length} appearances`
+          : `Sponsored listing with best rank selected from ${value.allRanks.length} appearances (no organic found)`,
       });
     } else {
       // Single appearance - still log for consistency
@@ -119,6 +137,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
         asin,
         rank: value.bestRank,
         all_ranks: [value.bestRank],
+        is_organic: value.isOrganic,
         selection_reason: "Single appearance",
       });
     }
