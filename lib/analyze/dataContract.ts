@@ -82,6 +82,9 @@ export interface KeywordAnalyzeResponse {
     fulfillment: Fulfillment;
     brand: string | null;
     seller_country: SellerCountry;
+    // Algorithm boost tracking (Sellerev-only insight)
+    page_one_appearances: number;
+    is_algorithm_boosted: boolean;
   }>;
   
   // B-2) Canonical Page-1 Array (explicit for UI)
@@ -100,6 +103,9 @@ export interface KeywordAnalyzeResponse {
     fulfillment: Fulfillment;
     brand: string | null;
     seller_country: SellerCountry;
+    // Algorithm boost tracking (Sellerev-only insight)
+    page_one_appearances: number;
+    is_algorithm_boosted: boolean;
   }>;
   
   // B-3) Aggregates Derived from Page-1 (explicit for UI)
@@ -319,6 +325,9 @@ export async function buildKeywordAnalyzeResponse(
       fulfillment: p.fulfillment,
       brand: p.brand,
       seller_country: p.seller_country,
+      // Algorithm boost tracking (Sellerev-only insight for AI/Spellbook)
+      page_one_appearances: p.page_one_appearances ?? 1,
+      is_algorithm_boosted: p.is_algorithm_boosted ?? false,
     }));
   } else {
     // Fallback: Build from listings (legacy path, should not be used for keyword analysis)
@@ -357,6 +366,9 @@ export async function buildKeywordAnalyzeResponse(
         fulfillment: normalizeFulfillment(listing.fulfillment),
         brand: listing.brand || null,
         seller_country: inferSellerCountry(listing),
+        // Algorithm boost tracking (default to 1 appearance for fallback path)
+        page_one_appearances: 1,
+        is_algorithm_boosted: false,
       };
     });
   }

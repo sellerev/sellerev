@@ -35,6 +35,9 @@ export interface CanonicalProduct {
   seller_country: "US" | "CN" | "Other" | "Unknown";
   snapshot_inferred: boolean;
   snapshot_inferred_fields?: string[];
+  // Algorithm boost tracking (Sellerev-only insight)
+  page_one_appearances: number; // How many times this ASIN appeared in raw search results
+  is_algorithm_boosted: boolean; // true if page_one_appearances >= 2
 }
 
 /**
@@ -71,6 +74,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     listing: ParsedListing; 
     bestRank: number; // Best (lowest) rank this ASIN appears at
     allRanks: number[]; // Track all ranks for logging
+    appearanceCount: number; // Track how many times ASIN appeared (for algorithm boost insight)
   }>();
   
   // Track all instances to find best rank per ASIN
@@ -81,6 +85,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     if (asinMap.has(asin)) {
       const existing = asinMap.get(asin)!;
       existing.allRanks.push(currentRank);
+      existing.appearanceCount += 1; // Increment appearance count
       
       // Keep the instance with the BEST (lowest) rank
       // Lower rank number = better visibility = canonical rank
@@ -93,6 +98,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
         listing, 
         bestRank: currentRank,
         allRanks: [currentRank],
+        appearanceCount: 1, // First appearance
       });
     }
   });
@@ -120,9 +126,17 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   
   // Convert back to array and sort by best rank (canonical order)
   // This ensures products are ordered by their best Page-1 visibility
-  const deduplicatedListings = Array.from(asinMap.values())
-    .sort((a, b) => a.bestRank - b.bestRank) // Sort by best rank
-    .map(item => item.listing);
+  // Preserve appearance metadata for algorithm boost insights
+  const deduplicatedListingsWithMetadata = Array.from(asinMap.entries())
+    .map(([asin, value]) => ({
+      listing: value.listing,
+      bestRank: value.bestRank,
+      appearanceCount: value.appearanceCount,
+      isAlgorithmBoosted: value.appearanceCount >= 2,
+    }))
+    .sort((a, b) => a.bestRank - b.bestRank); // Sort by best rank
+  
+  const deduplicatedListings = deduplicatedListingsWithMetadata.map(item => item.listing);
   
   const dedupedCount = deduplicatedListings.length;
   const duplicatesRemoved = rawCount - dedupedCount;
@@ -225,12 +239,15 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
 
   // Build products with allocation weights (using deduplicated listings)
   // Assign new ranks based on deduplicated order (1, 2, 3, ...)
-  const productsWithWeights = deduplicatedListings.map((l, i) => {
+  const productsWithWeights = deduplicatedListingsWithMetadata.map((item, i) => {
+    const l = item.listing;
     const bsr = l.bsr ?? l.main_category_bsr ?? null;
     const rank = i + 1; // New rank based on deduplicated order
     const price = l.price ?? 0;
     const reviewCount = l.reviews ?? 0;
     const rating = l.rating ?? 0;
+    const appearanceCount = item.appearanceCount;
+    const isAlgorithmBoosted = item.isAlgorithmBoosted;
 
     // Calculate allocation weight based on:
     // 1. Rank (lower rank = higher weight)
@@ -270,6 +287,8 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       reviewCount,
       rating,
       allocationWeight,
+      appearanceCount,
+      isAlgorithmBoosted,
     };
   });
 
@@ -302,6 +321,18 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
         weight: pw.allocationWeight.toFixed(4),
         allocated_units: allocatedUnits,
         allocated_revenue: allocatedRevenue,
+        page_one_appearances: pw.appearanceCount,
+        is_algorithm_boosted: pw.isAlgorithmBoosted,
+      });
+    }
+
+    // Log algorithm boost insights for boosted products
+    if (pw.isAlgorithmBoosted) {
+      console.log("🚀 ALGORITHM BOOST DETECTED", {
+        asin,
+        rank: pw.rank,
+        page_one_appearances: pw.appearanceCount,
+        insight: "This ASIN appears multiple times on Page-1, indicating Amazon algorithm boost",
       });
     }
 
@@ -321,6 +352,9 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       brand: l.brand ?? null,
       seller_country: "Unknown" as const,
       snapshot_inferred: false,
+      // Algorithm boost tracking (Sellerev-only insight)
+      page_one_appearances: pw.appearanceCount,
+      is_algorithm_boosted: pw.isAlgorithmBoosted,
     };
   });
 
@@ -386,6 +420,22 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       sample_bsr: products[0]?.bsr,
       sample_units: products[0]?.estimated_monthly_units,
       sample_revenue: products[0]?.estimated_monthly_revenue,
+    });
+  }
+
+  // Log algorithm boost summary (Sellerev-only insight)
+  const algorithmBoostedProducts = products.filter(p => p.is_algorithm_boosted);
+  if (algorithmBoostedProducts.length > 0) {
+    console.log("🚀 ALGORITHM BOOST SUMMARY", {
+      boosted_count: algorithmBoostedProducts.length,
+      total_products: products.length,
+      boost_rate: ((algorithmBoostedProducts.length / products.length) * 100).toFixed(1) + "%",
+      boosted_asins: algorithmBoostedProducts.map(p => ({
+        asin: p.asin,
+        appearances: p.page_one_appearances,
+        rank: p.rank,
+      })),
+      insight: "These ASINs appear multiple times on Page-1, indicating Amazon algorithm boost",
     });
   }
 
