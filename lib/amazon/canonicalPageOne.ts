@@ -467,6 +467,102 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2.4: POSITION-BASED REVENUE DISTRIBUTION (Helium-10 Style)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Normalize revenue distribution to resemble Helium 10 behavior
+  // Apply position-based multiplier using organic_rank (or page_position for sponsored)
+  // Top 3 listings should dominate total revenue
+  
+  /**
+   * Get position-based normalization multiplier
+   * Uses organic_rank for organic listings, page_position for sponsored
+   * Deterministic curve that makes top ranks dominate revenue
+   */
+  function getPositionMultiplier(organicRank: number | null, pagePosition: number): number {
+    // Use organic_rank if available, otherwise use page_position
+    const rank = organicRank ?? pagePosition;
+    
+    // Deterministic curve matching Helium 10 behavior
+    if (rank === 1) return 1.00;
+    if (rank === 2) return 0.82;
+    if (rank === 3) return 0.68;
+    if (rank >= 4 && rank <= 6) {
+      // Decay from 0.68 to ~0.45
+      const progress = (rank - 4) / 2; // 0.0 to 1.0
+      return 0.68 - (progress * 0.23); // 0.68 -> 0.45
+    }
+    if (rank >= 7 && rank <= 10) {
+      // Decay from 0.45 to ~0.25
+      const progress = (rank - 7) / 3; // 0.0 to 1.0
+      return 0.45 - (progress * 0.20); // 0.45 -> 0.25
+    }
+    if (rank >= 11 && rank <= 20) {
+      // Decay from 0.25 to ~0.12
+      const progress = (rank - 11) / 9; // 0.0 to 1.0
+      return 0.25 - (progress * 0.13); // 0.25 -> 0.12
+    }
+    // Rank 21+: continue decay to ~0.05
+    if (rank > 20) {
+      const excess = rank - 20;
+      return Math.max(0.05, 0.12 - (excess * 0.01));
+    }
+    return 1.0; // Fallback
+  }
+  
+  // Log totals before position-based normalization
+  const unitsBeforePositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const revenueBeforePositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  
+  // Apply position-based multipliers to units
+  products.forEach(p => {
+    const multiplier = getPositionMultiplier(p.organic_rank, p.page_position);
+    const normalizedUnits = Math.max(1, Math.round(p.estimated_monthly_units * multiplier));
+    
+    // Recalculate revenue after normalization (revenue = units × price)
+    const normalizedRevenue = Math.round(normalizedUnits * p.price);
+    
+    // Update product (preserve all other fields)
+    p.estimated_monthly_units = normalizedUnits;
+    p.estimated_monthly_revenue = normalizedRevenue;
+  });
+  
+  // Recalculate revenue share percentages after position normalization
+  const totalRevenueAfterPositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  if (totalRevenueAfterPositionNorm > 0) {
+    products.forEach(p => {
+      if (p.estimated_monthly_revenue > 0) {
+        p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / totalRevenueAfterPositionNorm) * 100 * 100) / 100;
+      } else {
+        p.revenue_share_pct = 0;
+      }
+    });
+  }
+  
+  // Log totals after position-based normalization
+  const unitsAfterPositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const revenueAfterPositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  
+  // Calculate top 3 revenue share for validation
+  const top3Products = products
+    .filter(p => p.organic_rank !== null)
+    .sort((a, b) => (a.organic_rank ?? 0) - (b.organic_rank ?? 0))
+    .slice(0, 3);
+  const top3Revenue = top3Products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const top3RevenueShare = revenueAfterPositionNorm > 0 
+    ? (top3Revenue / revenueAfterPositionNorm) * 100 
+    : 0;
+  
+  console.log("📊 POSITION-BASED NORMALIZATION", {
+    total_units_before: unitsBeforePositionNorm,
+    total_units_after: unitsAfterPositionNorm,
+    total_revenue_before: revenueBeforePositionNorm,
+    total_revenue_after: revenueAfterPositionNorm,
+    top_3_revenue_share_pct: top3RevenueShare.toFixed(1) + "%",
+    curve_applied: "organic_rank for organic, page_position for sponsored",
+    note: "Top 3 listings should dominate total revenue",
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2.5: SOFT NORMALIZATION (Helium-10 Style)
   // ═══════════════════════════════════════════════════════════════════════════
   // Normalize Page-1 totals to feel consistent with Helium 10
