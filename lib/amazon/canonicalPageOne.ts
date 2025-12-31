@@ -106,6 +106,10 @@ function applyDemandFloors({
 /**
  * Build keyword Page-1 product set (PERMISSIVE)
  * 
+ * PAGE-1 SCOPE: This function processes Page-1 listings only (both organic + sponsored)
+ * All listings passed to this function come from fetchKeywordMarketSnapshot which
+ * fetches page=1 results from Rainforest API only.
+ * 
  * KEYWORD CANONICAL RULES:
  * - DO NOT reject synthetic ASINs
  * - DO NOT require historical data
@@ -115,7 +119,7 @@ function applyDemandFloors({
  * 
  * HELIUM-10 STYLE: Estimate total Page-1 demand first, then allocate across products
  * 
- * @param listings - Raw listings from keyword search results
+ * @param listings - Raw listings from keyword search results (Page-1 only: organic + sponsored)
  * @returns Array of canonical products (always non-empty if listings exist)
  */
 export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct[] {

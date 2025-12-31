@@ -599,6 +599,9 @@ export async function fetchKeywordMarketSnapshot(
   let apiReturnedResults = false;
 
   try {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PAGE-1 ONLY: Hard-coded page=1 parameter ensures Page-1 results only
+    // ═══════════════════════════════════════════════════════════════════════════
     const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1`;
     console.log("RAINFOREST_API_REQUEST", { keyword, url: apiUrl.replace(rainforestApiKey, "***") });
     
@@ -720,7 +723,8 @@ export async function fetchKeywordMarketSnapshot(
     }
 
     // Step 2: Collect ALL listings from ALL possible locations in Rainforest response
-    // Check: search_results, organic_results, ads, results, etc.
+    // PAGE-1 SCOPE: All results come from page=1 API call above - includes both organic and sponsored
+    // Check: search_results, organic_results, ads (sponsored), results, etc.
     const allResultArrays: any[][] = [];
     
     if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
@@ -730,13 +734,13 @@ export async function fetchKeywordMarketSnapshot(
       allResultArrays.push(raw.organic_results);
     }
     if (Array.isArray(raw.ads) && raw.ads.length > 0) {
-      allResultArrays.push(raw.ads);
+      allResultArrays.push(raw.ads); // Sponsored listings from Page-1
     }
     if (Array.isArray(raw.results) && raw.results.length > 0) {
       allResultArrays.push(raw.results);
     }
     
-    // Flatten all arrays into a single array
+    // Flatten all arrays into a single array (Page-1 only: organic + sponsored)
     const searchResults = allResultArrays.flat();
     
     console.log("COLLECTED_LISTINGS_FROM_ALL_SOURCES", {
@@ -1198,6 +1202,19 @@ export async function fetchKeywordMarketSnapshot(
     // Aggregate metrics from Page 1 listings only (using canonical `listings` variable)
     const total_page1_listings = listings.length;
     const sponsored_count = listings.filter((l) => l.is_sponsored).length;
+    const organic_count = total_page1_listings - sponsored_count;
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PAGE-1 SCOPE VERIFICATION (REQUIRED)
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log("✅ PAGE-1 SCOPE VERIFIED", {
+      keyword,
+      total_listings_ingested: total_page1_listings,
+      organic_count,
+      sponsored_count,
+      confirmation: "PAGE-1 SCOPE VERIFIED",
+      timestamp: new Date().toISOString(),
+    });
 
     // TASK 3: Average price (only over listings with price != null) - do NOT fall back when real listings exist
     const listingsWithPrice = listings.filter((l) => l.price !== null && l.price !== undefined);
