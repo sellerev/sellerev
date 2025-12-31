@@ -403,6 +403,115 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2.5: SOFT NORMALIZATION (Helium-10 Style)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Normalize Page-1 totals to feel consistent with Helium 10
+  // Apply soft scaling if totals exceed plausible ceilings
+  // Preserves relative ordering and revenue share percentages
+  const sumUnitsBefore = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const sumRevenueBefore = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  
+  // Determine competition level for ceiling calculation
+  const organicCount = deduplicatedListings.filter(l => !l.is_sponsored).length;
+  const reviewDispersion = calculateReviewDispersionFromListings(deduplicatedListings);
+  const sponsoredDensity = deduplicatedListings.length > 0
+    ? (deduplicatedListings.filter(l => l.is_sponsored).length / deduplicatedListings.length) * 100
+    : 0;
+  
+  // Determine competition level (same logic as calibration)
+  let competitionLevel: "low_competition" | "medium_competition" | "high_competition";
+  if (organicCount < 8 || (reviewDispersion < 500 && sponsoredDensity < 20)) {
+    competitionLevel = "low_competition";
+  } else if (organicCount >= 15 && (reviewDispersion > 2000 || sponsoredDensity > 40)) {
+    competitionLevel = "high_competition";
+  } else {
+    competitionLevel = "medium_competition";
+  }
+  
+  // Get plausible ceiling from competition level
+  // Use the same ranges as calibration for consistency
+  const MARKET_RANGES = {
+    low_competition: { units_max: 6000, revenue_max: 150000 },
+    medium_competition: { units_max: 15000, revenue_max: 375000 },
+    high_competition: { units_max: 35000, revenue_max: 875000 },
+  };
+  
+  const ceiling = MARKET_RANGES[competitionLevel];
+  const unitsCeiling = ceiling.units_max;
+  const revenueCeiling = ceiling.revenue_max;
+  
+  // Check if totals exceed ceiling
+  const unitsExceedsCeiling = sumUnitsBefore > unitsCeiling;
+  const revenueExceedsCeiling = sumRevenueBefore > revenueCeiling;
+  
+  if (unitsExceedsCeiling || revenueExceedsCeiling) {
+    // Calculate scaling factor (use the more restrictive one)
+    const unitsScale = unitsExceedsCeiling ? unitsCeiling / sumUnitsBefore : 1.0;
+    const revenueScale = revenueExceedsCeiling ? revenueCeiling / sumRevenueBefore : 1.0;
+    const scaleFactor = Math.min(unitsScale, revenueScale);
+    
+    // Clamp scale factor to reasonable range (0.5x - 1.0x)
+    // Never scale up, only down if needed
+    const clampedScale = Math.max(0.5, Math.min(1.0, scaleFactor));
+    
+    // Apply proportional scaling to all products
+    // Preserves relative ordering and revenue share percentages
+    products.forEach(p => {
+      // Scale units (ensure never zero)
+      const scaledUnits = Math.max(1, Math.round(p.estimated_monthly_units * clampedScale));
+      
+      // Scale revenue proportionally (revenue = units × price)
+      const scaledRevenue = Math.round(scaledUnits * p.price);
+      
+      // Update product (preserve all other fields)
+      p.estimated_monthly_units = scaledUnits;
+      p.estimated_monthly_revenue = scaledRevenue;
+    });
+    
+    // Recalculate revenue share percentages after scaling
+    const scaledTotalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    if (scaledTotalRevenue > 0) {
+      products.forEach(p => {
+        if (p.estimated_monthly_revenue > 0) {
+          p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / scaledTotalRevenue) * 100 * 100) / 100;
+        }
+      });
+    }
+    
+    const sumUnitsAfter = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    const sumRevenueAfter = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    
+    console.log("📉 NORMALIZATION APPLIED", {
+      before: sumUnitsBefore,
+      after: sumUnitsAfter,
+      revenue_before: sumRevenueBefore,
+      revenue_after: sumRevenueAfter,
+      competition_level: competitionLevel,
+      ceiling: {
+        units: unitsCeiling,
+        revenue: revenueCeiling,
+      },
+      scale_factor: clampedScale.toFixed(3),
+      reason: unitsExceedsCeiling || revenueExceedsCeiling 
+        ? "Totals exceeded plausible ceiling, scaled proportionally"
+        : "No scaling needed",
+    });
+  } else {
+    // No normalization needed - totals are within plausible range
+    console.log("📉 NORMALIZATION CHECK", {
+      total_units: sumUnitsBefore,
+      total_revenue: sumRevenueBefore,
+      ceiling: {
+        units: unitsCeiling,
+        revenue: revenueCeiling,
+      },
+      competition_level: competitionLevel,
+      normalized: false,
+      reason: "Totals within plausible range",
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // STEP 3: INVARIANT VALIDATION
   // ═══════════════════════════════════════════════════════════════════════════
   const sumUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
