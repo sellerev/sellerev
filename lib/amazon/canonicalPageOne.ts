@@ -15,6 +15,7 @@
  */
 
 import { ParsedListing, KeywordMarketSnapshot } from "./keywordMarket";
+import { estimatePageOneDemand } from "./pageOneDemand";
 
 export interface CanonicalProduct {
   rank: number;
@@ -45,6 +46,8 @@ export interface CanonicalProduct {
  * - DO NOT return empty if listings exist
  * - Always return Page-1 rows if listings exist
  * 
+ * HELIUM-10 STYLE: Estimate total Page-1 demand first, then allocate across products
+ * 
  * @param listings - Raw listings from keyword search results
  * @returns Array of canonical products (always non-empty if listings exist)
  */
@@ -53,67 +56,146 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     return [];
   }
 
-  const products = listings.map((l, i) => {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 1: ESTIMATE TOTAL PAGE-1 DEMAND (Helium-10 Style)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Calculate average price for demand estimation
+  const prices = listings
+    .map(l => l.price)
+    .filter((p): p is number => p !== null && p > 0);
+  const avgPrice = prices.length > 0
+    ? prices.reduce((sum, p) => sum + p, 0) / prices.length
+    : null;
+
+  // Infer category from listings (check main_category if available)
+  const categories = listings
+    .map(l => l.main_category)
+    .filter((c): c is string => c !== null && c !== undefined);
+  const category = categories.length > 0 ? categories[0] : null;
+
+  // Estimate total Page-1 demand
+  const pageOneDemand = estimatePageOneDemand({
+    listings,
+    category,
+    avgPrice,
+  });
+
+  const totalPage1Units = pageOneDemand.total_monthly_units_est;
+  const totalPage1Revenue = pageOneDemand.total_monthly_revenue_est;
+
+  console.log("📊 PAGE-1 TOTAL UNITS", totalPage1Units);
+  console.log("📊 PAGE-1 TOTAL REVENUE", totalPage1Revenue);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2: ALLOCATE DEMAND ACROSS PRODUCTS
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Calculate median review count for comparison
+  const reviews = listings
+    .map(l => l.reviews)
+    .filter((r): r is number => r !== null && r > 0);
+  const medianReviews = reviews.length > 0
+    ? [...reviews].sort((a, b) => a - b)[Math.floor(reviews.length / 2)]
+    : 0;
+
+  // Calculate median rating for comparison
+  const ratings = listings
+    .map(l => l.rating)
+    .filter((r): r is number => r !== null && r > 0);
+  const medianRating = ratings.length > 0
+    ? [...ratings].sort((a, b) => a - b)[Math.floor(ratings.length / 2)]
+    : 4.0;
+
+  // Build products with allocation weights
+  const productsWithWeights = listings.map((l, i) => {
     const bsr = l.bsr ?? l.main_category_bsr ?? null;
     const rank = i + 1;
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // ESTIMATION LOGIC: Units and Revenue per ASIN
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Step 1: Estimate units from BSR if not already present
-    let estimatedUnits: number;
-    if (l.est_monthly_units !== null && l.est_monthly_units !== undefined) {
-      // Use existing estimate
-      estimatedUnits = l.est_monthly_units;
-    } else if (bsr !== null && bsr > 0) {
-      // Estimate from BSR: units = round(600000 / Math.pow(bsr, 0.45))
-      const rawUnits = Math.round(600000 / Math.pow(bsr, 0.45));
-      // Clamp to reasonable range: min 50, max 50000
-      estimatedUnits = Math.max(50, Math.min(50000, rawUnits));
-    } else {
-      // Fallback: Estimate units using rank position
-      // units = Math.round(3000 / rank)
-      const rawUnits = Math.round(3000 / rank);
-      // Clamp to reasonable range: min 50, max 50000
-      estimatedUnits = Math.max(50, Math.min(50000, rawUnits));
-    }
-    
-    // Step 2: Estimate revenue from units and price if not already present
-    let estimatedRevenue: number;
-    if (l.est_monthly_revenue !== null && l.est_monthly_revenue !== undefined) {
-      // Use existing estimate
-      estimatedRevenue = l.est_monthly_revenue;
-    } else if (estimatedUnits > 0 && l.price && l.price > 0) {
-      // Calculate revenue: revenue = units × price (rounded to nearest integer)
-      estimatedRevenue = Math.round(estimatedUnits * l.price);
-    } else {
-      // Cannot estimate - default to 0 (interface requires number)
-      estimatedRevenue = 0;
-    }
+    const price = l.price ?? 0;
+    const reviewCount = l.reviews ?? 0;
+    const rating = l.rating ?? 0;
+
+    // Calculate allocation weight based on:
+    // 1. Rank (lower rank = higher weight)
+    // 2. Review advantage vs median (more reviews = higher weight)
+    // 3. Rating penalty (lower rating = lower weight)
+    // 4. Price deviation (closer to median = higher weight, but less impact)
+
+    // Rank weight: exponential decay (position 1 gets highest weight)
+    const rankWeight = 1.0 / Math.pow(rank, 0.7);
+
+    // Review advantage: ratio vs median (clamped to 0.5x - 2.0x)
+    const reviewRatio = medianReviews > 0
+      ? Math.max(0.5, Math.min(2.0, reviewCount / medianReviews))
+      : 1.0;
+    const reviewWeight = reviewRatio;
+
+    // Rating penalty: products below median rating get penalized
+    const ratingPenalty = rating >= medianRating
+      ? 1.0
+      : Math.max(0.3, 1.0 - (medianRating - rating) * 0.5);
+
+    // Price deviation: products closer to median price get slight boost
+    // But price has less impact than rank/reviews
+    const priceDeviation = avgPrice && avgPrice > 0
+      ? Math.abs(price - avgPrice) / avgPrice
+      : 0;
+    const priceWeight = Math.max(0.8, 1.0 - priceDeviation * 0.2);
+
+    // Combined weight
+    const allocationWeight = rankWeight * reviewWeight * ratingPenalty * priceWeight;
+
+    return {
+      listing: l,
+      rank,
+      bsr,
+      price,
+      reviewCount,
+      rating,
+      allocationWeight,
+    };
+  });
+
+  // Normalize weights to sum to 1.0
+  const totalWeight = productsWithWeights.reduce((sum, p) => sum + p.allocationWeight, 0);
+  if (totalWeight === 0) {
+    // Fallback: equal allocation
+    productsWithWeights.forEach(p => {
+      p.allocationWeight = 1.0 / productsWithWeights.length;
+    });
+  } else {
+    productsWithWeights.forEach(p => {
+      p.allocationWeight = p.allocationWeight / totalWeight;
+    });
+  }
+
+  // Allocate units and revenue
+  const products = productsWithWeights.map((pw, i) => {
+    const l = pw.listing;
+    const allocatedUnits = Math.max(1, Math.round(totalPage1Units * pw.allocationWeight));
+    const allocatedRevenue = Math.round(allocatedUnits * pw.price);
 
     const asin = l.asin ?? `KEYWORD-${i + 1}`;
-    
-    // Log sample estimate for first product
+
+    // Log sample allocation for first product
     if (i === 0) {
-      console.log("📊 KEYWORD ESTIMATE SAMPLE", {
+      console.log("📊 ALLOCATION SAMPLE", {
         asin,
-        rank,
-        bsr,
-        units: estimatedUnits,
-        revenue: estimatedRevenue,
+        rank: pw.rank,
+        weight: pw.allocationWeight.toFixed(4),
+        allocated_units: allocatedUnits,
+        allocated_revenue: allocatedRevenue,
       });
     }
-    
+
     return {
-      rank: i + 1,
+      rank: pw.rank,
       asin, // Allow synthetic ASINs for keywords
       title: l.title ?? "Unknown product",
-      price: l.price ?? 0,
-      rating: l.rating ?? 0,
-      review_count: l.reviews ?? 0,
-      bsr,
-      estimated_monthly_units: estimatedUnits,
-      estimated_monthly_revenue: estimatedRevenue,
+      price: pw.price,
+      rating: pw.rating,
+      review_count: pw.reviewCount,
+      bsr: pw.bsr,
+      estimated_monthly_units: allocatedUnits,
+      estimated_monthly_revenue: allocatedRevenue,
       revenue_share_pct: 0, // Will be calculated after all products are built
       image_url: l.image_url ?? null,
       fulfillment: (l.fulfillment === "FBA" ? "FBA" : l.fulfillment === "Amazon" ? "AMZ" : "FBM") as "FBA" | "FBM" | "AMZ",
@@ -123,10 +205,10 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     };
   });
 
-  // Calculate total revenue from estimated values for revenue share percentages
+  // Calculate total revenue from allocated values for revenue share percentages
   const totalRevenue = products.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
   
-  // Calculate revenue share percentages using estimated revenues
+  // Calculate revenue share percentages using allocated revenues
   products.forEach(p => {
     if (totalRevenue > 0 && p.estimated_monthly_revenue > 0) {
       p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / totalRevenue) * 100 * 100) / 100;
@@ -135,17 +217,38 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     }
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 3: VALIDATION - Ensure sum matches total
+  // ═══════════════════════════════════════════════════════════════════════════
+  const sumUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const sumRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const unitsDiff = Math.abs(sumUnits - totalPage1Units);
+  const revenueDiff = Math.abs(sumRevenue - totalPage1Revenue);
+  const unitsDiffPct = totalPage1Units > 0 ? (unitsDiff / totalPage1Units) * 100 : 0;
+  const revenueDiffPct = totalPage1Revenue > 0 ? (revenueDiff / totalPage1Revenue) * 100 : 0;
+
+  console.log("⚖️ DEMAND DISTRIBUTION CHECK", {
+    total_page1_units: totalPage1Units,
+    sum_allocated_units: sumUnits,
+    units_diff: unitsDiff,
+    units_diff_pct: unitsDiffPct.toFixed(2) + "%",
+    total_page1_revenue: totalPage1Revenue,
+    sum_allocated_revenue: sumRevenue,
+    revenue_diff: revenueDiff,
+    revenue_diff_pct: revenueDiffPct.toFixed(2) + "%",
+  });
+
   console.log("✅ KEYWORD PAGE-1 COUNT", products.length);
   if (products.length > 0) {
     console.log("📦 SAMPLE PRODUCT", products[0]);
   }
   
-  // Log estimation statistics
-  const estimatedCount = products.filter(p => p.estimated_monthly_units > 0 || p.estimated_monthly_revenue > 0).length;
-  if (estimatedCount > 0) {
-    console.log("📊 ESTIMATION APPLIED", {
+  // Log allocation statistics
+  const allocatedCount = products.filter(p => p.estimated_monthly_units > 0 || p.estimated_monthly_revenue > 0).length;
+  if (allocatedCount > 0) {
+    console.log("📊 ALLOCATION APPLIED", {
       total_products: products.length,
-      products_with_estimates: estimatedCount,
+      products_with_allocations: allocatedCount,
       sample_asin: products[0]?.asin,
       sample_bsr: products[0]?.bsr,
       sample_units: products[0]?.estimated_monthly_units,

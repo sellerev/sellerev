@@ -401,7 +401,8 @@ export async function buildKeywordAnalyzeResponse(
   // ═══════════════════════════════════════════════════════════════════════════
   // If canonical products are provided, aggregate totals for market snapshot
   if (canonicalProducts && canonicalProducts.length > 0) {
-    // Compute totals from canonical products (ignore zero/missing values)
+    // HELIUM-10 STYLE: Use Page-1 totals directly (products are allocated from total)
+    // The sum of allocated units/revenue equals the Page-1 total estimate
     const productsWithUnits = canonicalProducts.filter(p => p.estimated_monthly_units > 0);
     const totalMonthlyUnits = productsWithUnits.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
     
@@ -455,8 +456,16 @@ export async function buildKeywordAnalyzeResponse(
     ? pageOneBsrs.reduce((sum, b) => sum + b, 0) / pageOneBsrs.length
     : null;
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HELIUM-10 STYLE: Use Page-1 totals (sum of allocated = Page-1 total)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Products are allocated from Page-1 total, so sum equals Page-1 total estimate
+  // These are the official snapshot values (not independent per-product estimates)
   const total_monthly_units_est = pageOneListings.reduce((sum, p) => sum + (p.estimated_monthly_units || 0), 0);
   const total_monthly_revenue_est = pageOneListings.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
+  
+  console.log("📊 PAGE-1 TOTAL UNITS (from allocated products)", total_monthly_units_est);
+  console.log("📊 PAGE-1 TOTAL REVENUE (from allocated products)", total_monthly_revenue_est);
   
   let summary = {
     search_volume_est: null, // TODO: Extract from search_demand if available
