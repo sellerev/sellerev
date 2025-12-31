@@ -58,10 +58,57 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 0: ASIN DEDUPLICATION (BEFORE ANY ESTIMATION)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Core rule: One ASIN = one canonical product
+  // Group by ASIN and keep only the instance with the best (lowest) rank
+  const rawCount = listings.length;
+  const asinMap = new Map<string, { listing: ParsedListing; originalRank: number }>();
+  
+  // Track original position for ranking
+  listings.forEach((listing, index) => {
+    const asin = listing.asin || `KEYWORD-${index + 1}`;
+    const originalRank = listing.position || index + 1;
+    
+    // If ASIN already seen, keep the one with better (lower) rank
+    if (asinMap.has(asin)) {
+      const existing = asinMap.get(asin)!;
+      if (originalRank < existing.originalRank) {
+        asinMap.set(asin, { listing, originalRank });
+      }
+    } else {
+      asinMap.set(asin, { listing, originalRank });
+    }
+  });
+  
+  // Convert back to array and sort by original rank
+  const deduplicatedListings = Array.from(asinMap.values())
+    .sort((a, b) => a.originalRank - b.originalRank)
+    .map(item => item.listing);
+  
+  const dedupedCount = deduplicatedListings.length;
+  const duplicatesRemoved = rawCount - dedupedCount;
+  
+  console.log("✅ ASIN DEDUP COMPLETE", {
+    raw: rawCount,
+    deduped: dedupedCount,
+    duplicates_removed: duplicatesRemoved,
+  });
+  
+  if (duplicatesRemoved > 0) {
+    console.log("🔍 DEDUPLICATION DETAILS", {
+      duplicates_removed: duplicatesRemoved,
+      unique_asins: dedupedCount,
+      duplicate_rate: ((duplicatesRemoved / rawCount) * 100).toFixed(1) + "%",
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // STEP 1: ESTIMATE TOTAL PAGE-1 DEMAND (Helium-10 Style)
   // ═══════════════════════════════════════════════════════════════════════════
+  // Use deduplicated listings for all subsequent logic
   // Calculate average price for demand estimation
-  const prices = listings
+  const prices = deduplicatedListings
     .map(l => l.price)
     .filter((p): p is number => p !== null && p > 0);
   const avgPrice = prices.length > 0
@@ -69,14 +116,14 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     : null;
 
   // Infer category from listings (check main_category if available)
-  const categories = listings
+  const categories = deduplicatedListings
     .map(l => l.main_category)
     .filter((c): c is string => c !== null && c !== undefined);
   const category = categories.length > 0 ? categories[0] : null;
 
-  // Estimate total Page-1 demand
+  // Estimate total Page-1 demand (using deduplicated listings)
   const pageOneDemand = estimatePageOneDemand({
-    listings,
+    listings: deduplicatedListings,
     category,
     avgPrice,
   });
@@ -87,13 +134,14 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   // ═══════════════════════════════════════════════════════════════════════════
   // CALIBRATION LAYER: Normalize into trusted bands
   // ═══════════════════════════════════════════════════════════════════════════
-  const organicListings = listings.filter(l => !l.is_sponsored);
-  const sponsoredCount = listings.filter(l => l.is_sponsored).length;
-  const sponsoredDensity = listings.length > 0
-    ? (sponsoredCount / listings.length) * 100
+  // Use deduplicated listings for calibration
+  const organicListings = deduplicatedListings.filter(l => !l.is_sponsored);
+  const sponsoredCount = deduplicatedListings.filter(l => l.is_sponsored).length;
+  const sponsoredDensity = deduplicatedListings.length > 0
+    ? (sponsoredCount / deduplicatedListings.length) * 100
     : 0;
 
-  const reviewDispersion = calculateReviewDispersionFromListings(listings);
+  const reviewDispersion = calculateReviewDispersionFromListings(deduplicatedListings);
   
   const priceMin = prices.length > 0 ? Math.min(...prices) : 0;
   const priceMax = prices.length > 0 ? Math.max(...prices) : 0;
@@ -118,8 +166,9 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: ALLOCATE DEMAND ACROSS PRODUCTS
   // ═══════════════════════════════════════════════════════════════════════════
+  // Use deduplicated listings for allocation
   // Calculate median review count for comparison
-  const reviews = listings
+  const reviews = deduplicatedListings
     .map(l => l.reviews)
     .filter((r): r is number => r !== null && r > 0);
   const medianReviews = reviews.length > 0
@@ -127,17 +176,18 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     : 0;
 
   // Calculate median rating for comparison
-  const ratings = listings
+  const ratings = deduplicatedListings
     .map(l => l.rating)
     .filter((r): r is number => r !== null && r > 0);
   const medianRating = ratings.length > 0
     ? [...ratings].sort((a, b) => a - b)[Math.floor(ratings.length / 2)]
     : 4.0;
 
-  // Build products with allocation weights
-  const productsWithWeights = listings.map((l, i) => {
+  // Build products with allocation weights (using deduplicated listings)
+  // Assign new ranks based on deduplicated order (1, 2, 3, ...)
+  const productsWithWeights = deduplicatedListings.map((l, i) => {
     const bsr = l.bsr ?? l.main_category_bsr ?? null;
-    const rank = i + 1;
+    const rank = i + 1; // New rank based on deduplicated order
     const price = l.price ?? 0;
     const reviewCount = l.reviews ?? 0;
     const rating = l.rating ?? 0;
