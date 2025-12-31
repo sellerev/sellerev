@@ -412,11 +412,8 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   const sumRevenueBefore = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
   
   // Determine competition level for ceiling calculation
+  // Reuse reviewDispersion and sponsoredDensity already calculated above for calibration
   const organicCount = deduplicatedListings.filter(l => !l.is_sponsored).length;
-  const reviewDispersion = calculateReviewDispersionFromListings(deduplicatedListings);
-  const sponsoredDensity = deduplicatedListings.length > 0
-    ? (deduplicatedListings.filter(l => l.is_sponsored).length / deduplicatedListings.length) * 100
-    : 0;
   
   // Determine competition level (same logic as calibration)
   let competitionLevel: "low_competition" | "medium_competition" | "high_competition";
