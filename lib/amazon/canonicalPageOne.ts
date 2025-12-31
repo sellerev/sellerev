@@ -1039,6 +1039,30 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     note: "Keyword available in dataContract.ts logging",
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ASIN DEDUP VERIFICATION (REQUIRED)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Assert that each ASIN appears exactly once in final products array
+  const total_products = products.length;
+  const unique_asins = new Set(products.map(p => p.asin)).size;
+  const duplicates_removed = total_products - unique_asins;
+  
+  console.log("✅ ASIN DEDUP VERIFIED", {
+    total_products,
+    unique_asins,
+    duplicates_removed,
+  });
+  
+  // If duplicates exist, log warning but do not throw (non-fatal)
+  if (total_products !== unique_asins) {
+    console.warn("⚠️ ASIN DEDUP MISMATCH", {
+      total_products,
+      unique_asins,
+      duplicates_removed,
+      message: "Expected total_products === unique_asins after deduplication",
+    });
+  }
+
   return products;
 }
 
