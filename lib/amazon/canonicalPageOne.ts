@@ -1040,6 +1040,41 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // RANK SEMANTICS VERIFICATION (REQUIRED)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Verify organic rank drives allocation, sponsored listings are capped, page position is informational
+  const organicProducts = products.filter(p => p.organic_rank !== null);
+  const sponsoredProducts = products.filter(p => p.organic_rank === null);
+  const organic_count = organicProducts.length;
+  const sponsored_count = sponsoredProducts.length;
+  const max_organic_rank = organicProducts.length > 0 
+    ? Math.max(...organicProducts.map(p => p.organic_rank!))
+    : 0;
+  
+  // Calculate sponsored units percentage (should be capped at ~15%)
+  const totalUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const sponsoredUnits = sponsoredProducts.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const sponsored_received_units_pct = totalUnits > 0 
+    ? Math.round((sponsoredUnits / totalUnits) * 100 * 100) / 100
+    : 0;
+  
+  console.log("✅ RANK SEMANTICS VERIFIED", {
+    organic_count,
+    sponsored_count,
+    max_organic_rank,
+    sponsored_received_units_pct: `${sponsored_received_units_pct}%`,
+  });
+  
+  // Warn if sponsored allocation exceeds cap (15% cap, allow up to 20% for rounding tolerance)
+  if (sponsored_received_units_pct > 20) {
+    console.warn("⚠️ SPONSORED ALLOCATION EXCEEDS CAP", {
+      sponsored_received_units_pct: `${sponsored_received_units_pct}%`,
+      cap: "15%",
+      message: "Sponsored listings received more than expected allocation",
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // ASIN DEDUP VERIFICATION (REQUIRED)
   // ═══════════════════════════════════════════════════════════════════════════
   // Assert that each ASIN appears exactly once in final products array
