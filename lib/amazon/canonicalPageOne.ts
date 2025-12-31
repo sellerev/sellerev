@@ -35,9 +35,10 @@ export interface CanonicalProduct {
   seller_country: "US" | "CN" | "Other" | "Unknown";
   snapshot_inferred: boolean;
   snapshot_inferred_fields?: string[];
-  // Algorithm boost tracking (Sellerev-only insight)
-  page_one_appearances: number; // How many times this ASIN appeared in raw search results
+  // Algorithm boost tracking (Sellerev-only insight for AI/Spellbook)
+  page_one_appearances: number; // How many times this ASIN appeared in raw search results (appearance_count)
   is_algorithm_boosted: boolean; // true if page_one_appearances >= 2
+  appeared_multiple_times: boolean; // true if page_one_appearances > 1 (hidden Spellbook signal for dominance/defense reasoning)
 }
 
 /**
@@ -403,9 +404,11 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       brand: l.brand ?? null,
       seller_country: "Unknown" as const,
       snapshot_inferred: false,
-      // Algorithm boost tracking (Sellerev-only insight)
-      page_one_appearances: pw.appearanceCount,
-      is_algorithm_boosted: pw.isAlgorithmBoosted,
+      // Algorithm boost tracking (Sellerev-only insight for AI/Spellbook)
+      // Hidden metadata for AI reasoning - not displayed in UI
+      page_one_appearances: pw.appearanceCount, // appearance_count
+      is_algorithm_boosted: pw.isAlgorithmBoosted, // true if appearances >= 2
+      appeared_multiple_times: pw.appearanceCount > 1, // Explicit flag for dominance/defense reasoning
     };
   });
 
