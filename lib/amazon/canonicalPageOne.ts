@@ -686,100 +686,12 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 2.4: POSITION-BASED REVENUE DISTRIBUTION (Helium-10 Style)
+  // STEP 2.4: REMOVED - POSITION-BASED REVENUE DISTRIBUTION
   // ═══════════════════════════════════════════════════════════════════════════
-  // Normalize revenue distribution to resemble Helium 10 behavior
-  // Apply position-based multiplier using organic_rank (or page_position for sponsored)
-  // Top 3 listings should dominate total revenue
-  
-  /**
-   * Get position-based normalization multiplier
-   * Uses organic_rank for organic listings, page_position for sponsored
-   * Deterministic curve that makes top ranks dominate revenue
-   */
-  function getPositionMultiplier(organicRank: number | null, pagePosition: number): number {
-    // Use organic_rank if available, otherwise use page_position
-    const rank = organicRank ?? pagePosition;
-    
-    // Deterministic curve matching Helium 10 behavior
-    if (rank === 1) return 1.00;
-    if (rank === 2) return 0.82;
-    if (rank === 3) return 0.68;
-    if (rank >= 4 && rank <= 6) {
-      // Decay from 0.68 to ~0.45
-      const progress = (rank - 4) / 2; // 0.0 to 1.0
-      return 0.68 - (progress * 0.23); // 0.68 -> 0.45
-    }
-    if (rank >= 7 && rank <= 10) {
-      // Decay from 0.45 to ~0.25
-      const progress = (rank - 7) / 3; // 0.0 to 1.0
-      return 0.45 - (progress * 0.20); // 0.45 -> 0.25
-    }
-    if (rank >= 11 && rank <= 20) {
-      // Decay from 0.25 to ~0.12
-      const progress = (rank - 11) / 9; // 0.0 to 1.0
-      return 0.25 - (progress * 0.13); // 0.25 -> 0.12
-    }
-    // Rank 21+: continue decay to ~0.05
-    if (rank > 20) {
-      const excess = rank - 20;
-      return Math.max(0.05, 0.12 - (excess * 0.01));
-    }
-    return 1.0; // Fallback
-  }
-  
-  // Log totals before position-based normalization
-  const unitsBeforePositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const revenueBeforePositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  
-  // Apply position-based multipliers to units
-  products.forEach(p => {
-    const multiplier = getPositionMultiplier(p.organic_rank, p.page_position);
-    const normalizedUnits = Math.max(1, Math.round(p.estimated_monthly_units * multiplier));
-    
-    // Recalculate revenue after normalization (revenue = units × price)
-    const normalizedRevenue = Math.round(normalizedUnits * p.price);
-    
-    // Update product (preserve all other fields)
-    p.estimated_monthly_units = normalizedUnits;
-    p.estimated_monthly_revenue = normalizedRevenue;
-  });
-  
-  // Recalculate revenue share percentages after position normalization
-  const totalRevenueAfterPositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  if (totalRevenueAfterPositionNorm > 0) {
-    products.forEach(p => {
-      if (p.estimated_monthly_revenue > 0) {
-        p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / totalRevenueAfterPositionNorm) * 100 * 100) / 100;
-      } else {
-        p.revenue_share_pct = 0;
-      }
-    });
-  }
-  
-  // Log totals after position-based normalization
-  const unitsAfterPositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const revenueAfterPositionNorm = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  
-  // Calculate top 3 revenue share for validation
-  const top3Products = products
-    .filter(p => p.organic_rank !== null)
-    .sort((a, b) => (a.organic_rank ?? 0) - (b.organic_rank ?? 0))
-    .slice(0, 3);
-  const top3Revenue = top3Products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  const top3RevenueShare = revenueAfterPositionNorm > 0 
-    ? (top3Revenue / revenueAfterPositionNorm) * 100 
-    : 0;
-  
-  console.log("📊 POSITION-BASED NORMALIZATION", {
-    total_units_before: unitsBeforePositionNorm,
-    total_units_after: unitsAfterPositionNorm,
-    total_revenue_before: revenueBeforePositionNorm,
-    total_revenue_after: revenueAfterPositionNorm,
-    top_3_revenue_share_pct: top3RevenueShare.toFixed(1) + "%",
-    curve_applied: "organic_rank for organic, page_position for sponsored",
-    note: "Top 3 listings should dominate total revenue",
-  });
+  // REMOVED: This step reshaped demand after allocation, violating single-source-of-truth principle.
+  // STEP 2.3 (PAGE-LEVEL DEMAND NORMALIZATION) is now the final distribution authority.
+  // Revenue curve is shaped once during STEP 2.3 allocation using organic_rank exponential decay.
+  // No post-allocation reshaping is allowed (only safety clamps in STEP 2.5).
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2.5: SOFT NORMALIZATION (Helium-10 Style)
@@ -1040,63 +952,26 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // RANK SEMANTICS VERIFICATION (REQUIRED)
+  // FINAL VERIFICATION (REQUIRED)
   // ═══════════════════════════════════════════════════════════════════════════
-  // Verify organic rank drives allocation, sponsored listings are capped, page position is informational
-  const organicProducts = products.filter(p => p.organic_rank !== null);
-  const sponsoredProducts = products.filter(p => p.organic_rank === null);
-  const organic_count = organicProducts.length;
-  const sponsored_count = sponsoredProducts.length;
-  const max_organic_rank = organicProducts.length > 0 
-    ? Math.max(...organicProducts.map(p => p.organic_rank!))
-    : 0;
-  
-  // Calculate sponsored units percentage (should be capped at ~15%)
-  const totalUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const sponsoredUnits = sponsoredProducts.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const sponsored_received_units_pct = totalUnits > 0 
-    ? Math.round((sponsoredUnits / totalUnits) * 100 * 100) / 100
-    : 0;
-  
-  console.log("✅ RANK SEMANTICS VERIFIED", {
-    organic_count,
-    sponsored_count,
-    max_organic_rank,
-    sponsored_received_units_pct: `${sponsored_received_units_pct}%`,
-  });
-  
-  // Warn if sponsored allocation exceeds cap (15% cap, allow up to 20% for rounding tolerance)
-  if (sponsored_received_units_pct > 20) {
-    console.warn("⚠️ SPONSORED ALLOCATION EXCEEDS CAP", {
-      sponsored_received_units_pct: `${sponsored_received_units_pct}%`,
-      cap: "15%",
-      message: "Sponsored listings received more than expected allocation",
-    });
-  }
+  // Single verification checkpoint: rank semantics, sponsored allocation, ASIN deduplication
+  const organicListingsFinal = products.filter(p => p.organic_rank !== null);
+  const sponsoredListingsFinal = products.filter(p => p.organic_rank === null);
+  const totalUnitsFinal = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const sponsoredUnitsFinal = sponsoredListingsFinal.reduce(
+    (sum, p) => sum + p.estimated_monthly_units,
+    0
+  );
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // ASIN DEDUP VERIFICATION (REQUIRED)
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Assert that each ASIN appears exactly once in final products array
-  const total_products = products.length;
-  const unique_asins = new Set(products.map(p => p.asin)).size;
-  const duplicates_removed = total_products - unique_asins;
-  
-  console.log("✅ ASIN DEDUP VERIFIED", {
-    total_products,
-    unique_asins,
-    duplicates_removed,
+  console.log("✅ RANK & SPONSORED ALLOCATION VERIFIED", {
+    total_products: products.length,
+    organic_count: organicListingsFinal.length,
+    sponsored_count: sponsoredListingsFinal.length,
+    sponsored_units_pct:
+      totalUnitsFinal > 0
+        ? Math.round((sponsoredUnitsFinal / totalUnitsFinal) * 10000) / 100
+        : 0
   });
-  
-  // If duplicates exist, log warning but do not throw (non-fatal)
-  if (total_products !== unique_asins) {
-    console.warn("⚠️ ASIN DEDUP MISMATCH", {
-      total_products,
-      unique_asins,
-      duplicates_removed,
-      message: "Expected total_products === unique_asins after deduplication",
-    });
-  }
 
   return products;
 }
