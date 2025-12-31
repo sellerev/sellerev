@@ -11,7 +11,7 @@ The Analyze feature is the core product analysis system that evaluates Amazon pr
 User Input (Keyword)
     ↓
 Frontend (AnalyzeForm.tsx)
-    ↓
+    ↓å
 API Route (/api/analyze)
     ↓
 Data Fetching (Market-First Architecture)
