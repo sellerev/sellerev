@@ -61,29 +61,67 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   // STEP 0: ASIN DEDUPLICATION (BEFORE ANY ESTIMATION)
   // ═══════════════════════════════════════════════════════════════════════════
   // Core rule: One ASIN = one canonical product
-  // Group by ASIN and keep only the instance with the best (lowest) rank
+  // HELIUM-10 BEHAVIOR: Use the BEST (lowest number) rank an ASIN holds on Page-1
+  // 
+  // For each ASIN:
+  // - If it appears multiple times: canonical rank = LOWEST rank number
+  // - Example: rank 3 beats rank 8 (better visibility)
   const rawCount = listings.length;
-  const asinMap = new Map<string, { listing: ParsedListing; originalRank: number }>();
+  const asinMap = new Map<string, { 
+    listing: ParsedListing; 
+    bestRank: number; // Best (lowest) rank this ASIN appears at
+    allRanks: number[]; // Track all ranks for logging
+  }>();
   
-  // Track original position for ranking
+  // Track all instances to find best rank per ASIN
   listings.forEach((listing, index) => {
     const asin = listing.asin || `KEYWORD-${index + 1}`;
-    const originalRank = listing.position || index + 1;
+    const currentRank = listing.position || index + 1;
     
-    // If ASIN already seen, keep the one with better (lower) rank
     if (asinMap.has(asin)) {
       const existing = asinMap.get(asin)!;
-      if (originalRank < existing.originalRank) {
-        asinMap.set(asin, { listing, originalRank });
+      existing.allRanks.push(currentRank);
+      
+      // Keep the instance with the BEST (lowest) rank
+      // Lower rank number = better visibility = canonical rank
+      if (currentRank < existing.bestRank) {
+        existing.bestRank = currentRank;
+        existing.listing = listing; // Update to best-ranked instance
       }
     } else {
-      asinMap.set(asin, { listing, originalRank });
+      asinMap.set(asin, { 
+        listing, 
+        bestRank: currentRank,
+        allRanks: [currentRank],
+      });
     }
   });
   
-  // Convert back to array and sort by original rank
+  // Log canonical rank selection for each ASIN
+  asinMap.forEach((value, asin) => {
+    if (value.allRanks.length > 1) {
+      // ASIN appeared multiple times - log the selection
+      console.log("📊 CANONICAL RANK SELECTED", {
+        asin,
+        rank: value.bestRank,
+        all_ranks: value.allRanks.sort((a, b) => a - b),
+        selection_reason: `Best (lowest) rank selected from ${value.allRanks.length} appearances`,
+      });
+    } else {
+      // Single appearance - still log for consistency
+      console.log("📊 CANONICAL RANK SELECTED", {
+        asin,
+        rank: value.bestRank,
+        all_ranks: [value.bestRank],
+        selection_reason: "Single appearance",
+      });
+    }
+  });
+  
+  // Convert back to array and sort by best rank (canonical order)
+  // This ensures products are ordered by their best Page-1 visibility
   const deduplicatedListings = Array.from(asinMap.values())
-    .sort((a, b) => a.originalRank - b.originalRank)
+    .sort((a, b) => a.bestRank - b.bestRank) // Sort by best rank
     .map(item => item.listing);
   
   const dedupedCount = deduplicatedListings.length;
@@ -93,6 +131,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     raw: rawCount,
     deduped: dedupedCount,
     duplicates_removed: duplicatesRemoved,
+    rank_logic: "best_rank_selected", // Explicitly document the logic
   });
   
   if (duplicatesRemoved > 0) {
@@ -100,6 +139,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       duplicates_removed: duplicatesRemoved,
       unique_asins: dedupedCount,
       duplicate_rate: ((duplicatesRemoved / rawCount) * 100).toFixed(1) + "%",
+      rank_selection: "best_rank_per_asin", // Document rank selection method
     });
   }
 
