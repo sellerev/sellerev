@@ -783,6 +783,43 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     note: "organic_rank excludes sponsored listings, page_position includes all",
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CALIBRATION LOGGING (Helium-10 Comparison)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Log metrics to compare Sellerev outputs against Helium-10 ranges
+  // Do NOT modify estimation logic - this is observation only
+  const totalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  
+  // Calculate top 3 revenue share
+  const sortedByRevenue = [...products]
+    .sort((a, b) => b.estimated_monthly_revenue - a.estimated_monthly_revenue);
+  const top3Revenue = sortedByRevenue.slice(0, 3).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const top3Pct = totalRevenue > 0 ? (top3Revenue / totalRevenue) * 100 : 0;
+  
+  // Calculate top 10 revenue share
+  const top10Revenue = sortedByRevenue.slice(0, 10).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const top10Pct = totalRevenue > 0 ? (top10Revenue / totalRevenue) * 100 : 0;
+  
+  // Calculate median product revenue
+  const revenues = products
+    .map(p => p.estimated_monthly_revenue)
+    .filter(r => r > 0)
+    .sort((a, b) => a - b);
+  const medianRevenue = revenues.length > 0
+    ? (revenues.length % 2 === 0
+        ? (revenues[Math.floor(revenues.length / 2) - 1] + revenues[Math.floor(revenues.length / 2)]) / 2
+        : revenues[Math.floor(revenues.length / 2)])
+    : 0;
+  
+  // Log calibration metrics (keyword not available in this context)
+  console.log("📊 CALIBRATION METRICS (Helium-10 Comparison)", {
+    total_revenue: Math.round(totalRevenue),
+    top3_pct: Math.round(top3Pct * 100) / 100,
+    top10_pct: Math.round(top10Pct * 100) / 100,
+    median_revenue: Math.round(medianRevenue),
+    note: "Keyword available in dataContract.ts logging",
+  });
+
   return products;
 }
 
