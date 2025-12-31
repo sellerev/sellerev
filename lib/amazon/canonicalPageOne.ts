@@ -19,7 +19,7 @@ import { estimatePageOneDemand } from "./pageOneDemand";
 import { calibrateMarketTotals, calculateReviewDispersionFromListings, validateInvariants } from "./calibration";
 
 export interface CanonicalProduct {
-  rank: number;
+  rank: number | null; // Legacy field - kept for backward compatibility (equals organic_rank for organic, null for sponsored)
   asin: string;
   title: string;
   image_url: string | null;
@@ -39,6 +39,9 @@ export interface CanonicalProduct {
   page_one_appearances: number; // How many times this ASIN appeared in raw search results (appearance_count)
   is_algorithm_boosted: boolean; // true if page_one_appearances >= 2
   appeared_multiple_times: boolean; // true if page_one_appearances > 1 (hidden Spellbook signal for dominance/defense reasoning)
+  // Helium-10 style rank semantics
+  organic_rank: number | null; // Position among organic listings only (1, 2, 3...) or null if sponsored
+  page_position: number; // Actual Page-1 position including sponsored listings (1, 2, 3...)
 }
 
 /**
@@ -166,6 +169,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     deduped: dedupedCount,
     duplicates_removed: duplicatesRemoved,
     rank_logic: "best_rank_selected", // Explicitly document the logic
+    organic_rank_logic: "organic_listings_only", // Organic rank excludes sponsored
   });
   
   if (duplicatesRemoved > 0) {
@@ -258,16 +262,46 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     : 4.0;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // NORMALIZE RANK (Helium-10 Style)
+  // ORGANIC RANK SEMANTICS (Helium-10 Style)
   // ═══════════════════════════════════════════════════════════════════════════
-  // Rule: Rank = Page-1 position after ASIN deduplication
-  // Rank must be sequential (1...N) and never differ for the same ASIN
+  // Distinction between:
+  // - organic_rank: Position among organic listings only (1, 2, 3...)
+  // - page_position: Actual Page-1 position including sponsored (1, 2, 3...)
+  // 
+  // Use organic_rank for estimation logic and competitive comparisons
+  // Sponsored listings do NOT inflate organic rank
+  
+  // Separate organic and sponsored listings for rank assignment
+  const organicListingsWithMetadata = deduplicatedListingsWithMetadata.filter(
+    item => !item.listing.is_sponsored
+  );
+  const sponsoredListingsWithMetadata = deduplicatedListingsWithMetadata.filter(
+    item => item.listing.is_sponsored
+  );
+  
+  // Assign organic_rank to organic listings (1, 2, 3...)
+  // Sort by bestRank to maintain Page-1 order
+  const organicListingsRanked = organicListingsWithMetadata
+    .sort((a, b) => a.bestRank - b.bestRank)
+    .map((item, i) => ({
+      ...item,
+      organicRank: i + 1, // Organic rank starts at 1
+    }));
+  
+  // Combine organic (with organic_rank) and sponsored (organic_rank = null)
+  // Sort by bestRank to maintain Page-1 order
+  const allListingsWithRanks = [
+    ...organicListingsRanked.map(item => ({ ...item, organicRank: item.organicRank })),
+    ...sponsoredListingsWithMetadata.map(item => ({ ...item, organicRank: null })),
+  ].sort((a, b) => a.bestRank - b.bestRank);
+  
   // Build products with allocation weights (using deduplicated listings)
-  // Assign new ranks based on deduplicated order (1, 2, 3, ...)
-  const productsWithWeights = deduplicatedListingsWithMetadata.map((item, i) => {
+  // Use organic_rank for estimation logic
+  const productsWithWeights = allListingsWithRanks.map((item, i) => {
     const l = item.listing;
     const bsr = l.bsr ?? l.main_category_bsr ?? null; // Used internally for estimation only
-    const rank = i + 1; // Sequential rank (1...N) - stable and predictable
+    const pagePosition = item.bestRank; // Actual Page-1 position including sponsored
+    const organicRank = item.organicRank; // Position among organic listings only (null for sponsored)
     const price = l.price ?? 0;
     const reviewCount = l.reviews ?? 0;
     const rating = l.rating ?? 0;
@@ -275,13 +309,15 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     const isAlgorithmBoosted = item.isAlgorithmBoosted;
 
     // Calculate allocation weight based on:
-    // 1. Rank (lower rank = higher weight)
+    // 1. Organic rank (lower rank = higher weight) - use organic_rank for estimation
     // 2. Review advantage vs median (more reviews = higher weight)
     // 3. Rating penalty (lower rating = lower weight)
     // 4. Price deviation (closer to median = higher weight, but less impact)
 
     // Rank weight: exponential decay (position 1 gets highest weight)
-    const rankWeight = 1.0 / Math.pow(rank, 0.7);
+    // Use organic_rank for organic listings, fallback to page_position for sponsored
+    const rankForWeight = organicRank ?? pagePosition;
+    const rankWeight = 1.0 / Math.pow(rankForWeight, 0.7);
 
     // Review advantage: ratio vs median (clamped to 0.5x - 2.0x)
     const reviewRatio = medianReviews > 0
@@ -306,7 +342,8 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
 
     return {
       listing: l,
-      rank,
+      pagePosition, // Actual Page-1 position including sponsored
+      organicRank, // Position among organic listings only (null for sponsored)
       bsr,
       price,
       reviewCount,
@@ -342,7 +379,8 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     if (i === 0) {
       console.log("📊 ALLOCATION SAMPLE", {
         asin,
-        rank: pw.rank,
+        organic_rank: pw.organicRank,
+        page_position: pw.pagePosition,
         weight: pw.allocationWeight.toFixed(4),
         allocated_units: allocatedUnits,
         allocated_revenue: allocatedRevenue,
@@ -355,7 +393,8 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     if (pw.isAlgorithmBoosted) {
       console.log("🚀 ALGORITHM BOOST DETECTED", {
         asin,
-        rank: pw.rank,
+        organic_rank: pw.organicRank,
+        page_position: pw.pagePosition,
         page_one_appearances: pw.appearanceCount,
         insight: "This ASIN appears multiple times on Page-1, indicating Amazon algorithm boost",
       });
@@ -389,7 +428,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     const displayBsr: number | null = null; // Always null for keyword Page-1
 
     return {
-      rank: pw.rank, // Sequential rank (1...N) after deduplication - stable and predictable
+      rank: pw.organicRank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
       asin, // Allow synthetic ASINs for keywords
       title: l.title ?? "Unknown product",
       price: pw.price,
@@ -409,6 +448,9 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       page_one_appearances: pw.appearanceCount, // appearance_count
       is_algorithm_boosted: pw.isAlgorithmBoosted, // true if appearances >= 2
       appeared_multiple_times: pw.appearanceCount > 1, // Explicit flag for dominance/defense reasoning
+      // Helium-10 style rank semantics
+      organic_rank: pw.organicRank, // Position among organic listings only (null for sponsored)
+      page_position: pw.pagePosition, // Actual Page-1 position including sponsored
     };
   });
 
@@ -572,17 +614,24 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   const fbmCount = products.filter(p => p.fulfillment === "FBM").length;
   const amzCount = products.filter(p => p.fulfillment === "AMZ").length;
   const bsrDisplayCount = products.filter(p => p.bsr !== null).length;
+  const organicProducts = products.filter(p => p.organic_rank !== null);
+  const sponsoredProducts = products.filter(p => p.organic_rank === null);
   
   console.log("📋 NORMALIZATION SUMMARY", {
     total_products: products.length,
-    ranks: `1-${products.length} (sequential)`,
+    organic_rank_range: organicProducts.length > 0
+      ? `1-${Math.max(...organicProducts.map(p => p.organic_rank!))} (organic only)`
+      : "N/A",
+    page_position_range: products.length > 0
+      ? `1-${Math.max(...products.map(p => p.page_position))} (all listings)`
+      : "N/A",
     fulfillment: {
       fba: fbaCount,
       fbm: fbmCount,
       amazon: amzCount,
     },
     bsr_display: bsrDisplayCount === 0 ? "hidden (null)" : `WARNING: ${bsrDisplayCount} products have BSR`,
-    rank_logic: "sequential_after_deduplication",
+    rank_logic: "organic_rank_excludes_sponsored",
     fulfillment_logic: "prime_eligible_fba_else_fbm",
     bsr_logic: "hidden_for_keyword_page1",
   });
@@ -617,11 +666,26 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       boosted_asins: algorithmBoostedProducts.map(p => ({
         asin: p.asin,
         appearances: p.page_one_appearances,
-        rank: p.rank,
+        organic_rank: p.organic_rank,
+        page_position: p.page_position,
       })),
       insight: "These ASINs appear multiple times on Page-1, indicating Amazon algorithm boost",
     });
   }
+  
+  // Log organic rank summary
+  console.log("📊 ORGANIC RANK SEMANTICS", {
+    total_products: products.length,
+    organic_count: organicProducts.length,
+    sponsored_count: sponsoredProducts.length,
+    organic_rank_range: organicProducts.length > 0 
+      ? `1-${Math.max(...organicProducts.map(p => p.organic_rank!))}`
+      : "N/A",
+    page_position_range: products.length > 0
+      ? `1-${Math.max(...products.map(p => p.page_position))}`
+      : "N/A",
+    note: "organic_rank excludes sponsored listings, page_position includes all",
+  });
 
   return products;
 }

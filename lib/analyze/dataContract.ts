@@ -68,7 +68,7 @@ export interface KeywordAnalyzeResponse {
 
   // B) Page-1 Product Table (Top 20, Organic Only)
   products: Array<{
-    rank: number;
+    rank: number | null; // Legacy field - equals organic_rank for organic, null for sponsored
     asin: string;
     title: string;
     image_url: string | null;
@@ -86,11 +86,14 @@ export interface KeywordAnalyzeResponse {
     page_one_appearances: number; // appearance_count
     is_algorithm_boosted: boolean; // true if appearances >= 2
     appeared_multiple_times: boolean; // true if appearances > 1 (hidden Spellbook signal)
+    // Helium-10 style rank semantics
+    organic_rank: number | null; // Position among organic listings only (null for sponsored)
+    page_position: number; // Actual Page-1 position including sponsored listings
   }>;
   
   // B-2) Canonical Page-1 Array (explicit for UI)
   page_one_listings: Array<{
-    rank: number;
+    rank: number | null; // Legacy field - equals organic_rank for organic, null for sponsored
     asin: string;
     title: string;
     image_url: string | null;
@@ -108,6 +111,9 @@ export interface KeywordAnalyzeResponse {
     page_one_appearances: number; // appearance_count
     is_algorithm_boosted: boolean; // true if appearances >= 2
     appeared_multiple_times: boolean; // true if appearances > 1 (hidden Spellbook signal)
+    // Helium-10 style rank semantics
+    organic_rank: number | null; // Position among organic listings only (null for sponsored)
+    page_position: number; // Actual Page-1 position including sponsored listings
   }>;
   
   // B-3) Aggregates Derived from Page-1 (explicit for UI)
@@ -313,7 +319,7 @@ export async function buildKeywordAnalyzeResponse(
     // Use canonical products directly - they are the final authority
     // NO filtering, NO rebuilding, NO conversion
     products = canonicalProducts.map(p => ({
-      rank: p.rank,
+      rank: p.rank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
       asin: p.asin,
       title: p.title,
       image_url: p.image_url,
@@ -332,6 +338,9 @@ export async function buildKeywordAnalyzeResponse(
       page_one_appearances: p.page_one_appearances ?? 1, // appearance_count
       is_algorithm_boosted: p.is_algorithm_boosted ?? false, // true if appearances >= 2
       appeared_multiple_times: p.appeared_multiple_times ?? false, // true if appearances > 1
+      // Helium-10 style rank semantics
+      organic_rank: p.organic_rank ?? null, // Position among organic listings only
+      page_position: p.page_position ?? p.rank ?? 0, // Actual Page-1 position including sponsored
     }));
   } else {
     // Fallback: Build from listings (legacy path, should not be used for keyword analysis)
@@ -356,7 +365,7 @@ export async function buildKeywordAnalyzeResponse(
       const revenueShare = totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0;
       
       return {
-        rank: listing.position || index + 1,
+        rank: listing.position || index + 1, // Legacy field - fallback path doesn't distinguish organic
         asin: listing.asin || "",
         title: listing.title || "",
         image_url: listing.image_url || null,
@@ -374,6 +383,9 @@ export async function buildKeywordAnalyzeResponse(
         page_one_appearances: 1, // appearance_count
         is_algorithm_boosted: false, // true if appearances >= 2
         appeared_multiple_times: false, // true if appearances > 1
+        // Helium-10 style rank semantics (fallback path - approximate)
+        organic_rank: listing.is_sponsored ? null : (listing.position || index + 1), // Approximate for fallback
+        page_position: listing.position || index + 1, // Actual Page-1 position
       };
     });
   }
