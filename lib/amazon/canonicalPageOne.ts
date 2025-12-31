@@ -45,6 +45,63 @@ export interface CanonicalProduct {
 }
 
 /**
+ * Apply demand floors to prevent under-reported sales/revenue
+ * Uses conservative signals from existing data (Rainforest) to set minimum units
+ * 
+ * @param params - Product estimation parameters
+ * @returns Floored units (never less than estimatedUnits, but may be higher)
+ */
+function applyDemandFloors({
+  estimatedUnits,
+  price,
+  reviewCount,
+  rank,
+  isSponsored,
+  fulfillment
+}: {
+  estimatedUnits: number;
+  price: number;
+  reviewCount: number;
+  rank: number;
+  isSponsored: boolean;
+  fulfillment: "FBA" | "FBM" | "AMZ" | "Unknown";
+}): number {
+  // Map AMZ to FBA for floor calculations (Amazon Retail uses FBA fulfillment)
+  const fulfillmentForFloor = fulfillment === "AMZ" ? "FBA" : fulfillment;
+  let floorUnits = 0;
+
+  // REVIEW-BASED FLOOR (primary)
+  if (reviewCount >= 20) {
+    // Assume 1–3% review rate, spread over 12 months (conservative)
+    floorUnits = Math.max(
+      floorUnits,
+      Math.round((reviewCount / 12) / 0.03)
+    );
+  }
+
+  // PAGE 1 SANITY FLOOR
+  if (rank <= 50 && reviewCount >= 10 && fulfillmentForFloor === "FBA") {
+    floorUnits = Math.max(floorUnits, 50);
+  }
+
+  // SPONSORED ECONOMIC FLOOR
+  if (isSponsored && reviewCount >= 10) {
+    floorUnits = Math.max(floorUnits, 100);
+  }
+
+  // REVENUE REALITY FLOOR
+  if (reviewCount >= 10 && fulfillmentForFloor === "FBA") {
+    const minRevenue = 1000;
+    floorUnits = Math.max(
+      floorUnits,
+      Math.ceil(minRevenue / Math.max(price, 1))
+    );
+  }
+
+  return Math.max(estimatedUnits, floorUnits);
+}
+
+/**
  * Build keyword Page-1 product set (PERMISSIVE)
  * 
  * KEYWORD CANONICAL RULES:
@@ -375,31 +432,6 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
 
     const asin = l.asin ?? `KEYWORD-${i + 1}`;
 
-    // Log sample allocation for first product
-    if (i === 0) {
-      console.log("📊 ALLOCATION SAMPLE", {
-        asin,
-        organic_rank: pw.organicRank,
-        page_position: pw.pagePosition,
-        weight: pw.allocationWeight.toFixed(4),
-        allocated_units: allocatedUnits,
-        allocated_revenue: allocatedRevenue,
-        page_one_appearances: pw.appearanceCount,
-        is_algorithm_boosted: pw.isAlgorithmBoosted,
-      });
-    }
-
-    // Log algorithm boost insights for boosted products
-    if (pw.isAlgorithmBoosted) {
-      console.log("🚀 ALGORITHM BOOST DETECTED", {
-        asin,
-        organic_rank: pw.organicRank,
-        page_position: pw.pagePosition,
-        page_one_appearances: pw.appearanceCount,
-        insight: "This ASIN appears multiple times on Page-1, indicating Amazon algorithm boost",
-      });
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
     // NORMALIZE FULFILLMENT (Helium-10 Style)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -420,6 +452,67 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // DEMAND FLOOR APPLICATION (Helium-10 Style)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Apply conservative demand floors to prevent under-reported sales
+    // Scope: Page-1 + Sponsored listings ONLY (already true in this function)
+    const rank = pw.pagePosition; // Use page_position for floor calculation
+    const isSponsored = !!l.is_sponsored;
+    const reviewCount = pw.reviewCount;
+    
+    // Apply demand floor
+    const finalUnits = applyDemandFloors({
+      estimatedUnits: allocatedUnits,
+      price: pw.price,
+      reviewCount,
+      rank,
+      isSponsored,
+      fulfillment,
+    });
+    
+    // Recalculate revenue after floor application
+    const finalRevenue = Math.round(finalUnits * pw.price);
+
+    // Debug log for top 3 products
+    if (rank <= 3) {
+      console.log("🧠 DEMAND FLOOR CHECK", {
+        asin,
+        rank,
+        reviews: reviewCount,
+        sponsored: isSponsored,
+        units_before: allocatedUnits,
+        units_after: finalUnits,
+      });
+    }
+
+    // Log sample allocation for first product
+    if (i === 0) {
+      console.log("📊 ALLOCATION SAMPLE", {
+        asin,
+        organic_rank: pw.organicRank,
+        page_position: pw.pagePosition,
+        weight: pw.allocationWeight.toFixed(4),
+        allocated_units: allocatedUnits,
+        final_units: finalUnits,
+        allocated_revenue: allocatedRevenue,
+        final_revenue: finalRevenue,
+        page_one_appearances: pw.appearanceCount,
+        is_algorithm_boosted: pw.isAlgorithmBoosted,
+      });
+    }
+
+    // Log algorithm boost insights for boosted products
+    if (pw.isAlgorithmBoosted) {
+      console.log("🚀 ALGORITHM BOOST DETECTED", {
+        asin,
+        organic_rank: pw.organicRank,
+        page_position: pw.pagePosition,
+        page_one_appearances: pw.appearanceCount,
+        insight: "This ASIN appears multiple times on Page-1, indicating Amazon algorithm boost",
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // NORMALIZE BSR (Helium-10 Style)
     // ═══════════════════════════════════════════════════════════════════════════
     // Rule: Do NOT display BSR on keyword Page-1 cards
@@ -435,8 +528,8 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       rating: pw.rating,
       review_count: pw.reviewCount,
       bsr: displayBsr, // Always null for keyword Page-1 (not displayed, but pw.bsr still used internally)
-      estimated_monthly_units: allocatedUnits,
-      estimated_monthly_revenue: allocatedRevenue,
+      estimated_monthly_units: finalUnits, // Use floored units
+      estimated_monthly_revenue: finalRevenue, // Use floored revenue
       revenue_share_pct: 0, // Will be calculated after all products are built
       image_url: l.image_url ?? null,
       fulfillment, // Normalized: Prime → FBA, else → FBM, Amazon Retail → AMZ
