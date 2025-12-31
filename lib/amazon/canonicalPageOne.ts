@@ -921,12 +921,11 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   console.log("✅ KEYWORD PAGE-1 COUNT", products.length);
   
   // Log normalization summary
+  // Reuse organicProducts and sponsoredProducts already declared at lines 614-615
   const fbaCount = products.filter(p => p.fulfillment === "FBA").length;
   const fbmCount = products.filter(p => p.fulfillment === "FBM").length;
   const amzCount = products.filter(p => p.fulfillment === "AMZ").length;
   const bsrDisplayCount = products.filter(p => p.bsr !== null).length;
-  const organicProducts = products.filter(p => p.organic_rank !== null);
-  const sponsoredProducts = products.filter(p => p.organic_rank === null);
   
   console.log("📋 NORMALIZATION SUMMARY", {
     total_products: products.length,
