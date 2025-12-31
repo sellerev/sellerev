@@ -237,12 +237,17 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     ? [...ratings].sort((a, b) => a - b)[Math.floor(ratings.length / 2)]
     : 4.0;
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NORMALIZE RANK (Helium-10 Style)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Rule: Rank = Page-1 position after ASIN deduplication
+  // Rank must be sequential (1...N) and never differ for the same ASIN
   // Build products with allocation weights (using deduplicated listings)
   // Assign new ranks based on deduplicated order (1, 2, 3, ...)
   const productsWithWeights = deduplicatedListingsWithMetadata.map((item, i) => {
     const l = item.listing;
-    const bsr = l.bsr ?? l.main_category_bsr ?? null;
-    const rank = i + 1; // New rank based on deduplicated order
+    const bsr = l.bsr ?? l.main_category_bsr ?? null; // Used internally for estimation only
+    const rank = i + 1; // Sequential rank (1...N) - stable and predictable
     const price = l.price ?? 0;
     const reviewCount = l.reviews ?? 0;
     const rating = l.rating ?? 0;
@@ -336,19 +341,46 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       });
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NORMALIZE FULFILLMENT (Helium-10 Style)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Rule: If Prime-eligible → "FBA", else → "FBM"
+    // Do NOT infer from seller name - use is_prime flag only
+    let fulfillment: "FBA" | "FBM" | "AMZ";
+    if (l.is_prime === true) {
+      fulfillment = "FBA"; // Prime-eligible = FBA
+    } else {
+      fulfillment = "FBM"; // Not Prime = FBM (default)
+    }
+    
+    // Special case: Amazon Retail (sold by Amazon)
+    // Check seller name or brand for Amazon Retail
+    const isAmazonRetail = l.seller === "Amazon" || l.brand === "Amazon";
+    if (isAmazonRetail) {
+      fulfillment = "AMZ";
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NORMALIZE BSR (Helium-10 Style)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Rule: Do NOT display BSR on keyword Page-1 cards
+    // BSR may still be used internally for estimation (via pw.bsr variable)
+    // Set product bsr to null so UI shows "BSR: —" or hides it
+    const displayBsr: number | null = null; // Always null for keyword Page-1
+
     return {
-      rank: pw.rank,
+      rank: pw.rank, // Sequential rank (1...N) after deduplication - stable and predictable
       asin, // Allow synthetic ASINs for keywords
       title: l.title ?? "Unknown product",
       price: pw.price,
       rating: pw.rating,
       review_count: pw.reviewCount,
-      bsr: pw.bsr,
+      bsr: displayBsr, // Always null for keyword Page-1 (not displayed, but pw.bsr still used internally)
       estimated_monthly_units: allocatedUnits,
       estimated_monthly_revenue: allocatedRevenue,
       revenue_share_pct: 0, // Will be calculated after all products are built
       image_url: l.image_url ?? null,
-      fulfillment: (l.fulfillment === "FBA" ? "FBA" : l.fulfillment === "Amazon" ? "AMZ" : "FBM") as "FBA" | "FBM" | "AMZ",
+      fulfillment, // Normalized: Prime → FBA, else → FBM, Amazon Retail → AMZ
       brand: l.brand ?? null,
       seller_country: "Unknown" as const,
       snapshot_inferred: false,
@@ -406,8 +438,32 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   );
 
   console.log("✅ KEYWORD PAGE-1 COUNT", products.length);
+  
+  // Log normalization summary
+  const fbaCount = products.filter(p => p.fulfillment === "FBA").length;
+  const fbmCount = products.filter(p => p.fulfillment === "FBM").length;
+  const amzCount = products.filter(p => p.fulfillment === "AMZ").length;
+  const bsrDisplayCount = products.filter(p => p.bsr !== null).length;
+  
+  console.log("📋 NORMALIZATION SUMMARY", {
+    total_products: products.length,
+    ranks: `1-${products.length} (sequential)`,
+    fulfillment: {
+      fba: fbaCount,
+      fbm: fbmCount,
+      amazon: amzCount,
+    },
+    bsr_display: bsrDisplayCount === 0 ? "hidden (null)" : `WARNING: ${bsrDisplayCount} products have BSR`,
+    rank_logic: "sequential_after_deduplication",
+    fulfillment_logic: "prime_eligible_fba_else_fbm",
+    bsr_logic: "hidden_for_keyword_page1",
+  });
+  
   if (products.length > 0) {
-    console.log("📦 SAMPLE PRODUCT", products[0]);
+    console.log("📦 SAMPLE PRODUCT", {
+      ...products[0],
+      bsr: products[0].bsr === null ? "— (hidden)" : products[0].bsr, // Show as "—" in logs
+    });
   }
   
   // Log allocation statistics
