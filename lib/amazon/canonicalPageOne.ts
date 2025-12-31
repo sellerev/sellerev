@@ -42,6 +42,8 @@ export interface CanonicalProduct {
   // Helium-10 style rank semantics
   organic_rank: number | null; // Position among organic listings only (1, 2, 3...) or null if sponsored
   page_position: number; // Actual Page-1 position including sponsored listings (1, 2, 3...)
+  // Sponsored visibility (for clarity, not estimation changes)
+  is_sponsored: boolean; // Explicit flag for sponsored listings
 }
 
 /**
@@ -360,7 +362,8 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     const pagePosition = item.bestRank; // Actual Page-1 position including sponsored
     const organicRank = item.organicRank; // Position among organic listings only (null for sponsored)
     const price = l.price ?? 0;
-    const reviewCount = l.reviews ?? 0;
+    // Fix review count mapping: use review_count if available, fallback to reviews
+    const reviewCount = (l as any).review_count ?? l.reviews ?? 0;
     const rating = l.rating ?? 0;
     const appearanceCount = item.appearanceCount;
     const isAlgorithmBoosted = item.isAlgorithmBoosted;
@@ -520,13 +523,16 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     // Set product bsr to null so UI shows "BSR: —" or hides it
     const displayBsr: number | null = null; // Always null for keyword Page-1
 
+    // Fix review count: ensure correct mapping from listing data
+    const reviewCountForProduct = (l as any).review_count ?? l.reviews ?? 0;
+
     return {
       rank: pw.organicRank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
       asin, // Allow synthetic ASINs for keywords
       title: l.title ?? "Unknown product",
       price: pw.price,
       rating: pw.rating,
-      review_count: pw.reviewCount,
+      review_count: reviewCountForProduct, // Fixed: use review_count if available, fallback to reviews
       bsr: displayBsr, // Always null for keyword Page-1 (not displayed, but pw.bsr still used internally)
       estimated_monthly_units: finalUnits, // Use floored units
       estimated_monthly_revenue: finalRevenue, // Use floored revenue
@@ -544,6 +550,8 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       // Helium-10 style rank semantics
       organic_rank: pw.organicRank, // Position among organic listings only (null for sponsored)
       page_position: pw.pagePosition, // Actual Page-1 position including sponsored
+      // Sponsored visibility (for clarity, not estimation changes)
+      is_sponsored: isSponsored, // Explicit flag for sponsored listings
     };
   });
 

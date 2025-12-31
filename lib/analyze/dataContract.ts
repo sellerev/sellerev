@@ -89,6 +89,8 @@ export interface KeywordAnalyzeResponse {
     // Helium-10 style rank semantics
     organic_rank: number | null; // Position among organic listings only (null for sponsored)
     page_position: number; // Actual Page-1 position including sponsored listings
+    // Sponsored visibility (for clarity, not estimation changes)
+    is_sponsored: boolean; // Explicit flag for sponsored listings
   }>;
   
   // B-2) Canonical Page-1 Array (explicit for UI)
@@ -114,6 +116,8 @@ export interface KeywordAnalyzeResponse {
     // Helium-10 style rank semantics
     organic_rank: number | null; // Position among organic listings only (null for sponsored)
     page_position: number; // Actual Page-1 position including sponsored listings
+    // Sponsored visibility (for clarity, not estimation changes)
+    is_sponsored: boolean; // Explicit flag for sponsored listings
   }>;
   
   // B-3) Aggregates Derived from Page-1 (explicit for UI)
@@ -341,6 +345,8 @@ export async function buildKeywordAnalyzeResponse(
       // Helium-10 style rank semantics
       organic_rank: p.organic_rank ?? null, // Position among organic listings only
       page_position: p.page_position ?? p.rank ?? 0, // Actual Page-1 position including sponsored
+      // Sponsored visibility (for clarity, not estimation changes)
+      is_sponsored: p.is_sponsored ?? false, // Explicit flag for sponsored listings
     }));
   } else {
     // Fallback: Build from listings (legacy path, should not be used for keyword analysis)
@@ -386,6 +392,8 @@ export async function buildKeywordAnalyzeResponse(
         // Helium-10 style rank semantics (fallback path - approximate)
         organic_rank: listing.is_sponsored ? null : (listing.position || index + 1), // Approximate for fallback
         page_position: listing.position || index + 1, // Actual Page-1 position
+        // Sponsored visibility (for clarity, not estimation changes)
+        is_sponsored: listing.is_sponsored ?? false, // Explicit flag for sponsored listings
       };
     });
   }
@@ -467,6 +475,29 @@ export async function buildKeywordAnalyzeResponse(
   const pageOneListings = products; // Canonical Page-1 array (final authority)
   
   // ═══════════════════════════════════════════════════════════════════════════
+  // FIX PAGE-1 PRODUCT COUNT (Helium-10 Semantics)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // "Number of Products" = Unique ASINs on Page 1 (organic + sponsored)
+  // NOT raw scraped length, NOT post-dedupe + reinsert
+  // This matches Helium-10 exactly
+  const uniquePageOneAsins = new Set(
+    pageOneListings.map(p => p.asin)
+  );
+  
+  // Update snapshot with correct unique ASIN count
+  if (snapshot) {
+    (snapshot as any).number_of_products = uniquePageOneAsins.size;
+    (snapshot as any).total_page1_listings = uniquePageOneAsins.size; // Also update total_page1_listings for consistency
+  }
+  
+  // Sanity log to confirm correctness
+  console.log("📊 PAGE 1 SNAPSHOT CHECK", {
+    totalListings: pageOneListings.length,
+    uniqueAsins: uniquePageOneAsins.size,
+    sponsoredCount: pageOneListings.filter(p => p.is_sponsored).length,
+  });
+  
+  // ═══════════════════════════════════════════════════════════════════════════
   // CALIBRATION LOGGING (Helium-10 Comparison)
   // ═══════════════════════════════════════════════════════════════════════════
   // Log metrics to compare Sellerev outputs against Helium-10 ranges
@@ -544,7 +575,7 @@ export async function buildKeywordAnalyzeResponse(
     avg_bsr,
     total_monthly_units_est,
     total_monthly_revenue_est,
-    page1_product_count: pageOneListings.length, // Use actual count from canonical array
+    page1_product_count: uniquePageOneAsins.size, // Use unique ASIN count (matches Helium-10)
     sponsored_count: snapshot.sponsored_count || null,
   };
   
@@ -678,7 +709,7 @@ export async function buildKeywordAnalyzeResponse(
     avg_bsr: summary.avg_bsr,
     total_monthly_units_est: summary.total_monthly_units_est,
     total_monthly_revenue_est: summary.total_monthly_revenue_est,
-    page1_product_count: summary.page1_product_count,
+    page1_product_count: uniquePageOneAsins.size, // Use unique ASIN count (matches Helium-10)
   };
   
   return {
