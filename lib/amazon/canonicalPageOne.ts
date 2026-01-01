@@ -839,6 +839,57 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // PAGE-1 VISIBILITY FLOOR: Prevent tail ASINs from decaying to near-zero
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Apply minimum unit floor to all Page-1 ASINs to ensure tail listings show meaningful units
+  // This prevents ranks 15-40 from showing only 1 unit while preserving top 5 distribution
+  const MIN_PAGE1_SHARE = 0.00015; // 0.015% of total Page-1 units (minimum visibility)
+  const minUnits = Math.max(1, Math.round(totalPage1Units * MIN_PAGE1_SHARE));
+  
+  // Calculate total units before floor application
+  const totalUnitsBeforeFloor = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  
+  // Apply floor to each product (preserve top listings, lift tail)
+  products.forEach(p => {
+    const floorUnits = Math.max(p.estimated_monthly_units, minUnits);
+    p.estimated_monthly_units = floorUnits;
+    // Recalculate revenue proportionally
+    p.estimated_monthly_revenue = Math.round(floorUnits * p.price);
+  });
+  
+  // Renormalize to ensure sum equals totalPage1Units
+  const totalUnitsAfterFloor = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  if (totalUnitsAfterFloor > 0 && totalUnitsAfterFloor !== totalPage1Units) {
+    const renormalizeFactor = totalPage1Units / totalUnitsAfterFloor;
+    products.forEach(p => {
+      const renormalizedUnits = Math.max(1, Math.round(p.estimated_monthly_units * renormalizeFactor));
+      p.estimated_monthly_units = renormalizedUnits;
+      p.estimated_monthly_revenue = Math.round(renormalizedUnits * p.price);
+    });
+  }
+  
+  // Recalculate revenue share percentages after floor and renormalization
+  const totalRevenueAfterFloor = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  if (totalRevenueAfterFloor > 0) {
+    products.forEach(p => {
+      if (p.estimated_monthly_revenue > 0) {
+        p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / totalRevenueAfterFloor) * 100 * 100) / 100;
+      } else {
+        p.revenue_share_pct = 0;
+      }
+    });
+  }
+  
+  const totalUnitsAfter = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  
+  console.log("✅ PAGE1_FLOOR_APPLIED", {
+    min_units: minUnits,
+    total_units_before: totalUnitsBeforeFloor,
+    total_units_after: totalUnitsAfter,
+    target_total: totalPage1Units,
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // H10 ALIGNMENT: Post-calibration lift factor
   // ═══════════════════════════════════════════════════════════════════════════
   // Apply global lift factor to final Page-1 totals AFTER all allocation steps
