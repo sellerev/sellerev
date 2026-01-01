@@ -880,12 +880,13 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     });
   }
   
-  const totalUnitsAfter = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  // Recalculate total units after renormalization (reuse existing variable name pattern)
+  const totalUnitsAfterFloorFinal = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
   
   console.log("✅ PAGE1_FLOOR_APPLIED", {
     min_units: minUnits,
     total_units_before: totalUnitsBeforeFloor,
-    total_units_after: totalUnitsAfter,
+    total_units_after: totalUnitsAfterFloorFinal,
     target_total: totalPage1Units,
   });
 
