@@ -973,8 +973,8 @@ export function buildKeywordPageOne(
   // Calculate excess units to redistribute
   let excessUnits = 0;
   
-  // Cap Rank #1
-  const rank1Product = sortedByRank.find(p => p.organic_rank === 1);
+  // Cap Rank #1 (reuse existing rank1Product from market expansion section)
+  // Note: sortedByRank contains same product references as products array
   if (rank1Product && rank1Product.estimated_monthly_units > rank1Cap) {
     const rank1Excess = rank1Product.estimated_monthly_units - rank1Cap;
     rank1Product.estimated_monthly_units = rank1Cap;
@@ -1058,10 +1058,9 @@ export function buildKeywordPageOne(
   totalPage1Units = cappedTotalUnits;
   totalPage1Revenue = cappedTotalRevenue;
   
-  // Calculate final percentages for logging
-  const finalRank1Product = sortedByRank.find(p => p.organic_rank === 1);
+  // Calculate final percentages for logging (reuse existing rank1Product)
   const finalTop3Products = sortedByRank.filter(p => (p.organic_rank ?? 999) <= 3);
-  const finalRank1Units = finalRank1Product?.estimated_monthly_units || 0;
+  const finalRank1Units = rank1Product?.estimated_monthly_units || 0;
   const finalTop3Units = finalTop3Products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
   const rank1Pct = cappedTotalUnits > 0 ? (finalRank1Units / cappedTotalUnits) * 100 : 0;
   const top3Pct = cappedTotalUnits > 0 ? (finalTop3Units / cappedTotalUnits) * 100 : 0;
