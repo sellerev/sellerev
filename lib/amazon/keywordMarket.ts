@@ -116,8 +116,8 @@ function parsePrice(item: any): number | null {
 
 /**
  * Safely parses review count from Rainforest API.
- * Checks multiple possible field names to match Amazon Page-1 review count.
- * Priority order matches Rainforest API response structure.
+ * Checks all possible field names to match Amazon Page-1 review count.
+ * Fallback order: reviews ?? review_count ?? ratings_total ?? null
  */
 function parseReviews(item: any): number | null {
   // Primary: reviews.count (most common in search results)
@@ -126,21 +126,33 @@ function parseReviews(item: any): number | null {
     if (!isNaN(parsed) && parsed >= 0) return parsed;
   }
   
-  // Secondary: reviews_total (used in product API responses)
+  // Secondary: reviews as direct number
+  if (typeof item.reviews === "number" && !isNaN(item.reviews) && item.reviews >= 0) {
+    return item.reviews;
+  }
+  
+  // Tertiary: review_count (alternative field name)
+  if (item.review_count !== undefined && item.review_count !== null) {
+    const parsed = parseInt(item.review_count.toString().replace(/,/g, ""), 10);
+    if (!isNaN(parsed) && parsed >= 0) return parsed;
+  }
+  
+  // Quaternary: ratings_total (used in some API responses)
+  if (item.ratings_total !== undefined && item.ratings_total !== null) {
+    const parsed = parseInt(item.ratings_total.toString().replace(/,/g, ""), 10);
+    if (!isNaN(parsed) && parsed >= 0) return parsed;
+  }
+  
+  // Quinary: reviews_total (used in product API responses)
   if (item.reviews_total !== undefined && item.reviews_total !== null) {
     const parsed = parseInt(item.reviews_total.toString().replace(/,/g, ""), 10);
     if (!isNaN(parsed) && parsed >= 0) return parsed;
   }
   
-  // Tertiary: reviews.total (alternative structure)
+  // Senary: reviews.total (alternative structure)
   if (item.reviews?.total !== undefined && item.reviews.total !== null) {
     const parsed = parseInt(item.reviews.total.toString().replace(/,/g, ""), 10);
     if (!isNaN(parsed) && parsed >= 0) return parsed;
-  }
-  
-  // Fallback: reviews as direct number
-  if (typeof item.reviews === "number" && !isNaN(item.reviews) && item.reviews >= 0) {
-    return item.reviews;
   }
   
   return null;

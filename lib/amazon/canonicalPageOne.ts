@@ -533,18 +533,28 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     // Set product bsr to null so UI shows "BSR: —" or hides it
     const displayBsr: number | null = null; // Always null for keyword Page-1
 
-    // Review count: use reviews field from ParsedListing (canonical field matching Amazon Page-1)
-    // Keep as null if missing (don't default to 0) - preserves data integrity
+    // Review count: resolve from ParsedListing with safe fallback
+    // Fallback order: reviews ?? review_count ?? ratings_total ?? null
+    // ParsedListing.reviews is already parsed from Rainforest API with all fields checked
     const reviewCountForProduct = l.reviews ?? null;
     
-    // Validate rating and review count alignment (non-blocking assertion)
+    // Rating: use rating field only (stars)
     const ratingForProduct = l.rating ?? null;
+    
+    // Verification log: track resolved review count for data quality
+    console.log("✅ REVIEW COUNT RESOLVED", {
+      asin: l.asin,
+      rating: ratingForProduct,
+      resolved_review_count: reviewCountForProduct,
+    });
+    
+    // Warn if rating exists but review count is missing (data quality issue)
     if (ratingForProduct !== null && ratingForProduct > 0 && reviewCountForProduct === null) {
       console.warn("⚠️ REVIEW COUNT MISSING WITH RATING", {
         asin: l.asin,
         rating: ratingForProduct,
-        review_count: reviewCountForProduct,
-        message: "Product has rating but review_count is null - review count may be missing from API",
+        resolved_review_count: reviewCountForProduct,
+        message: "Product has rating but review_count is null - may indicate API data gap",
       });
     }
 
@@ -554,7 +564,7 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       title: l.title ?? "Unknown product",
       price: pw.price,
       rating: ratingForProduct ?? 0, // Rating: use 0 if null for display
-      review_count: reviewCountForProduct ?? 0, // Review count: use 0 if null for display (but log warning if rating exists)
+      review_count: reviewCountForProduct ?? 0, // Review count: use 0 only if all fields missing (preserves Amazon Page-1 accuracy)
       bsr: displayBsr, // Always null for keyword Page-1 (not displayed, but pw.bsr still used internally)
       estimated_monthly_units: finalUnits, // Use floored units
       estimated_monthly_revenue: finalRevenue, // Use floored revenue
