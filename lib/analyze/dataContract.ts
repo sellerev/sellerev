@@ -317,7 +317,19 @@ export async function buildKeywordAnalyzeResponse(
   // CANONICAL PAGE-1 IS FINAL AUTHORITY
   // ═══════════════════════════════════════════════════════════════════════════
   // If canonical products are provided, use them directly - DO NOT rebuild
+  // CRITICAL: If canonicalProducts is provided (even if empty), use it - never fallback to listings
+  // Fallback to listings only when canonicalProducts is null/undefined (not provided)
   let products: KeywordAnalyzeResponse["products"];
+  
+  const canonical_count = canonicalProducts ? canonicalProducts.length : 0;
+  const using_fallback = !canonicalProducts || canonicalProducts.length === 0;
+  
+  console.log("PAGE1_SOURCE", {
+    canonical_count,
+    using_fallback,
+    has_canonical: !!canonicalProducts,
+    listings_count: listings?.length || 0,
+  });
   
   if (canonicalProducts && canonicalProducts.length > 0) {
     // Use canonical products directly - they are the final authority
@@ -348,8 +360,18 @@ export async function buildKeywordAnalyzeResponse(
       // Sponsored visibility (for clarity, not estimation changes)
       is_sponsored: p.is_sponsored ?? false, // Explicit flag for sponsored listings
     }));
+  } else if (canonicalProducts && canonicalProducts.length === 0) {
+    // CRITICAL: If canonicalProducts is empty array (but was provided), return empty
+    // This means real listings existed but canonical builder returned empty (should not happen)
+    // DO NOT fallback to listings - canonical builder is the authority
+    console.warn("⚠️ CANONICAL_PRODUCTS_EMPTY", {
+      message: "Canonical products array is empty - this should not happen if real listings exist",
+      listings_count: listings?.length || 0,
+    });
+    products = [];
   } else {
     // Fallback: Build from listings (legacy path, should not be used for keyword analysis)
+    // ONLY use this when canonicalProducts is null/undefined (not provided)
     if (!Array.isArray(listings)) {
       throw new Error("marketData.listings must be an array when canonical products are not provided");
     }

@@ -1965,7 +1965,8 @@ ${body.input_value}`;
           avg_bsr: snapshot.avg_bsr || null,
           dominance_score: snapshot.dominance_score || null,
           // Use canonical products for listings (ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array)
-          listings: (canonicalProductsForListings ? canonicalProductsForListings.map((p: any) => ({
+          // CRITICAL: If canonicalProductsForListings exists (even if empty), use it - never fallback to raw listings
+          listings: (canonicalProductsForListings && canonicalProductsForListings.length > 0 ? canonicalProductsForListings.map((p: any) => ({
             asin: p.asin,
             title: p.title,
             price: p.price,
@@ -1982,7 +1983,7 @@ ${body.input_value}`;
             est_monthly_revenue: p.estimated_monthly_revenue,
             est_monthly_units: p.estimated_monthly_units,
             revenue_confidence: p.snapshot_inferred ? "low" as const : "medium" as const,
-          })) : listings).map((listing: any) => {
+          })) : (listings && listings.length > 0 ? listings : [])).map((listing: any) => {
             const normalized = normalizeListing(listing);
             return {
               asin: normalized.asin,
