@@ -1470,7 +1470,38 @@ export async function POST(req: NextRequest) {
           raw_listings_count: rawListings.length,
         });
         
-        pageOneProducts = buildKeywordPageOne(rawListings);
+        // Get search volume for keyword demand scaling
+        let searchVolumeLow: number | undefined;
+        let searchVolumeHigh: number | undefined;
+        
+        if (keywordMarketData.snapshot?.search_demand?.search_volume_range) {
+          // Parse search volume range (e.g., "10k–20k", "1.5M–2M")
+          const parseRange = (rangeStr: string): { min: number; max: number } => {
+            const match = rangeStr.match(/(\d+(?:\.\d+)?)([kM]?)\s*[–-]\s*(\d+(?:\.\d+)?)([kM]?)/);
+            if (match) {
+              const min = parseFloat(match[1]) * (match[2] === 'M' ? 1000000 : match[2] === 'k' ? 1000 : 1);
+              const max = parseFloat(match[3]) * (match[4] === 'M' ? 1000000 : match[4] === 'k' ? 1000 : 1);
+              return { min: Math.round(min), max: Math.round(max) };
+            }
+            return { min: 0, max: 0 };
+          };
+          
+          const parsed = parseRange(keywordMarketData.snapshot.search_demand.search_volume_range);
+          searchVolumeLow = parsed.min;
+          searchVolumeHigh = parsed.max;
+        } else if (rawListings.length > 0) {
+          // Estimate search volume from listings if not available in snapshot
+          const { estimateSearchVolume } = await import("@/lib/amazon/searchVolumeEstimator");
+          const estimated = estimateSearchVolume({
+            page1Listings: rawListings,
+            sponsoredCount: keywordMarketData.snapshot?.sponsored_count || 0,
+            avgReviews: keywordMarketData.snapshot?.avg_reviews || 0,
+          });
+          searchVolumeLow = estimated.min;
+          searchVolumeHigh = estimated.max;
+        }
+        
+        pageOneProducts = buildKeywordPageOne(rawListings, searchVolumeLow, searchVolumeHigh);
         
         console.log("✅ KEYWORD PAGE-1 COUNT", pageOneProducts.length);
         if (pageOneProducts.length > 0) {

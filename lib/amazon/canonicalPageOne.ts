@@ -104,6 +104,27 @@ function applyDemandFloors({
 }
 
 /**
+ * Estimate total keyword units from search volume (Helium-10 style)
+ * 
+ * @param searchVolumeLow - Lower bound of search volume estimate
+ * @param searchVolumeHigh - Upper bound of search volume estimate
+ * @param avgCVR - Average conversion rate (default 0.10 = 10%)
+ * @returns Estimated total keyword units
+ */
+function estimateTotalKeywordUnits({
+  searchVolumeLow,
+  searchVolumeHigh,
+  avgCVR = 0.10
+}: {
+  searchVolumeLow: number;
+  searchVolumeHigh: number;
+  avgCVR?: number;
+}): number {
+  const avgSearchVolume = (searchVolumeLow + searchVolumeHigh) / 2;
+  return Math.round(avgSearchVolume * avgCVR);
+}
+
+/**
  * Build keyword Page-1 product set (PERMISSIVE)
  * 
  * PAGE-1 SCOPE: This function processes Page-1 listings only (both organic + sponsored)
@@ -120,9 +141,15 @@ function applyDemandFloors({
  * HELIUM-10 STYLE: Estimate total Page-1 demand first, then allocate across products
  * 
  * @param listings - Raw listings from keyword search results (Page-1 only: organic + sponsored)
+ * @param searchVolumeLow - Optional lower bound of search volume (for keyword demand scaling)
+ * @param searchVolumeHigh - Optional upper bound of search volume (for keyword demand scaling)
  * @returns Array of canonical products (always non-empty if listings exist)
  */
-export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct[] {
+export function buildKeywordPageOne(
+  listings: ParsedListing[],
+  searchVolumeLow?: number,
+  searchVolumeHigh?: number
+): CanonicalProduct[] {
   if (!Array.isArray(listings) || listings.length === 0) {
     return [];
   }
@@ -1104,7 +1131,77 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     sponsored_pct: `${sponsored_pct}%`,
   });
 
-  return products;
+  // ═══════════════════════════════════════════════════════════════════════════
+  // KEYWORD DEMAND SCALING: Scale Page-1 to total keyword demand (Helium-10 style)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Apply post-allocation scaling to match total keyword market size
+  // This prevents long-tail ASINs from collapsing while preserving Page-1 ratios
+  let scaledProducts = products;
+  
+  if (searchVolumeLow !== undefined && searchVolumeHigh !== undefined && searchVolumeLow > 0 && searchVolumeHigh > 0) {
+    // STEP 1: Calculate Page-1 totals
+    const pageOneUnits = products.reduce(
+      (sum, p) => sum + (p.estimated_monthly_units || 0),
+      0
+    );
+    const pageOneRevenue = products.reduce(
+      (sum, p) => sum + (p.estimated_monthly_revenue || 0),
+      0
+    );
+    
+    // STEP 2: Estimate total keyword units
+    const estimatedTotalKeywordUnits = estimateTotalKeywordUnits({
+      searchVolumeLow,
+      searchVolumeHigh
+    });
+    
+    // STEP 3: Compute keyword demand multiplier
+    const keywordDemandMultiplier =
+      pageOneUnits > 0
+        ? estimatedTotalKeywordUnits / pageOneUnits
+        : 1;
+    
+    // STEP 4: Apply safe clamps to prevent explosions
+    const SAFE_MIN_MULTIPLIER = 1;
+    const SAFE_MAX_MULTIPLIER = 20;
+    const finalKeywordMultiplier = Math.min(
+      SAFE_MAX_MULTIPLIER,
+      Math.max(SAFE_MIN_MULTIPLIER, keywordDemandMultiplier)
+    );
+    
+    // STEP 5: Apply multiplier (POST-ALLOCATION ONLY)
+    // Do NOT re-sort products, do NOT re-run decay logic
+    scaledProducts = products.map(p => ({
+      ...p,
+      estimated_monthly_units: Math.round(
+        p.estimated_monthly_units * finalKeywordMultiplier
+      ),
+      estimated_monthly_revenue: Math.round(
+        p.estimated_monthly_revenue * finalKeywordMultiplier
+      )
+    }));
+    
+    // STEP 6: Calculate scaled market totals
+    const totalMarketUnits = scaledProducts.reduce(
+      (sum, p) => sum + p.estimated_monthly_units,
+      0
+    );
+    const totalMarketRevenue = scaledProducts.reduce(
+      (sum, p) => sum + p.estimated_monthly_revenue,
+      0
+    );
+    
+    // STEP 7: Debug log
+    console.log("📈 KEYWORD_DEMAND_SCALE", {
+      pageOneUnits,
+      estimatedTotalKeywordUnits,
+      finalKeywordMultiplier,
+      totalMarketUnits,
+      totalMarketRevenue
+    });
+  }
+
+  return scaledProducts;
 }
 
 /**
