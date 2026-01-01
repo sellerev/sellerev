@@ -341,6 +341,27 @@ export function buildKeywordPageOne(
   console.log("📊 PAGE-1 TOTAL REVENUE (calibrated)", totalPage1Revenue);
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // CATEGORY DEMAND MULTIPLIER: Fix undercounted total market size
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Applied AFTER keyword demand estimation, BEFORE product-level allocation
+  // Increases total market size to match Helium-10 for categories like heating/pain relief
+  // Does NOT touch per-ASIN allocation logic, decay, caps, or floors
+  const CATEGORY_DEMAND_MULTIPLIER = 10; // Temporary global multiplier for calibration
+  totalPage1Units = Math.round(totalPage1Units * CATEGORY_DEMAND_MULTIPLIER);
+  
+  // Recalculate revenue from scaled units × avg price (use existing avgPrice or fallback)
+  const avgPriceForRevenue = avgPrice ?? (prices.length > 0
+    ? prices.reduce((sum, p) => sum + p, 0) / prices.length
+    : 0);
+  totalPage1Revenue = Math.round(totalPage1Units * avgPriceForRevenue);
+  
+  console.log("✅ CATEGORY_MULTIPLIER_APPLIED", {
+    multiplier: CATEGORY_DEMAND_MULTIPLIER,
+    final_units: totalPage1Units,
+    final_revenue: totalPage1Revenue,
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: ALLOCATE DEMAND ACROSS PRODUCTS
   // ═══════════════════════════════════════════════════════════════════════════
   // Use deduplicated listings for allocation
