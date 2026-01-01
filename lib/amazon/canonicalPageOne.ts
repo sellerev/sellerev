@@ -104,6 +104,43 @@ function applyDemandFloors({
 }
 
 /**
+ * Category velocity classification
+ */
+type CategoryVelocity = "FAST_MOVING" | "DURABLE";
+
+/**
+ * Classify category velocity using keyword and product title heuristics
+ * 
+ * @param listings - Product listings to analyze
+ * @returns Category velocity type
+ */
+function classifyCategoryVelocity(listings: ParsedListing[]): CategoryVelocity {
+  const durableKeywords = [
+    "laptop", "computer", "tv", "monitor", "appliance",
+    "refrigerator", "washer", "dryer", "dishwasher",
+    "oven", "stove", "microwave", "freezer"
+  ];
+  
+  // Check product titles for durable keywords
+  const titles = listings
+    .map(l => l.title?.toLowerCase() || "")
+    .filter(t => t.length > 0);
+  
+  if (titles.length === 0) {
+    return "FAST_MOVING"; // Default to fast-moving if no titles
+  }
+  
+  // Count how many titles contain durable keywords
+  const durableMatches = titles.filter(title => 
+    durableKeywords.some(keyword => title.includes(keyword))
+  ).length;
+  
+  // If majority of titles contain durable keywords, classify as DURABLE
+  const durableRatio = durableMatches / titles.length;
+  return durableRatio >= 0.3 ? "DURABLE" : "FAST_MOVING";
+}
+
+/**
  * Estimate total keyword units from search volume (Helium-10 style)
  * 
  * @param searchVolumeLow - Lower bound of search volume estimate
@@ -360,6 +397,26 @@ export function buildKeywordPageOne(
     final_units: totalPage1Units,
     final_revenue: totalPage1Revenue,
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CATEGORY-AWARE DEMAND CAPS: Prevent inflation for durable goods
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Apply hard caps on total Page-1 units for DURABLE categories
+  // Caps applied AFTER market calibration but BEFORE allocation
+  // Constants defined at function scope for use in both pre-allocation and post-expansion caps
+  const DURABLE_MAX_TOTAL_UNITS = 30000; // Max total Page-1 units for durable goods
+  const DURABLE_MAX_RANK1_UNITS = 6000; // Max rank-1 units for durable goods
+  
+  if (categoryVelocity === "DURABLE") {
+    // Cap total Page-1 units if exceeds limit (before allocation)
+    if (totalPage1Units > DURABLE_MAX_TOTAL_UNITS) {
+      const scaleDownFactor = DURABLE_MAX_TOTAL_UNITS / totalPage1Units;
+      totalPage1Units = DURABLE_MAX_TOTAL_UNITS;
+      totalPage1Revenue = Math.round(totalPage1Revenue * scaleDownFactor);
+    }
+    
+    // Note: Rank-1 cap will be applied after allocation (we'll find rank-1 product then)
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: ALLOCATE DEMAND ACROSS PRODUCTS
@@ -1072,6 +1129,116 @@ export function buildKeywordPageOne(
     rank1_units: finalRank1Units,
     top3_units: finalTop3Units,
     excess_redistributed: excessUnits,
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DURABLE CATEGORY: Re-apply total cap and rank-1 cap after expansion
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Market expansion may have pushed totals over DURABLE limits - re-apply caps
+  if (categoryVelocity === "DURABLE") {
+    // Re-apply total cap if market expansion pushed it over
+    const currentTotalAfterExpansion = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    if (currentTotalAfterExpansion > DURABLE_MAX_TOTAL_UNITS) {
+      const scaleDownFactor = DURABLE_MAX_TOTAL_UNITS / currentTotalAfterExpansion;
+      products.forEach(p => {
+        p.estimated_monthly_units = Math.round(p.estimated_monthly_units * scaleDownFactor);
+        p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+      });
+      
+      // Update totals
+      totalPage1Units = DURABLE_MAX_TOTAL_UNITS;
+      totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    }
+    
+    // Apply rank-1 cap for DURABLE (if not already capped by rank absorption)
+    if (rank1Product && rank1Product.estimated_monthly_units > DURABLE_MAX_RANK1_UNITS) {
+      const durableRank1Excess = rank1Product.estimated_monthly_units - DURABLE_MAX_RANK1_UNITS;
+      rank1Product.estimated_monthly_units = DURABLE_MAX_RANK1_UNITS;
+      rank1Product.estimated_monthly_revenue = Math.round(DURABLE_MAX_RANK1_UNITS * rank1Product.price);
+      
+      // Redistribute excess to ranks 2-10 only (not tail)
+      const ranks2to10 = sortedByRank.filter(p => {
+        const rank = p.organic_rank ?? 999;
+        return rank >= 2 && rank <= 10;
+      });
+      
+      if (ranks2to10.length > 0) {
+        const totalRanks2to10Units = ranks2to10.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+        
+        if (totalRanks2to10Units > 0) {
+          // Distribute excess proportionally to ranks 2-10
+          ranks2to10.forEach(p => {
+            const share = p.estimated_monthly_units / totalRanks2to10Units;
+            const additionalUnits = Math.round(durableRank1Excess * share);
+            p.estimated_monthly_units += additionalUnits;
+            p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+          });
+        }
+      }
+      
+      // Re-normalize total after rank-1 redistribution (maintain total cap)
+      const afterRank1Redistribution = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+      if (afterRank1Redistribution > DURABLE_MAX_TOTAL_UNITS) {
+        const renormalizeFactor = DURABLE_MAX_TOTAL_UNITS / afterRank1Redistribution;
+        products.forEach(p => {
+          p.estimated_monthly_units = Math.round(p.estimated_monthly_units * renormalizeFactor);
+          p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+        });
+        totalPage1Units = DURABLE_MAX_TOTAL_UNITS;
+        totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+      }
+    }
+    
+    // Remove forced minimum units for tail ASINs (ranks > 15) in DURABLE categories
+    // Allow tail to fall to 0-5 units naturally (remove Math.max(1, ...) effect)
+    products.forEach(p => {
+      const rank = p.organic_rank ?? 999;
+      if (rank > 15 && p.estimated_monthly_units === 1) {
+        // If units are exactly 1, this was likely forced by Math.max(1, ...)
+        // Scale down to allow natural tail decay (0-5 units range)
+        const tailDecayFactor = 0.3; // Allow tail to decay to ~30% (0-5 units range)
+        const naturalUnits = Math.round(p.estimated_monthly_units * tailDecayFactor);
+        p.estimated_monthly_units = Math.max(0, naturalUnits); // Allow 0, but don't force negative
+        p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+      }
+    });
+    
+    // Recalculate totals after tail adjustment
+    const afterTailAdjustmentUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    const afterTailAdjustmentRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    
+    // Update totals
+    totalPage1Units = afterTailAdjustmentUnits;
+    totalPage1Revenue = afterTailAdjustmentRevenue;
+    
+    // Recalculate revenue share percentages
+    if (afterTailAdjustmentRevenue > 0) {
+      products.forEach(p => {
+        if (p.estimated_monthly_revenue > 0) {
+          p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / afterTailAdjustmentRevenue) * 100 * 100) / 100;
+        } else {
+          p.revenue_share_pct = 0;
+        }
+      });
+    }
+  }
+  
+  // Calculate final values for verification log
+  const finalTotalUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const finalRank1Product = products.find(p => p.organic_rank === 1);
+  const finalRank1Units = finalRank1Product?.estimated_monthly_units || 0;
+  const tailProducts = products.filter(p => (p.organic_rank ?? 999) > 15);
+  const tailUnitsSum = tailProducts.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  
+  // Extract keyword hint from first listing title (for logging only)
+  const keywordHint = deduplicatedListings[0]?.title?.toLowerCase().split(' ').slice(0, 3).join(' ') || "keyword_analysis";
+  
+  console.log("📊 PAGE1_CATEGORY_CALIBRATION", {
+    keyword: keywordHint,
+    categoryType: categoryVelocity,
+    totalUnitsAfterCap: finalTotalUnits,
+    rank1Units: finalRank1Units,
+    tailUnitsSum: tailUnitsSum,
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
