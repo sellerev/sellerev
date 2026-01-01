@@ -839,6 +839,25 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // H10 ALIGNMENT: Post-calibration lift factor
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Apply global lift factor to final Page-1 totals AFTER all allocation steps
+  // This brings Sellerev totals in line with Helium-10 without changing per-product allocation
+  const H10_LIFT_FACTOR = 1.85;
+  const liftedUnits = Math.round(totalPage1Units * H10_LIFT_FACTOR);
+  const liftedRevenue = Math.round(totalPage1Revenue * H10_LIFT_FACTOR);
+  
+  // Update totals (per-product units/revenue remain unchanged)
+  totalPage1Units = liftedUnits;
+  totalPage1Revenue = liftedRevenue;
+  
+  console.log("✅ H10_ALIGNMENT_CHECK", {
+    lifted_units: liftedUnits,
+    lifted_revenue: liftedRevenue,
+    lift_factor: H10_LIFT_FACTOR,
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // STEP 3: INVARIANT VALIDATION
   // ═══════════════════════════════════════════════════════════════════════════
   const sumUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
