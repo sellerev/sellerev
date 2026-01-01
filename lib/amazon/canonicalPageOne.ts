@@ -1019,13 +1019,13 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   // - Total units within 0.8x-1.1x of H10 range
   // - Top 3 organic products capture 40-65% of total Page-1 revenue
   // - Sponsored cap at 15% maintained
-  const totalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const totalRevenueForCalibration = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
   const organicProductsSorted = [...organicListingsFinal]
     .sort((a, b) => (a.organic_rank ?? 0) - (b.organic_rank ?? 0));
   const top3Revenue = organicProductsSorted.slice(0, 3).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  const top3_pct = totalRevenue > 0 ? Math.round((top3Revenue / totalRevenue) * 10000) / 100 : 0;
+  const top3_pct = totalRevenueForCalibration > 0 ? Math.round((top3Revenue / totalRevenueForCalibration) * 10000) / 100 : 0;
   const sponsoredRevenue = sponsoredListingsFinal.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  const sponsored_pct = totalRevenue > 0 ? Math.round((sponsoredRevenue / totalRevenue) * 10000) / 100 : 0;
+  const sponsored_pct = totalRevenueForCalibration > 0 ? Math.round((sponsoredRevenue / totalRevenueForCalibration) * 10000) / 100 : 0;
 
   console.log("✅ H10 CALIBRATION CHECK", {
     total_units: totalUnitsFinal,
