@@ -887,6 +887,66 @@ export function buildKeywordPageOne(
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // PAGE-1 MARKET EXPANSION: Scale allocated units to realistic market size
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Applied AFTER allocation but BEFORE final rounding
+  // Expands total Page-1 demand to align with Helium-10 market size
+  // Preserves relative distribution (all ASINs scaled proportionally)
+  const currentTotalUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  
+  // Target calibration: Rank #1 ≈ 90k-110k units, Page-1 total ≈ 180k-240k units
+  // Compute multiplier based on current allocation vs target
+  // If rank #1 exists, target ~100k units; otherwise target ~200k total
+  const rank1Product = products.find(p => p.organic_rank === 1);
+  const rank1Units = rank1Product?.estimated_monthly_units || 0;
+  
+  // Calculate expansion factor: target rank #1 at ~100k units if available, else target total
+  let PAGE1_EXPANSION_FACTOR = 1.0;
+  if (rank1Units > 0) {
+    // Scale based on rank #1 target (100k units)
+    PAGE1_EXPANSION_FACTOR = 100000 / rank1Units;
+  } else if (currentTotalUnits > 0) {
+    // Fallback: scale based on total target (200k units)
+    PAGE1_EXPANSION_FACTOR = 200000 / currentTotalUnits;
+  }
+  
+  // Clamp multiplier to reasonable range (1x - 50x)
+  PAGE1_EXPANSION_FACTOR = Math.max(1.0, Math.min(50.0, PAGE1_EXPANSION_FACTOR));
+  
+  // Apply expansion factor to all products (preserves relative distribution)
+  products.forEach(p => {
+    p.estimated_monthly_units = Math.round(p.estimated_monthly_units * PAGE1_EXPANSION_FACTOR);
+    p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+  });
+  
+  // Calculate expanded totals
+  const expandedTotalUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  const expandedTotalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  
+  // Recalculate revenue share percentages after expansion
+  if (expandedTotalRevenue > 0) {
+    products.forEach(p => {
+      if (p.estimated_monthly_revenue > 0) {
+        p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / expandedTotalRevenue) * 100 * 100) / 100;
+      } else {
+        p.revenue_share_pct = 0;
+      }
+    });
+  }
+  
+  // Update totalPage1Units and totalPage1Revenue to match expanded products
+  totalPage1Units = expandedTotalUnits;
+  totalPage1Revenue = expandedTotalRevenue;
+  
+  console.log("📈 PAGE1_MARKET_EXPANSION", {
+    expansion_factor: PAGE1_EXPANSION_FACTOR.toFixed(3),
+    current_total_units: currentTotalUnits,
+    expanded_total_units: expandedTotalUnits,
+    rank1_units_before: rank1Units,
+    rank1_units_after: rank1Product ? rank1Product.estimated_monthly_units : 0,
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // PAGE-1 VISIBILITY FLOOR: REMOVED
   // ═══════════════════════════════════════════════════════════════════════════
   // REMOVED: Per-ASIN floors applied AFTER STEP 2.3 cause tail flatlining
