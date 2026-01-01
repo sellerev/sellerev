@@ -366,9 +366,10 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     const pagePosition = item.bestRank; // Actual Page-1 position including sponsored
     const organicRank = item.organicRank; // Position among organic listings only (null for sponsored)
     const price = l.price ?? 0;
-    // Fix review count mapping: use review_count if available, fallback to reviews
-    const reviewCount = (l as any).review_count ?? l.reviews ?? 0;
-    const rating = l.rating ?? 0;
+    // Review count: use reviews field from ParsedListing (matches Amazon Page-1 count)
+    // Keep as null if missing (don't default to 0)
+    const reviewCount = l.reviews ?? null;
+    const rating = l.rating ?? null;
     const appearanceCount = item.appearanceCount;
     const isAlgorithmBoosted = item.isAlgorithmBoosted;
 
@@ -384,15 +385,19 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     const rankWeight = 1.0 / Math.pow(rankForWeight, 0.7);
 
     // Review advantage: ratio vs median (clamped to 0.5x - 2.0x)
-    const reviewRatio = medianReviews > 0
-      ? Math.max(0.5, Math.min(2.0, reviewCount / medianReviews))
+    // If reviewCount is null, treat as 0 for weight calculation
+    const reviewCountForWeight = reviewCount ?? 0;
+    const reviewRatio = medianReviews > 0 && reviewCountForWeight > 0
+      ? Math.max(0.5, Math.min(2.0, reviewCountForWeight / medianReviews))
       : 1.0;
     const reviewWeight = reviewRatio;
 
     // Rating penalty: products below median rating get penalized
-    const ratingPenalty = rating >= medianRating
+    // If rating is null, use neutral penalty
+    const ratingForPenalty = rating ?? medianRating;
+    const ratingPenalty = ratingForPenalty >= medianRating
       ? 1.0
-      : Math.max(0.3, 1.0 - (medianRating - rating) * 0.5);
+      : Math.max(0.3, 1.0 - (medianRating - ratingForPenalty) * 0.5);
 
     // Price deviation: products closer to median price get slight boost
     // But price has less impact than rank/reviews
@@ -467,11 +472,12 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     const isSponsored = !!l.is_sponsored;
     const reviewCount = pw.reviewCount;
     
-    // Apply demand floor
+    // Apply demand floor (use 0 if reviewCount is null for floor calculation)
+    const reviewCountForFloor = reviewCount ?? 0;
     const finalUnits = applyDemandFloors({
       estimatedUnits: allocatedUnits,
       price: pw.price,
-      reviewCount,
+      reviewCount: reviewCountForFloor,
       rank,
       isSponsored,
       fulfillment,
@@ -527,16 +533,28 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
     // Set product bsr to null so UI shows "BSR: —" or hides it
     const displayBsr: number | null = null; // Always null for keyword Page-1
 
-    // Fix review count: ensure correct mapping from listing data
-    const reviewCountForProduct = (l as any).review_count ?? l.reviews ?? 0;
+    // Review count: use reviews field from ParsedListing (canonical field matching Amazon Page-1)
+    // Keep as null if missing (don't default to 0) - preserves data integrity
+    const reviewCountForProduct = l.reviews ?? null;
+    
+    // Validate rating and review count alignment (non-blocking assertion)
+    const ratingForProduct = l.rating ?? null;
+    if (ratingForProduct !== null && ratingForProduct > 0 && reviewCountForProduct === null) {
+      console.warn("⚠️ REVIEW COUNT MISSING WITH RATING", {
+        asin: l.asin,
+        rating: ratingForProduct,
+        review_count: reviewCountForProduct,
+        message: "Product has rating but review_count is null - review count may be missing from API",
+      });
+    }
 
     return {
       rank: pw.organicRank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
       asin, // Allow synthetic ASINs for keywords
       title: l.title ?? "Unknown product",
       price: pw.price,
-      rating: pw.rating,
-      review_count: reviewCountForProduct, // Fixed: use review_count if available, fallback to reviews
+      rating: ratingForProduct ?? 0, // Rating: use 0 if null for display
+      review_count: reviewCountForProduct ?? 0, // Review count: use 0 if null for display (but log warning if rating exists)
       bsr: displayBsr, // Always null for keyword Page-1 (not displayed, but pw.bsr still used internally)
       estimated_monthly_units: finalUnits, // Use floored units
       estimated_monthly_revenue: finalRevenue, // Use floored revenue

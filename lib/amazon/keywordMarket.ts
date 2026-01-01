@@ -115,16 +115,34 @@ function parsePrice(item: any): number | null {
 }
 
 /**
- * Safely parses review count.
+ * Safely parses review count from Rainforest API.
+ * Checks multiple possible field names to match Amazon Page-1 review count.
+ * Priority order matches Rainforest API response structure.
  */
 function parseReviews(item: any): number | null {
-  if (item.reviews?.count !== undefined) {
+  // Primary: reviews.count (most common in search results)
+  if (item.reviews?.count !== undefined && item.reviews.count !== null) {
     const parsed = parseInt(item.reviews.count.toString().replace(/,/g, ""), 10);
-    return isNaN(parsed) ? null : parsed;
+    if (!isNaN(parsed) && parsed >= 0) return parsed;
   }
-  if (typeof item.reviews === "number") {
-    return isNaN(item.reviews) ? null : item.reviews;
+  
+  // Secondary: reviews_total (used in product API responses)
+  if (item.reviews_total !== undefined && item.reviews_total !== null) {
+    const parsed = parseInt(item.reviews_total.toString().replace(/,/g, ""), 10);
+    if (!isNaN(parsed) && parsed >= 0) return parsed;
   }
+  
+  // Tertiary: reviews.total (alternative structure)
+  if (item.reviews?.total !== undefined && item.reviews.total !== null) {
+    const parsed = parseInt(item.reviews.total.toString().replace(/,/g, ""), 10);
+    if (!isNaN(parsed) && parsed >= 0) return parsed;
+  }
+  
+  // Fallback: reviews as direct number
+  if (typeof item.reviews === "number" && !isNaN(item.reviews) && item.reviews >= 0) {
+    return item.reviews;
+  }
+  
   return null;
 }
 
