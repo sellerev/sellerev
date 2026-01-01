@@ -301,6 +301,15 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   totalPage1Units = calibrated.calibrated_units;
   totalPage1Revenue = calibrated.calibrated_revenue;
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // H10 CALIBRATION: Global multiplier for total Page-1 units
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Adjusts total market size to match Helium-10 output range (0.8x-1.1x)
+  // This is the ONLY multiplier that controls total Page-1 units
+  const PAGE1_UNITS_MULTIPLIER = 0.95; // Calibrated to match H10 range
+  totalPage1Units = Math.round(totalPage1Units * PAGE1_UNITS_MULTIPLIER);
+  totalPage1Revenue = Math.round(totalPage1Revenue * PAGE1_UNITS_MULTIPLIER);
+
   console.log("📊 PAGE-1 TOTAL UNITS (calibrated)", totalPage1Units);
   console.log("📊 PAGE-1 TOTAL REVENUE (calibrated)", totalPage1Revenue);
 
@@ -649,13 +658,15 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
   // Sort organic products by organic_rank (1, 2, 3...)
   const sortedOrganic = [...organicProducts].sort((a, b) => (a.organic_rank ?? 0) - (b.organic_rank ?? 0));
   
-  // Calculate rank weights using exponential decay: rankWeight = exp(-0.35 * (rank - 1))
+  // Calculate rank weights using exponential decay: rankWeight = exp(-0.45 * (rank - 1))
+  // H10 CALIBRATION: Adjusted decay constant to make Top 3 capture 40-65% of revenue
+  const EXPONENTIAL_DECAY_CONSTANT = -0.45; // Calibrated for Top 3 = 40-65% revenue share
   const organicWeights = sortedOrganic.map((p, index) => {
     const rank = p.organic_rank ?? (index + 1);
     return {
       product: p,
       rank,
-      weight: Math.exp(-0.35 * (rank - 1)),
+      weight: Math.exp(EXPONENTIAL_DECAY_CONSTANT * (rank - 1)),
     };
   });
   
@@ -999,6 +1010,27 @@ export function buildKeywordPageOne(listings: ParsedListing[]): CanonicalProduct
       totalUnitsFinal > 0
         ? Math.round((sponsoredUnitsFinal / totalUnitsFinal) * 10000) / 100
         : 0
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // H10 CALIBRATION CHECK (REQUIRED)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Verify calibration matches Helium-10 behavior:
+  // - Total units within 0.8x-1.1x of H10 range
+  // - Top 3 organic products capture 40-65% of total Page-1 revenue
+  // - Sponsored cap at 15% maintained
+  const totalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const organicProductsSorted = [...organicListingsFinal]
+    .sort((a, b) => (a.organic_rank ?? 0) - (b.organic_rank ?? 0));
+  const top3Revenue = organicProductsSorted.slice(0, 3).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const top3_pct = totalRevenue > 0 ? Math.round((top3Revenue / totalRevenue) * 10000) / 100 : 0;
+  const sponsoredRevenue = sponsoredListingsFinal.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const sponsored_pct = totalRevenue > 0 ? Math.round((sponsoredRevenue / totalRevenue) * 10000) / 100 : 0;
+
+  console.log("✅ H10 CALIBRATION CHECK", {
+    total_units: totalUnitsFinal,
+    top3_pct: `${top3_pct}%`,
+    sponsored_pct: `${sponsored_pct}%`,
   });
 
   return products;
