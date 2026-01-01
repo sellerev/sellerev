@@ -1225,8 +1225,8 @@ export function buildKeywordPageOne(
   
   // Calculate final values for verification log
   const finalTotalUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const finalRank1Product = products.find(p => p.organic_rank === 1);
-  const finalRank1Units = finalRank1Product?.estimated_monthly_units || 0;
+  // Reuse existing rank1Product (defined earlier in market expansion section)
+  const finalRank1UnitsForCalibration = rank1Product?.estimated_monthly_units || 0;
   const tailProducts = products.filter(p => (p.organic_rank ?? 999) > 15);
   const tailUnitsSum = tailProducts.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
   
@@ -1237,7 +1237,7 @@ export function buildKeywordPageOne(
     keyword: keywordHint,
     categoryType: categoryVelocity,
     totalUnitsAfterCap: finalTotalUnits,
-    rank1Units: finalRank1Units,
+    rank1Units: finalRank1UnitsForCalibration,
     tailUnitsSum: tailUnitsSum,
   });
 
