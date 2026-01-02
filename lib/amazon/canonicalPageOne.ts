@@ -47,27 +47,6 @@ export interface CanonicalProduct {
 }
 
 /**
- * Compute tail floor units for Page-1 ASINs with rank > 10
- * Ensures tail ASINs never receive 0 units (additive, not redistributed)
- * 
- * @param rank - Organic rank of the product
- * @param totalEstimatedUnits - Total estimated units across all Page-1 products
- * @returns Minimum units for tail ASINs (0 for ranks <= 10)
- */
-function computeTailFloorUnits(
-  rank: number,
-  totalEstimatedUnits: number
-): number {
-  if (rank <= 10) return 0;
-  const FLOOR_SHARE = 0.0025; // 0.25% of total demand
-  const decay = Math.log(rank + 1);
-  return Math.max(
-    Math.round((totalEstimatedUnits * FLOOR_SHARE) / decay),
-    2 // absolute minimum
-  );
-}
-
-/**
  * Apply demand floors to prevent under-reported sales/revenue
  * Uses conservative signals from existing data (Rainforest) to set minimum units
  * 
@@ -824,107 +803,197 @@ export function buildKeywordPageOne(
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 2.3: MARKET DEMAND ANCHORING (Market Shape Based)
+  // 3-PHASE DETERMINISTIC ALLOCATION MODEL
   // ═══════════════════════════════════════════════════════════════════════════
-  // Anchor total demand based on MARKET_SHAPE before rank distribution
-  // Rank curves will DISTRIBUTE this total, not create it
+  // Phase 1: Anchor top sellers (ranks 1-5)
+  // Phase 2: Distribute tail demand (ranks 6+)
+  // Phase 3: Snapshot conservation (ensure totals match)
   
-  // Compute organic count for market demand estimation
+  // Separate organic and sponsored products
+  const organicProducts = products.filter(p => p.organic_rank !== null);
+  const sponsoredProducts = products.filter(p => p.organic_rank === null);
+  
+  // Calculate median price for anchor clamping
+  const sortedPrices = [...prices].sort((a, b) => a - b);
+  const medianPrice = sortedPrices.length > 0
+    ? sortedPrices[Math.floor(sortedPrices.length / 2)]
+    : avgPrice ?? 0;
+  
+  // Get estimated total market units (use market demand estimate or totalPage1Units)
   const organicCountForDemand = deduplicatedListings.filter(l => !l.is_sponsored).length;
-  
-  // Estimate market demand based on shape, price, and product count
   const avgPriceForDemand = avgPrice ?? 0;
   const marketDemandEstimate = estimateMarketDemand({
     marketShape,
     avgPrice: avgPriceForDemand,
     organicCount: organicCountForDemand,
   });
+  const estimatedTotalMarketUnits = marketDemandEstimate;
   
-  // This is the target total for Page-1 - rank curves will distribute it
-  const targetPageOneUnits = marketDemandEstimate;
+  // Calculate snapshot search volume (average of low/high if available)
+  const snapshotSearchVolume = (searchVolumeLow !== undefined && searchVolumeHigh !== undefined && searchVolumeLow > 0 && searchVolumeHigh > 0)
+    ? (searchVolumeLow + searchVolumeHigh) / 2
+    : estimatedTotalMarketUnits * 10; // Fallback: assume 10% conversion rate
   
-  // Separate organic and sponsored products for rank-based allocation
-  const organicProducts = products.filter(p => p.organic_rank !== null);
-  const sponsoredProducts = products.filter(p => p.organic_rank === null);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE 1: ANCHOR TOP SELLERS (Ranks 1-5)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const topAnchors = organicProducts.filter(p => (p.organic_rank ?? 999) <= 5);
+  let anchorUnitsTotal = 0;
   
-  // Sort organic products by organic_rank (1, 2, 3...)
-  const sortedOrganic = [...organicProducts].sort((a, b) => (a.organic_rank ?? 0) - (b.organic_rank ?? 0));
+  topAnchors.forEach(anchor => {
+    const rank = anchor.organic_rank ?? 1;
+    
+    // Estimate units using existing rank → units logic (exponential decay)
+    const EXPONENTIAL_DECAY_CONSTANT = -0.45;
+    const rankWeight = Math.exp(EXPONENTIAL_DECAY_CONSTANT * (rank - 1));
+    
+    // Normalize weight (assume top 5 get 60% of total)
+    const top5WeightSum = Array.from({ length: 5 }, (_, i) => Math.exp(EXPONENTIAL_DECAY_CONSTANT * i)).reduce((a, b) => a + b, 0);
+    const normalizedWeight = rankWeight / top5WeightSum;
+    const estimatedUnits = estimatedTotalMarketUnits * 0.6 * normalizedWeight;
+    
+    // Clamp: minUnits = max(price < medianPrice ? 50 : 25, 1)
+    const minUnits = Math.max(anchor.price < medianPrice ? 50 : 25, 1);
+    // Clamp: maxUnits = snapshotSearchVolume * 0.35
+    const maxUnits = Math.round(snapshotSearchVolume * 0.35);
+    
+    const clampedUnits = Math.max(minUnits, Math.min(maxUnits, Math.round(estimatedUnits)));
+    anchor.estimated_monthly_units = clampedUnits;
+    anchor.estimated_monthly_revenue = Math.round(clampedUnits * anchor.price);
+    anchorUnitsTotal += clampedUnits;
+  });
   
-  // Calculate rank weights using exponential decay: rankWeight = exp(-0.45 * (rank - 1))
-  // H10 CALIBRATION: Adjusted decay constant to make Top 3 capture 40-65% of revenue
-  const EXPONENTIAL_DECAY_CONSTANT = -0.45; // Calibrated for Top 3 = 40-65% revenue share
-  const organicWeights = sortedOrganic.map((p, index) => {
-    const rank = p.organic_rank ?? (index + 1);
+  console.log("PHASE1_ANCHOR_UNITS", {
+    anchor_count: topAnchors.length,
+    anchor_units_total: anchorUnitsTotal,
+    median_price: medianPrice,
+  });
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE 2: DISTRIBUTE TAIL DEMAND (Ranks 6+)
+  // ═══════════════════════════════════════════════════════════════════════════
+  let remainingUnits = estimatedTotalMarketUnits - anchorUnitsTotal;
+  if (remainingUnits <= 0) {
+    remainingUnits = anchorUnitsTotal * 0.6;
+  }
+  
+  const phase2TailProducts = organicProducts.filter(p => (p.organic_rank ?? 999) > 5);
+  
+  // Calculate weights for tail products
+  const tailWeights = phase2TailProducts.map(product => {
+    const reviewCount = product.review_count ?? 0;
+    const rank = product.organic_rank ?? 999;
+    const rating = product.rating ?? 0;
+    
+    // weight = log(review_count + 10) * (1 / sqrt(organic_rank)) * (rating ? rating / 5 : 0.85)
+    const reviewWeight = Math.log(reviewCount + 10);
+    const rankWeight = 1 / Math.sqrt(rank);
+    const ratingWeight = rating > 0 ? rating / 5 : 0.85;
+    
     return {
-      product: p,
-      rank,
-      weight: Math.exp(EXPONENTIAL_DECAY_CONSTANT * (rank - 1)),
+      product,
+      weight: reviewWeight * rankWeight * ratingWeight,
     };
   });
   
-  // Normalize organic weights to sum to 1.0
-  const totalOrganicWeight = organicWeights.reduce((sum, w) => sum + w.weight, 0);
-  organicWeights.forEach(w => {
-    w.weight = w.weight / totalOrganicWeight;
-  });
-  
-  // Allocate 85% of target to organic (sponsored capped at 15%)
-  const organicTargetUnits = Math.round(targetPageOneUnits * 0.85);
-  const sponsoredTargetUnits = Math.round(targetPageOneUnits * 0.15);
-  
-  // Re-allocate organic units using rank weights
-  // Use precise allocation first (no early rounding to preserve tail distribution)
-  organicWeights.forEach(w => {
-    const allocatedUnitsPrecise = organicTargetUnits * w.weight;
-    const allocatedRevenuePrecise = allocatedUnitsPrecise * w.product.price;
-    
-    w.product.estimated_monthly_units = allocatedUnitsPrecise;
-    w.product.estimated_monthly_revenue = allocatedRevenuePrecise;
-  });
-  
-  // Allocate sponsored units (equal distribution, capped at 15% total)
-  if (sponsoredProducts.length > 0) {
-    const sponsoredUnitsPerProductPrecise = sponsoredTargetUnits / sponsoredProducts.length;
-    sponsoredProducts.forEach(p => {
-      p.estimated_monthly_units = sponsoredUnitsPerProductPrecise;
-      p.estimated_monthly_revenue = sponsoredUnitsPerProductPrecise * p.price;
+  // Normalize weights so sum(weights) = 1
+  const totalTailWeight = tailWeights.reduce((sum, w) => sum + w.weight, 0);
+  if (totalTailWeight > 0) {
+    tailWeights.forEach(w => {
+      w.weight = w.weight / totalTailWeight;
+    });
+  } else {
+    // Fallback: equal weights
+    tailWeights.forEach(w => {
+      w.weight = 1 / tailWeights.length;
     });
   }
   
-  // Apply rounding ONLY at final output (preserves total distribution, prevents tail truncation)
-  products.forEach(p => {
-    p.estimated_monthly_units = Math.round(p.estimated_monthly_units);
-    p.estimated_monthly_revenue = Math.round(p.estimated_monthly_revenue);
+  // Calculate tail min unit floor
+  const tailMinUnitFloor = phase2TailProducts.length > 0
+    ? Math.floor((anchorUnitsTotal / phase2TailProducts.length) * 0.15)
+    : 2;
+  
+  // Assign units to tail products
+  tailWeights.forEach(({ product, weight }) => {
+    const weightedUnits = Math.round(remainingUnits * weight);
+    const flooredUnits = Math.max(weightedUnits, tailMinUnitFloor);
+    
+    product.estimated_monthly_units = flooredUnits;
+    product.estimated_monthly_revenue = Math.round(flooredUnits * product.price);
   });
   
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PHASE 2: TAIL FLOOR ALLOCATION (NEW)
-  // ═══════════════════════════════════════════════════════════════════════════
-  // For every Page-1 ASIN with rank > 10, enforce a non-zero minimum
-  // Tail demand is additive, NOT redistributed from top ranks
-  // Tail ASINs must never end at 0 units
-  const totalEstimatedUnits = products.reduce((sum, p) => sum + (p.estimated_monthly_units ?? 0), 0);
+  console.log("PHASE2_REMAINING_UNITS", {
+    remaining_units: remainingUnits,
+    tail_count: phase2TailProducts.length,
+  });
   
-  // Apply tail floor to all Page-1 products with rank > 10 and units <= 0
+  console.log("TAIL_MIN_UNIT_FLOOR", {
+    tail_min_unit_floor: tailMinUnitFloor,
+    anchor_units_total: anchorUnitsTotal,
+    tail_product_count: phase2TailProducts.length,
+  });
+  
+  // Allocate sponsored units (equal distribution, capped at 15% of total)
+  const sponsoredTargetUnits = Math.round(estimatedTotalMarketUnits * 0.15);
+  if (sponsoredProducts.length > 0) {
+    const sponsoredUnitsPerProduct = sponsoredTargetUnits / sponsoredProducts.length;
+    sponsoredProducts.forEach(p => {
+      p.estimated_monthly_units = Math.round(sponsoredUnitsPerProduct);
+      p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+    });
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GUARDRAILS
+  // ═══════════════════════════════════════════════════════════════════════════
+  // No product with review_count > 20 may have units < 5
   products.forEach(product => {
-    if (
-      product.organic_rank !== null &&
-      product.organic_rank > 10 &&
-      product.estimated_monthly_units <= 0
-    ) {
-      const tailUnits = computeTailFloorUnits(
-        product.organic_rank,
-        totalEstimatedUnits
-      );
-      product.estimated_monthly_units = tailUnits;
-      product.estimated_monthly_revenue = Math.round(tailUnits * (product.price ?? 0));
+    if ((product.review_count ?? 0) > 20 && product.estimated_monthly_units < 5) {
+      product.estimated_monthly_units = 5;
+      product.estimated_monthly_revenue = Math.round(5 * product.price);
     }
   });
   
-  // Recalculate revenue share percentages after re-allocation
-  const totalUnitsAfter = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const totalRevenueAfter = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  // Rank > 15 must still receive demand (ensure minimum)
+  organicProducts.forEach(product => {
+    const rank = product.organic_rank ?? 999;
+    if (rank > 15 && product.estimated_monthly_units === 0) {
+      product.estimated_monthly_units = Math.max(2, Math.floor(tailMinUnitFloor * 0.5));
+      product.estimated_monthly_revenue = Math.round(product.estimated_monthly_units * product.price);
+    }
+  });
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE 3: SNAPSHOT CONSERVATION (MANDATORY)
+  // ═══════════════════════════════════════════════════════════════════════════
+  let totalAssignedUnits = products.reduce((sum, p) => sum + (p.estimated_monthly_units ?? 0), 0);
+  const phase3UnitsDiff = Math.abs(totalAssignedUnits - estimatedTotalMarketUnits);
+  const phase3UnitsDiffPct = estimatedTotalMarketUnits > 0 ? (phase3UnitsDiff / estimatedTotalMarketUnits) * 100 : 0;
+  
+  let scaleFactor = 1.0;
+  if (phase3UnitsDiffPct > 3) {
+    scaleFactor = estimatedTotalMarketUnits / totalAssignedUnits;
+    
+    // Scale all product units
+    products.forEach(p => {
+      p.estimated_monthly_units = Math.round(p.estimated_monthly_units * scaleFactor);
+      p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+    });
+    
+    totalAssignedUnits = products.reduce((sum, p) => sum + (p.estimated_monthly_units ?? 0), 0);
+  }
+  
+  console.log("SNAPSHOT_SCALE_FACTOR", {
+    estimated_total_market_units: estimatedTotalMarketUnits,
+    total_assigned_units: totalAssignedUnits,
+    units_diff_pct: phase3UnitsDiffPct.toFixed(2) + "%",
+    scale_factor: scaleFactor.toFixed(4),
+    scaled: phase3UnitsDiffPct > 3,
+  });
+  
+  // Recalculate revenue share percentages
+  const totalRevenueAfter = products.reduce((sum, p) => sum + (p.estimated_monthly_revenue ?? 0), 0);
   if (totalRevenueAfter > 0) {
     products.forEach(p => {
       if (p.estimated_monthly_revenue > 0) {
@@ -935,30 +1004,20 @@ export function buildKeywordPageOne(
     });
   }
   
-  // Calculate sponsored share for logging
-  const sponsoredUnits = sponsoredProducts.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  // Calculate totals for logging
+  const totalUnitsAfter = products.reduce((sum, p) => sum + (p.estimated_monthly_units ?? 0), 0);
+  const sponsoredUnits = sponsoredProducts.reduce((sum, p) => sum + (p.estimated_monthly_units ?? 0), 0);
   const sponsoredShare = totalUnitsAfter > 0 ? (sponsoredUnits / totalUnitsAfter) * 100 : 0;
   
-  // Calculate min/max per-ASIN units for debug logging
-  const unitsPerAsin = products.map(p => p.estimated_monthly_units).filter(u => u > 0);
-  const minUnitsPerAsin = unitsPerAsin.length > 0 ? Math.min(...unitsPerAsin) : 0;
-  const maxUnitsPerAsin = unitsPerAsin.length > 0 ? Math.max(...unitsPerAsin) : 0;
-  
-  // Calculate allocation accuracy (should be ±1% of marketDemandEstimate)
-  const allocationAccuracy = marketDemandEstimate > 0 
-    ? ((totalUnitsAfter / marketDemandEstimate) * 100).toFixed(2) + "%"
-    : "N/A";
-  
-  console.log("📈 MARKET DEMAND ANCHORED", {
-    marketShape,
-    marketDemandEstimate,
-    sumAllocatedUnits: totalUnitsAfter,
-    allocationAccuracy,
-    minUnitsPerAsin,
-    maxUnitsPerAsin,
-    organicCount: organicProducts.length,
-    sponsoredCount: sponsoredProducts.length,
-    sponsoredShare: sponsoredShare.toFixed(1) + "%",
+  console.log("📈 3-PHASE ALLOCATION COMPLETE", {
+    estimated_total_market_units: estimatedTotalMarketUnits,
+    total_assigned_units: totalUnitsAfter,
+    anchor_units: anchorUnitsTotal,
+    tail_units: phase2TailProducts.reduce((sum, p) => sum + (p.estimated_monthly_units ?? 0), 0),
+    sponsored_units: sponsoredUnits,
+    sponsored_share: sponsoredShare.toFixed(1) + "%",
+    organic_count: organicProducts.length,
+    sponsored_count: sponsoredProducts.length,
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
