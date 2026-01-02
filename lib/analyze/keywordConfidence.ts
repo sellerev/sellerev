@@ -87,8 +87,8 @@ export async function getConfidenceStats(
     const average_revenue = revenues.reduce((sum: number, val: number) => sum + val, 0) / run_count;
 
     // Calculate standard deviations
-    const variance_units = units.reduce((sum, val) => sum + Math.pow(val - average_units, 2), 0) / run_count;
-    const variance_revenue = revenues.reduce((sum, val) => sum + Math.pow(val - average_revenue, 2), 0) / run_count;
+    const variance_units = units.reduce((sum: number, val: number) => sum + Math.pow(val - average_units, 2), 0) / run_count;
+    const variance_revenue = revenues.reduce((sum: number, val: number) => sum + Math.pow(val - average_revenue, 2), 0) / run_count;
     
     const std_dev_units = Math.sqrt(variance_units);
     const std_dev_revenue = Math.sqrt(variance_revenue);
