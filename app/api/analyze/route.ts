@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
-import { fetchKeywordMarketSnapshot, KeywordMarketData } from "@/lib/amazon/keywordMarket";
+import { fetchKeywordMarketSnapshot, KeywordMarketData, KeywordMarketSnapshot, ParsedListing } from "@/lib/amazon/keywordMarket";
 import { pickRepresentativeAsin } from "@/lib/amazon/representativeAsin";
 import { calculateCPI } from "@/lib/amazon/competitivePressureIndex";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
@@ -10,7 +10,6 @@ import { buildKeywordAnalyzeResponse } from "@/lib/analyze/dataContract";
 import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import { buildKeywordPageOne, buildAsinPageOne } from "@/lib/amazon/canonicalPageOne";
-import { ParsedListing } from "@/lib/amazon/keywordMarket";
 
 // Sellerev production SYSTEM PROMPT
 const SYSTEM_PROMPT = `You are Sellerev, an AI advisory system for Amazon FBA sellers.
@@ -919,6 +918,117 @@ export async function POST(req: NextRequest) {
       console.warn("Cache check failed, continuing to Rainforest:", error);
     }
     
+    // STEP 1.5: Rehydrate cache into KeywordMarketData format (pure adapter layer)
+    async function rehydrateCacheToMarketData(
+      cachedRows: any[],
+      keyword: string
+    ): Promise<KeywordMarketData | null> {
+      if (!cachedRows || cachedRows.length === 0) return null;
+
+      // Convert cached rows to ParsedListing[]
+      const listings: ParsedListing[] = cachedRows.map((row) => {
+        return {
+          asin: row.asin || null,
+          title: null, // Not stored in keyword_products
+          price: row.price !== null && row.price !== undefined ? parseFloat(row.price) : null,
+          rating: row.rating !== null && row.rating !== undefined ? parseFloat(row.rating) : null,
+          reviews: row.review_count !== null && row.review_count !== undefined ? parseInt(row.review_count) : null,
+          is_sponsored: false, // Assume organic (not stored in keyword_products)
+          position: row.rank || 1, // Organic rank
+          brand: null, // Not stored in keyword_products
+          image_url: null, // Not stored in keyword_products
+          bsr: null, // Not stored in keyword_products
+          main_category_bsr: null, // Not stored in keyword_products
+          main_category: null, // Not stored in keyword_products
+          fulfillment: row.fulfillment || null,
+          seller: null, // Not stored in keyword_products
+          is_prime: undefined, // Not stored in keyword_products
+          est_monthly_revenue: row.estimated_monthly_revenue !== null && row.estimated_monthly_revenue !== undefined
+            ? parseFloat(row.estimated_monthly_revenue)
+            : null,
+          est_monthly_units: row.estimated_monthly_units !== null && row.estimated_monthly_units !== undefined
+            ? parseInt(row.estimated_monthly_units)
+            : null,
+          revenue_confidence: undefined,
+          bsr_invalid_reason: null,
+        };
+      });
+
+      // Compute KeywordMarketSnapshot from listings (reusing existing helper functions)
+      const { computeAvgReviews } = await import("@/lib/amazon/marketAggregates");
+      const { computeFulfillmentMix } = await import("@/lib/amazon/fulfillmentMix");
+      const { computePPCIndicators } = await import("@/lib/amazon/ppcIndicators");
+
+      const total_page1_listings = listings.length;
+      const sponsored_count = listings.filter((l) => l.is_sponsored).length;
+
+      // Average price
+      const listingsWithPrice = listings.filter((l) => l.price !== null && l.price !== undefined);
+      const avg_price =
+        listingsWithPrice.length > 0
+          ? listingsWithPrice.reduce((sum, l) => sum + (l.price ?? 0), 0) / listingsWithPrice.length
+          : null;
+
+      // Average reviews
+      const avg_reviews = computeAvgReviews(listings);
+
+      // Average rating
+      const listingsWithRating = listings.filter((l) => l.rating !== null && l.rating !== undefined);
+      const avg_rating =
+        listingsWithRating.length > 0
+          ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length
+          : null;
+
+      // Average BSR (none in cache, so null)
+      const avg_bsr = null;
+
+      // Fulfillment mix
+      const fulfillmentMix = listings.length > 0
+        ? computeFulfillmentMix(listings)
+        : { fba: 0, fbm: 0, amazon: 0 };
+
+      // Top brands (none in cache, so dominance_score = 0)
+      const dominance_score = 0;
+
+      // PPC indicators
+      let ppcIndicators: { sponsored_pct: number; ad_intensity_label: "Low" | "Medium" | "High"; signals: string[]; source: "heuristic_v1" } | null = null;
+      try {
+        const ppcResult = computePPCIndicators(
+          listings,
+          total_page1_listings,
+          sponsored_count,
+          dominance_score,
+          avg_price
+        );
+        ppcIndicators = {
+          sponsored_pct: ppcResult.sponsored_pct,
+          ad_intensity_label: ppcResult.ad_intensity_label,
+          signals: ppcResult.signals,
+          source: "heuristic_v1",
+        };
+      } catch (error) {
+        // Continue without PPC indicators if computation fails
+      }
+
+      const snapshot: KeywordMarketSnapshot = {
+        keyword,
+        avg_price: avg_price !== null ? Math.round(avg_price * 100) / 100 : null,
+        avg_reviews,
+        avg_rating: avg_rating !== null ? Math.round(avg_rating * 10) / 10 : null,
+        avg_bsr,
+        total_page1_listings,
+        sponsored_count,
+        dominance_score,
+        fulfillment_mix: fulfillmentMix,
+        ppc: ppcIndicators,
+      };
+
+      return {
+        snapshot,
+        listings,
+      };
+    }
+
     // STEP 2: Try to fetch real Rainforest listings FIRST (skip if cache exists)
     console.log("🔵 MARKET_FETCH_START", {
       keyword: body.input_value,
@@ -927,14 +1037,28 @@ export async function POST(req: NextRequest) {
     });
     
     try {
-      // Skip Rainforest if we have cached products
-      const realMarketData = cachedProducts.length === 0
-        ? await fetchKeywordMarketSnapshot(
-            body.input_value,
-            supabase,
-            "US"
-          )
-        : null;
+      // Rehydrate cache if available, otherwise fetch from Rainforest
+      let realMarketData: KeywordMarketData | null = null;
+      
+      if (cachedProducts.length > 0) {
+        // Rehydrate cached products into KeywordMarketData format
+        realMarketData = await rehydrateCacheToMarketData(cachedProducts, body.input_value);
+        
+        if (realMarketData) {
+          console.log("KEYWORD_PRODUCTS_CACHE_REHYDRATED", {
+            keyword: normalizedKeyword,
+            product_count: cachedProducts.length,
+            listing_count: realMarketData.listings.length,
+          });
+        }
+      } else {
+        // No cache - fetch from Rainforest
+        realMarketData = await fetchKeywordMarketSnapshot(
+          body.input_value,
+          supabase,
+          "US"
+        );
+      }
       
       // CRITICAL: If real listings exist, use them and NEVER use snapshot-based Page-1
       if (realMarketData && realMarketData.listings && realMarketData.listings.length > 0) {
