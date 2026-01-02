@@ -162,6 +162,30 @@ function estimateTotalKeywordUnits({
 }
 
 /**
+ * Market shape classification
+ */
+type MarketShape = "DURABLE" | "HYBRID" | "CONSUMABLE";
+
+/**
+ * Detect market shape based on price and total units
+ * 
+ * @param avgPrice - Average price of products
+ * @param totalPage1Units - Total Page-1 units
+ * @returns Market shape type
+ */
+function detectMarketShape({
+  avgPrice,
+  totalPage1Units
+}: {
+  avgPrice: number;
+  totalPage1Units: number;
+}): MarketShape {
+  if (avgPrice >= 300) return "DURABLE";
+  if (avgPrice <= 30 && totalPage1Units >= 80000) return "CONSUMABLE";
+  return "HYBRID";
+}
+
+/**
  * Build keyword Page-1 product set (PERMISSIVE)
  * 
  * PAGE-1 SCOPE: This function processes Page-1 listings only (both organic + sponsored)
@@ -396,6 +420,21 @@ export function buildKeywordPageOne(
     multiplier: CATEGORY_DEMAND_MULTIPLIER,
     final_units: totalPage1Units,
     final_revenue: totalPage1Revenue,
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MARKET SHAPE DETECTION
+  // ═══════════════════════════════════════════════════════════════════════════
+  const avgPriceForShape = avgPrice ?? 0;
+  const marketShape = detectMarketShape({
+    avgPrice: avgPriceForShape,
+    totalPage1Units,
+  });
+
+  console.log("📊 MARKET_SHAPE", {
+    marketShape,
+    avgPrice: avgPriceForShape,
+    totalPage1Units,
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1007,127 +1046,129 @@ export function buildKeywordPageOne(
   // Caps Rank #1 at 10-12% and Top 3 at 40-45% of total Page-1 units
   // Redistributes excess proportionally to ranks 4-15
   // Tail (ranks >20) remains unchanged
-  const RANK1_CAP_PCT = 0.11; // 11% cap for Rank #1
-  const TOP3_CAP_PCT = 0.425; // 42.5% cap for Top 3 combined
-  
-  // Sort products by organic rank (rank 1, 2, 3...)
+  // Sort products by organic rank (rank 1, 2, 3...) - needed for both DURABLE and non-DURABLE paths
   const sortedByRank = [...products].sort((a, b) => {
     const rankA = a.organic_rank ?? 999;
     const rankB = b.organic_rank ?? 999;
     return rankA - rankB;
   });
   
-  const currentTotal = expandedTotalUnits;
-  const rank1Cap = Math.round(currentTotal * RANK1_CAP_PCT);
-  const top3Cap = Math.round(currentTotal * TOP3_CAP_PCT);
-  
-  // Calculate current top 3 total
-  const top3Products = sortedByRank.filter(p => (p.organic_rank ?? 999) <= 3);
-  const currentTop3Units = top3Products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  
-  // Calculate excess units to redistribute
-  let excessUnits = 0;
-  
-  // Cap Rank #1 (reuse existing rank1Product from market expansion section)
-  // Note: sortedByRank contains same product references as products array
-  if (rank1Product && rank1Product.estimated_monthly_units > rank1Cap) {
-    const rank1Excess = rank1Product.estimated_monthly_units - rank1Cap;
-    rank1Product.estimated_monthly_units = rank1Cap;
-    rank1Product.estimated_monthly_revenue = Math.round(rank1Cap * rank1Product.price);
-    excessUnits += rank1Excess;
-  }
-  
-  // Cap Top 3 combined (if still over after rank 1 cap)
-  if (currentTop3Units > top3Cap) {
-    // Recalculate top 3 after rank 1 cap
-    const top3AfterRank1Cap = top3Products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  if (marketShape === "DURABLE") {
+    const RANK1_CAP_PCT = 0.11; // 11% cap for Rank #1
+    const TOP3_CAP_PCT = 0.425; // 42.5% cap for Top 3 combined
     
-    if (top3AfterRank1Cap > top3Cap) {
-      // Calculate how much to reduce from ranks 2-3
-      const top3Excess = top3AfterRank1Cap - top3Cap;
-      const rank2Product = sortedByRank.find(p => p.organic_rank === 2);
-      const rank3Product = sortedByRank.find(p => p.organic_rank === 3);
+    const currentTotal = expandedTotalUnits;
+    const rank1Cap = Math.round(currentTotal * RANK1_CAP_PCT);
+    const top3Cap = Math.round(currentTotal * TOP3_CAP_PCT);
+    
+    // Calculate current top 3 total
+    const top3Products = sortedByRank.filter(p => (p.organic_rank ?? 999) <= 3);
+    const currentTop3Units = top3Products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    
+    // Calculate excess units to redistribute
+    let excessUnits = 0;
+    
+    // Cap Rank #1 (reuse existing rank1Product from market expansion section)
+    // Note: sortedByRank contains same product references as products array
+    if (rank1Product && rank1Product.estimated_monthly_units > rank1Cap) {
+      const rank1Excess = rank1Product.estimated_monthly_units - rank1Cap;
+      rank1Product.estimated_monthly_units = rank1Cap;
+      rank1Product.estimated_monthly_revenue = Math.round(rank1Cap * rank1Product.price);
+      excessUnits += rank1Excess;
+    }
+    
+    // Cap Top 3 combined (if still over after rank 1 cap)
+    if (currentTop3Units > top3Cap) {
+      // Recalculate top 3 after rank 1 cap
+      const top3AfterRank1Cap = top3Products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
       
-      // Redistribute excess from ranks 2-3 proportionally
-      const rank2Units = rank2Product?.estimated_monthly_units || 0;
-      const rank3Units = rank3Product?.estimated_monthly_units || 0;
-      const rank2Plus3Units = rank2Units + rank3Units;
-      
-      if (rank2Plus3Units > 0) {
-        const rank2Reduction = Math.round((top3Excess * rank2Units) / rank2Plus3Units);
-        const rank3Reduction = top3Excess - rank2Reduction;
+      if (top3AfterRank1Cap > top3Cap) {
+        // Calculate how much to reduce from ranks 2-3
+        const top3Excess = top3AfterRank1Cap - top3Cap;
+        const rank2Product = sortedByRank.find(p => p.organic_rank === 2);
+        const rank3Product = sortedByRank.find(p => p.organic_rank === 3);
         
-        if (rank2Product) {
-          rank2Product.estimated_monthly_units = Math.max(0, rank2Product.estimated_monthly_units - rank2Reduction);
-          rank2Product.estimated_monthly_revenue = Math.round(rank2Product.estimated_monthly_units * rank2Product.price);
-          excessUnits += rank2Reduction;
-        }
+        // Redistribute excess from ranks 2-3 proportionally
+        const rank2Units = rank2Product?.estimated_monthly_units || 0;
+        const rank3Units = rank3Product?.estimated_monthly_units || 0;
+        const rank2Plus3Units = rank2Units + rank3Units;
         
-        if (rank3Product) {
-          rank3Product.estimated_monthly_units = Math.max(0, rank3Product.estimated_monthly_units - rank3Reduction);
-          rank3Product.estimated_monthly_revenue = Math.round(rank3Product.estimated_monthly_units * rank3Product.price);
-          excessUnits += rank3Reduction;
+        if (rank2Plus3Units > 0) {
+          const rank2Reduction = Math.round((top3Excess * rank2Units) / rank2Plus3Units);
+          const rank3Reduction = top3Excess - rank2Reduction;
+          
+          if (rank2Product) {
+            rank2Product.estimated_monthly_units = Math.max(0, rank2Product.estimated_monthly_units - rank2Reduction);
+            rank2Product.estimated_monthly_revenue = Math.round(rank2Product.estimated_monthly_units * rank2Product.price);
+            excessUnits += rank2Reduction;
+          }
+          
+          if (rank3Product) {
+            rank3Product.estimated_monthly_units = Math.max(0, rank3Product.estimated_monthly_units - rank3Reduction);
+            rank3Product.estimated_monthly_revenue = Math.round(rank3Product.estimated_monthly_units * rank3Product.price);
+            excessUnits += rank3Reduction;
+          }
         }
       }
     }
-  }
-  
-  // Redistribute excess to ranks 4-15 proportionally
-  if (excessUnits > 0) {
-    const ranks4to15 = sortedByRank.filter(p => {
-      const rank = p.organic_rank ?? 999;
-      return rank >= 4 && rank <= 15;
-    });
     
-    if (ranks4to15.length > 0) {
-      const totalRanks4to15Units = ranks4to15.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    // Redistribute excess to ranks 4-15 proportionally
+    if (excessUnits > 0) {
+      const ranks4to15 = sortedByRank.filter(p => {
+        const rank = p.organic_rank ?? 999;
+        return rank >= 4 && rank <= 15;
+      });
       
-      if (totalRanks4to15Units > 0) {
-        // Distribute excess proportionally to ranks 4-15
-        ranks4to15.forEach(p => {
-          const share = p.estimated_monthly_units / totalRanks4to15Units;
-          const additionalUnits = Math.round(excessUnits * share);
-          p.estimated_monthly_units += additionalUnits;
-          p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
-        });
+      if (ranks4to15.length > 0) {
+        const totalRanks4to15Units = ranks4to15.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+        
+        if (totalRanks4to15Units > 0) {
+          // Distribute excess proportionally to ranks 4-15
+          ranks4to15.forEach(p => {
+            const share = p.estimated_monthly_units / totalRanks4to15Units;
+            const additionalUnits = Math.round(excessUnits * share);
+            p.estimated_monthly_units += additionalUnits;
+            p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+          });
+        }
       }
     }
-  }
-  
-  // Recalculate totals after cap
-  const cappedTotalUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const cappedTotalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  
-  // Recalculate revenue share percentages
-  if (cappedTotalRevenue > 0) {
-    products.forEach(p => {
-      if (p.estimated_monthly_revenue > 0) {
-        p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / cappedTotalRevenue) * 100 * 100) / 100;
-      } else {
-        p.revenue_share_pct = 0;
-      }
+    
+    // Recalculate totals after cap
+    const cappedTotalUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    const cappedTotalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    
+    // Recalculate revenue share percentages
+    if (cappedTotalRevenue > 0) {
+      products.forEach(p => {
+        if (p.estimated_monthly_revenue > 0) {
+          p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / cappedTotalRevenue) * 100 * 100) / 100;
+        } else {
+          p.revenue_share_pct = 0;
+        }
+      });
+    }
+    
+    // Update totals
+    totalPage1Units = cappedTotalUnits;
+    totalPage1Revenue = cappedTotalRevenue;
+    
+    // Calculate final percentages for logging (reuse existing rank1Product)
+    const finalTop3Products = sortedByRank.filter(p => (p.organic_rank ?? 999) <= 3);
+    const finalRank1Units = rank1Product?.estimated_monthly_units || 0;
+    const finalTop3Units = finalTop3Products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    const rank1Pct = cappedTotalUnits > 0 ? (finalRank1Units / cappedTotalUnits) * 100 : 0;
+    const top3Pct = cappedTotalUnits > 0 ? (finalTop3Units / cappedTotalUnits) * 100 : 0;
+    
+    console.log("🎯 RANK_ABSORPTION_CAP", {
+      total_units: cappedTotalUnits,
+      rank1_pct: rank1Pct.toFixed(2) + "%",
+      top3_pct: top3Pct.toFixed(2) + "%",
+      rank1_units: finalRank1Units,
+      top3_units: finalTop3Units,
+      excess_redistributed: excessUnits,
     });
   }
-  
-  // Update totals
-  totalPage1Units = cappedTotalUnits;
-  totalPage1Revenue = cappedTotalRevenue;
-  
-  // Calculate final percentages for logging (reuse existing rank1Product)
-  const finalTop3Products = sortedByRank.filter(p => (p.organic_rank ?? 999) <= 3);
-  const finalRank1Units = rank1Product?.estimated_monthly_units || 0;
-  const finalTop3Units = finalTop3Products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const rank1Pct = cappedTotalUnits > 0 ? (finalRank1Units / cappedTotalUnits) * 100 : 0;
-  const top3Pct = cappedTotalUnits > 0 ? (finalTop3Units / cappedTotalUnits) * 100 : 0;
-  
-  console.log("🎯 RANK_ABSORPTION_CAP", {
-    total_units: cappedTotalUnits,
-    rank1_pct: rank1Pct.toFixed(2) + "%",
-    top3_pct: top3Pct.toFixed(2) + "%",
-    rank1_units: finalRank1Units,
-    top3_units: finalTop3Units,
-    excess_redistributed: excessUnits,
-  });
 
   // ═══════════════════════════════════════════════════════════════════════════
   // DURABLE CATEGORY: Re-apply total cap and rank-1 cap after expansion
@@ -1186,37 +1227,39 @@ export function buildKeywordPageOne(
     }
   }
   
-  // Remove forced minimum units for tail ASINs (ranks > 15) in DURABLE categories
-  // Allow tail to fall to 0-5 units naturally (remove Math.max(1, ...) effect)
-  products.forEach(p => {
-    const rank = p.organic_rank ?? 999;
-    if (rank > 15 && p.estimated_monthly_units === 1) {
-      // If units are exactly 1, this was likely forced by Math.max(1, ...)
-      // Scale down to allow natural tail decay (0-5 units range)
-      const tailDecayFactor = 0.3; // Allow tail to decay to ~30% (0-5 units range)
-      const naturalUnits = Math.round(p.estimated_monthly_units * tailDecayFactor);
-      p.estimated_monthly_units = Math.max(0, naturalUnits); // Allow 0, but don't force negative
-      p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
-    }
-  });
-  
-  // Recalculate totals after tail adjustment
-  const afterTailAdjustmentUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const afterTailAdjustmentRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  
-  // Update totals
-  totalPage1Units = afterTailAdjustmentUnits;
-  totalPage1Revenue = afterTailAdjustmentRevenue;
-  
-  // Recalculate revenue share percentages
-  if (afterTailAdjustmentRevenue > 0) {
+  if (marketShape === "CONSUMABLE") {
+    // Remove forced minimum units for tail ASINs (ranks > 15) in CONSUMABLE categories
+    // Allow tail to fall to 0-5 units naturally (remove Math.max(1, ...) effect)
     products.forEach(p => {
-      if (p.estimated_monthly_revenue > 0) {
-        p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / afterTailAdjustmentRevenue) * 100 * 100) / 100;
-      } else {
-        p.revenue_share_pct = 0;
+      const rank = p.organic_rank ?? 999;
+      if (rank > 15 && p.estimated_monthly_units === 1) {
+        // If units are exactly 1, this was likely forced by Math.max(1, ...)
+        // Scale down to allow natural tail decay (0-5 units range)
+        const tailDecayFactor = 0.3; // Allow tail to decay to ~30% (0-5 units range)
+        const naturalUnits = Math.round(p.estimated_monthly_units * tailDecayFactor);
+        p.estimated_monthly_units = Math.max(0, naturalUnits); // Allow 0, but don't force negative
+        p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
       }
     });
+    
+    // Recalculate totals after tail adjustment
+    const afterTailAdjustmentUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    const afterTailAdjustmentRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    
+    // Update totals
+    totalPage1Units = afterTailAdjustmentUnits;
+    totalPage1Revenue = afterTailAdjustmentRevenue;
+    
+    // Recalculate revenue share percentages
+    if (afterTailAdjustmentRevenue > 0) {
+      products.forEach(p => {
+        if (p.estimated_monthly_revenue > 0) {
+          p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / afterTailAdjustmentRevenue) * 100 * 100) / 100;
+        } else {
+          p.revenue_share_pct = 0;
+        }
+      });
+    }
   }
   
   // Calculate final values for verification log
@@ -1527,6 +1570,16 @@ export function buildKeywordPageOne(
       totalMarketRevenue
     });
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FINAL MARKET SHAPE ASSERTION LOG
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log("✅ MARKET_SHAPE_APPLIED", {
+    marketShape,
+    totalUnits: scaledProducts.reduce((s, p) => s + p.estimated_monthly_units, 0),
+    rank1Units: scaledProducts.find(p => p.organic_rank === 1)?.estimated_monthly_units ?? 0,
+    tailCount: scaledProducts.filter(p => (p.organic_rank ?? 999) > 15).length
+  });
 
   return scaledProducts;
 }
