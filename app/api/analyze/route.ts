@@ -988,14 +988,14 @@ export async function POST(req: NextRequest) {
     // STEP 2: Only use snapshot if NO real market data exists
     if (!keywordMarketData || dataSource !== "market") {
       const {
-        searchKeywordSnapshot,
+        buildKeywordSnapshotFromCache,
         getKeywordProducts,
         incrementSearchCount,
         queueKeyword,
       } = await import("@/lib/snapshots/keywordSnapshots");
       
-      // Check for precomputed snapshot (READ-ONLY, no API calls)
-      let snapshot = await searchKeywordSnapshot(supabase, body.input_value, marketplace);
+      // Build snapshot from cached keyword_products (zero Rainforest API calls)
+      let snapshot = await buildKeywordSnapshotFromCache(supabase, body.input_value, marketplace);
 
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:778',message:'Snapshot lookup result',data:{has_snapshot:!!snapshot,keyword:body.input_value,marketplace},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});

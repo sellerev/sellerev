@@ -88,6 +88,115 @@ export async function searchKeywordSnapshot(
 }
 
 /**
+ * Build keyword snapshot from cached keyword_products
+ * Rebuilds snapshot entirely from ASIN-level cache with zero Rainforest API calls
+ * 
+ * @param supabase - Supabase client
+ * @param keyword - Search keyword
+ * @param marketplace - Marketplace (default: 'amazon.com')
+ * @returns Snapshot if products exist, null otherwise
+ */
+export async function buildKeywordSnapshotFromCache(
+  supabase: any,
+  keyword: string,
+  marketplace: string = 'amazon.com'
+): Promise<KeywordSnapshot | null> {
+  if (!supabase) return null;
+
+  const normalized = normalizeKeyword(keyword);
+  const snapshotMarketplace = marketplace === 'US' ? 'amazon.com' : marketplace;
+  
+  // Check if snapshot exists and is fresh (< 24h)
+  const { data: existingSnapshot, error: checkError } = await supabase
+    .from('keyword_snapshots')
+    .select('*')
+    .eq('keyword', normalized)
+    .eq('marketplace', snapshotMarketplace)
+    .single();
+
+  if (!checkError && existingSnapshot) {
+    const lastUpdated = new Date(existingSnapshot.last_updated);
+    const now = new Date();
+    const ageHours = (now.getTime() - lastUpdated.getTime()) / (1000 * 60 * 60);
+    
+    if (ageHours < 24) {
+      // Snapshot is fresh - reuse it
+      return existingSnapshot as KeywordSnapshot;
+    }
+  }
+
+  // Query keyword_products for this keyword
+  const { data: products, error: productsError } = await supabase
+    .from('keyword_products')
+    .select('*')
+    .eq('keyword', normalized);
+
+  if (productsError || !products || products.length === 0) {
+    return null;
+  }
+
+  // Aggregate data from products
+  const productsWithUnits = products.filter((p: any) => p.estimated_monthly_units !== null && p.estimated_monthly_units !== undefined);
+  const productsWithRevenue = products.filter((p: any) => p.estimated_monthly_revenue !== null && p.estimated_monthly_revenue !== undefined);
+  const productsWithPrice = products.filter((p: any) => p.price !== null && p.price !== undefined && p.price > 0);
+
+  const totalMonthlyUnits = productsWithUnits.reduce((sum: number, p: any) => sum + (p.estimated_monthly_units || 0), 0);
+  const totalMonthlyRevenue = productsWithRevenue.reduce((sum: number, p: any) => sum + (parseFloat(p.estimated_monthly_revenue) || 0), 0);
+  const averagePrice = productsWithPrice.length > 0
+    ? productsWithPrice.reduce((sum: number, p: any) => sum + (parseFloat(p.price) || 0), 0) / productsWithPrice.length
+    : null;
+  const productCount = products.length;
+
+  // Compute demand_level based on total units
+  let demandLevel: 'high' | 'medium' | 'low' | 'very_low';
+  if (totalMonthlyUnits >= 200000) {
+    demandLevel = 'high';
+  } else if (totalMonthlyUnits >= 50000) {
+    demandLevel = 'medium';
+  } else if (totalMonthlyUnits >= 10000) {
+    demandLevel = 'low';
+  } else {
+    demandLevel = 'very_low';
+  }
+
+  // Build snapshot object
+  const snapshot: Omit<KeywordSnapshot, 'created_at'> = {
+    keyword: normalized,
+    marketplace: snapshotMarketplace,
+    total_monthly_units: totalMonthlyUnits,
+    total_monthly_revenue: totalMonthlyRevenue,
+    average_bsr: null, // Not computed from products
+    average_price: averagePrice,
+    product_count: productCount,
+    demand_level: demandLevel,
+    last_updated: new Date().toISOString(),
+    refresh_priority: 5,
+    search_count: existingSnapshot?.search_count || 0,
+  };
+
+  // UPSERT snapshot
+  const { error: upsertError } = await supabase
+    .from('keyword_snapshots')
+    .upsert(snapshot, {
+      onConflict: 'keyword,marketplace',
+    });
+
+  if (upsertError) {
+    console.error('Failed to upsert snapshot from cache:', upsertError);
+    return null;
+  }
+
+  console.log('KEYWORD_SNAPSHOT_FROM_CACHE', {
+    keyword: normalized,
+    product_count: productCount,
+    total_units: totalMonthlyUnits,
+    demand_level: demandLevel,
+  });
+
+  return snapshot as KeywordSnapshot;
+}
+
+/**
  * Get products for a keyword
  */
 export async function getKeywordProducts(
