@@ -2673,6 +2673,53 @@ ${body.input_value}`;
       analysis_run_id: insertedRun.id,
     });
 
+    // 12.5. Insert confidence observation and compute confidence metadata (non-blocking)
+    let confidenceMetadata: any = null;
+    if (body.input_type === "keyword" && contractResponse) {
+      try {
+        const {
+          insertConfidenceObservation,
+          getConfidenceStats,
+          computeConfidenceMetadata,
+        } = await import("@/lib/analyze/keywordConfidence");
+
+        const normalizedKeyword = body.input_value.toLowerCase().trim();
+        const market = marketplace; // e.g., "amazon.com" or "US"
+        
+        // Get observed totals from contract response
+        const observed_total_units = contractResponse.summary.total_monthly_units_est || 0;
+        const observed_total_revenue = contractResponse.summary.total_monthly_revenue_est || 0;
+
+        // Insert observation (non-blocking)
+        await insertConfidenceObservation(supabase, {
+          keyword: normalizedKeyword,
+          market: market,
+          observed_total_units: observed_total_units,
+          observed_total_revenue: observed_total_revenue,
+          run_id: insertedRun.id,
+          timestamp: new Date().toISOString(),
+        });
+
+        // Compute confidence stats from historical observations
+        const stats = await getConfidenceStats(supabase, normalizedKeyword, market);
+        confidenceMetadata = computeConfidenceMetadata(stats);
+
+        if (confidenceMetadata) {
+          console.log("KEYWORD_CONFIDENCE_COMPUTED", {
+            keyword: normalizedKeyword,
+            market: market,
+            confidence_level: confidenceMetadata.confidence_level,
+            run_count: confidenceMetadata.run_count,
+            confidence_range_units: confidenceMetadata.confidence_range_units,
+            confidence_range_revenue: confidenceMetadata.confidence_range_revenue,
+          });
+        }
+      } catch (confidenceError) {
+        console.error("Confidence layer error (non-blocking):", confidenceError);
+        // Don't throw - confidence layer never blocks analysis
+      }
+    }
+
     // 13. Increment usage counter (only after successful AI analysis, and only if not bypassing)
     if (shouldIncrementUsage(userEmail)) {
       const { error: incrementError } = await supabase
@@ -2828,6 +2875,7 @@ ${body.input_value}`;
         message: isEstimated ? "Estimated market data. Refining with live data…" : undefined,
         analysisRunId: insertedRun.id,
         decision: finalResponse, // Return contract-compliant response
+        confidence_metadata: confidenceMetadata || undefined, // Confidence & learning layer metadata
       },
       { 
         status: 200, // Always 200, even for estimated data
