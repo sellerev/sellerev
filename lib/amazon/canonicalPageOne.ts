@@ -186,6 +186,58 @@ function detectMarketShape({
 }
 
 /**
+ * Estimate total market demand for Page-1 based on market shape
+ * 
+ * @param marketShape - Market shape classification
+ * @param avgPrice - Average price of products
+ * @param organicCount - Number of organic products on Page-1
+ * @returns Estimated total monthly units for Page-1
+ */
+function estimateMarketDemand({
+  marketShape,
+  avgPrice,
+  organicCount
+}: {
+  marketShape: MarketShape;
+  avgPrice: number;
+  organicCount: number;
+}): number {
+  // Base units per organic listing varies by market shape
+  let baseUnitsPerListing: number;
+  
+  if (marketShape === "DURABLE") {
+    // Lower velocity baseline for durable goods
+    baseUnitsPerListing = 300;
+  } else if (marketShape === "CONSUMABLE") {
+    // High velocity baseline for consumable goods
+    baseUnitsPerListing = 1500;
+  } else {
+    // HYBRID: Medium velocity
+    baseUnitsPerListing = 800;
+  }
+  
+  // Price adjustment: lower prices support higher volumes
+  // For very low prices (<$10), increase base units
+  // For higher prices (>$50), decrease base units
+  let priceMultiplier = 1.0;
+  if (avgPrice < 10) {
+    priceMultiplier = 1.5;
+  } else if (avgPrice < 25) {
+    priceMultiplier = 1.2;
+  } else if (avgPrice > 50) {
+    priceMultiplier = 0.8;
+  } else if (avgPrice > 100) {
+    priceMultiplier = 0.6;
+  }
+  
+  // Calculate base market demand
+  const baseDemand = organicCount * baseUnitsPerListing * priceMultiplier;
+  
+  // Round to reasonable precision
+  return Math.round(baseDemand);
+}
+
+/**
  * Build keyword Page-1 product set (PERMISSIVE)
  * 
  * PAGE-1 SCOPE: This function processes Page-1 listings only (both organic + sponsored)
@@ -751,47 +803,24 @@ export function buildKeywordPageOne(
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 2.3: PAGE-LEVEL DEMAND NORMALIZATION (Helium-10 Style)
+  // STEP 2.3: MARKET DEMAND ANCHORING (Market Shape Based)
   // ═══════════════════════════════════════════════════════════════════════════
-  // Normalize demand at Page-1 level, then distribute by rank
-  // Prevents unrealistic totals from bottom-up per-ASIN estimates
+  // Anchor total demand based on MARKET_SHAPE before rank distribution
+  // Rank curves will DISTRIBUTE this total, not create it
   
-  // Compute total estimated units from current allocation
-  const totalEstimatedUnits = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  // Compute organic count for market demand estimation
+  const organicCountForDemand = deduplicatedListings.filter(l => !l.is_sponsored).length;
   
-  // Compute targetPageOneUnits ceiling using existing signals
-  // Reuse organicCount, reviewDispersion, sponsoredDensity already calculated
-  const organicCountForTarget = deduplicatedListings.filter(l => !l.is_sponsored).length;
+  // Estimate market demand based on shape, price, and product count
+  const avgPriceForDemand = avgPrice ?? 0;
+  const marketDemandEstimate = estimateMarketDemand({
+    marketShape,
+    avgPrice: avgPriceForDemand,
+    organicCount: organicCountForDemand,
+  });
   
-  // Calculate category velocity signal (using review dispersion as proxy)
-  // Higher review dispersion = more established market = higher velocity
-  const categoryVelocityMultiplier = reviewDispersion > 2000 
-    ? 1.2 
-    : reviewDispersion > 1000 
-    ? 1.0 
-    : 0.8;
-  
-  // Base target calculation using organic count and sponsored density
-  const baseTarget = organicCountForTarget * 200; // Conservative base: 200 units per organic listing
-  const sponsoredAdjustment = sponsoredDensity > 30 ? 1.15 : 1.0; // Slight boost if high sponsored density
-  
-  // Calculate target range
-  const targetMinimum = Math.max(
-    totalEstimatedUnits * 0.6, // Never go below 60% of current
-    organicCountForTarget * 100 // Minimum floor based on organic count
-  );
-  const targetMaximum = totalEstimatedUnits * 1.4;
-  
-  // Choose midpoint as targetPageOneUnits
-  const targetPageOneUnits = Math.round(
-    Math.max(
-      targetMinimum,
-      Math.min(
-        targetMaximum,
-        (baseTarget * categoryVelocityMultiplier * sponsoredAdjustment + totalEstimatedUnits) / 2
-      )
-    )
-  );
+  // This is the target total for Page-1 - rank curves will distribute it
+  const targetPageOneUnits = marketDemandEstimate;
   
   // Separate organic and sponsored products for rank-based allocation
   const organicProducts = products.filter(p => p.organic_rank !== null);
@@ -823,22 +852,29 @@ export function buildKeywordPageOne(
   const sponsoredTargetUnits = Math.round(targetPageOneUnits * 0.15);
   
   // Re-allocate organic units using rank weights
+  // Use precise allocation first (no early rounding to preserve tail distribution)
   organicWeights.forEach(w => {
-    const allocatedUnits = Math.max(1, Math.round(organicTargetUnits * w.weight));
-    const allocatedRevenue = Math.round(allocatedUnits * w.product.price);
+    const allocatedUnitsPrecise = organicTargetUnits * w.weight;
+    const allocatedRevenuePrecise = allocatedUnitsPrecise * w.product.price;
     
-    w.product.estimated_monthly_units = allocatedUnits;
-    w.product.estimated_monthly_revenue = allocatedRevenue;
+    w.product.estimated_monthly_units = allocatedUnitsPrecise;
+    w.product.estimated_monthly_revenue = allocatedRevenuePrecise;
   });
   
   // Allocate sponsored units (equal distribution, capped at 15% total)
   if (sponsoredProducts.length > 0) {
-    const sponsoredUnitsPerProduct = Math.max(1, Math.round(sponsoredTargetUnits / sponsoredProducts.length));
+    const sponsoredUnitsPerProductPrecise = sponsoredTargetUnits / sponsoredProducts.length;
     sponsoredProducts.forEach(p => {
-      p.estimated_monthly_units = sponsoredUnitsPerProduct;
-      p.estimated_monthly_revenue = Math.round(sponsoredUnitsPerProduct * p.price);
+      p.estimated_monthly_units = sponsoredUnitsPerProductPrecise;
+      p.estimated_monthly_revenue = sponsoredUnitsPerProductPrecise * p.price;
     });
   }
+  
+  // Apply rounding ONLY at final output (preserves total distribution, prevents tail truncation)
+  products.forEach(p => {
+    p.estimated_monthly_units = Math.round(p.estimated_monthly_units);
+    p.estimated_monthly_revenue = Math.round(p.estimated_monthly_revenue);
+  });
   
   // Recalculate revenue share percentages after re-allocation
   const totalUnitsAfter = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
@@ -858,12 +894,26 @@ export function buildKeywordPageOne(
   const sponsoredUnits = sponsoredProducts.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
   const sponsoredShare = totalUnitsAfter > 0 ? (sponsoredUnits / totalUnitsAfter) * 100 : 0;
   
-  console.log("📈 PAGE-LEVEL DEMAND NORMALIZED", {
-    targetPageOneUnits,
-    totalUnitsAfter,
-    sponsoredShare: sponsoredShare.toFixed(1) + "%",
+  // Calculate min/max per-ASIN units for debug logging
+  const unitsPerAsin = products.map(p => p.estimated_monthly_units).filter(u => u > 0);
+  const minUnitsPerAsin = unitsPerAsin.length > 0 ? Math.min(...unitsPerAsin) : 0;
+  const maxUnitsPerAsin = unitsPerAsin.length > 0 ? Math.max(...unitsPerAsin) : 0;
+  
+  // Calculate allocation accuracy (should be ±1% of marketDemandEstimate)
+  const allocationAccuracy = marketDemandEstimate > 0 
+    ? ((totalUnitsAfter / marketDemandEstimate) * 100).toFixed(2) + "%"
+    : "N/A";
+  
+  console.log("📈 MARKET DEMAND ANCHORED", {
+    marketShape,
+    marketDemandEstimate,
+    sumAllocatedUnits: totalUnitsAfter,
+    allocationAccuracy,
+    minUnitsPerAsin,
+    maxUnitsPerAsin,
     organicCount: organicProducts.length,
     sponsoredCount: sponsoredProducts.length,
+    sponsoredShare: sponsoredShare.toFixed(1) + "%",
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
