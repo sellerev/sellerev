@@ -47,6 +47,27 @@ export interface CanonicalProduct {
 }
 
 /**
+ * Compute tail floor units for Page-1 ASINs with rank > 10
+ * Ensures tail ASINs never receive 0 units (additive, not redistributed)
+ * 
+ * @param rank - Organic rank of the product
+ * @param totalEstimatedUnits - Total estimated units across all Page-1 products
+ * @returns Minimum units for tail ASINs (0 for ranks <= 10)
+ */
+function computeTailFloorUnits(
+  rank: number,
+  totalEstimatedUnits: number
+): number {
+  if (rank <= 10) return 0;
+  const FLOOR_SHARE = 0.0025; // 0.25% of total demand
+  const decay = Math.log(rank + 1);
+  return Math.max(
+    Math.round((totalEstimatedUnits * FLOOR_SHARE) / decay),
+    2 // absolute minimum
+  );
+}
+
+/**
  * Apply demand floors to prevent under-reported sales/revenue
  * Uses conservative signals from existing data (Rainforest) to set minimum units
  * 
@@ -876,6 +897,30 @@ export function buildKeywordPageOne(
     p.estimated_monthly_revenue = Math.round(p.estimated_monthly_revenue);
   });
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE 2: TAIL FLOOR ALLOCATION (NEW)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // For every Page-1 ASIN with rank > 10, enforce a non-zero minimum
+  // Tail demand is additive, NOT redistributed from top ranks
+  // Tail ASINs must never end at 0 units
+  const totalEstimatedUnits = products.reduce((sum, p) => sum + (p.estimated_monthly_units ?? 0), 0);
+  
+  // Apply tail floor to all Page-1 products with rank > 10 and units <= 0
+  products.forEach(product => {
+    if (
+      product.organic_rank !== null &&
+      product.organic_rank > 10 &&
+      product.estimated_monthly_units <= 0
+    ) {
+      const tailUnits = computeTailFloorUnits(
+        product.organic_rank,
+        totalEstimatedUnits
+      );
+      product.estimated_monthly_units = tailUnits;
+      product.estimated_monthly_revenue = Math.round(tailUnits * (product.price ?? 0));
+    }
+  });
+  
   // Recalculate revenue share percentages after re-allocation
   const totalUnitsAfter = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
   const totalRevenueAfter = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
@@ -1629,6 +1674,47 @@ export function buildKeywordPageOne(
     totalUnits: scaledProducts.reduce((s, p) => s + p.estimated_monthly_units, 0),
     rank1Units: scaledProducts.find(p => p.organic_rank === 1)?.estimated_monthly_units ?? 0,
     tailCount: scaledProducts.filter(p => (p.organic_rank ?? 999) > 15).length
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HARD GUARANTEE: Prevent zero-unit Page-1 ASINs (ranks <= 50)
+  // ═══════════════════════════════════════════════════════════════════════════
+  for (const product of scaledProducts) {
+    if (
+      product.organic_rank &&
+      product.organic_rank <= 50 &&
+      product.estimated_monthly_units === 0
+    ) {
+      throw new Error(
+        `Invalid zero-units Page-1 ASIN: ${product.asin}`
+      );
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PAGE1 ALLOCATION SUMMARY LOG
+  // ═══════════════════════════════════════════════════════════════════════════
+  const summaryTotalUnits = scaledProducts.reduce(
+    (sum: number, p) => sum + (p.estimated_monthly_units ?? 0),
+    0
+  );
+  const summaryTotalRevenue = scaledProducts.reduce(
+    (sum: number, p) =>
+      sum + (p.estimated_monthly_units ?? 0) * (p.price ?? 0),
+    0
+  );
+  const minUnits = Math.min(
+    ...scaledProducts.map(p => p.estimated_monthly_units ?? 0)
+  );
+  const maxUnits = Math.max(
+    ...scaledProducts.map(p => p.estimated_monthly_units ?? 0)
+  );
+
+  console.log("PAGE1_ALLOCATION_SUMMARY", {
+    total_units: summaryTotalUnits,
+    total_revenue: summaryTotalRevenue,
+    min_units: minUnits,
+    max_units: maxUnits,
   });
 
   return scaledProducts;
