@@ -892,30 +892,96 @@ export async function POST(req: NextRequest) {
     let dataSource: "market" | "snapshot" = "snapshot"; // Default to snapshot, switch to market if real listings exist
     let rawRainforestListings: any[] = []; // Track raw Rainforest listings for assertions
     
-    // STEP 1: Check keyword_products cache before Rainforest
+    // STEP 1: Check keyword_confidence and skip Rainforest if HIGH confidence
     const normalizedKeyword = body.input_value.toLowerCase().trim();
+    let confidenceLevel = 'low';
+    
+    if (body.input_type === "keyword") {
+      try {
+        // Compute confidence from observations (on-the-fly, since keyword_confidence table doesn't exist yet)
+        const {
+          getConfidenceStats,
+          computeConfidenceMetadata,
+        } = await import("@/lib/analyze/keywordConfidence");
+        
+        const stats = await getConfidenceStats(supabase, normalizedKeyword, marketplace);
+        const metadata = computeConfidenceMetadata(stats);
+        
+        if (metadata) {
+          // Map confidence level to lowercase format
+          confidenceLevel = metadata.confidence_level.toLowerCase() as 'high' | 'medium' | 'low';
+        }
+      } catch (error) {
+        console.warn("Confidence check failed, continuing normally:", error);
+      }
+    }
+    
+    console.log("CONFIDENCE_LEVEL_USED", {
+      keyword: normalizedKeyword,
+      marketplace: marketplace,
+      confidenceLevel: confidenceLevel,
+    });
+    
+    // STEP 1.1: If confidence is HIGH, skip Rainforest and use cached data
     let cachedProducts: any[] = [];
     const cacheThreshold = new Date();
     cacheThreshold.setHours(cacheThreshold.getHours() - 24);
     
-    try {
-      const { data: cachedRows, error: cacheError } = await supabase
-        .from("keyword_products")
-        .select("*")
-        .eq("keyword", normalizedKeyword)
-        .gte("last_updated", cacheThreshold.toISOString())
-        .order("rank", { ascending: true });
-      
-      if (!cacheError && cachedRows && cachedRows.length > 0) {
-        cachedProducts = cachedRows;
-        console.log("KEYWORD_PRODUCTS_CACHE_HIT", {
-          keyword: normalizedKeyword,
-          cached_count: cachedProducts.length,
-        });
+    if (confidenceLevel === 'high' && body.input_type === "keyword") {
+      try {
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        
+        const { data: cachedRows } = await supabase
+          .from("keyword_products")
+          .select("*")
+          .eq("keyword", normalizedKeyword)
+          .gte("last_updated", sevenDaysAgo.toISOString())
+          .order("rank", { ascending: true });
+        
+        const { data: snapshot } = await supabase
+          .from("keyword_snapshots")
+          .select("*")
+          .eq("keyword", normalizedKeyword)
+          .eq("marketplace", marketplace)
+          .order("last_updated", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        
+        if (cachedRows && cachedRows.length > 0 && snapshot) {
+          cachedProducts = cachedRows;
+          console.log("RAINFOREST_SKIPPED_CONFIDENT", {
+            keyword: normalizedKeyword,
+            marketplace: marketplace,
+            cached_count: cachedProducts.length,
+          });
+          
+          // Rehydrate cache and use it (skip Rainforest entirely)
+          // This will be handled in the rehydration section below
+        }
+      } catch (error) {
+        console.warn("High confidence cache fetch failed, continuing to Rainforest:", error);
       }
-    } catch (error) {
-      // Cache check failed - continue to Rainforest
-      console.warn("Cache check failed, continuing to Rainforest:", error);
+    } else {
+      // Normal cache check (24 hours) when confidence is not HIGH
+      try {
+        const { data: cachedRows, error: cacheError } = await supabase
+          .from("keyword_products")
+          .select("*")
+          .eq("keyword", normalizedKeyword)
+          .gte("last_updated", cacheThreshold.toISOString())
+          .order("rank", { ascending: true });
+        
+        if (!cacheError && cachedRows && cachedRows.length > 0) {
+          cachedProducts = cachedRows;
+          console.log("KEYWORD_PRODUCTS_CACHE_HIT", {
+            keyword: normalizedKeyword,
+            cached_count: cachedProducts.length,
+          });
+        }
+      } catch (error) {
+        // Cache check failed - continue to Rainforest
+        console.warn("Cache check failed, continuing to Rainforest:", error);
+      }
     }
     
     // STEP 1.5: Rehydrate cache into KeywordMarketData format (pure adapter layer)
@@ -1040,6 +1106,7 @@ export async function POST(req: NextRequest) {
       // Rehydrate cache if available, otherwise fetch from Rainforest
       let realMarketData: KeywordMarketData | null = null;
       
+      // If we have cached products (either from HIGH confidence skip or normal cache), rehydrate them
       if (cachedProducts.length > 0) {
         // Rehydrate cached products into KeywordMarketData format
         realMarketData = await rehydrateCacheToMarketData(cachedProducts, body.input_value);
@@ -1049,15 +1116,19 @@ export async function POST(req: NextRequest) {
             keyword: normalizedKeyword,
             product_count: cachedProducts.length,
             listing_count: realMarketData.listings.length,
+            confidence_skip: confidenceLevel === 'high',
           });
         }
       } else {
-        // No cache - fetch from Rainforest
-        realMarketData = await fetchKeywordMarketSnapshot(
-          body.input_value,
-          supabase,
-          "US"
-        );
+        // No cache - fetch from Rainforest (only if confidence is not HIGH)
+        if (confidenceLevel !== 'high') {
+          realMarketData = await fetchKeywordMarketSnapshot(
+            body.input_value,
+            supabase,
+            "US"
+          );
+        }
+        // If confidence is HIGH but no cache, we'll fall through to snapshot lookup
       }
       
       // CRITICAL: If real listings exist, use them and NEVER use snapshot-based Page-1
