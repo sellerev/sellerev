@@ -893,18 +893,48 @@ export async function POST(req: NextRequest) {
     let dataSource: "market" | "snapshot" = "snapshot"; // Default to snapshot, switch to market if real listings exist
     let rawRainforestListings: any[] = []; // Track raw Rainforest listings for assertions
     
-    // STEP 1: Try to fetch real Rainforest listings FIRST
+    // STEP 1: Check keyword_products cache before Rainforest
+    const normalizedKeyword = body.input_value.toLowerCase().trim();
+    let cachedProducts: any[] = [];
+    const cacheThreshold = new Date();
+    cacheThreshold.setHours(cacheThreshold.getHours() - 24);
+    
+    try {
+      const { data: cachedRows, error: cacheError } = await supabase
+        .from("keyword_products")
+        .select("*")
+        .eq("keyword", normalizedKeyword)
+        .gte("last_updated", cacheThreshold.toISOString())
+        .order("rank", { ascending: true });
+      
+      if (!cacheError && cachedRows && cachedRows.length > 0) {
+        cachedProducts = cachedRows;
+        console.log("KEYWORD_PRODUCTS_CACHE_HIT", {
+          keyword: normalizedKeyword,
+          cached_count: cachedProducts.length,
+        });
+      }
+    } catch (error) {
+      // Cache check failed - continue to Rainforest
+      console.warn("Cache check failed, continuing to Rainforest:", error);
+    }
+    
+    // STEP 2: Try to fetch real Rainforest listings FIRST (skip if cache exists)
     console.log("🔵 MARKET_FETCH_START", {
       keyword: body.input_value,
+      cached_count: cachedProducts.length,
       timestamp: new Date().toISOString(),
     });
     
     try {
-      const realMarketData = await fetchKeywordMarketSnapshot(
-        body.input_value,
-        supabase,
-        "US"
-      );
+      // Skip Rainforest if we have cached products
+      const realMarketData = cachedProducts.length === 0
+        ? await fetchKeywordMarketSnapshot(
+            body.input_value,
+            supabase,
+            "US"
+          )
+        : null;
       
       // CRITICAL: If real listings exist, use them and NEVER use snapshot-based Page-1
       if (realMarketData && realMarketData.listings && realMarketData.listings.length > 0) {
@@ -1529,6 +1559,43 @@ export async function POST(req: NextRequest) {
       
       // Assign to function-scope variable (final authority)
       canonicalProducts = pageOneProducts;
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // UPSERT canonical products to keyword_products cache
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (canonicalProducts.length > 0 && body.input_type === "keyword") {
+        try {
+          const upsertData = canonicalProducts.map((p) => ({
+            keyword: normalizedKeyword,
+            asin: p.asin,
+            rank: p.organic_rank ?? p.page_position ?? 1,
+            price: p.price,
+            estimated_monthly_units: p.estimated_monthly_units,
+            estimated_monthly_revenue: p.estimated_monthly_revenue,
+            rating: p.rating || null,
+            review_count: p.review_count || null,
+            fulfillment: p.fulfillment || null,
+            last_updated: new Date().toISOString(),
+          }));
+          
+          const { error: upsertError } = await supabase
+            .from("keyword_products")
+            .upsert(upsertData, {
+              onConflict: "keyword,asin",
+            });
+          
+          if (upsertError) {
+            console.warn("Failed to cache keyword products:", upsertError);
+          } else {
+            console.log("KEYWORD_PRODUCTS_CACHE_WRITE", {
+              keyword: normalizedKeyword,
+              product_count: upsertData.length,
+            });
+          }
+        } catch (error) {
+          console.warn("Error caching keyword products:", error);
+        }
+      }
       
       // ═══════════════════════════════════════════════════════════════════════════
       // CANONICAL PAGE-1 IS FINAL AUTHORITY - NO CONVERSION, NO REBUILDING
