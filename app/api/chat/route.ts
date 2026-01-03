@@ -1499,11 +1499,19 @@ export async function POST(req: NextRequest) {
     
     // If ai_context is not available, fall back to legacy context building
     // But prefer the locked contract structure
+    // Extract decision from analysis response for co-pilot context
+    const decision = analysisResponse.decision ? {
+      verdict: (analysisResponse.decision as { verdict: string }).verdict as "GO" | "CAUTION" | "NO_GO",
+      confidence: (analysisResponse.decision as { confidence: number }).confidence,
+      executive_summary: analysisResponse.executive_summary as string | undefined,
+    } : undefined;
+    
     const copilotContext = {
       ai_context: contextToUse,
       seller_memory: sellerMemory,
       structured_memories: structuredMemories, // New structured memory system
       seller_profile_version: sellerProfile.updated_at || null, // Include profile version for context
+      decision: decision, // Pass decision to co-pilot for reasoning forward
       session_context: {
         current_feature: "analyze" as const,
         user_question: body.message,
