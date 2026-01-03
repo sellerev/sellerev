@@ -972,7 +972,7 @@ export default function AnalyzeForm({
                         <h2 className="text-xl font-semibold text-gray-900 mb-4">Market Snapshot</h2>
                         
                         {/* Canonical Metrics - Exact Order */}
-                        <div className="grid grid-cols-4 gap-6">
+                        <div className="grid grid-cols-3 gap-6">
                           {/* 1. Keyword */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Keyword</div>
@@ -993,19 +993,7 @@ export default function AnalyzeForm({
                             </div>
                           </div>
                           
-                          {/* 4. Average BSR (Conditional - Tier-2 only) */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Average BSR</div>
-                            <div className="text-lg font-semibold text-gray-900">
-                              {hasListings && avgBSR !== null && avgBSR !== undefined
-                                ? `#${avgBSR.toLocaleString()}`
-                                : snapshotType === "estimated"
-                                  ? "— (refining)"
-                                  : "Estimating…"}
-                            </div>
-                          </div>
-                          
-                          {/* 5. Monthly Units */}
+                          {/* 4. Monthly Units */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
                             <div className="text-lg font-semibold text-gray-900">
@@ -1013,7 +1001,7 @@ export default function AnalyzeForm({
                             </div>
                           </div>
                           
-                          {/* 6. Monthly Revenue */}
+                          {/* 5. Monthly Revenue */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
                             <div className="text-lg font-semibold text-gray-900">
@@ -1021,18 +1009,12 @@ export default function AnalyzeForm({
                             </div>
                           </div>
                           
-                          {/* 7. Average Rating */}
+                          {/* 6. Average Rating */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Rating</div>
                             <div className="text-lg font-semibold text-gray-900">
                               {hasListings && !isNaN(avgRating) ? `${avgRating.toFixed(1)} ★` : "Estimating…"}
                             </div>
-                          </div>
-                          
-                          {/* 8. Search Volume */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Search Volume</div>
-                            <div className="text-lg font-semibold text-gray-900">{searchVolume}</div>
                           </div>
                         </div>
                       </div>
@@ -1222,7 +1204,7 @@ export default function AnalyzeForm({
                                 {imageUrl ? (
                                   <img
                                     src={imageUrl}
-                                    alt={listing.title || "Product"}
+                                    alt={listing.title || "Product listing"}
                                     className="w-32 h-32 object-contain"
                                     loading="lazy"
                                     onError={(e) => {
@@ -1233,14 +1215,16 @@ export default function AnalyzeForm({
                                     }}
                                   />
                                 ) : null}
-                                <div className="img-placeholder w-32 h-32 bg-gray-100 rounded flex items-center justify-center" style={{ display: imageUrl ? 'none' : 'flex' }}>
-                                  <span className="text-xs text-gray-400">No image</span>
+                                <div className="img-placeholder w-32 h-32 bg-gray-100 rounded flex items-center justify-center border border-gray-200" style={{ display: imageUrl ? 'none' : 'flex' }}>
+                                  <svg className="w-12 h-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                  </svg>
                                 </div>
                               </div>
                               
                               {/* Title (2 lines max) */}
                               <h3 className="text-sm font-medium text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
-                                {listing.title}
+                                {listing.title || "Product listing"}
                               </h3>
                               
                               {/* Price */}
