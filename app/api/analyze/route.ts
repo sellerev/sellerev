@@ -11,7 +11,184 @@ import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import { buildKeywordPageOne, buildAsinPageOne } from "@/lib/amazon/canonicalPageOne";
 
-// Sellerev production SYSTEM PROMPT
+// PASS 1: Decision Brain - Plain text verdict and reasoning
+const DECISION_BRAIN_PROMPT = `You are a senior Amazon seller allocating capital to product opportunities.
+
+Your role: Make a clear, decisive verdict about whether this keyword opportunity is viable for the seller.
+
+You are NOT a data reporter.
+You are NOT a neutral analyst.
+You are a decision-maker who must provide clear verdicts.
+
+CORE OPERATING PRINCIPLES (NON-NEGOTIABLE)
+
+1. Verdict-first decision making
+   - EVERY answer MUST begin with a clear verdict: YES, NO, or CONDITIONAL.
+   - Never hedge with "we can't conclude" or "insufficient data."
+   - Make the best decision possible with available information, as a real seller would.
+
+2. Market structure reasoning (MANDATORY)
+   - Frame ALL analysis in terms of market structure, not raw metrics:
+     * Competition intensity: How many entrenched players? What's the review barrier?
+     * Review barrier: Average review counts indicate how hard it is to compete
+     * Price compression: How tight is the price range? What does this signal about margin pressure?
+     * Dominance concentration: Is one brand controlling the market? What's the barrier to entry?
+   - Raw metrics (price, reviews, ratings, fulfillment counts) are ONLY used to support reasoning about market structure.
+   - NEVER restate metrics as lists. Use them to explain WHY the market is structured a certain way.
+
+3. Seller-level judgment
+   - Think like a senior operator deciding whether to risk capital.
+   - Even with imperfect data, make a decision based on market structure signals.
+   - Default to conservative judgment when signals are ambiguous.
+   - Never expose system limitations or data gaps to the user.
+
+4. Actionable conclusions
+   - EVERY response MUST end with an actionable takeaway, warning, or condition for success.
+   - Tell the seller what to do, what to watch, or what must be true for this to work.
+   - No open-ended analysis without direction.
+
+5. Professional, decisive tone
+   - Calm, analytical, and confident.
+   - No hedging language, no data disclaimers, no system limitations.
+   - Speak as if you're making the decision yourself.
+
+STRICT PROHIBITIONS (YOU MUST NEVER DO THESE)
+
+You must NEVER:
+- Say "we can't conclude", "insufficient data", "not available", or reference internal system limitations
+- Restate raw metrics as lists (e.g., "Average price: $24, Average reviews: 1,200, Average rating: 4.5")
+- Ask follow-up questions unless explicitly requested by the user
+- Expose system gaps or data limitations
+- Add new data sources or request additional information
+- Use phrases that suggest uncertainty about making a decision
+- Dump metrics without explaining market structure implications
+- Include confidence scores, assumptions, limitations, or numbers_used
+
+Instead, you MUST:
+- Make a decision based on available market structure signals
+- Use metrics to explain competition intensity, review barriers, price compression, and dominance
+- End every response with actionable guidance
+- Speak with the confidence of a senior seller making a real decision
+
+REQUIRED OUTPUT FORMAT (PLAIN TEXT ONLY)
+
+Your response must be plain text (no JSON, no markdown code blocks) with this structure:
+
+VERDICT: [YES / NO / CONDITIONAL]
+
+REASONING:
+[Explain market structure: competition intensity, review barrier, price compression, dominance concentration. Use metrics to support structure analysis, not as standalone facts. Frame in terms of seller's stage and context.]
+
+ACTIONABLE GUIDANCE:
+[What must the seller do? What are the conditions for success? What should they watch? End with clear direction.]
+
+Example format:
+
+VERDICT: NO
+
+REASONING:
+The review barrier is too high for new sellers. Page 1 shows an average of 2,800 reviews across 10 competitors, indicating entrenched competition that requires significant capital to overcome. The top brand controls 55% of listings, suggesting strong brand loyalty that new entrants must break. Price compression in the $12–$15 range signals tight margins and limited differentiation room. For a new seller without established review velocity, this market structure indicates capital risk exceeds potential return.
+
+ACTIONABLE GUIDANCE:
+Do not proceed unless you can commit to 6+ months of PPC spend and have a unique value proposition that breaks brand loyalty. Entry is only viable for existing sellers with established review velocity and clear differentiation strategy.`;
+
+// PASS 2: Structuring Brain - Converts plain text decision into JSON contract
+const STRUCTURING_BRAIN_PROMPT = `You are a structuring assistant that converts plain text decisions into structured JSON contracts.
+
+Your role: Convert the Decision Brain's plain text verdict and reasoning into the required JSON decision contract format.
+
+REQUIRED OUTPUT FORMAT (STRICT JSON ONLY)
+
+You must output valid JSON that conforms exactly to the following structure:
+
+{
+  "decision": {
+    "verdict": "GO" | "CAUTION" | "NO_GO",
+    "confidence": number
+  },
+  "executive_summary": string,
+  "reasoning": {
+    "primary_factors": string[],
+    "seller_context_impact": string
+  },
+  "risks": {
+    "competition": {
+      "level": "Low" | "Medium" | "High",
+      "explanation": string
+    },
+    "pricing": {
+      "level": "Low" | "Medium" | "High",
+      "explanation": string
+    },
+    "differentiation": {
+      "level": "Low" | "Medium" | "High",
+      "explanation": string
+    },
+    "operations": {
+      "level": "Low" | "Medium" | "High",
+      "explanation": string
+    }
+  },
+  "recommended_actions": {
+    "must_do": string[],
+    "should_do": string[],
+    "avoid": string[]
+  },
+  "assumptions_and_limits": string[],
+  "numbers_used": {
+    "avg_price": number | null,
+    "price_range": [number, number] | null,
+    "median_reviews": number | null,
+    "review_density_pct": number | null,
+    "brand_concentration_pct": number | null,
+    "competitor_count": number | null,
+    "avg_rating": number | null
+  }
+}
+
+VERDICT MAPPING:
+- YES → "GO"
+- NO → "NO_GO"
+- CONDITIONAL → "CAUTION"
+
+CONFIDENCE RULES:
+- Start with confidence = 70 (default)
+- Adjust based on market structure clarity from Decision Brain reasoning
+- Higher clarity = higher confidence, lower clarity = lower confidence
+- Range: 40-75 (will be capped by system rules later)
+
+EXECUTIVE SUMMARY:
+- First sentence: Clear verdict that directly answers viability
+- Second sentence: Market structure explanation using metrics to support reasoning
+- Third sentence: Seller-specific feasibility assessment
+- Final sentence: Actionable takeaway, warning, or condition for success
+
+RISK BREAKDOWN:
+- Each risk must explain market structure implications (competition intensity, review barrier, price compression, dominance concentration)
+- Use metrics from ai_context to support structure analysis
+- Extract risk levels from Decision Brain reasoning
+
+RECOMMENDED ACTIONS:
+- Extract actionable guidance from Decision Brain output
+- "must_do": Critical actions required given market structure
+- "should_do": Strategic actions that improve position
+- "avoid": Actions that worsen position given market structure
+
+ASSUMPTIONS AND LIMITS:
+- Focus on market structure assumptions, not system limitations
+- Frame as market dynamics uncertainties, not data gaps
+
+NUMBERS_USED:
+- Extract all numeric metrics from ai_context
+- Populate from ai_context.summary, ai_context.market_structure, etc.
+- Use null if metric not available in ai_context
+
+No additional keys.
+No missing keys.
+No markdown.
+No commentary outside JSON.`;
+
+// Legacy system prompt (kept for reference, not used in two-pass system)
 const SYSTEM_PROMPT = `You are Sellerev, a seller decision engine for Amazon FBA.
 
 You are a senior Amazon seller making real capital allocation decisions. You think and speak like someone who risks time and money on every product decision, even when data is imperfect.
@@ -1934,28 +2111,6 @@ export async function POST(req: NextRequest) {
       }
     }
     
-    // 8. Build system prompt with ai_context ONLY
-    let systemPrompt = SYSTEM_PROMPT;
-    
-    if (contractResponse && contractResponse.ai_context) {
-      const aiContextSection = `
-
-DATA CONTRACT CONTEXT (READ-ONLY):
-
-You MUST use ONLY the following ai_context object. This is the single source of truth.
-Do NOT reference data outside this context. Do NOT invent metrics.
-
-${JSON.stringify(contractResponse.ai_context, null, 2)}
-
-CRITICAL RULES:
-- All reasoning MUST be based on the ai_context object above
-- If a metric is null in ai_context, explicitly state it's unavailable
-- Do NOT fabricate or estimate values not present in ai_context
-- Use summary, products, market_structure, margin_snapshot, signals`;
-
-      systemPrompt = SYSTEM_PROMPT + aiContextSection;
-    }
-
     // Guard: Ensure required data before AI call
     if (!sellerProfile) {
       // #region agent log
@@ -1970,9 +2125,8 @@ CRITICAL RULES:
       throw new Error("Missing market snapshot");
     }
 
-    console.log("AI_PROMPT_READY");
+    console.log("AI_TWO_PASS_START");
 
-    // 9. Call OpenAI
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) {
       return NextResponse.json(
@@ -1981,8 +2135,31 @@ CRITICAL RULES:
       );
     }
 
-    // 10. Build user message with seller context (raw values, no interpretation)
-    const userMessage = `SELLER CONTEXT:
+    // ============================================================================
+    // PASS 1: Decision Brain - Plain text verdict and reasoning
+    // ============================================================================
+    
+    // Build PASS 1 system prompt with ai_context
+    let decisionBrainPrompt = DECISION_BRAIN_PROMPT;
+    if (contractResponse && contractResponse.ai_context) {
+      const aiContextSection = `
+
+MARKET DATA CONTEXT (READ-ONLY):
+
+You MUST use ONLY the following market data. This is the single source of truth.
+Do NOT reference data outside this context. Do NOT invent metrics.
+
+${JSON.stringify(contractResponse.ai_context, null, 2)}
+
+CRITICAL RULES:
+- All reasoning MUST be based on the market data above
+- Use metrics to explain market structure (competition intensity, review barrier, price compression, dominance)
+- Do NOT restate metrics as lists - use them to support structure reasoning`;
+      decisionBrainPrompt = DECISION_BRAIN_PROMPT + aiContextSection;
+    }
+
+    // Build user message for PASS 1
+    const pass1UserMessage = `SELLER CONTEXT:
 - Stage: ${sellerContext.stage}
 - Experience (months): ${sellerContext.experience_months ?? "null"}
 - Monthly revenue range: ${sellerContext.monthly_revenue_range ?? "null"}
@@ -1990,7 +2167,9 @@ CRITICAL RULES:
 ANALYSIS REQUEST:
 ${body.input_value}`;
 
-    const openaiResponse = await fetch(
+    console.log("PASS1_DECISION_BRAIN_CALL");
+
+    const pass1Response = await fetch(
       "https://api.openai.com/v1/chat/completions",
       {
         method: "POST",
@@ -2001,44 +2180,114 @@ ${body.input_value}`;
         body: JSON.stringify({
           model: "gpt-4o-mini",
           messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userMessage },
+            { role: "system", content: decisionBrainPrompt },
+            { role: "user", content: pass1UserMessage },
           ],
-          response_format: { type: "json_object" },
+          // NO response_format - plain text output
           temperature: 0.7,
         }),
       }
     );
 
-    if (!openaiResponse.ok) {
-      const errorData = await openaiResponse.text();
+    if (!pass1Response.ok) {
+      const errorData = await pass1Response.text();
       return NextResponse.json(
         {
           success: false,
-          error: `OpenAI API error: ${openaiResponse.statusText}`,
+          error: `OpenAI API error (PASS 1): ${pass1Response.statusText}`,
           details: errorData,
         },
         { status: 500, headers: res.headers }
       );
     }
 
-    const openaiData = await openaiResponse.json();
-    const content = openaiData.choices?.[0]?.message?.content;
+    const pass1Data = await pass1Response.json();
+    const decisionBrainOutput = pass1Data.choices?.[0]?.message?.content;
 
-    console.log("AI_RESPONSE_RAW", content?.substring(0, 500));
+    console.log("PASS1_DECISION_BRAIN_OUTPUT", decisionBrainOutput?.substring(0, 500));
 
-    if (!content) {
+    if (!decisionBrainOutput) {
       return NextResponse.json(
-        { success: false, error: "No content in OpenAI response" },
+        { success: false, error: "No content in PASS 1 OpenAI response" },
         { status: 500, headers: res.headers }
       );
     }
 
-    // 9. Parse and validate OpenAI JSON output
+    // ============================================================================
+    // PASS 2: Structuring Brain - Convert plain text to JSON contract
+    // ============================================================================
+
+    // Build PASS 2 system prompt with ai_context
+    let structuringBrainPrompt = STRUCTURING_BRAIN_PROMPT;
+    if (contractResponse && contractResponse.ai_context) {
+      const aiContextSection = `
+
+AI_CONTEXT (for numbers_used population):
+
+${JSON.stringify(contractResponse.ai_context, null, 2)}
+
+Extract all numeric metrics from ai_context and populate numbers_used accordingly.`;
+      structuringBrainPrompt = STRUCTURING_BRAIN_PROMPT + aiContextSection;
+    }
+
+    // Build user message for PASS 2
+    const pass2UserMessage = `DECISION BRAIN OUTPUT:
+
+${decisionBrainOutput}
+
+Convert this plain text decision into the required JSON contract format. Extract verdict, reasoning, risks, recommended actions, and populate numbers_used from ai_context.`;
+
+    console.log("PASS2_STRUCTURING_BRAIN_CALL");
+
+    const pass2Response = await fetch(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${openaiApiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: structuringBrainPrompt },
+            { role: "user", content: pass2UserMessage },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.3, // Lower temperature for structured output
+        }),
+      }
+    );
+
+    if (!pass2Response.ok) {
+      const errorData = await pass2Response.text();
+      return NextResponse.json(
+        {
+          success: false,
+          error: `OpenAI API error (PASS 2): ${pass2Response.statusText}`,
+          details: errorData,
+        },
+        { status: 500, headers: res.headers }
+      );
+    }
+
+    const pass2Data = await pass2Response.json();
+    const pass2Content = pass2Data.choices?.[0]?.message?.content;
+
+    console.log("PASS2_STRUCTURING_BRAIN_OUTPUT", pass2Content?.substring(0, 500));
+
+    if (!pass2Content) {
+      return NextResponse.json(
+        { success: false, error: "No content in PASS 2 OpenAI response" },
+        { status: 500, headers: res.headers }
+      );
+    }
+
+    // Parse and validate PASS 2 JSON output
     let decisionJson: any;
     try {
       // Remove markdown code blocks if present
-      const cleanedContent = content
+      const cleanedContent = pass2Content
         .replace(/^```json\s*/i, "")
         .replace(/^```\s*/i, "")
         .replace(/\s*```$/i, "")
@@ -2046,7 +2295,7 @@ ${body.input_value}`;
       decisionJson = JSON.parse(cleanedContent);
       
       // Log the parsed JSON structure for debugging
-      console.log("OPENAI_PARSED_JSON", {
+      console.log("PASS2_PARSED_JSON", {
         keys: Object.keys(decisionJson),
         has_decision: !!decisionJson.decision,
         decision_keys: decisionJson.decision ? Object.keys(decisionJson.decision) : [],
@@ -2056,15 +2305,15 @@ ${body.input_value}`;
         risks_keys: decisionJson.risks ? Object.keys(decisionJson.risks) : [],
       });
     } catch (parseError) {
-      console.error("JSON_PARSE_ERROR", {
+      console.error("PASS2_JSON_PARSE_ERROR", {
         error: parseError,
-        content_preview: content.substring(0, 500),
+        content_preview: pass2Content.substring(0, 500),
       });
       return NextResponse.json(
         {
           success: false,
-          error: "OpenAI returned invalid JSON",
-          details: content.substring(0, 200),
+          error: "PASS 2 returned invalid JSON",
+          details: pass2Content.substring(0, 200),
         },
         { status: 500, headers: res.headers }
       );
@@ -2114,12 +2363,13 @@ ${body.input_value}`;
       );
     }
 
-    console.log("AI_VALIDATED");
+    console.log("PASS2_VALIDATED");
 
     // 10.5. Normalize risks to ensure stable contract (all 4 keys always present)
     const normalizedRisks = normalizeRisks(decisionJson.risks);
 
-    // 11. Extract verdict and confidence for analytics
+    // 11. Apply confidence caps and downgrades (PASS 2 ONLY)
+    // Note: Confidence is set by Structuring Brain, but we apply caps here
     const verdict = decisionJson.decision.verdict;
     let confidence = decisionJson.decision.confidence;
     const confidenceDowngrades: string[] = [];
@@ -2153,7 +2403,8 @@ ${body.input_value}`;
       decisionJson.confidence_downgrades = confidenceDowngrades;
     }
 
-    // 12a. Ensure numbers_used is populated from contract response if available
+    // 12a. Ensure numbers_used is populated (PASS 2 should populate from ai_context, but ensure completeness)
+    // Fallback: If PASS 2 didn't populate or missed fields, fill from contractResponse
     if (contractResponse) {
       if (!decisionJson.numbers_used) {
         decisionJson.numbers_used = {
@@ -2166,19 +2417,31 @@ ${body.input_value}`;
           avg_rating: null,
         };
       }
-      // Map contract response to numbers_used format
-      decisionJson.numbers_used.avg_price = contractResponse.summary.avg_price;
-      decisionJson.numbers_used.price_range = [
-        contractResponse.market_structure.price_band.min,
-        contractResponse.market_structure.price_band.max,
-      ];
-      decisionJson.numbers_used.median_reviews = contractResponse.market_structure.review_barrier.median_reviews;
-      decisionJson.numbers_used.review_density_pct = null; // Not in contract
-      decisionJson.numbers_used.brand_concentration_pct = contractResponse.market_structure.brand_dominance_pct;
-      decisionJson.numbers_used.competitor_count = contractResponse.summary.page1_product_count;
-      decisionJson.numbers_used.avg_rating = contractResponse.summary.avg_rating;
+      // Ensure all fields are populated (override nulls with contract data if available)
+      if (decisionJson.numbers_used.avg_price === null) {
+        decisionJson.numbers_used.avg_price = contractResponse.summary.avg_price;
+      }
+      if (decisionJson.numbers_used.price_range === null) {
+        decisionJson.numbers_used.price_range = [
+          contractResponse.market_structure.price_band.min,
+          contractResponse.market_structure.price_band.max,
+        ];
+      }
+      if (decisionJson.numbers_used.median_reviews === null) {
+        decisionJson.numbers_used.median_reviews = contractResponse.market_structure.review_barrier.median_reviews;
+      }
+      if (decisionJson.numbers_used.brand_concentration_pct === null) {
+        decisionJson.numbers_used.brand_concentration_pct = contractResponse.market_structure.brand_dominance_pct;
+      }
+      if (decisionJson.numbers_used.competitor_count === null) {
+        decisionJson.numbers_used.competitor_count = contractResponse.summary.page1_product_count;
+      }
+      if (decisionJson.numbers_used.avg_rating === null) {
+        decisionJson.numbers_used.avg_rating = contractResponse.summary.avg_rating;
+      }
+      // review_density_pct is not in contract, keep as null
     } else {
-      // Ensure numbers_used is all null if no contract data
+      // Ensure numbers_used exists even if no contract data
       if (!decisionJson.numbers_used) {
         decisionJson.numbers_used = {
           avg_price: null,
