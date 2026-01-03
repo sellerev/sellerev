@@ -736,23 +736,65 @@ export function buildKeywordPageOne(
     // Set product bsr to null so UI shows "BSR: —" or hides it
     const displayBsr: number | null = null; // Always null for keyword Page-1
 
-    // Review count: resolve from ParsedListing with safe fallback
-    // Fallback order: reviews ?? review_count ?? ratings_total ?? null
-    // ParsedListing.reviews is already parsed from Rainforest API with all fields checked
-    const reviewCountForProduct = l.reviews ?? null;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DETECT ESTIMATED/FALLBACK PRODUCTS
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Products with synthetic ASINs (KEYWORD-*, ESTIMATED-*, INFERRED-*) are fallback products
+    // Only these should use hardcoded defaults like "Unknown product", rating 0, null image
+    const isEstimatedProduct = asin.startsWith('KEYWORD-') || 
+                               asin.startsWith('ESTIMATED-') || 
+                               asin.startsWith('INFERRED-');
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MAP FIELDS FROM PARSEDLISTING → CANONICALPRODUCT
+    // ═══════════════════════════════════════════════════════════════════════════
+    // For real Amazon listings: preserve actual values from source listing
+    // For ESTIMATED products: use fallback defaults ("Unknown product", 0, null)
     
-    // Rating: use rating field only (stars)
+    // Title: map directly from listing.title, only use "Unknown product" for ESTIMATED
+    const title = isEstimatedProduct 
+      ? "Unknown product"
+      : (l.title ?? "");
+    
+    // Rating: map directly from listing.rating, only use 0 for ESTIMATED
+    // Interface requires number, so use 0 as fallback for real listings with missing data
     const ratingForProduct = l.rating ?? null;
+    const rating = isEstimatedProduct 
+      ? 0
+      : (ratingForProduct ?? 0);
+    
+    // Review count: map directly from listing.reviews (ratings_total equivalent)
+    // ParsedListing.reviews is already parsed from Rainforest API with all fields checked
+    // Interface requires number, so use 0 as fallback for real listings with missing data
+    const reviewCountForProduct = l.reviews ?? null;
+    const review_count = isEstimatedProduct
+      ? 0
+      : (reviewCountForProduct ?? 0);
+    
+    // Image: check multiple sources (listing.image_url OR listing.main_image OR listing.images[0])
+    // Only use null for ESTIMATED products
+    const image_url = isEstimatedProduct
+      ? null
+      : (l.image_url ?? 
+         (l as any).main_image ?? 
+         ((l as any).images && Array.isArray((l as any).images) && (l as any).images.length > 0 
+           ? (l as any).images[0] 
+           : null) ?? 
+         null);
+    
+    // Price: always preserve from listing (already handled via pw.price)
+    // ASIN: already set above
     
     // Verification log: track resolved review count for data quality
     console.log("✅ REVIEW COUNT RESOLVED", {
       asin: l.asin,
       rating: ratingForProduct,
       resolved_review_count: reviewCountForProduct,
+      is_estimated: isEstimatedProduct,
     });
     
     // Warn if rating exists but review count is missing (data quality issue)
-    if (ratingForProduct !== null && ratingForProduct > 0 && reviewCountForProduct === null) {
+    if (!isEstimatedProduct && ratingForProduct !== null && ratingForProduct > 0 && reviewCountForProduct === null) {
       console.warn("⚠️ REVIEW COUNT MISSING WITH RATING", {
         asin: l.asin,
         rating: ratingForProduct,
@@ -764,15 +806,15 @@ export function buildKeywordPageOne(
     return {
       rank: pw.organicRank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
       asin, // Allow synthetic ASINs for keywords
-      title: l.title ?? "Unknown product",
-      price: pw.price,
-      rating: ratingForProduct ?? 0, // Rating: use 0 if null for display
-      review_count: reviewCountForProduct ?? 0, // Review count: use 0 only if all fields missing (preserves Amazon Page-1 accuracy)
+      title, // Preserved from listing (or "Unknown product" for ESTIMATED only)
+      price: pw.price, // Preserved from listing
+      rating, // Preserved from listing (or 0 for ESTIMATED only)
+      review_count, // Preserved from listing (or 0 for ESTIMATED only)
       bsr: displayBsr, // Always null for keyword Page-1 (not displayed, but pw.bsr still used internally)
       estimated_monthly_units: finalUnits, // Use floored units
       estimated_monthly_revenue: finalRevenue, // Use floored revenue
       revenue_share_pct: 0, // Will be calculated after all products are built
-      image_url: l.image_url ?? null,
+      image_url, // Preserved from listing (or null for ESTIMATED only)
       fulfillment, // Normalized: Prime → FBA, else → FBM, Amazon Retail → AMZ
       brand: l.brand ?? null,
       seller_country: "Unknown" as const,
