@@ -1681,11 +1681,41 @@ export async function POST(req: NextRequest) {
       // ROUTE CANONICAL LOGIC BY INPUT TYPE
       // ═══════════════════════════════════════════════════════════════════════════
       
-      const rawListings = keywordMarketData.listings || [];
+      let rawListings = keywordMarketData.listings || [];
       let pageOneProducts: any[] = [];
       
       console.log("🔵 INPUT_TYPE_RECEIVED", body.input_type);
       console.log("🔵 RAW_LISTINGS_LENGTH_BEFORE_CANONICAL", rawListings.length);
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // ASIN METADATA ENRICHMENT (DECOUPLED FROM SNAPSHOT FINALIZATION)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: Enrich metadata BEFORE building canonical products.
+      // This ensures metadata is populated regardless of:
+      // - Snapshot finalization state
+      // - Snapshot estimating state
+      // - Inferred state
+      // - Expected ASIN count
+      // - Mixed category detection
+      // 
+      // Metadata enrichment runs as soon as ASINs are discovered, not gated behind
+      // snapshot finalization. This fixes issues like "food warming mat" where
+      // snapshot never finalizes but ASINs still need metadata.
+      if (rawListings.length > 0) {
+        const { enrichListingsMetadata } = await import("@/lib/amazon/keywordMarket");
+        rawListings = await enrichListingsMetadata(rawListings, body.input_value);
+        console.log("✅ METADATA_ENRICHMENT_COMPLETE_BEFORE_CANONICAL", {
+          keyword: body.input_value,
+          enriched_listings_count: rawListings.length,
+          sample_listing: rawListings[0] ? {
+            asin: rawListings[0].asin,
+            has_title: !!rawListings[0].title,
+            has_image: !!rawListings[0].image_url,
+            has_rating: rawListings[0].rating !== null,
+            has_reviews: rawListings[0].reviews !== null,
+          } : null,
+        });
+      }
       
       if (body.input_type === "keyword") {
         // Keyword analysis: Use permissive canonical builder

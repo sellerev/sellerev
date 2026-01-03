@@ -607,6 +607,197 @@ function inferBrandFromTitle(title: string | null): string | null {
 }
 
 /**
+ * Enriches ParsedListing objects with metadata (title, image_url, rating, reviews)
+ * by fetching full product data from Rainforest API.
+ * 
+ * CRITICAL: This function is decoupled from snapshot finalization.
+ * Metadata enrichment runs as soon as ASINs are discovered, regardless of:
+ * - Snapshot stability
+ * - Inferred state
+ * - Expected ASIN count
+ * - Mixed category detection
+ * - Snapshot estimating state
+ * 
+ * @param listings - Array of ParsedListing objects to enrich
+ * @param keyword - Keyword for logging context (optional)
+ * @param rainforestApiKey - Rainforest API key (optional, will use env var if not provided)
+ * @returns Enriched listings (only missing fields are populated, existing data is preserved)
+ */
+export async function enrichListingsMetadata(
+  listings: ParsedListing[],
+  keyword?: string,
+  rainforestApiKey?: string
+): Promise<ParsedListing[]> {
+  if (!listings || listings.length === 0) {
+    return listings;
+  }
+
+  // Get API key from parameter or environment
+  const apiKey = rainforestApiKey || process.env.RAINFOREST_API_KEY;
+  if (!apiKey) {
+    console.warn("⚠️ ASIN_METADATA_ENRICHMENT_SKIPPED", {
+      keyword: keyword || "unknown",
+      reason: "RAINFOREST_API_KEY not configured",
+      listings_count: listings.length,
+    });
+    return listings;
+  }
+
+  // Identify listings needing enrichment (missing title, image_url, rating, or reviews)
+  const listingsNeedingEnrichment = listings.filter(l => 
+    l.asin && 
+    (!l.title || !l.image_url || l.rating === null || l.reviews === null)
+  );
+
+  if (listingsNeedingEnrichment.length === 0) {
+    // All listings already have metadata - no enrichment needed
+    return listings;
+  }
+
+  console.log("🔵 ASIN_METADATA_ENRICHMENT_START", {
+    keyword: keyword || "unknown",
+    listings_needing_enrichment: listingsNeedingEnrichment.length,
+    total_listings: listings.length,
+    missing_metadata_breakdown: {
+      missing_title: listingsNeedingEnrichment.filter(l => !l.title).length,
+      missing_image: listingsNeedingEnrichment.filter(l => !l.image_url).length,
+      missing_rating: listingsNeedingEnrichment.filter(l => l.rating === null).length,
+      missing_reviews: listingsNeedingEnrichment.filter(l => l.reviews === null).length,
+    },
+  });
+
+  try {
+    // Get ASINs that need enrichment
+    const asinsToEnrich = listingsNeedingEnrichment
+      .map(l => l.asin)
+      .filter((asin): asin is string => asin !== null && asin !== undefined);
+
+    if (asinsToEnrich.length === 0) {
+      return listings;
+    }
+
+    // Batch fetch product data using existing batch fetch function
+    const { batchFetchBsrWithBackoff } = await import("./asinBsrCache");
+    const batchData = await batchFetchBsrWithBackoff(
+      apiKey,
+      asinsToEnrich,
+      keyword || "metadata_enrichment"
+    );
+
+    if (!batchData) {
+      console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
+        keyword: keyword || "unknown",
+        reason: "batch_fetch_returned_null",
+        listings_needing_enrichment: listingsNeedingEnrichment.length,
+        message: "Batch fetch returned null - metadata enrichment skipped",
+      });
+      return listings; // Return original listings if enrichment fails
+    }
+
+    // Parse batch response (can be array or object with products array)
+    let products: any[] = [];
+    if (Array.isArray(batchData)) {
+      products = batchData;
+    } else if (batchData.products && Array.isArray(batchData.products)) {
+      products = batchData.products;
+    } else if (batchData.product) {
+      products = Array.isArray(batchData.product) ? batchData.product : [batchData.product];
+    } else if (batchData.asin || batchData.title) {
+      products = [batchData];
+    }
+
+    // Create enrichment map: ASIN -> product data
+    const enrichmentMap = new Map<string, any>();
+    for (const productData of products) {
+      const product = productData?.product || productData;
+      if (product?.asin) {
+        enrichmentMap.set(product.asin.toUpperCase(), product);
+      }
+    }
+
+    // Enrich listings with fetched metadata
+    let enrichedListingsCount = 0;
+    let enrichedFieldsCount = 0;
+    const enrichedListings = listings.map(listing => {
+      if (!listing.asin || !enrichmentMap.has(listing.asin.toUpperCase())) {
+        return listing; // No enrichment data available
+      }
+
+      const productData = enrichmentMap.get(listing.asin.toUpperCase())!;
+      const enriched: ParsedListing = { ...listing };
+      let listingEnriched = false;
+
+      // Enrich title (only if missing)
+      if (!enriched.title && productData.title) {
+        enriched.title = productData.title;
+        enrichedFieldsCount++;
+        listingEnriched = true;
+      }
+
+      // Enrich image_url (only if missing, check multiple sources)
+      if (!enriched.image_url) {
+        const imageUrl = productData.image || 
+                        productData.image_url || 
+                        productData.main_image ||
+                        (productData.images && Array.isArray(productData.images) && productData.images.length > 0 
+                          ? productData.images[0] 
+                          : null);
+        if (imageUrl) {
+          enriched.image_url = imageUrl;
+          enrichedFieldsCount++;
+          listingEnriched = true;
+        }
+      }
+
+      // Enrich rating (only if null)
+      if (enriched.rating === null) {
+        const rating = parseRating(productData);
+        if (rating !== null) {
+          enriched.rating = rating;
+          enrichedFieldsCount++;
+          listingEnriched = true;
+        }
+      }
+
+      // Enrich reviews (only if null)
+      if (enriched.reviews === null) {
+        const reviews = parseReviews(productData);
+        if (reviews !== null) {
+          enriched.reviews = reviews;
+          enrichedFieldsCount++;
+          listingEnriched = true;
+        }
+      }
+
+      if (listingEnriched) {
+        enrichedListingsCount++;
+      }
+
+      return enriched;
+    });
+
+    console.log("✅ ASIN_METADATA_ENRICHMENT_COMPLETE", {
+      keyword: keyword || "unknown",
+      listings_enriched: enrichedListingsCount,
+      fields_enriched: enrichedFieldsCount,
+      total_listings: enrichedListings.length,
+      enrichment_success_rate: `${((enrichedListingsCount / listingsNeedingEnrichment.length) * 100).toFixed(1)}%`,
+    });
+
+    return enrichedListings;
+  } catch (error) {
+    console.warn("⚠️ ASIN_METADATA_ENRICHMENT_ERROR", {
+      keyword: keyword || "unknown",
+      error: error instanceof Error ? error.message : String(error),
+      listings_needing_enrichment: listingsNeedingEnrichment.length,
+      message: "Metadata enrichment failed - using original listing data",
+    });
+    // Return original listings - do NOT overwrite with empty defaults
+    return listings;
+  }
+}
+
+/**
  * Fetches Amazon search results for a keyword and computes aggregated market signals.
  * 
  * @param keyword - The search keyword
@@ -1230,153 +1421,14 @@ export async function fetchKeywordMarketSnapshot(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // ASIN METADATA ENRICHMENT
+    // ASIN METADATA ENRICHMENT (DECOUPLED FROM SNAPSHOT FINALIZATION)
     // ═══════════════════════════════════════════════════════════════════════════
     // Enrich listings missing metadata (title, image_url, rating, reviews) by
     // fetching full product data from Rainforest API.
+    // CRITICAL: This runs regardless of snapshot state - metadata must be populated
+    // as soon as ASINs are discovered, not gated behind snapshot finalization.
     // Only enriches missing fields - does NOT overwrite existing data.
-    const listingsNeedingEnrichment = listings.filter(l => 
-      l.asin && 
-      (!l.title || !l.image_url || l.rating === null || l.reviews === null)
-    );
-
-    if (listingsNeedingEnrichment.length > 0) {
-      console.log("🔵 ASIN_METADATA_ENRICHMENT_START", {
-        keyword,
-        listings_needing_enrichment: listingsNeedingEnrichment.length,
-        total_listings: listings.length,
-        missing_metadata_breakdown: {
-          missing_title: listingsNeedingEnrichment.filter(l => !l.title).length,
-          missing_image: listingsNeedingEnrichment.filter(l => !l.image_url).length,
-          missing_rating: listingsNeedingEnrichment.filter(l => l.rating === null).length,
-          missing_reviews: listingsNeedingEnrichment.filter(l => l.reviews === null).length,
-        },
-      });
-
-      try {
-        // Get ASINs that need enrichment
-        const asinsToEnrich = listingsNeedingEnrichment
-          .map(l => l.asin)
-          .filter((asin): asin is string => asin !== null && asin !== undefined);
-
-        if (asinsToEnrich.length > 0) {
-          // Batch fetch product data using existing batch fetch function
-          const { batchFetchBsrWithBackoff } = await import("./asinBsrCache");
-          const batchData = await batchFetchBsrWithBackoff(
-            rainforestApiKey,
-            asinsToEnrich,
-            keyword
-          );
-
-          if (batchData) {
-            // Parse batch response (can be array or object with products array)
-            let products: any[] = [];
-            if (Array.isArray(batchData)) {
-              products = batchData;
-            } else if (batchData.products && Array.isArray(batchData.products)) {
-              products = batchData.products;
-            } else if (batchData.product) {
-              products = Array.isArray(batchData.product) ? batchData.product : [batchData.product];
-            } else if (batchData.asin || batchData.title) {
-              products = [batchData];
-            }
-
-            // Create enrichment map: ASIN -> product data
-            const enrichmentMap = new Map<string, any>();
-            for (const productData of products) {
-              const product = productData?.product || productData;
-              if (product?.asin) {
-                enrichmentMap.set(product.asin.toUpperCase(), product);
-              }
-            }
-
-            // Enrich listings with fetched metadata
-            let enrichedListingsCount = 0;
-            let enrichedFieldsCount = 0;
-            listings = listings.map(listing => {
-              if (!listing.asin || !enrichmentMap.has(listing.asin.toUpperCase())) {
-                return listing; // No enrichment data available
-              }
-
-              const productData = enrichmentMap.get(listing.asin.toUpperCase())!;
-              const enriched: ParsedListing = { ...listing };
-              let listingEnriched = false;
-
-              // Enrich title (only if missing)
-              if (!enriched.title && productData.title) {
-                enriched.title = productData.title;
-                enrichedFieldsCount++;
-                listingEnriched = true;
-              }
-
-              // Enrich image_url (only if missing, check multiple sources)
-              if (!enriched.image_url) {
-                const imageUrl = productData.image || 
-                                productData.image_url || 
-                                productData.main_image ||
-                                (productData.images && Array.isArray(productData.images) && productData.images.length > 0 
-                                  ? productData.images[0] 
-                                  : null);
-                if (imageUrl) {
-                  enriched.image_url = imageUrl;
-                  enrichedFieldsCount++;
-                  listingEnriched = true;
-                }
-              }
-
-              // Enrich rating (only if null)
-              if (enriched.rating === null) {
-                const rating = parseRating(productData);
-                if (rating !== null) {
-                  enriched.rating = rating;
-                  enrichedFieldsCount++;
-                  listingEnriched = true;
-                }
-              }
-
-              // Enrich reviews (only if null)
-              if (enriched.reviews === null) {
-                const reviews = parseReviews(productData);
-                if (reviews !== null) {
-                  enriched.reviews = reviews;
-                  enrichedFieldsCount++;
-                  listingEnriched = true;
-                }
-              }
-
-              if (listingEnriched) {
-                enrichedListingsCount++;
-              }
-
-              return enriched;
-            });
-
-            console.log("✅ ASIN_METADATA_ENRICHMENT_COMPLETE", {
-              keyword,
-              listings_enriched: enrichedListingsCount,
-              fields_enriched: enrichedFieldsCount,
-              total_listings: listings.length,
-              enrichment_success_rate: `${((enrichedListingsCount / listingsNeedingEnrichment.length) * 100).toFixed(1)}%`,
-            });
-          } else {
-            console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
-              keyword,
-              reason: "batch_fetch_returned_null",
-              listings_needing_enrichment: listingsNeedingEnrichment.length,
-              message: "Batch fetch returned null - metadata enrichment skipped",
-            });
-          }
-        }
-      } catch (error) {
-        console.warn("⚠️ ASIN_METADATA_ENRICHMENT_ERROR", {
-          keyword,
-          error: error instanceof Error ? error.message : String(error),
-          listings_needing_enrichment: listingsNeedingEnrichment.length,
-          message: "Metadata enrichment failed - using original listing data",
-        });
-        // Continue with original listings - do NOT overwrite with empty defaults
-      }
-    }
+    listings = await enrichListingsMetadata(listings, keyword, rainforestApiKey);
 
     // Aggregate metrics from Page 1 listings only (using canonical `listings` variable)
     const total_page1_listings = listings.length;
