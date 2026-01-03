@@ -1199,7 +1199,7 @@ export async function fetchKeywordMarketSnapshot(
     );
 
     // TASK 1: Create canonical `listings` variable for all downstream logic
-    const listings = validListings; // Canonical variable name
+    let listings = validListings; // Canonical variable name
 
     console.warn("PAGE1_LISTINGS_COUNT", listings.length); // Step 7: Debug log
     console.log(`Extracted ${listings.length} valid listings from ${parsedListings.length} total results`, {
@@ -1227,6 +1227,155 @@ export async function fetchKeywordMarketSnapshot(
         } : null,
       });
       return null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ASIN METADATA ENRICHMENT
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Enrich listings missing metadata (title, image_url, rating, reviews) by
+    // fetching full product data from Rainforest API.
+    // Only enriches missing fields - does NOT overwrite existing data.
+    const listingsNeedingEnrichment = listings.filter(l => 
+      l.asin && 
+      (!l.title || !l.image_url || l.rating === null || l.reviews === null)
+    );
+
+    if (listingsNeedingEnrichment.length > 0) {
+      console.log("🔵 ASIN_METADATA_ENRICHMENT_START", {
+        keyword,
+        listings_needing_enrichment: listingsNeedingEnrichment.length,
+        total_listings: listings.length,
+        missing_metadata_breakdown: {
+          missing_title: listingsNeedingEnrichment.filter(l => !l.title).length,
+          missing_image: listingsNeedingEnrichment.filter(l => !l.image_url).length,
+          missing_rating: listingsNeedingEnrichment.filter(l => l.rating === null).length,
+          missing_reviews: listingsNeedingEnrichment.filter(l => l.reviews === null).length,
+        },
+      });
+
+      try {
+        // Get ASINs that need enrichment
+        const asinsToEnrich = listingsNeedingEnrichment
+          .map(l => l.asin)
+          .filter((asin): asin is string => asin !== null && asin !== undefined);
+
+        if (asinsToEnrich.length > 0) {
+          // Batch fetch product data using existing batch fetch function
+          const { batchFetchBsrWithBackoff } = await import("./asinBsrCache");
+          const batchData = await batchFetchBsrWithBackoff(
+            rainforestApiKey,
+            asinsToEnrich,
+            keyword
+          );
+
+          if (batchData) {
+            // Parse batch response (can be array or object with products array)
+            let products: any[] = [];
+            if (Array.isArray(batchData)) {
+              products = batchData;
+            } else if (batchData.products && Array.isArray(batchData.products)) {
+              products = batchData.products;
+            } else if (batchData.product) {
+              products = Array.isArray(batchData.product) ? batchData.product : [batchData.product];
+            } else if (batchData.asin || batchData.title) {
+              products = [batchData];
+            }
+
+            // Create enrichment map: ASIN -> product data
+            const enrichmentMap = new Map<string, any>();
+            for (const productData of products) {
+              const product = productData?.product || productData;
+              if (product?.asin) {
+                enrichmentMap.set(product.asin.toUpperCase(), product);
+              }
+            }
+
+            // Enrich listings with fetched metadata
+            let enrichedListingsCount = 0;
+            let enrichedFieldsCount = 0;
+            listings = listings.map(listing => {
+              if (!listing.asin || !enrichmentMap.has(listing.asin.toUpperCase())) {
+                return listing; // No enrichment data available
+              }
+
+              const productData = enrichmentMap.get(listing.asin.toUpperCase())!;
+              const enriched: ParsedListing = { ...listing };
+              let listingEnriched = false;
+
+              // Enrich title (only if missing)
+              if (!enriched.title && productData.title) {
+                enriched.title = productData.title;
+                enrichedFieldsCount++;
+                listingEnriched = true;
+              }
+
+              // Enrich image_url (only if missing, check multiple sources)
+              if (!enriched.image_url) {
+                const imageUrl = productData.image || 
+                                productData.image_url || 
+                                productData.main_image ||
+                                (productData.images && Array.isArray(productData.images) && productData.images.length > 0 
+                                  ? productData.images[0] 
+                                  : null);
+                if (imageUrl) {
+                  enriched.image_url = imageUrl;
+                  enrichedFieldsCount++;
+                  listingEnriched = true;
+                }
+              }
+
+              // Enrich rating (only if null)
+              if (enriched.rating === null) {
+                const rating = parseRating(productData);
+                if (rating !== null) {
+                  enriched.rating = rating;
+                  enrichedFieldsCount++;
+                  listingEnriched = true;
+                }
+              }
+
+              // Enrich reviews (only if null)
+              if (enriched.reviews === null) {
+                const reviews = parseReviews(productData);
+                if (reviews !== null) {
+                  enriched.reviews = reviews;
+                  enrichedFieldsCount++;
+                  listingEnriched = true;
+                }
+              }
+
+              if (listingEnriched) {
+                enrichedListingsCount++;
+              }
+
+              return enriched;
+            });
+
+            console.log("✅ ASIN_METADATA_ENRICHMENT_COMPLETE", {
+              keyword,
+              listings_enriched: enrichedListingsCount,
+              fields_enriched: enrichedFieldsCount,
+              total_listings: listings.length,
+              enrichment_success_rate: `${((enrichedListingsCount / listingsNeedingEnrichment.length) * 100).toFixed(1)}%`,
+            });
+          } else {
+            console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
+              keyword,
+              reason: "batch_fetch_returned_null",
+              listings_needing_enrichment: listingsNeedingEnrichment.length,
+              message: "Batch fetch returned null - metadata enrichment skipped",
+            });
+          }
+        }
+      } catch (error) {
+        console.warn("⚠️ ASIN_METADATA_ENRICHMENT_ERROR", {
+          keyword,
+          error: error instanceof Error ? error.message : String(error),
+          listings_needing_enrichment: listingsNeedingEnrichment.length,
+          message: "Metadata enrichment failed - using original listing data",
+        });
+        // Continue with original listings - do NOT overwrite with empty defaults
+      }
     }
 
     // Aggregate metrics from Page 1 listings only (using canonical `listings` variable)
