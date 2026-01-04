@@ -511,16 +511,9 @@ export default function AnalyzeForm({
         error: data.error 
       });
 
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/analyze/AnalyzeForm.tsx:453',message:'Frontend received response',data:{status:res.status,ok:res.ok,success:data.success,has_analysisRunId:!!data.analysisRunId,has_decision:!!data.decision,response_status:data.status,error:data.error},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
-
       // Handle queued response (status: "queued") - keyword is being processed
       // CHECK THIS FIRST before error checks, since 202 is a valid success response
       if (data.status === "queued" || res.status === 202) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/analyze/AnalyzeForm.tsx:498',message:'Handling queued response',data:{data_status:data.status,res_status:res.status,matches_queued:data.status==="queued",matches_202:res.status===202},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-        // #endregion
         console.log("ANALYZE_QUEUED", {
           status: data.status,
           message: data.message,
@@ -575,9 +568,6 @@ export default function AnalyzeForm({
 
       if (!data.analysisRunId) {
         console.error("ANALYZE_MISSING_RUN_ID", { data });
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/analyze/AnalyzeForm.tsx:505',message:'Missing analysisRunId error',data:{status:res.status,data_status:data.status,data_keys:Object.keys(data),has_success:!!data.success,has_decision:!!data.decision},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         setError("Analysis completed but no run ID returned");
         setLoading(false);
         return;
