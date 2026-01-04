@@ -1591,13 +1591,9 @@ export async function POST(req: NextRequest) {
     const { classifyQuestion } = await import("@/lib/ai/copilotSystemPrompt");
     const questionClassification = classifyQuestion(body.message);
     
-    // Check if profitability question requires product-level COGS
-    if (questionClassification.category === "PROFITABILITY" && questionClassification.requiresProductLevelCogs) {
-      // Check if we have product-level COGS in the data
-      // For keyword mode, we typically don't have product-level COGS
-      const hasProductLevelCogs = false; // Keyword mode doesn't have product-level COGS
-      
-      if (!hasProductLevelCogs) {
+    // Check if profitability question (treat as keyword-level only)
+    if (questionClassification.category === "PROFITABILITY") {
+      // For keyword mode, we don't have product-level COGS - use keyword-level estimates only
         // Return mandatory profitability refusal
         const encoder = new TextEncoder();
         const profitabilityRefusal = `We can't determine profitability directly because product-level COGS isn't available.
@@ -1645,7 +1641,6 @@ Would you like me to:
             ...Object.fromEntries(res.headers.entries()),
           },
         });
-      }
     }
 
     // 14. Call OpenAI with streaming enabled
