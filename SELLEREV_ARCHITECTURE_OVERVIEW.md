@@ -408,3 +408,4 @@ When a user clicks a product card or asks about a specific product:
 
 - **The architecture is designed for learning and scale**, with modular components, strict data contracts, and a calibration layer that improves over time as more historical data becomes available.
 
+
