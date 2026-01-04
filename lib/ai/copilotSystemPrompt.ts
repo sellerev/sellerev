@@ -41,7 +41,7 @@ export interface CopilotContext {
  * The AI auto-detects intent to provide appropriate guidance.
  */
 export function classifyQuestion(question: string): {
-  category: "CAPITAL_ALLOCATION" | "STRATEGY" | "RISK_PROBING" | "EXECUTION" | "COMPARISON" | "OVERRIDE" | "GENERAL";
+  category: "CAPITAL_ALLOCATION" | "STRATEGY" | "RISK_PROBING" | "EXECUTION" | "COMPARISON" | "OVERRIDE" | "GENERAL" | "PROFITABILITY";
 } {
   const normalized = question.toLowerCase().trim();
   
