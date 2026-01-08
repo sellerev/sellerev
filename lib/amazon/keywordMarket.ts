@@ -676,20 +676,69 @@ export async function enrichListingsMetadata(
       return listings;
     }
 
-    // Batch fetch product data using existing batch fetch function
-    const { batchFetchBsrWithBackoff } = await import("./asinBsrCache");
-    const batchData = await batchFetchBsrWithBackoff(
-      apiKey,
-      asinsToEnrich,
-      keyword || "metadata_enrichment"
-    );
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SYNCHRONOUS BATCH FETCH (NO RETRIES, NO BACKOFF, SINGLE ATTEMPT)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Perform single batched Rainforest product lookup as part of request lifecycle
+    // No retries, no fire-and-forget, no async background tasks
+    // If fetch fails, preserve listings with null fields (do NOT fabricate placeholders)
+    
+    const batchAsinString = asinsToEnrich.join(",");
+    const batchProductUrl = `https://api.rainforestapi.com/request?api_key=${apiKey}&type=product&amazon_domain=amazon.com&asin=${batchAsinString}`;
+    
+    let batchData: any = null;
+    
+    try {
+      const batchResponse = await fetch(batchProductUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!batchResponse.ok) {
+        console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
+          keyword: keyword || "unknown",
+          reason: "batch_fetch_http_error",
+          status: batchResponse.status,
+          statusText: batchResponse.statusText,
+          listings_needing_enrichment: listingsNeedingEnrichment.length,
+          message: "Batch fetch HTTP error - preserving listings with null fields",
+        });
+        // Return original listings with null fields (do NOT fabricate placeholders)
+        return listings;
+      }
+
+      batchData = await batchResponse.json();
+      
+      // Check for API-level errors in response
+      if (batchData && batchData.error) {
+        console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
+          keyword: keyword || "unknown",
+          reason: "batch_fetch_api_error",
+          api_error: batchData.error,
+          listings_needing_enrichment: listingsNeedingEnrichment.length,
+          message: "Batch fetch API error - preserving listings with null fields",
+        });
+        // Return original listings with null fields
+        return listings;
+      }
+    } catch (fetchError) {
+      console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
+        keyword: keyword || "unknown",
+        reason: "batch_fetch_exception",
+        error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+        listings_needing_enrichment: listingsNeedingEnrichment.length,
+        message: "Batch fetch exception - preserving listings with null fields",
+      });
+      // Return original listings with null fields
+      return listings;
+    }
 
     if (!batchData) {
       console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
         keyword: keyword || "unknown",
         reason: "batch_fetch_returned_null",
         listings_needing_enrichment: listingsNeedingEnrichment.length,
-        message: "Batch fetch returned null - metadata enrichment skipped",
+        message: "Batch fetch returned null - preserving listings with null fields",
       });
       return listings; // Return original listings if enrichment fails
     }
@@ -756,6 +805,9 @@ export async function enrichListingsMetadata(
           enriched.rating = rating;
           enrichedFieldsCount++;
           listingEnriched = true;
+        } else {
+          // Ensure rating is 0 if missing (not null) for aggregation calculations
+          enriched.rating = 0;
         }
       }
 
@@ -766,7 +818,21 @@ export async function enrichListingsMetadata(
           enriched.reviews = reviews;
           enrichedFieldsCount++;
           listingEnriched = true;
+        } else {
+          // Ensure review_count is 0 if missing (not null) for aggregation calculations
+          enriched.reviews = 0;
         }
+      }
+
+      // Enrich brand (only if missing, from product.brand or by_line?.name)
+      if (!enriched.brand || enriched.brand.trim().length === 0) {
+        const brand = productData.brand || productData.by_line?.name || null;
+        if (brand && typeof brand === "string" && brand.trim().length > 0) {
+          enriched.brand = brand.trim();
+          enrichedFieldsCount++;
+          listingEnriched = true;
+        }
+        // If brand missing, leave as null (do NOT fabricate)
       }
 
       if (listingEnriched) {
