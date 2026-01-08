@@ -171,16 +171,13 @@ export interface KeywordAnalyzeResponse {
 
   // F) Brand Moat Analysis (Page-1 Only, Deterministic)
   brand_moat: {
-    verdict: "NO_MOAT" | "SOFT_MOAT" | "HARD_MOAT";
-    dominant_brand?: string;
-    brand_revenue_share_pct?: number;
-    page_one_slots?: number;
-    top_ten_slots?: number;
+    dominant_brand: string | null;
+    moat_level: "HARD" | "SOFT" | "NONE";
     signals: {
-      revenue_concentration: boolean;
-      slot_control: boolean;
-      review_ladder: boolean;
-      price_immunity: boolean;
+      revenue_share_pct: number;
+      listing_count_on_page1: number;
+      avg_review_count: number;
+      max_rank: number;
     };
   };
 
@@ -847,48 +844,61 @@ export async function buildKeywordAnalyzeResponse(
   // ═══════════════════════════════════════════════════════════════════════════
   // BRAND MOAT ANALYSIS (PAGE-1 ONLY, DETERMINISTIC)
   // ═══════════════════════════════════════════════════════════════════════════
-  // Compute brand moat verdict from Page-1 products
-  // Uses normalized brands (missing = "UNKNOWN")
-  // Never hallucinates brand dominance
-  let brandMoat: any = null;
+  // Compute brand moat detection from Page-1 listings only
+  // Groups listings by brand after normalization
+  // Computes metrics per brand: listing_count, revenue_share, avg_reviews, max_rank
+  // Never throws or returns null — defaults to NONE with explanation
+  let brandMoat: KeywordAnalyzeResponse["brand_moat"];
 
   if (products && products.length > 0) {
     try {
       const { analyzeBrandMoat } = await import("@/lib/market/brandMoatAnalysis");
       
-      // Map products to PageOneProduct format for moat analysis
-      const pageOneProducts = products.map((p) => ({
-        asin: p.asin || "",
-        brand: p.brand || null, // Will be normalized to "UNKNOWN" in analysis
+      // Map products to PageOneListing format for moat analysis
+      const pageOneListings = products.map((p) => ({
+        brand: p.brand || null,
         estimated_monthly_revenue: p.estimated_monthly_revenue || 0,
         review_count: p.review_count || 0,
-        price: p.price || 0,
-        page_position: p.page_position || p.rank || 0,
+        rank: p.rank || p.page_position || null,
+        page_position: p.page_position || p.rank || null,
       }));
 
-      brandMoat = analyzeBrandMoat(pageOneProducts);
+      brandMoat = analyzeBrandMoat(pageOneListings);
 
       console.log("[BrandMoat] Analysis complete", {
-        verdict: brandMoat.verdict,
-        dominant_brand: brandMoat.dominant_brand || null,
-        brand_revenue_share_pct: brandMoat.brand_revenue_share_pct || null,
-        page_one_slots: brandMoat.page_one_slots || null,
-        top_ten_slots: brandMoat.top_ten_slots || null,
-        signals: brandMoat.signals,
+        moat_level: brandMoat.moat_level,
+        dominant_brand: brandMoat.dominant_brand,
+        revenue_share_pct: brandMoat.signals.revenue_share_pct,
+        listing_count: brandMoat.signals.listing_count_on_page1,
+        avg_review_count: brandMoat.signals.avg_review_count,
+        max_rank: brandMoat.signals.max_rank,
       });
     } catch (error) {
       console.warn("[BrandMoat] Error computing brand moat:", error);
-      // Fail silently - brand moat is non-critical
+      // Never throw or return null — default to NONE
       brandMoat = {
-        verdict: "NO_MOAT" as const,
+        dominant_brand: null,
+        moat_level: "NONE",
         signals: {
-          revenue_concentration: false,
-          slot_control: false,
-          review_ladder: false,
-          price_immunity: false,
+          revenue_share_pct: 0,
+          listing_count_on_page1: 0,
+          avg_review_count: 0,
+          max_rank: 0,
         },
       };
     }
+  } else {
+    // No products — default to NONE
+    brandMoat = {
+      dominant_brand: null,
+      moat_level: "NONE",
+      signals: {
+        revenue_share_pct: 0,
+        listing_count_on_page1: 0,
+        avg_review_count: 0,
+        max_rank: 0,
+      },
+    };
   }
 
   // Build AI context (read-only copy)
