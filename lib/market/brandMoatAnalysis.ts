@@ -26,7 +26,7 @@ export interface PageOneListing {
   estimated_monthly_revenue: number;
   review_count: number;
   rank: number | null; // Page-1 position (lower is better)
-  page_position?: number; // Alternative to rank
+  page_position?: number | null; // Alternative to rank
 }
 
 /**
@@ -164,8 +164,11 @@ export function analyzeBrandMoat(
     // max_rank = best position (lowest rank number)
     // Use page_position if available, otherwise rank
     const ranks = brandListings
-      .map(l => l.page_position || l.rank || 999)
-      .filter(r => r > 0);
+      .map(l => {
+        const pos = l.page_position ?? l.rank;
+        return pos !== null && pos !== undefined && pos > 0 ? pos : 999;
+      })
+      .filter(r => r > 0 && r < 999);
     const max_rank =
       ranks.length > 0 ? Math.min(...ranks) : 0; // Lower is better
 
