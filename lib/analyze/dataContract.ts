@@ -828,6 +828,53 @@ export async function buildKeywordAnalyzeResponse(
     assumptions: Array.isArray(marginSnapshot.assumptions) ? marginSnapshot.assumptions : [],
   };
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BRAND MOAT ANALYSIS (PAGE-1 ONLY, DETERMINISTIC)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Compute brand moat verdict from Page-1 products
+  // Uses normalized brands (missing = "UNKNOWN")
+  // Never hallucinates brand dominance
+  let brandMoat: any = null;
+
+  if (products && products.length > 0) {
+    try {
+      const { analyzeBrandMoat } = await import("@/lib/market/brandMoatAnalysis");
+      
+      // Map products to PageOneProduct format for moat analysis
+      const pageOneProducts = products.map((p) => ({
+        asin: p.asin || "",
+        brand: p.brand || null, // Will be normalized to "UNKNOWN" in analysis
+        estimated_monthly_revenue: p.estimated_monthly_revenue || 0,
+        review_count: p.review_count || 0,
+        price: p.price || 0,
+        page_position: p.page_position || p.rank || 0,
+      }));
+
+      brandMoat = analyzeBrandMoat(pageOneProducts);
+
+      console.log("[BrandMoat] Analysis complete", {
+        verdict: brandMoat.verdict,
+        dominant_brand: brandMoat.dominant_brand || null,
+        brand_revenue_share_pct: brandMoat.brand_revenue_share_pct || null,
+        page_one_slots: brandMoat.page_one_slots || null,
+        top_ten_slots: brandMoat.top_ten_slots || null,
+        signals: brandMoat.signals,
+      });
+    } catch (error) {
+      console.warn("[BrandMoat] Error computing brand moat:", error);
+      // Fail silently - brand moat is non-critical
+      brandMoat = {
+        verdict: "NO_MOAT" as const,
+        signals: {
+          revenue_concentration: false,
+          slot_control: false,
+          review_ladder: false,
+          price_immunity: false,
+        },
+      };
+    }
+  }
+
   // Build AI context (read-only copy)
   const aiContext = {
     mode: "keyword" as const,
@@ -837,6 +884,7 @@ export async function buildKeywordAnalyzeResponse(
     market_structure: marketStructure,
     margin_snapshot: marginSnapshotContract,
     signals,
+    brand_moat: brandMoat, // Add brand moat to AI context
   };
   
   // Calculate aggregates from canonical Page-1 array
@@ -868,6 +916,7 @@ export async function buildKeywordAnalyzeResponse(
     market_structure: marketStructure,
     margin_snapshot: marginSnapshotContract,
     signals,
+    brand_moat: brandMoat, // Brand Moat verdict (deterministic, Page-1 only)
     ai_context: aiContext,
   };
 }
