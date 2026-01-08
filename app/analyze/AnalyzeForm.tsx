@@ -1338,8 +1338,13 @@ export default function AnalyzeForm({
                                 )}
                               </div>
                               
+                              {/* Brand */}
+                              <div className="mt-2 text-xs text-gray-500">
+                                {listing.brand && listing.brand.trim() ? listing.brand.trim() : "—"}
+                              </div>
+                              
                               {/* ASIN */}
-                              <div className="mt-2 text-xs text-gray-400">
+                              <div className="mt-1 text-xs text-gray-400">
                                 {listing.asin}
                               </div>
                             </div>

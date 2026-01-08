@@ -441,10 +441,125 @@ export async function buildKeywordAnalyzeResponse(
         amazon_pct: 0,
       };
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BRAND AGGREGATION (WHEN AVAILABLE)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Compute brand dominance summary when brand data exists
+  // Group Page-1 ASINs by brand, compute ASIN count and review concentration per brand
+  let brandDominanceSummary: {
+    total_brands: number;
+    asin_count_per_brand: Record<string, number>;
+    review_concentration_per_brand: Record<string, number>;
+    top_brand: string | null;
+    top_brand_asin_share_pct: number;
+    confidence: "complete" | "partial";
+  } | null = null;
+
+  // Check if any products have brand data (from products array or cache lookup)
+  const productsWithBrands = products.filter((p) => p.brand && p.brand.trim().length > 0);
+  const hasBrandData = productsWithBrands.length > 0;
+
+  if (hasBrandData && supabase) {
+    // Try to enrich brand data from cache if products have ASINs but missing brands
+    const productsNeedingBrand = products.filter(
+      (p) => p.asin && /^[A-Z0-9]{10}$/.test(p.asin) && (!p.brand || !p.brand.trim())
+    );
+
+    if (productsNeedingBrand.length > 0) {
+      // Fetch brand data from asin_bsr_cache for products missing brands
+      try {
+        const asinsNeedingBrand = productsNeedingBrand.map((p) => p.asin);
+        const { data: brandCacheData, error: brandCacheError } = await supabase
+          .from("asin_bsr_cache")
+          .select("asin, brand")
+          .in("asin", asinsNeedingBrand)
+          .not("brand", "is", null);
+
+        if (!brandCacheError && brandCacheData) {
+          // Update products with brand data from cache
+          const brandMap = new Map<string, string>();
+          brandCacheData.forEach((entry: any) => {
+            if (entry.brand && entry.brand.trim().length > 0) {
+              brandMap.set(entry.asin, entry.brand.trim());
+            }
+          });
+
+          products.forEach((p) => {
+            if (!p.brand && p.asin && brandMap.has(p.asin)) {
+              (p as any).brand = brandMap.get(p.asin)!;
+            }
+          });
+        }
+      } catch (error) {
+        console.warn("[BrandAggregation] Error fetching brand data from cache:", error);
+      }
+    }
+
+    // Re-check products with brands after cache lookup
+    const finalProductsWithBrands = products.filter(
+      (p) => p.brand && p.brand.trim().length > 0
+    );
+
+    if (finalProductsWithBrands.length > 0) {
+      // Group by brand
+      const brandGroups = new Map<string, typeof products>();
+      finalProductsWithBrands.forEach((p) => {
+        const brand = p.brand!.trim();
+        if (!brandGroups.has(brand)) {
+          brandGroups.set(brand, []);
+        }
+        brandGroups.get(brand)!.push(p);
+      });
+
+      // Compute aggregates per brand
+      const asinCountPerBrand: Record<string, number> = {};
+      const reviewConcentrationPerBrand: Record<string, number> = {};
+
+      brandGroups.forEach((brandProducts, brandName) => {
+        asinCountPerBrand[brandName] = brandProducts.length;
+        const totalReviews = brandProducts.reduce(
+          (sum, p) => sum + (p.review_count || 0),
+          0
+        );
+        reviewConcentrationPerBrand[brandName] = totalReviews;
+      });
+
+      // Find top brand by ASIN count
+      const topBrandEntry = Array.from(brandGroups.entries()).sort(
+        (a, b) => b[1].length - a[1].length
+      )[0];
+
+      const topBrand = topBrandEntry ? topBrandEntry[0] : null;
+      const topBrandAsinSharePct = topBrand
+        ? (asinCountPerBrand[topBrand] / products.length) * 100
+        : 0;
+
+      brandDominanceSummary = {
+        total_brands: brandGroups.size,
+        asin_count_per_brand: asinCountPerBrand,
+        review_concentration_per_brand: reviewConcentrationPerBrand,
+        top_brand: topBrand,
+        top_brand_asin_share_pct: Math.round(topBrandAsinSharePct * 100) / 100,
+        confidence:
+          finalProductsWithBrands.length === products.length ? "complete" : "partial",
+      };
+
+      console.log("[BrandAggregation] Brand dominance computed", {
+        total_brands: brandGroups.size,
+        top_brand: topBrand,
+        top_brand_asin_share_pct: topBrandAsinSharePct.toFixed(1) + "%",
+        products_with_brand: finalProductsWithBrands.length,
+        total_products: products.length,
+        confidence: brandDominanceSummary.confidence,
+      });
+    }
+  }
+
   // Build market structure from products (canonical or fallback)
   const marketStructure = {
     brand_dominance_pct: snapshot.dominance_score || 0,
     top_3_brand_share_pct: calculateTop3BrandShare(products),
+    brand_dominance_summary: brandDominanceSummary, // Add brand aggregation when available
     price_band: {
       min: priceMin,
       max: priceMax,

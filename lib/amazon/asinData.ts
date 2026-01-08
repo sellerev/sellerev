@@ -157,6 +157,119 @@ function parseSellerCount(item: any): number | null {
 }
 
 /**
+ * Enriches ASIN brand data lazily (non-blocking).
+ * 
+ * Rules:
+ * - If brand already exists in asin_bsr_cache → return immediately
+ * - Otherwise: Call Rainforest product API, extract brand, save to DB
+ * - Fails silently (logs only) - never throws, never blocks caller
+ * 
+ * @param asin - The Amazon ASIN
+ * @param supabase - Supabase client for database operations
+ * @returns Promise<void> - Always resolves, never rejects
+ */
+export async function enrichAsinBrandIfMissing(
+  asin: string,
+  supabase: any
+): Promise<void> {
+  try {
+    // Validate ASIN format
+    const cleanAsin = asin.trim().toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(cleanAsin)) {
+      console.warn(`[BrandEnrichment] Invalid ASIN format: ${asin}`);
+      return;
+    }
+
+    // Check if brand already exists in cache
+    const { data: existing, error: checkError } = await supabase
+      .from("asin_bsr_cache")
+      .select("brand")
+      .eq("asin", cleanAsin)
+      .single();
+
+    if (checkError && checkError.code !== "PGRST116") {
+      // PGRST116 = no rows found (expected if ASIN not in cache yet)
+      console.warn(`[BrandEnrichment] Error checking cache for ${cleanAsin}:`, checkError.message);
+      return;
+    }
+
+    // If brand exists (and is not null), return immediately
+    if (existing && existing.brand) {
+      return; // Brand already cached, no action needed
+    }
+
+    // Brand missing → fetch from Rainforest API
+    const rainforestApiKey = process.env.RAINFOREST_API_KEY;
+    if (!rainforestApiKey) {
+      console.warn(`[BrandEnrichment] RAINFOREST_API_KEY not configured`);
+      return;
+    }
+
+    // Call Rainforest product API
+    const response = await fetch(
+      `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${cleanAsin}`,
+      {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.warn(`[BrandEnrichment] Rainforest API error for ${cleanAsin}: ${response.status}`);
+      return;
+    }
+
+    const raw = await response.json();
+
+    // Extract brand from product data
+    if (!raw || typeof raw !== "object" || !raw.product) {
+      console.warn(`[BrandEnrichment] Invalid Rainforest response for ${cleanAsin}`);
+      return;
+    }
+
+    const product = raw.product;
+    const brand = product.brand || product.by_line?.name || null;
+
+    // If brand is missing from API, log and return (fail silently)
+    if (!brand || typeof brand !== "string" || brand.trim().length === 0) {
+      console.log(`[BrandEnrichment] Brand not available for ${cleanAsin}`);
+      return;
+    }
+
+    // Normalize brand name (trim, basic cleanup)
+    const normalizedBrand = brand.trim();
+
+    // Save brand to asin_bsr_cache
+    // Use upsert: if ASIN exists, update brand; if not, insert new row
+    const { error: upsertError } = await supabase
+      .from("asin_bsr_cache")
+      .upsert(
+        {
+          asin: cleanAsin,
+          brand: normalizedBrand,
+          last_fetched_at: new Date().toISOString(),
+          source: "rainforest",
+        },
+        {
+          onConflict: "asin",
+        }
+      );
+
+    if (upsertError) {
+      console.warn(`[BrandEnrichment] Failed to save brand for ${cleanAsin}:`, upsertError.message);
+      return;
+    }
+
+    console.log(`[BrandEnrichment] ✅ Enriched brand for ${cleanAsin}: ${normalizedBrand}`);
+  } catch (error) {
+    // Fail silently - log only
+    console.warn(`[BrandEnrichment] Error enriching brand for ${asin}:`, error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
  * Fetches Amazon product data for a specific ASIN.
  * 
  * @param asin - The Amazon ASIN (10 alphanumeric characters)

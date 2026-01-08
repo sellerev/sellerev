@@ -10,6 +10,7 @@ import { buildKeywordAnalyzeResponse } from "@/lib/analyze/dataContract";
 import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import { buildKeywordPageOne, buildAsinPageOne } from "@/lib/amazon/canonicalPageOne";
+import { enrichAsinBrandIfMissing } from "@/lib/amazon/asinData";
 
 // PASS 1: Decision Brain - Plain text verdict and reasoning
 const DECISION_BRAIN_PROMPT = `You are a senior Amazon seller allocating capital to product opportunities.
@@ -3279,6 +3280,41 @@ Convert this plain text decision into the required JSON contract format. Extract
       has_estimated_revenue: first5Api.some((p: any) => p.estimated_monthly_revenue !== null && p.estimated_monthly_revenue !== undefined),
       timestamp: new Date().toISOString(),
     });
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LAZY BRAND ENRICHMENT (NON-BLOCKING, FIRE-AND-FORGET)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Trigger brand enrichment lazily after Analyze completes:
+    // - Top 10 Page-1 ASINs OR
+    // - ASINs referenced in AI reasoning (future enhancement)
+    // 
+    // This must NOT:
+    // - Delay Analyze response
+    // - Delay UI render
+    // - Affect AI latency
+    // 
+    // Implementation: fireAndForget pattern (no await)
+    if (canonicalProducts && canonicalProducts.length > 0) {
+      // Extract top 10 Page-1 ASINs
+      const top10Asins = canonicalProducts
+        .slice(0, 10)
+        .map((p) => p.asin)
+        .filter((asin): asin is string => !!asin && /^[A-Z0-9]{10}$/.test(asin));
+
+      // Fire-and-forget: Enrich brands for top 10 ASINs
+      // Do NOT await - let it run in background
+      if (top10Asins.length > 0) {
+        // Use Promise.allSettled to handle all async operations without blocking
+        Promise.allSettled(
+          top10Asins.map((asin) => enrichAsinBrandIfMissing(asin, supabase))
+        ).catch((error) => {
+          // Fail silently - log only
+          console.warn("[BrandEnrichment] Background enrichment error:", error);
+        });
+        
+        console.log(`[BrandEnrichment] Triggered lazy enrichment for ${top10Asins.length} ASINs`);
+      }
+    }
 
     return NextResponse.json(
       {
