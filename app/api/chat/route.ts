@@ -1752,68 +1752,13 @@ export async function POST(req: NextRequest) {
     // 12. Append the new user message
     messages.push({ role: "user", content: body.message });
 
-    // 13. Data Sufficiency Check (MANDATORY FIRST STEP)
+    // 13. Classify question (for context, not blocking)
     // ────────────────────────────────────────────────────────────────────────
-    // Before generating AI response, check if we have enough data to answer
+    // Note: We no longer block responses due to missing data.
+    // The AI will always answer using available data, with confidence adjustments.
     // ────────────────────────────────────────────────────────────────────────
     const { classifyQuestion } = await import("@/lib/ai/copilotSystemPrompt");
     const questionClassification = classifyQuestion(body.message);
-    
-    // Check data sufficiency based on question type
-    const dataSufficiencyCheck = checkDataSufficiency(
-      body.message,
-      questionClassification.category,
-      contextToUse,
-      sellerProfile,
-      marketSnapshot
-    );
-    
-    if (!dataSufficiencyCheck.sufficient) {
-      // Return data insufficiency response
-      const encoder = new TextEncoder();
-      const insufficiencyResponse = `I can't answer this definitively with the current data.
-
-${dataSufficiencyCheck.missingItems.length > 0 ? `Missing:\n${dataSufficiencyCheck.missingItems.map(item => `• ${item}`).join("\n")}` : ""}
-
-${dataSufficiencyCheck.suggestions.length > 0 ? `\nYou can:\n${dataSufficiencyCheck.suggestions.map(s => `• ${s}`).join("\n")}` : ""}`;
-
-      const stream = new ReadableStream({
-        async start(controller) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: insufficiencyResponse })}\n\n`));
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
-        },
-      });
-
-      // Save to database
-      try {
-        await supabase.from("analysis_messages").insert([
-          {
-            analysis_run_id: body.analysisRunId,
-            user_id: user.id,
-            role: "user",
-            content: body.message,
-          },
-          {
-            analysis_run_id: body.analysisRunId,
-            user_id: user.id,
-            role: "assistant",
-            content: insufficiencyResponse,
-          },
-        ]);
-      } catch (saveError) {
-        console.error("Failed to save data insufficiency response:", saveError);
-      }
-
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-          ...Object.fromEntries(res.headers.entries()),
-        },
-      });
-    }
 
     // 14. Call OpenAI with streaming enabled
     // ────────────────────────────────────────────────────────────────────────
