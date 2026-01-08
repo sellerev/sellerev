@@ -522,6 +522,172 @@ When the user asks about a specific product or compares products, reference this
 }
 
 /**
+ * Checks data sufficiency for answering a question
+ * 
+ * This is the MANDATORY FIRST STEP before generating any AI response.
+ * Determines if we have enough data to answer the question definitively.
+ * 
+ * @param message - User's question
+ * @param questionCategory - Classified question category
+ * @param aiContext - AI context data (from analysis response)
+ * @param sellerProfile - Seller profile data
+ * @param marketSnapshot - Market snapshot data
+ * @returns Object with sufficient boolean, missingItems array, and suggestions array
+ */
+function checkDataSufficiency(
+  message: string,
+  questionCategory: string,
+  aiContext: Record<string, unknown>,
+  sellerProfile: {
+    stage: string;
+    experience_months: number | null;
+    monthly_revenue_range: string | null;
+    sourcing_model: string;
+    goals?: string | null;
+    risk_tolerance?: string | null;
+    margin_target?: number | null;
+    max_fee_pct?: number | null;
+    updated_at?: string;
+  },
+  marketSnapshot: Record<string, unknown> | null
+): {
+  sufficient: boolean;
+  missingItems: string[];
+  suggestions: string[];
+} {
+  const missingItems: string[] = [];
+  const suggestions: string[] = [];
+  
+  // Extract market snapshot from ai_context if not provided separately
+  const snapshot = marketSnapshot || (aiContext.market_snapshot as Record<string, unknown> | null) || null;
+  const listings = (snapshot?.listings as any[] | undefined) || (aiContext.products as any[] | undefined) || [];
+  
+  // Check for "winnable" or "viable" questions (most common)
+  const isWinnableQuestion = /\b(winnable|viable|worth it|should i|can i win|can i compete)\b/i.test(message);
+  
+  if (isWinnableQuestion || questionCategory === "GENERAL" || questionCategory === "CAPITAL_ALLOCATION") {
+    // Required data for winnability assessment:
+    
+    // 1. Review barrier (median top 10 organic reviews)
+    const top10Organic = listings
+      .filter((l: any) => !l.is_sponsored)
+      .slice(0, 10)
+      .map((l: any) => l.reviews || l.review_count)
+      .filter((r: any) => typeof r === 'number' && r > 0);
+    
+    if (top10Organic.length < 5) {
+      missingItems.push("Review counts for top 10 organic listings (need at least 5 listings with review data)");
+    }
+    
+    // 2. Revenue concentration (top 10 revenue share)
+    const top10RevenueShare = snapshot?.top10_revenue_share_pct || snapshot?.top10_revenue_share;
+    if (top10RevenueShare === null || top10RevenueShare === undefined) {
+      missingItems.push("Top 10 revenue share percentage (top10_revenue_share_pct)");
+    }
+    
+    // 3. CPI score
+    const cpiScore = (snapshot?.cpi as any)?.score;
+    if (cpiScore === null || cpiScore === undefined) {
+      missingItems.push("CPI score (competitive pressure index)");
+    }
+    
+    // 4. Price compression (price range)
+    const prices = listings
+      .map((l: any) => l.price)
+      .filter((p: any) => typeof p === 'number' && p > 0);
+    
+    if (prices.length < 5) {
+      missingItems.push("Price data for at least 5 listings (to calculate price compression)");
+    }
+    
+    // 5. Seller profile (stage, capital, risk tolerance)
+    if (!sellerProfile.stage) {
+      missingItems.push("Seller stage (from profile)");
+    }
+    if (!sellerProfile.monthly_revenue_range) {
+      missingItems.push("Seller revenue range (from profile) - needed to assess capital constraints");
+    }
+    if (!sellerProfile.risk_tolerance) {
+      missingItems.push("Seller risk tolerance (from profile)");
+    }
+  }
+  
+  // Check for profitability questions
+  if (questionCategory === "PROFITABILITY") {
+    const marginSnapshot = aiContext.margin_snapshot as any;
+    const hasCogs = marginSnapshot?.estimated_cogs_min !== null && marginSnapshot?.estimated_cogs_min !== undefined;
+    
+    if (!hasCogs) {
+      missingItems.push("COGS estimates (from margin snapshot or user input)");
+      suggestions.push("Use the Feasibility Calculator to input your COGS assumptions");
+    }
+    
+    // Price compression still needed
+    const prices = listings
+      .map((l: any) => l.price)
+      .filter((p: any) => typeof p === 'number' && p > 0);
+    
+    if (prices.length < 5) {
+      missingItems.push("Price data for at least 5 listings (to assess price compression)");
+    }
+  }
+  
+  // Check for strategy questions
+  if (questionCategory === "STRATEGY") {
+    // Need market structure data to suggest strategies
+    const cpiScore = (snapshot?.cpi as any)?.score;
+    if (cpiScore === null || cpiScore === undefined) {
+      missingItems.push("CPI score (to assess market structure)");
+    }
+    
+    const listingsCount = listings.length;
+    if (listingsCount < 5) {
+      missingItems.push("At least 5 listings (to identify market gaps)");
+    }
+  }
+  
+  // Check for risk questions
+  if (questionCategory === "RISK_PROBING") {
+    const cpiScore = (snapshot?.cpi as any)?.score;
+    if (cpiScore === null || cpiScore === undefined) {
+      missingItems.push("CPI score (to assess risk level)");
+    }
+    
+    const top10Organic = listings
+      .filter((l: any) => !l.is_sponsored)
+      .slice(0, 10)
+      .map((l: any) => l.reviews || l.review_count)
+      .filter((r: any) => typeof r === 'number' && r > 0);
+    
+    if (top10Organic.length < 5) {
+      missingItems.push("Review counts for top 10 organic listings (to assess review barrier)");
+    }
+  }
+  
+  // If no missing items, data is sufficient
+  if (missingItems.length === 0) {
+    return { sufficient: true, missingItems: [], suggestions: [] };
+  }
+  
+  // Generate suggestions based on missing data
+  if (missingItems.some(item => item.includes("review"))) {
+    suggestions.push("Review data may be available in the listings - check if review counts are shown");
+  }
+  if (missingItems.some(item => item.includes("revenue"))) {
+    suggestions.push("Revenue estimates are calculated from BSR - ensure listings have BSR data");
+  }
+  if (missingItems.some(item => item.includes("profile"))) {
+    suggestions.push("Update your seller profile in Settings to include missing fields");
+  }
+  
+  return {
+    sufficient: false,
+    missingItems,
+    suggestions: suggestions.length > 0 ? suggestions : ["Run a new analysis to gather missing data"],
+  };
+}
+
+/**
  * Determines if the AI can answer a question based on available data
  * 
  * NOTE: This function is now minimal - most blocking is handled by the system prompt.
@@ -1586,61 +1752,67 @@ export async function POST(req: NextRequest) {
     // 12. Append the new user message
     messages.push({ role: "user", content: body.message });
 
-    // 13. Check for profitability questions (require product-level COGS)
+    // 13. Data Sufficiency Check (MANDATORY FIRST STEP)
+    // ────────────────────────────────────────────────────────────────────────
+    // Before generating AI response, check if we have enough data to answer
     // ────────────────────────────────────────────────────────────────────────
     const { classifyQuestion } = await import("@/lib/ai/copilotSystemPrompt");
     const questionClassification = classifyQuestion(body.message);
     
-    // Check if profitability question (treat as keyword-level only)
-    if (questionClassification.category === "PROFITABILITY") {
-      // For keyword mode, we don't have product-level COGS - use keyword-level estimates only
-        // Return mandatory profitability refusal
-        const encoder = new TextEncoder();
-        const profitabilityRefusal = `We can't determine profitability directly because product-level COGS isn't available.
+    // Check data sufficiency based on question type
+    const dataSufficiencyCheck = checkDataSufficiency(
+      body.message,
+      questionClassification.category,
+      contextToUse,
+      sellerProfile,
+      marketSnapshot
+    );
+    
+    if (!dataSufficiencyCheck.sufficient) {
+      // Return data insufficiency response
+      const encoder = new TextEncoder();
+      const insufficiencyResponse = `I can't answer this definitively with the current data.
 
-What we can do is compare revenue potential, price positioning, and competitive pressure.
+${dataSufficiencyCheck.missingItems.length > 0 ? `Missing:\n${dataSufficiencyCheck.missingItems.map(item => `• ${item}`).join("\n")}` : ""}
 
-Would you like me to:
-• Compare revenue estimates across listings
-• Analyze price positioning relative to competitors
-• Discuss competitive pressure indicators`;
+${dataSufficiencyCheck.suggestions.length > 0 ? `\nYou can:\n${dataSufficiencyCheck.suggestions.map(s => `• ${s}`).join("\n")}` : ""}`;
 
-        const stream = new ReadableStream({
-          async start(controller) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: profitabilityRefusal })}\n\n`));
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
+      const stream = new ReadableStream({
+        async start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: insufficiencyResponse })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+
+      // Save to database
+      try {
+        await supabase.from("analysis_messages").insert([
+          {
+            analysis_run_id: body.analysisRunId,
+            user_id: user.id,
+            role: "user",
+            content: body.message,
           },
-        });
-
-        // Save to database
-        try {
-          await supabase.from("analysis_messages").insert([
-            {
-              analysis_run_id: body.analysisRunId,
-              user_id: user.id,
-              role: "user",
-              content: body.message,
-            },
-            {
-              analysis_run_id: body.analysisRunId,
-              user_id: user.id,
-              role: "assistant",
-              content: profitabilityRefusal,
-            },
-          ]);
-        } catch (saveError) {
-          console.error("Failed to save profitability refusal:", saveError);
-        }
-
-        return new Response(stream, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            ...Object.fromEntries(res.headers.entries()),
+          {
+            analysis_run_id: body.analysisRunId,
+            user_id: user.id,
+            role: "assistant",
+            content: insufficiencyResponse,
           },
-        });
+        ]);
+      } catch (saveError) {
+        console.error("Failed to save data insufficiency response:", saveError);
+      }
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
     }
 
     // 14. Call OpenAI with streaming enabled
