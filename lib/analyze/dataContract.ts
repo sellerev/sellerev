@@ -169,7 +169,22 @@ export interface KeywordAnalyzeResponse {
     operational_complexity: OperationalComplexity;
   };
 
-  // F) AI Context (Read-only)
+  // F) Brand Moat Analysis (Page-1 Only, Deterministic)
+  brand_moat: {
+    verdict: "NO_MOAT" | "SOFT_MOAT" | "HARD_MOAT";
+    dominant_brand?: string;
+    brand_revenue_share_pct?: number;
+    page_one_slots?: number;
+    top_ten_slots?: number;
+    signals: {
+      revenue_concentration: boolean;
+      slot_control: boolean;
+      review_ladder: boolean;
+      price_immunity: boolean;
+    };
+  };
+
+  // G) AI Context (Read-only)
   ai_context: {
     mode: "keyword";
     keyword: string;
@@ -178,6 +193,7 @@ export interface KeywordAnalyzeResponse {
     market_structure: KeywordAnalyzeResponse["market_structure"];
     margin_snapshot: KeywordAnalyzeResponse["margin_snapshot"];
     signals: KeywordAnalyzeResponse["signals"];
+    brand_moat: KeywordAnalyzeResponse["brand_moat"];
   };
 }
 
