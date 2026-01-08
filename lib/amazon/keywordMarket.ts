@@ -1294,7 +1294,10 @@ export async function fetchKeywordMarketSnapshot(
       const asin = item.asin ?? null;
       
       // Step 4: Normalize all fields (nullable where appropriate)
-      const title = item.title ?? null; // Optional
+      // CRITICAL: Never allow empty strings - use null instead, so buildKeywordPageOne can handle fallback
+      const title = (item.title && typeof item.title === 'string' && item.title.trim().length > 0) 
+        ? item.title.trim() 
+        : null; // Use null instead of empty string
       const price = parsePrice(item); // Nullable
       const rating = parseRating(item); // Nullable
       const reviews = parseReviews(item); // Nullable
@@ -1346,23 +1349,33 @@ export async function fetchKeywordMarketSnapshot(
       }
 
       // Extract image URL from Rainforest search_results[].image
-      const image_url = item.image ?? null; // Nullable
+      // CRITICAL: Check multiple sources and never allow empty strings
+      const image_url = (item.image && typeof item.image === 'string' && item.image.trim().length > 0)
+        ? item.image.trim()
+        : (item.image_url && typeof item.image_url === 'string' && item.image_url.trim().length > 0)
+          ? item.image_url.trim()
+          : (item.main_image && typeof item.main_image === 'string' && item.main_image.trim().length > 0)
+            ? item.main_image.trim()
+            : (Array.isArray(item.images) && item.images.length > 0 && typeof item.images[0] === 'string' && item.images[0].trim().length > 0)
+              ? item.images[0].trim()
+              : null; // Use null instead of empty string
       
       // Extract seller and is_prime for fulfillment mix detection
       const seller = item.seller ?? null; // Nullable
       const is_prime = item.is_prime ?? false; // Boolean, default false
 
       // Step 4: Return normalized listing - only ASIN is required
+      // CRITICAL: Preserve raw item data for fallback in buildKeywordPageOne
       return {
         asin, // Required
-        title, // Optional (nullable)
+        title, // Optional (nullable) - NEVER empty string, only null if missing
         price, // Optional (nullable)
         rating, // Optional (nullable)
         reviews, // Optional (nullable)
         is_sponsored, // Boolean
         position,
         brand, // Optional (nullable)
-        image_url, // Optional (nullable)
+        image_url, // Optional (nullable) - NEVER empty string, only null if missing
         bsr, // Optional (nullable) - DEPRECATED: use main_category_bsr
         main_category_bsr, // Main category BSR (top-level category only)
         main_category, // Main category name
@@ -1372,7 +1385,9 @@ export async function fetchKeywordMarketSnapshot(
         is_prime, // Boolean
         // PHASE 1: BSR invalid reason (if BSR was marked invalid)
         bsr_invalid_reason, // Optional (nullable) - reason why BSR is invalid
-      } as ParsedListing & { seller?: string | null; is_prime?: boolean };
+        // PRESERVE RAW ITEM DATA for fallback in buildKeywordPageOne
+        _rawItem: item, // Preserve original Rainforest item for title/image fallback
+      } as ParsedListing & { seller?: string | null; is_prime?: boolean; _rawItem?: any };
     });
     } catch (parseError) {
       console.error("Error parsing search results:", {

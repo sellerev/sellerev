@@ -871,13 +871,19 @@ export default function AnalyzeForm({
                     }
                     
                     // Normalize listings to calculate metrics
+                    // CRITICAL: Do NOT filter out listings without titles - title is optional
+                    // Only require ASIN (which is required for all listings)
                     const normalizedListings = pageOneListings
                       .filter((l: any) => {
-                        const normalized = normalizeListing(l);
-                        return normalized.asin && normalized.title;
+                        // Only filter out listings without ASIN (ASIN is required)
+                        const asin = l.asin || normalizeListing(l).asin;
+                        return asin && asin.trim().length > 0;
                       })
                       .map((l: any) => ({
                         ...normalizeListing(l),
+                        // Preserve title and image_url from original listing (may be empty, that's ok)
+                        title: l.title || normalizeListing(l).title || `Product ${l.asin || 'Unknown'}`,
+                        image_url: l.image_url || l.image || normalizeListing(l).image || null,
                         est_monthly_revenue: l.est_monthly_revenue ?? l.estimated_monthly_revenue ?? null,
                         est_monthly_units: l.est_monthly_units ?? l.estimated_monthly_units ?? null,
                       }));
@@ -890,7 +896,17 @@ export default function AnalyzeForm({
                     
                     // CRITICAL: Use aggregates from canonical Page-1 array (guaranteed to be numeric when listings exist)
                     // If listings exist, aggregates must always be numeric (never "Estimating...")
-                    const hasListings = normalizedListings.length > 0;
+                    // HARD INVARIANT: If page_one_listings.length > 0, snapshot MUST resolve (never "Estimating...")
+                    // Use pageOneListings (raw) for hasListings check, not normalizedListings (which may be filtered)
+                    const hasListings = pageOneListings.length > 0;
+                    
+                    // Log error if invariant is violated
+                    if (pageOneListings.length > 0 && !hasListings) {
+                      console.error("🔴 HARD INVARIANT VIOLATION: page_one_listings.length > 0 but hasListings is false", {
+                        page_one_listings_length: pageOneListings.length,
+                        normalized_listings_length: normalizedListings.length,
+                      });
+                    }
                     
                     // Average Price - always numeric when listings exist
                     const avgPrice = hasListings 
@@ -979,7 +995,7 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Price</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {hasListings ? formatCurrency(avgPrice) : "Estimating…"}
+                              {hasListings && avgPrice > 0 ? formatCurrency(avgPrice) : (pageOneListings.length > 0 ? formatCurrency(avgPrice || 0) : "Estimating…")}
                             </div>
                           </div>
                           
@@ -987,7 +1003,7 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {hasListings ? monthlyUnits.toLocaleString() : "Estimating…"}
+                              {hasListings && monthlyUnits > 0 ? monthlyUnits.toLocaleString() : (pageOneListings.length > 0 ? monthlyUnits.toLocaleString() : "Estimating…")}
                             </div>
                           </div>
                           
@@ -995,7 +1011,7 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {hasListings ? formatCurrency(monthlyRevenue) : "Estimating…"}
+                              {hasListings && monthlyRevenue > 0 ? formatCurrency(monthlyRevenue) : (pageOneListings.length > 0 ? formatCurrency(monthlyRevenue || 0) : "Estimating…")}
                             </div>
                           </div>
                           
@@ -1003,7 +1019,7 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Rating</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {hasListings && !isNaN(avgRating) ? `${avgRating.toFixed(1)} ★` : "Estimating…"}
+                              {hasListings && !isNaN(avgRating) && avgRating > 0 ? `${avgRating.toFixed(1)} ★` : (pageOneListings.length > 0 && avgRating > 0 ? `${avgRating.toFixed(1)} ★` : "Estimating…")}
                             </div>
                           </div>
                         </div>
@@ -1143,6 +1159,11 @@ export default function AnalyzeForm({
                         : (snapshot?.listings || []));
                     console.log("🔵 CARDS_TO_RENDER_LENGTH", cardsToRender.length);
                     console.log("🔵 CARDS_TO_RENDER_SAMPLE", cardsToRender[0]);
+                    // TEMPORARY: Log title and image_url for debugging
+                    if (cardsToRender.length > 0) {
+                      console.log("🔵 CARD_0_TITLE", cardsToRender[0]?.title);
+                      console.log("🔵 CARD_0_IMAGE_URL", cardsToRender[0]?.image_url);
+                    }
                 
                 return (
                   <div>

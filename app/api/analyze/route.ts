@@ -2788,12 +2788,30 @@ Convert this plain text decision into the required JSON contract format. Extract
     
     // CRITICAL: Ensure aggregates_derived_from_page_one is always computed from canonical Page-1 listings
     // If listings exist, aggregates must be numeric values (never "Estimating...")
+    // HARD INVARIANT: If page_one_listings.length > 0, snapshot MUST resolve (never "Estimating...")
     if (finalResponse.page_one_listings && finalResponse.page_one_listings.length > 0) {
       // Recompute aggregates from canonical Page-1 listings to ensure correctness
       const pageOne = finalResponse.page_one_listings;
       const prices = pageOne.map((p: any) => p.price).filter((p: any): p is number => p !== null && p !== undefined && p > 0);
       const ratings = pageOne.map((p: any) => p.rating).filter((r: any): r is number => r !== null && r !== undefined && r > 0);
       const bsrs = pageOne.map((p: any) => p.bsr).filter((b: any): b is number => b !== null && b !== undefined && b > 0);
+      
+      // HARD INVARIANT CHECK: Log error if title or image_url are empty strings
+      const invalidProducts = pageOne.filter((p: any) => 
+        (!p.title || (typeof p.title === 'string' && p.title.trim().length === 0)) ||
+        (p.image_url !== null && p.image_url !== undefined && typeof p.image_url === 'string' && p.image_url.trim().length === 0)
+      );
+      if (invalidProducts.length > 0) {
+        console.error("🔴 HARD INVARIANT VIOLATION: Products with empty title or image_url", {
+          invalid_count: invalidProducts.length,
+          sample: invalidProducts[0],
+          all_invalid: invalidProducts.map((p: any) => ({
+            asin: p.asin,
+            title: p.title,
+            image_url: p.image_url,
+          })),
+        });
+      }
       
       // Calculate aggregates synchronously from canonical listings
       const avg_price = prices.length > 0 ? prices.reduce((sum: number, p: number) => sum + p, 0) / prices.length : 0;

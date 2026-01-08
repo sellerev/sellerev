@@ -765,18 +765,35 @@ export function buildKeywordPageOne(
     // ═══════════════════════════════════════════════════════════════════════════
     // MAP FIELDS FROM PARSEDLISTING → CANONICALPRODUCT
     // ═══════════════════════════════════════════════════════════════════════════
-    // For REAL Rainforest listings: preserve actual values (even if null/empty)
+    // For REAL Rainforest listings: preserve actual values, fallback to raw listing fields if missing
     // For ESTIMATED products: use fallback defaults ("Unknown product", 0, null)
     // 
-    // CRITICAL: Empty strings, null ratings, and missing images are VALID for real listings.
-    // Only ESTIMATED products should use placeholder values.
+    // CRITICAL: NEVER allow empty strings for title or image_url
+    // Always fallback to raw listing fields if ParsedListing fields are null/empty
     
-    // Title: map directly from listing.title
-    // Real listings: preserve actual title (even if empty string or null)
+    // Title: map from listing.title, fallback to raw listing fields if missing/empty
+    // Real listings: preserve actual title, fallback to raw item if null/empty
     // ESTIMATED: use "Unknown product"
-    const title = isEstimatedProduct 
-      ? "Unknown product"
-      : (l.title ?? "");
+    // CRITICAL: NEVER allow empty strings
+    let title: string;
+    if (isEstimatedProduct) {
+      title = "Unknown product";
+    } else {
+      // Check ParsedListing.title first (may be null if empty from Rainforest parsing)
+      if (l.title && typeof l.title === 'string' && l.title.trim().length > 0) {
+        title = l.title.trim();
+      } else {
+        // Fallback to raw item data (preserved in _rawItem field)
+        const rawItem = (l as any)._rawItem;
+        const rawTitle = rawItem?.title || rawItem?.Title || (l as any).original_title || (l as any).raw_title;
+        if (rawTitle && typeof rawTitle === 'string' && rawTitle.trim().length > 0) {
+          title = rawTitle.trim();
+        } else {
+          // Last resort: use ASIN-based placeholder (never empty string)
+          title = asin ? `Product ${asin}` : `Product #${i + 1}`;
+        }
+      }
+    }
     
     // Rating: map directly from listing.rating
     // Real listings: preserve actual rating (even if null - interface requires number, so use 0)
@@ -794,17 +811,41 @@ export function buildKeywordPageOne(
       ? 0
       : (reviewCountForProduct ?? 0);
     
-    // Image: check multiple sources (listing.image_url OR listing.main_image OR listing.images[0])
-    // Real listings: preserve actual image (even if null)
+    // Image: check multiple sources (listing.image_url OR listing.image OR listing.main_image OR listing.images[0])
+    // Real listings: preserve actual image, fallback to raw listing fields if missing/empty
     // ESTIMATED: use null
-    const image_url = isEstimatedProduct
-      ? null
-      : (l.image_url ?? 
-         (l as any).main_image ?? 
-         ((l as any).images && Array.isArray((l as any).images) && (l as any).images.length > 0 
-           ? (l as any).images[0] 
-           : null) ?? 
-         null);
+    // CRITICAL: NEVER allow empty strings for image_url
+    // Use canonical key: image_url (never "image" in final output)
+    let image_url: string | null;
+    if (isEstimatedProduct) {
+      image_url = null;
+    } else {
+      // Check ParsedListing.image_url first (may be null if empty from Rainforest parsing)
+      if (l.image_url && typeof l.image_url === 'string' && l.image_url.trim().length > 0) {
+        image_url = l.image_url.trim();
+      } else {
+        // Fallback to raw item data (preserved in _rawItem field)
+        const rawItem = (l as any)._rawItem;
+        const rawImage = rawItem?.image || 
+                        rawItem?.image_url || 
+                        rawItem?.Image || 
+                        rawItem?.main_image ||
+                        (rawItem?.images && Array.isArray(rawItem.images) && rawItem.images.length > 0 
+                          ? rawItem.images[0] 
+                          : null) ||
+                        (l as any).image ||
+                        (l as any).main_image ||
+                        ((l as any).images && Array.isArray((l as any).images) && (l as any).images.length > 0 
+                          ? (l as any).images[0] 
+                          : null);
+        
+        if (rawImage && typeof rawImage === 'string' && rawImage.trim().length > 0) {
+          image_url = rawImage.trim();
+        } else {
+          image_url = null; // Use null, never empty string
+        }
+      }
+    }
     
     // Price: always preserve from listing (already handled via pw.price)
     // ASIN: already set above
