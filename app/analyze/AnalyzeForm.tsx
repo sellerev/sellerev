@@ -7,7 +7,6 @@ import FeasibilityCalculator from "./FeasibilityCalculator";
 import BrandMoatBlock from "./BrandMoatBlock";
 import { ProductCard } from "@/app/components/ProductCard";
 import { Search, Loader2 } from "lucide-react";
-import { Search, Loader2 } from "lucide-react";
 
 /**
  * Sellerev Analyze Page - Core Product Component
