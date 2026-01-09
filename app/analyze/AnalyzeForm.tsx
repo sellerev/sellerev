@@ -6,6 +6,8 @@ import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import FeasibilityCalculator from "./FeasibilityCalculator";
 import BrandMoatBlock from "./BrandMoatBlock";
 import { ProductCard } from "@/app/components/ProductCard";
+import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2 } from "lucide-react";
 
 /**
  * Sellerev Analyze Page - Core Product Component
@@ -700,43 +702,58 @@ export default function AnalyzeForm({
       {/* BLOCK 1: INPUT BAR (TOP - FULL WIDTH)                               */}
       {/* In readOnly mode: inputs and button are disabled                    */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="border-b bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex gap-3 items-end">
+      <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-6 py-6">
+          <div className="flex gap-4 items-end">
             {/* Keyword Input Field */}
             <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
                 Search Keyword
               </label>
-              <input
-                type="text"
-                className={`w-full border rounded-lg px-4 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent ${
-                  inputError ? "border-red-300" : "border-gray-300"
-                } ${readOnly ? "bg-gray-50 cursor-not-allowed" : ""}`}
-                value={inputValue}
-                onChange={(e) => {
-                  if (!readOnly) {
-                    setInputValue(e.target.value);
-                    setInputError(null);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading && !readOnly) {
-                    analyze();
-                  }
-                }}
-                disabled={loading || readOnly}
-                placeholder="Search any Amazon keyword…"
-                readOnly={readOnly}
-              />
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                  <Search className="h-5 w-5 text-gray-400" />
+                </div>
+                <input
+                  type="text"
+                  className={`w-full border rounded-xl pl-12 pr-4 py-3.5 text-base text-gray-900 placeholder-gray-400
+                    focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:border-transparent
+                    transition-all duration-200
+                    ${inputError 
+                      ? "border-red-300 bg-red-50 focus:ring-red-500 focus:bg-white" 
+                      : "border-gray-300 bg-white hover:border-gray-400 focus:bg-white"
+                    } 
+                    ${readOnly ? "bg-gray-50 cursor-not-allowed" : ""}`}
+                  value={inputValue}
+                  onChange={(e) => {
+                    if (!readOnly) {
+                      setInputValue(e.target.value);
+                      setInputError(null);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !loading && !readOnly) {
+                      analyze();
+                    }
+                  }}
+                  disabled={loading || readOnly}
+                  placeholder="Enter an Amazon keyword (e.g., food warmer, chalk, coffee maker)"
+                  readOnly={readOnly}
+                />
+              </div>
               {inputError && (
-                <p className="text-red-600 text-xs mt-1">{inputError}</p>
+                <p className="text-red-600 text-sm mt-1.5 flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  {inputError}
+                </p>
               )}
             </div>
 
             {/* Analyze Button - Hidden in readOnly mode */}
             {readOnly ? (
-              <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-lg text-sm text-gray-500">
+              <div className="flex items-center gap-2 px-6 py-3.5 bg-gray-100 rounded-xl text-sm font-medium text-gray-500">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                 </svg>
@@ -744,35 +761,24 @@ export default function AnalyzeForm({
               </div>
             ) : (
               <button
-                className="bg-black text-white rounded-lg px-8 py-2 font-medium text-sm hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="bg-[#3B82F6] text-white rounded-xl px-8 py-3.5 font-semibold text-base
+                  hover:bg-[#2563EB] active:bg-[#1D4ED8]
+                  disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#3B82F6]
+                  transition-all duration-200 shadow-sm hover:shadow-md
+                  flex items-center gap-2 min-w-[140px] justify-center"
                 onClick={analyze}
                 disabled={loading || !inputValue.trim()}
               >
                 {loading ? (
-                  <span className="flex items-center gap-2">
-                    <svg
-                      className="animate-spin h-4 w-4"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                      />
-                    </svg>
-                    Analyzing...
-                  </span>
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    <span>Analyzing…</span>
+                  </>
                 ) : (
-                  "Analyze"
+                  <>
+                    <Search className="h-5 w-5" />
+                    <span>Analyze</span>
+                  </>
                 )}
               </button>
             )}
