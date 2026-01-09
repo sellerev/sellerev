@@ -639,6 +639,9 @@ export function buildKeywordPageOne(
     });
   }
 
+  // Map to store ASIN-to-listing mapping for parent-child normalization
+  const asinToListingMap = new Map<string, ParsedListing>();
+  
   // Allocate units and revenue
   const products = productsWithWeights.map((pw, i) => {
     const l = pw.listing;
@@ -869,7 +872,7 @@ export function buildKeywordPageOne(
       });
     }
 
-    return {
+    const product: CanonicalProduct = {
       rank: pw.organicRank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
       asin, // Allow synthetic ASINs for keywords
       title: title ?? null, // Preserved from Rainforest SEARCH response - null if truly missing (never fabricated)
@@ -896,6 +899,11 @@ export function buildKeywordPageOne(
       // Sponsored visibility (for clarity, not estimation changes)
       is_sponsored: isSponsored, // Explicit flag for sponsored listings
     };
+    
+    // Store mapping for parent-child normalization (use ASIN as key)
+    asinToListingMap.set(asin, l);
+    
+    return product;
   });
 
   // Calculate total revenue from allocated values for revenue share percentages
@@ -1883,6 +1891,166 @@ export function buildKeywordPageOne(
     min_units: minUnits,
     max_units: maxUnits,
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PARENT-CHILD ASIN NORMALIZATION (FINAL STEP)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Group listings by parent_asin (fallback to self ASIN if null)
+  // Allocate total revenue to parent group FIRST, then split among children
+  // proportionally by review share, rating weight, price normalization
+  // This runs AFTER all allocation phases to normalize final values
+  
+  // Group products by parent_asin (deterministic: same input → same output)
+  const parentGroups = new Map<string, CanonicalProduct[]>();
+  
+  scaledProducts.forEach((product) => {
+    const listing = asinToListingMap.get(product.asin);
+    if (!listing) return;
+    
+    // Determine parent ASIN: use parent_asin if available, else use self ASIN
+    const parentAsin = listing.parent_asin && listing.parent_asin.trim()
+      ? listing.parent_asin.trim()
+      : product.asin;
+    
+    if (!parentGroups.has(parentAsin)) {
+      parentGroups.set(parentAsin, []);
+    }
+    parentGroups.get(parentAsin)!.push(product);
+  });
+  
+  // Process each parent group
+  parentGroups.forEach((children, parentAsin) => {
+    // Skip if only one child (no normalization needed)
+    if (children.length <= 1) {
+      return;
+    }
+    
+    // Calculate parent group total revenue (sum of all children)
+    const parentTotalRevenue = children.reduce((sum, child) => sum + child.estimated_monthly_revenue, 0);
+    const parentTotalUnits = children.reduce((sum, child) => sum + child.estimated_monthly_units, 0);
+    
+    if (parentTotalRevenue === 0 || parentTotalUnits === 0) {
+      return; // Skip if no revenue/units to allocate
+    }
+    
+    // Calculate child weights for revenue splitting
+    // Weight = review_share * rating_weight * price_normalization
+    const childWeights = children.map((child) => {
+      // Review share: log(review_count + 10) normalized
+      const reviewCount = child.review_count ?? 0;
+      const reviewShare = Math.log(reviewCount + 10);
+      
+      // Rating weight: rating / 5.0 (normalized to 0-1)
+      const rating = child.rating ?? 0;
+      const ratingWeight = rating > 0 ? rating / 5.0 : 0.85; // Default 0.85 if no rating
+      
+      // Price normalization: products closer to median price get slight boost
+      const childPrices = children.map(c => c.price);
+      const sortedPrices = [...childPrices].sort((a, b) => a - b);
+      const medianPrice = sortedPrices.length > 0
+        ? sortedPrices[Math.floor(sortedPrices.length / 2)]
+        : child.price;
+      
+      const priceDeviation = medianPrice > 0
+        ? Math.abs(child.price - medianPrice) / medianPrice
+        : 0;
+      const priceNormalization = Math.max(0.8, 1.0 - priceDeviation * 0.2);
+      
+      // Combined weight
+      const weight = reviewShare * ratingWeight * priceNormalization;
+      
+      return {
+        product: child,
+        weight,
+        reviewShare,
+        ratingWeight,
+        priceNormalization,
+      };
+    });
+    
+    // Normalize weights to sum to 1.0
+    const totalWeight = childWeights.reduce((sum, cw) => sum + cw.weight, 0);
+    if (totalWeight === 0) {
+      // Fallback: equal allocation
+      childWeights.forEach(cw => {
+        cw.weight = 1.0 / childWeights.length;
+      });
+    } else {
+      childWeights.forEach(cw => {
+        cw.weight = cw.weight / totalWeight;
+      });
+    }
+    
+    // Allocate revenue and units proportionally
+    let allocatedRevenue = 0;
+    let allocatedUnits = 0;
+    
+    childWeights.forEach((cw) => {
+      const child = cw.product;
+      const revenueShare = cw.weight;
+      
+      // Allocate revenue proportionally
+      const childRevenue = Math.round(parentTotalRevenue * revenueShare);
+      const childUnits = parentTotalUnits > 0
+        ? Math.round((childRevenue / child.price) || 0)
+        : Math.round(parentTotalUnits * revenueShare);
+      
+      // Ensure minimum of 1 unit if revenue > 0
+      const finalUnits = childRevenue > 0 && childUnits === 0 ? 1 : childUnits;
+      const finalRevenue = Math.round(finalUnits * child.price);
+      
+      child.estimated_monthly_revenue = finalRevenue;
+      child.estimated_monthly_units = finalUnits;
+      
+      allocatedRevenue += finalRevenue;
+      allocatedUnits += finalUnits;
+    });
+    
+    // Snapshot conservation: ensure sum equals parent total
+    // Re-scale if there's a discrepancy (should be minimal due to rounding)
+    const revenueDiff = parentTotalRevenue - allocatedRevenue;
+    const unitsDiff = parentTotalUnits - allocatedUnits;
+    
+    if (Math.abs(revenueDiff) > 0 || Math.abs(unitsDiff) > 0) {
+      // Distribute difference to largest child (deterministic)
+      if (childWeights.length > 0) {
+        const largestChild = childWeights.reduce((max, cw) => 
+          cw.product.estimated_monthly_revenue > max.product.estimated_monthly_revenue ? cw : max
+        );
+        
+        largestChild.product.estimated_monthly_revenue += revenueDiff;
+        largestChild.product.estimated_monthly_units += unitsDiff;
+        
+        // Recalculate units from revenue if needed
+        if (largestChild.product.estimated_monthly_revenue > 0 && largestChild.product.estimated_monthly_units === 0) {
+          largestChild.product.estimated_monthly_units = Math.max(1, Math.round(largestChild.product.estimated_monthly_revenue / largestChild.product.price));
+        }
+      }
+    }
+    
+    console.log("🔗 PARENT-CHILD NORMALIZATION", {
+      parent_asin: parentAsin,
+      children_count: children.length,
+      parent_total_revenue: parentTotalRevenue,
+      parent_total_units: parentTotalUnits,
+      allocated_revenue: allocatedRevenue,
+      allocated_units: allocatedUnits,
+      revenue_diff: revenueDiff,
+      units_diff: unitsDiff,
+    });
+  });
+  
+  // Recalculate revenue share percentages after parent-child normalization
+  const finalTotalRevenue = scaledProducts.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
+  if (finalTotalRevenue > 0) {
+    scaledProducts.forEach(p => {
+      if (p.estimated_monthly_revenue > 0) {
+        p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / finalTotalRevenue) * 100 * 100) / 100;
+      } else {
+        p.revenue_share_pct = 0;
+      }
+    });
+  }
 
   return scaledProducts;
 }

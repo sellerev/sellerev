@@ -32,6 +32,7 @@ export interface ParsedListing {
   est_monthly_units?: number | null; // 30-day units estimate (modeled)
   revenue_confidence?: "low" | "medium"; // Confidence level for revenue estimate
   bsr_invalid_reason?: string | null; // Reason why BSR was marked invalid (e.g., "duplicate_bug")
+  parent_asin?: string | null; // Parent ASIN for variant grouping (null if listing is its own parent)
 }
 
 export interface KeywordMarketSnapshot {
