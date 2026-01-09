@@ -5,6 +5,7 @@ import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import FeasibilityCalculator from "./FeasibilityCalculator";
 import BrandMoatBlock from "./BrandMoatBlock";
+import { ProductCard } from "@/app/components/ProductCard";
 
 /**
  * Sellerev Analyze Page - Core Product Component
@@ -1214,170 +1215,47 @@ export default function AnalyzeForm({
                         </div>
                       </div>
                     )}
-                    {/* TEMPORARY: Unconditional render with simple .map() */}
+                    {/* Product Cards Grid - 4 columns desktop */}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                       {cardsToRender.map((listing: any, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
                           const imageUrl = listing.image_url || listing.image;
                           // Rank = Page-1 position (array index + 1)
                           const rank = idx + 1;
-                          // Fulfillment from canonical product (map AMZ → FBA)
-                          const fulfillment = listing.fulfillment === "AMZ" ? "FBA" : (listing.fulfillment === "FBA" ? "FBA" : (listing.fulfillment === "FBM" ? "FBM" : null));
+                          // Fulfillment from canonical product (map AMZ → FBA, default to FBM if null)
+                          const fulfillment = listing.fulfillment === "AMZ" 
+                            ? "AMZ" 
+                            : (listing.fulfillment === "FBA" 
+                              ? "FBA" 
+                              : (listing.fulfillment === "FBM" ? "FBM" : "FBM"));
                           
-                          // Debug logging (non-blocking)
-                          console.log("🧪 CARD META", {
-                            asin: listing.asin,
-                            rank,
-                            fulfillment,
-                          });
+                          // Extract data with safe defaults
+                          const title = listing.title || "Product Title";
+                          const brand = listing.brand || "—";
+                          const price = listing.price ?? 0;
+                          const rating = listing.rating ?? 0;
+                          const reviews = listing.reviews ?? listing.review_count ?? 0;
+                          const monthlyRevenue = (listing as any).estimated_monthly_revenue ?? 0;
+                          const monthlyUnits = (listing as any).estimated_monthly_units ?? 0;
+                          const isSponsored = listing.sponsored ?? listing.is_sponsored ?? false;
                           
                           return (
-                            <div
+                            <ProductCard
                               key={`${listing.asin}-${idx}`}
-                              onClick={() => setSelectedListing(isSelected ? null : listing)}
-                              className={`bg-white border-2 rounded-lg p-4 cursor-pointer transition-all hover:shadow-lg ${
-                                isSelected 
-                                  ? 'ring-2 ring-blue-500 border-blue-500 shadow-md' 
-                                  : 'border-gray-200 hover:border-gray-400'
-                              }`}
-                            >
-                              {/* Image */}
-                              <div className="mb-3 flex justify-center">
-                                {imageUrl ? (
-                                  <img
-                                    src={imageUrl}
-                                    alt={listing.title || listing.asin || "Product listing"}
-                                    className="w-32 h-32 object-contain"
-                                    loading="lazy"
-                                    onError={(e) => {
-                                      const img = e.target as HTMLImageElement;
-                                      img.style.display = 'none';
-                                      const placeholder = img.parentElement?.querySelector('.img-placeholder');
-                                      if (placeholder) (placeholder as HTMLElement).style.display = 'flex';
-                                    }}
-                                  />
-                                ) : null}
-                                <div className="img-placeholder w-32 h-32 bg-gray-100 rounded flex items-center justify-center border border-gray-200" style={{ display: imageUrl ? 'none' : 'flex' }}>
-                                  <svg className="w-12 h-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                  </svg>
-                                </div>
-                              </div>
-                              
-                              {/* Title (2 lines max) - only render if title exists */}
-                              {listing.title && (
-                                <h3 className="text-sm font-medium text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
-                                  {listing.title}
-                                </h3>
-                              )}
-                              {!listing.title && (
-                                <div className="text-sm text-gray-400 italic mb-2 min-h-[2.5rem]">
-                                  Title not available
-                                </div>
-                              )}
-                              
-                              {/* Price */}
-                              <div className="mb-2">
-                                <span className="text-lg font-semibold text-gray-900">
-                                  {listing.price !== null ? formatCurrency(listing.price) : "Price not available"}
-                                </span>
-                              </div>
-                              
-                              {/* Rating + Reviews */}
-                              <div className="mb-2 flex items-center gap-2">
-                                {listing.rating !== null && listing.rating !== undefined ? (
-                                  <>
-                                    <span className="text-yellow-400">★</span>
-                                    <span className="text-sm text-gray-700">{listing.rating.toFixed(1)}</span>
-                                  </>
-                                ) : null}
-                                {(listing.reviews !== null && listing.reviews !== undefined) || (listing.review_count !== null && listing.review_count !== undefined) ? (
-                                  <span className="text-xs text-gray-500">
-                                    ({(listing.reviews || listing.review_count || 0).toLocaleString()})
-                                  </span>
-                                ) : null}
-                              </div>
-                              
-                              {/* Revenue Block */}
-                              {(() => {
-                                // Use canonical field: estimated_monthly_revenue (v1: canonical only, no refinement)
-                                const revenue = (listing as any).estimated_monthly_revenue;
-                                const units = (listing as any).estimated_monthly_units;
-                                
-                                // Format revenue: round to nearest dollar, format with thousands separators, append "/ mo"
-                                const formatRevenue = (value: number | null | undefined): string => {
-                                  if (value === null || value === undefined || typeof value !== 'number' || isNaN(value) || value <= 0) {
-                                    return "—";
-                                  }
-                                  const rounded = Math.round(value);
-                                  return new Intl.NumberFormat("en-US", {
-                                    style: "currency",
-                                    currency: "USD",
-                                    minimumFractionDigits: 0,
-                                    maximumFractionDigits: 0,
-                                  }).format(rounded) + " / mo";
-                                };
-                                
-                                if (revenue === null && units === null) {
-                                  return null;
-                                }
-                                
-                                return (
-                                  <div className="mt-3 pt-3 border-t border-gray-200 bg-gray-50 rounded -mx-4 px-4 py-3">
-                                    {/* Est. Monthly Revenue - bold, largest text */}
-                                    <div className="mb-1.5">
-                                      <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Revenue</div>
-                                      <div className="text-xl font-bold text-gray-900">
-                                        {formatRevenue(revenue)}
-                                      </div>
-                                    </div>
-                                    
-                                    {/* Est. Monthly Units */}
-                                    {units !== null && units !== undefined && (
-                                      <div className="mb-2">
-                                        <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Units</div>
-                                        <div className="text-sm font-semibold text-gray-700">
-                                          {units.toLocaleString()}
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })()}
-                              
-                              {/* Badges */}
-                              <div className="flex flex-wrap gap-1 mt-2">
-                                {listing.sponsored && (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
-                                    Sponsored
-                                  </span>
-                                )}
-                                {/* Rank = Page-1 position (always shown) */}
-                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                                  Rank #{rank}
-                                </span>
-                                {/* Fulfillment badge */}
-                                {fulfillment && (
-                                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                    fulfillment === 'FBA' ? 'bg-blue-100 text-blue-800' :
-                                    fulfillment === 'FBM' ? 'bg-gray-100 text-gray-800' :
-                                    'bg-yellow-100 text-yellow-800'
-                                  }`}>
-                                    {fulfillment}
-                                  </span>
-                                )}
-                              </div>
-                              
-                              {/* Brand */}
-                              <div className="mt-2 text-xs text-gray-500">
-                                {listing.brand && listing.brand.trim() ? listing.brand.trim() : "—"}
-                              </div>
-                              
-                              {/* ASIN */}
-                              <div className="mt-1 text-xs text-gray-400">
-                                {listing.asin}
-                              </div>
-                            </div>
+                              rank={rank}
+                              title={title}
+                              brand={brand}
+                              price={price}
+                              rating={rating}
+                              reviews={reviews}
+                              monthlyRevenue={monthlyRevenue}
+                              monthlyUnits={monthlyUnits}
+                              fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
+                              isSponsored={isSponsored}
+                              imageUrl={imageUrl}
+                              isSelected={isSelected}
+                              onSelect={() => setSelectedListing(isSelected ? null : listing)}
+                            />
                           );
                         })}
                     </div>
