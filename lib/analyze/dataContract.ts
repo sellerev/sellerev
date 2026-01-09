@@ -193,6 +193,14 @@ export interface KeywordAnalyzeResponse {
     margin_snapshot: KeywordAnalyzeResponse["margin_snapshot"];
     signals: KeywordAnalyzeResponse["signals"];
     brand_moat: KeywordAnalyzeResponse["brand_moat"];
+    // Calibration metadata (for AI explanations only, not UI math)
+    calibration: {
+      applied: boolean;
+      revenue_multiplier: number;
+      units_multiplier: number;
+      confidence: 'high' | 'medium' | 'low';
+      source: 'profile' | 'default';
+    };
   };
 }
 
@@ -897,6 +905,22 @@ export async function buildKeywordAnalyzeResponse(
     };
   }
 
+  // Extract calibration metadata from canonical products array (if present)
+  // This metadata is attached during calibration step for AI explanations only
+  let calibrationMetadata: {
+    applied: boolean;
+    revenue_multiplier: number;
+    units_multiplier: number;
+    confidence: 'high' | 'medium' | 'low';
+    source: 'profile' | 'default';
+  } | null = null;
+  
+  if (canonicalProducts && (canonicalProducts as any).__calibration_metadata) {
+    calibrationMetadata = (canonicalProducts as any).__calibration_metadata;
+    // Remove metadata from products array (cleanup)
+    delete (canonicalProducts as any).__calibration_metadata;
+  }
+  
   // Build AI context (read-only copy)
   const aiContext = {
     mode: "keyword" as const,
@@ -907,6 +931,14 @@ export async function buildKeywordAnalyzeResponse(
     margin_snapshot: marginSnapshotContract,
     signals,
     brand_moat: brandMoat, // Add brand moat to AI context
+    // Calibration metadata (for AI explanations only, not UI math)
+    calibration: calibrationMetadata || {
+      applied: false,
+      revenue_multiplier: 1.0,
+      units_multiplier: 1.0,
+      confidence: 'low' as const,
+      source: 'default' as const,
+    },
   };
   
   // Calculate aggregates from canonical Page-1 array

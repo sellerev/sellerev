@@ -1980,6 +1980,70 @@ export async function POST(req: NextRequest) {
             raw_listings_count: rawListings.length,
           });
         }
+        
+        // ═══════════════════════════════════════════════════════════════════════════
+        // APPLY KEYWORD CALIBRATION (DETERMINISTIC)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Apply calibration AFTER buildKeywordPageOne and BEFORE buildKeywordAnalyzeResponse
+        // This adjusts canonical revenue based on keyword intent archetype and category
+        if (pageOneProducts.length > 0) {
+          try {
+            const { applyKeywordCalibration } = await import("@/lib/amazon/keywordCalibration");
+            
+            // Extract category from listings (most common category)
+            const categoryCounts = new Map<string, number>();
+            for (const listing of rawListings) {
+              const category = listing.main_category;
+              if (category && category.trim()) {
+                categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1);
+              }
+            }
+            let mostCommonCategory: string | null = null;
+            let maxCount = 0;
+            for (const [category, count] of categoryCounts.entries()) {
+              if (count > maxCount) {
+                maxCount = count;
+                mostCommonCategory = category;
+              }
+            }
+            
+            const calibrationResult = await applyKeywordCalibration(
+              pageOneProducts,
+              body.input_value,
+              mostCommonCategory,
+              supabase,
+              rawListings
+            );
+            
+            // Replace pageOneProducts with calibrated products
+            pageOneProducts = calibrationResult.products;
+            
+            // Store calibration metadata for logging (will be added to ai_context)
+            (pageOneProducts as any).__calibration_metadata = {
+              applied: calibrationResult.calibration_applied,
+              revenue_multiplier: calibrationResult.revenue_multiplier,
+              units_multiplier: calibrationResult.units_multiplier,
+              confidence: calibrationResult.confidence,
+              source: calibrationResult.source,
+            };
+            
+            console.log("✅ KEYWORD CALIBRATION APPLIED", {
+              keyword: body.input_value,
+              category: mostCommonCategory,
+              calibration_applied: calibrationResult.calibration_applied,
+              revenue_multiplier: calibrationResult.revenue_multiplier,
+              units_multiplier: calibrationResult.units_multiplier,
+              confidence: calibrationResult.confidence,
+              source: calibrationResult.source,
+            });
+          } catch (error) {
+            console.warn("⚠️ KEYWORD CALIBRATION ERROR (NON-FATAL)", {
+              keyword: body.input_value,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            // Continue with uncalibrated products if calibration fails
+          }
+        }
       } else {
         // ASIN analysis: Use strict canonical builder
         console.log("🔵 CALLING_CANONICAL_BUILDER: asin (buildAsinPageOne)");
