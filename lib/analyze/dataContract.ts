@@ -176,6 +176,13 @@ export interface KeywordAnalyzeResponse {
     top_brand_share_pct: number;
     top_3_share_pct: number;
     unique_brand_count: number;
+    brand_revenue_breakdown: Array<{
+      brand: string;
+      revenue: number;
+      share_pct: number;
+      asin_count: number;
+      top10_count: number;
+    }>;
   };
 
   // G) AI Context (Read-only)
@@ -868,6 +875,7 @@ export async function buildKeywordAnalyzeResponse(
         top_brand_share_pct: brandMoat.top_brand_share_pct,
         top_3_share_pct: brandMoat.top_3_share_pct,
         unique_brand_count: brandMoat.unique_brand_count,
+        breakdown_count: brandMoat.brand_revenue_breakdown?.length || 0,
       });
     } catch (error) {
       console.warn("[BrandMoat] Error computing brand moat:", error);
@@ -878,6 +886,7 @@ export async function buildKeywordAnalyzeResponse(
         top_brand_share_pct: 0,
         top_3_share_pct: 0,
         unique_brand_count: 0,
+        brand_revenue_breakdown: [],
       };
     }
   } else {
@@ -888,6 +897,7 @@ export async function buildKeywordAnalyzeResponse(
       top_brand_share_pct: 0,
       top_3_share_pct: 0,
       unique_brand_count: 0,
+      brand_revenue_breakdown: [],
     };
   }
 

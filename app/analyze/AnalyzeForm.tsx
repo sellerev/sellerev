@@ -4,6 +4,7 @@ import { useState } from "react";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import FeasibilityCalculator from "./FeasibilityCalculator";
+import BrandMoatSummary from "./BrandMoatSummary";
 
 /**
  * Sellerev Analyze Page - Core Product Component
@@ -140,17 +141,18 @@ interface AnalysisResponse {
     assumptions: string[];
   };
   brand_moat?: {
-    verdict: "NO_MOAT" | "SOFT_MOAT" | "HARD_MOAT";
-    dominant_brand?: string;
-    brand_revenue_share_pct?: number;
-    page_one_slots?: number;
-    top_ten_slots?: number;
-    signals: {
-      revenue_concentration: boolean;
-      slot_control: boolean;
-      review_ladder: boolean;
-      price_immunity: boolean;
-    };
+    level: "HARD" | "SOFT" | "NONE";
+    top_brand: string | null;
+    top_brand_share_pct: number;
+    top_3_share_pct: number;
+    unique_brand_count: number;
+    brand_revenue_breakdown?: Array<{
+      brand: string;
+      revenue: number;
+      share_pct: number;
+      asin_count: number;
+      top10_count: number;
+    }>;
   };
   market_snapshot?: {
     keyword: string;
@@ -990,35 +992,16 @@ export default function AnalyzeForm({
                         
                         <h2 className="text-xl font-semibold text-gray-900 mb-4">Market Snapshot</h2>
                         
-                        {/* Brand Moat Display */}
-                        {analysis.brand_moat && analysis.brand_moat.verdict !== "NO_MOAT" && (
-                          <div className="mb-4 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                            <div className="flex items-center gap-3 mb-2">
-                              <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${
-                                analysis.brand_moat.verdict === "HARD_MOAT" 
-                                  ? "bg-red-100 text-red-800"
-                                  : "bg-yellow-100 text-yellow-800"
-                              }`}>
-                                {analysis.brand_moat.verdict === "HARD_MOAT" ? "Hard Brand Moat" : "Soft Brand Moat"}
-                              </span>
-                              {analysis.brand_moat.dominant_brand && (
-                                <span className="text-sm font-medium text-gray-900">
-                                  {analysis.brand_moat.dominant_brand}
-                                </span>
-                              )}
-                            </div>
-                            {analysis.brand_moat.brand_revenue_share_pct !== undefined && (
-                              <div className="text-sm text-gray-700">
-                                Controls {analysis.brand_moat.brand_revenue_share_pct.toFixed(1)}% of Page-1 revenue
-                                {analysis.brand_moat.page_one_slots !== undefined && (
-                                  <> • {analysis.brand_moat.page_one_slots} Page-1 slots</>
-                                )}
-                                {analysis.brand_moat.top_ten_slots !== undefined && analysis.brand_moat.top_ten_slots > 0 && (
-                                  <> • {analysis.brand_moat.top_ten_slots} top-10 slots</>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                        {/* Brand Moat Summary */}
+                        {analysis.brand_moat && (
+                          <BrandMoatSummary
+                            level={analysis.brand_moat.level}
+                            top_brand={analysis.brand_moat.top_brand}
+                            top_brand_share_pct={analysis.brand_moat.top_brand_share_pct}
+                            top_3_share_pct={analysis.brand_moat.top_3_share_pct}
+                            unique_brand_count={analysis.brand_moat.unique_brand_count}
+                            brand_revenue_breakdown={analysis.brand_moat.brand_revenue_breakdown || []}
+                          />
                         )}
                         
                         {/* Canonical Metrics - Exact Order */}

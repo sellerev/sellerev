@@ -11,12 +11,21 @@
  * - No additional API calls — uses existing Page-1 keyword data
  */
 
+export interface BrandRevenueBreakdown {
+  brand: string;
+  revenue: number;
+  share_pct: number;
+  asin_count: number;
+  top10_count: number;
+}
+
 export interface BrandMoatResult {
   level: "HARD" | "SOFT" | "NONE";
   top_brand: string | null;
   top_brand_share_pct: number;
   top_3_share_pct: number;
   unique_brand_count: number;
+  brand_revenue_breakdown: BrandRevenueBreakdown[];
 }
 
 export interface PageOneListing {
@@ -67,6 +76,7 @@ export function analyzeBrandMoat(
       top_brand_share_pct: 0,
       top_3_share_pct: 0,
       unique_brand_count: 0,
+      brand_revenue_breakdown: [],
     };
   }
 
@@ -83,6 +93,7 @@ export function analyzeBrandMoat(
       top_brand_share_pct: 0,
       top_3_share_pct: 0,
       unique_brand_count: 0,
+      brand_revenue_breakdown: [],
     };
   }
 
@@ -198,6 +209,15 @@ export function analyzeBrandMoat(
   }
   // Otherwise NONE (already default)
 
+  // Build brand revenue breakdown array (sorted by revenue share descending)
+  const brand_revenue_breakdown: BrandRevenueBreakdown[] = brandMetrics.map(bm => ({
+    brand: bm.brand_name,
+    revenue: bm.estimated_page1_revenue,
+    share_pct: Math.round(bm.revenue_share_pct * 100) / 100,
+    asin_count: bm.asin_count,
+    top10_count: bm.top_10_listing_count,
+  }));
+
   // Build result
   const result: BrandMoatResult = {
     level,
@@ -205,6 +225,7 @@ export function analyzeBrandMoat(
     top_brand_share_pct: Math.round(top_brand_share_pct * 100) / 100,
     top_3_share_pct: Math.round(top_3_share_pct * 100) / 100,
     unique_brand_count,
+    brand_revenue_breakdown,
   };
 
   return result;
