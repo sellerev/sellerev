@@ -396,9 +396,9 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* HEADER                                                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="p-4 border-b bg-gray-50 shrink-0">
-        <h2 className="font-semibold text-gray-900">AI Assistant</h2>
-        <p className="text-xs text-gray-500 mt-0.5">
+      <div className="px-6 py-5 border-b bg-gray-50 shrink-0">
+        <h2 className="font-semibold text-gray-900 text-base">AI Assistant</h2>
+        <p className="text-xs text-gray-500 mt-1">
           {analysisRunId
             ? "Explains the visible Page-1 data only"
             : "Complete an analysis to start chatting"}
@@ -410,7 +410,7 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50"
+        className="flex-1 overflow-y-auto px-6 py-4 space-y-4 bg-gray-50"
         style={{ minHeight: 0 }}
       >
         {isDisabled ? (
@@ -450,7 +450,7 @@ export default function ChatSidebar({
             {getSuggestedQuestions(analysisMode, marketSnapshot, selectedListing).slice(0, 4).map((question, idx) => (
               <button
                 key={idx}
-                className="w-full text-left text-sm p-3 bg-white border rounded-lg hover:bg-gray-50 hover:border-gray-300 transition-colors text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full text-left text-sm px-4 py-3 bg-white border rounded-lg hover:bg-gray-50 hover:border-gray-300 transition-colors text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={() => sendMessage(question)}
                 disabled={isLoading}
               >
@@ -464,10 +464,10 @@ export default function ChatSidebar({
             {messages.map((msg, idx) => (
               <div
                 key={idx}
-                className={`p-3 rounded-lg ${
+                className={`px-4 py-3 rounded-lg ${
                   msg.role === "user"
-                    ? "bg-black text-white ml-6"
-                    : "bg-white border mr-6 shadow-sm"
+                    ? "bg-black text-white ml-8"
+                    : "bg-white border mr-8 shadow-sm"
                 }`}
               >
                 <div
@@ -614,7 +614,7 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* INPUT AREA                                                          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="p-4 border-t bg-white shrink-0">
+      <div className="px-6 py-4 border-t bg-white shrink-0">
         <div className="flex gap-2 items-end">
           <textarea
             ref={inputRef}

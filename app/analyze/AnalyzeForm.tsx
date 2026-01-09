@@ -3,7 +3,6 @@
 import { useState } from "react";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
-import FeasibilityCalculator from "./FeasibilityCalculator";
 import BrandMoatBlock from "./BrandMoatBlock";
 import { ProductCard } from "@/app/components/ProductCard";
 import SearchBar from "@/app/components/SearchBar";
@@ -759,11 +758,11 @@ export default function AnalyzeForm({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* MAIN CONTENT: TWO-COLUMN LAYOUT                                     */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 relative">
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* LEFT COLUMN: MARKET DATA & PRODUCTS (SCROLLABLE)                */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto px-6">
+        <div className="flex-1 overflow-y-auto px-6" style={{ paddingRight: "500px" }}>
           {!analysis ? (
             /* PRE-ANALYSIS STATE */
             <div className="flex items-center justify-center h-full">
@@ -1233,14 +1232,6 @@ export default function AnalyzeForm({
                   );
                   })()}
 
-                  {/* ─────────────────────────────────────────────────────────── */}
-                  {/* FEASIBILITY CALCULATOR                                     */}
-                  {/* ─────────────────────────────────────────────────────────── */}
-                  <FeasibilityCalculator
-                    defaultPrice={analysis.market_snapshot?.avg_price || null}
-                    categoryHint={null} // TODO: Extract category from keyword if available
-                    representativeAsin={analysis.market_snapshot?.representative_asin || null}
-                  />
                 </>
               ) : null}
             </div>
@@ -1248,23 +1239,24 @@ export default function AnalyzeForm({
         </div>
 
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* RIGHT COLUMN: AI CHAT SIDEBAR (STICKY/FIXED - STAYS VISIBLE)    */}
-        {/* AI Copilot is always available - stays with you as you scroll  */}
+        {/* RIGHT COLUMN: AI CHAT SIDEBAR (FIXED - NEVER MOVES)             */}
+        {/* AI Copilot is always available - completely fixed position      */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="w-[400px] border-l border-gray-200 bg-white flex-shrink-0">
-          <div className="sticky top-[140px] h-[calc(100vh-140px)] overflow-hidden">
-            <ChatSidebar
-              analysisRunId={analysis?.analysis_run_id || null}
-              initialMessages={chatMessages}
-              onMessagesChange={setChatMessages}
-              marketSnapshot={analysis?.market_snapshot || null}
-              analysisMode={analysisMode}
-              selectedListing={selectedListing ? {
-                ...selectedListing,
-                // Include enriched data if available for this ASIN
-              } : null}
-            />
-          </div>
+        <div 
+          className="fixed right-0 top-[140px] w-[480px] border-l border-gray-200 bg-white flex-shrink-0"
+          style={{ height: "calc(100vh - 140px)" }}
+        >
+          <ChatSidebar
+            analysisRunId={analysis?.analysis_run_id || null}
+            initialMessages={chatMessages}
+            onMessagesChange={setChatMessages}
+            marketSnapshot={analysis?.market_snapshot || null}
+            analysisMode={analysisMode}
+            selectedListing={selectedListing ? {
+              ...selectedListing,
+              // Include enriched data if available for this ASIN
+            } : null}
+          />
         </div>
       </div>
     </div>
