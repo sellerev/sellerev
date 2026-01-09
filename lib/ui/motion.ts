@@ -1,12 +1,24 @@
 /**
  * Sellerev Motion System
  * 
- * Centralized motion tokens for consistent animations across the Analyze page.
+ * ⚠️ LAUNCH-CRITICAL: Motion tokens are FROZEN for launch.
+ * 
+ * This file defines the ONLY allowed motion primitives for Sellerev v1:
+ * - fadeIn
+ * - slideUp
+ * - hoverElevation
+ * - defaultTransition
+ * 
+ * RULES:
+ * - No new animations may be added without explicit approval
+ * - No per-component easing overrides
+ * - No timing overrides
+ * - All motion must use these tokens exclusively
  * 
  * Usage:
  *   import { fadeIn, slideUp, hoverElevation } from '@/lib/ui/motion';
  *   
- *   <motion.div {...fadeIn}>
+ *   <motion.div variants={fadeIn} initial="initial" animate="animate">
  *     Content
  *   </motion.div>
  */
