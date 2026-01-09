@@ -70,7 +70,7 @@ export interface KeywordAnalyzeResponse {
   products: Array<{
     rank: number | null; // Legacy field - equals organic_rank for organic, null for sponsored
     asin: string;
-    title: string;
+    title: string | null; // From Rainforest SEARCH response - null if truly missing (never fabricated)
     image_url: string | null;
     price: number;
     rating: number;
@@ -97,7 +97,7 @@ export interface KeywordAnalyzeResponse {
   page_one_listings: Array<{
     rank: number | null; // Legacy field - equals organic_rank for organic, null for sponsored
     asin: string;
-    title: string;
+    title: string | null; // From Rainforest SEARCH response - null if truly missing (never fabricated)
     image_url: string | null;
     price: number;
     rating: number;
@@ -410,7 +410,7 @@ export async function buildKeywordAnalyzeResponse(
       return {
         rank: listing.position || index + 1, // Legacy field - fallback path doesn't distinguish organic
         asin: listing.asin || "",
-        title: listing.title || "",
+        title: listing.title || null, // From Rainforest SEARCH response - null if truly missing
         image_url: listing.image_url || null,
         price: listing.price || 0,
         rating: listing.rating || 0,

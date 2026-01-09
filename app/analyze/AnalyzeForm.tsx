@@ -78,7 +78,7 @@ interface AnalysisResponse {
   page_one_listings?: Array<{
     rank: number;
     asin: string;
-    title: string;
+    title: string | null; // From Rainforest SEARCH response - null if truly missing
     image_url: string | null;
     price: number;
     rating: number;
@@ -106,7 +106,7 @@ interface AnalysisResponse {
   products?: Array<{
     rank: number;
     asin: string;
-    title: string;
+    title: string | null; // From Rainforest SEARCH response - null if truly missing
     image_url: string | null;
     price: number;
     rating: number;
@@ -910,7 +910,7 @@ export default function AnalyzeForm({
                       .map((l: any) => ({
                         ...normalizeListing(l),
                         // Preserve title and image_url from original listing (may be empty, that's ok)
-                        title: l.title || normalizeListing(l).title || `Product ${l.asin || 'Unknown'}`,
+                        title: l.title || normalizeListing(l).title || null, // Never fabricate placeholders
                         image_url: l.image_url || l.image || normalizeListing(l).image || null,
                         est_monthly_revenue: l.est_monthly_revenue ?? l.estimated_monthly_revenue ?? null,
                         est_monthly_units: l.est_monthly_units ?? l.estimated_monthly_units ?? null,
@@ -1260,7 +1260,7 @@ export default function AnalyzeForm({
                                 {imageUrl ? (
                                   <img
                                     src={imageUrl}
-                                    alt={listing.title || "Product listing"}
+                                    alt={listing.title || listing.asin || "Product listing"}
                                     className="w-32 h-32 object-contain"
                                     loading="lazy"
                                     onError={(e) => {
@@ -1278,10 +1278,17 @@ export default function AnalyzeForm({
                                 </div>
                               </div>
                               
-                              {/* Title (2 lines max) */}
-                              <h3 className="text-sm font-medium text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
-                                {listing.title || "Product listing"}
-                              </h3>
+                              {/* Title (2 lines max) - only render if title exists */}
+                              {listing.title && (
+                                <h3 className="text-sm font-medium text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
+                                  {listing.title}
+                                </h3>
+                              )}
+                              {!listing.title && (
+                                <div className="text-sm text-gray-400 italic mb-2 min-h-[2.5rem]">
+                                  Title not available
+                                </div>
+                              )}
                               
                               {/* Price */}
                               <div className="mb-2">

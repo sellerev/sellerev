@@ -1408,11 +1408,11 @@ export async function fetchKeywordMarketSnapshot(
       
       const fulfillment = parseFulfillment(item); // Nullable
       
-      // Extract brand: try item.brand first, then infer from title (if title exists)
-      let brand = item.brand ?? null;
-      if (!brand && title) {
-        brand = inferBrandFromTitle(title);
-      }
+      // Extract brand: ONLY from item.brand field (do NOT infer or guess)
+      // Missing brand = null (will be normalized to "Unknown" in brand moat analysis)
+      const brand = (item.brand && typeof item.brand === 'string' && item.brand.trim().length > 0)
+        ? item.brand.trim()
+        : null;
 
       // Extract image URL from Rainforest search_results[].image
       // CRITICAL: Check multiple sources and never allow empty strings

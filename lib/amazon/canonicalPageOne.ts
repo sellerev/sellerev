@@ -21,7 +21,7 @@ import { calibrateMarketTotals, calculateReviewDispersionFromListings, validateI
 export interface CanonicalProduct {
   rank: number | null; // Legacy field - kept for backward compatibility (equals organic_rank for organic, null for sponsored)
   asin: string;
-  title: string;
+  title: string | null; // From Rainforest SEARCH response - null if truly missing (never fabricated)
   image_url: string | null;
   price: number;
   rating: number;
@@ -772,25 +772,26 @@ export function buildKeywordPageOne(
     // Always fallback to raw listing fields if ParsedListing fields are null/empty
     
     // Title: map from listing.title, fallback to raw listing fields if missing/empty
-    // Real listings: preserve actual title, fallback to raw item if null/empty
+    // Real listings: preserve actual title from Rainforest SEARCH response
     // ESTIMATED: use "Unknown product"
-    // CRITICAL: NEVER allow empty strings
-    let title: string;
+    // CRITICAL: NEVER allow empty strings, NEVER fabricate placeholders like "Product {ASIN}"
+    let title: string | null;
     if (isEstimatedProduct) {
       title = "Unknown product";
     } else {
-      // Check ParsedListing.title first (may be null if empty from Rainforest parsing)
+      // Check ParsedListing.title first (from Rainforest SEARCH response)
       if (l.title && typeof l.title === 'string' && l.title.trim().length > 0) {
         title = l.title.trim();
       } else {
-        // Fallback to raw item data (preserved in _rawItem field)
+        // Fallback to raw item data (preserved in _rawItem field from search response)
         const rawItem = (l as any)._rawItem;
         const rawTitle = rawItem?.title || rawItem?.Title || (l as any).original_title || (l as any).raw_title;
         if (rawTitle && typeof rawTitle === 'string' && rawTitle.trim().length > 0) {
           title = rawTitle.trim();
         } else {
-          // Last resort: use ASIN-based placeholder (never empty string)
-          title = asin ? `Product ${asin}` : `Product #${i + 1}`;
+          // DO NOT fabricate placeholders - use null if truly missing
+          // Frontend will handle null titles appropriately
+          title = null;
         }
       }
     }
@@ -871,7 +872,7 @@ export function buildKeywordPageOne(
     return {
       rank: pw.organicRank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
       asin, // Allow synthetic ASINs for keywords
-      title, // Preserved from listing (or "Unknown product" for ESTIMATED only)
+      title: title ?? null, // Preserved from Rainforest SEARCH response - null if truly missing (never fabricated)
       price: pw.price, // Preserved from listing
       rating, // Preserved from listing (or 0 for ESTIMATED only)
       review_count, // Preserved from listing (or 0 for ESTIMATED only)
