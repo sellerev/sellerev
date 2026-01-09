@@ -2,7 +2,7 @@ import { Star, Image as ImageIcon, Check } from "lucide-react";
 
 interface ProductCardProps {
   rank: number;
-  title: string;
+  title: string | null;
   brand: string;
   price: number;
   rating: number;
@@ -11,7 +11,7 @@ interface ProductCardProps {
   monthlyUnits: number;
   fulfillment: "FBA" | "FBM" | "AMZ";
   isSponsored: boolean;
-  imageUrl?: string;
+  imageUrl?: string | null;
   isSelected?: boolean;
   onSelect?: () => void;
 }
@@ -57,7 +57,8 @@ export function ProductCard({
       className={`
         bg-white rounded-xl p-4 relative cursor-pointer
         transition-all duration-200 ease-in-out
-        min-h-[480px] flex flex-col
+        flex flex-col
+        min-h-[480px]
         focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:ring-offset-2
         ${isSelected 
           ? 'border-2 border-[#3B82F6] bg-[#EFF6FF] shadow-md' 
@@ -79,19 +80,36 @@ export function ProductCard({
         </div>
       )}
 
-      {/* Product Image */}
-      <div className="w-32 h-32 bg-[#F3F4F6] rounded-lg mb-3 flex items-center justify-center overflow-hidden mx-auto">
+      {/* Product Image - Larger size for visibility */}
+      <div className="w-full max-w-[160px] h-[160px] bg-[#F3F4F6] rounded-lg mb-3 flex items-center justify-center overflow-hidden mx-auto">
         {imageUrl ? (
-          <img src={imageUrl} alt={title} className="w-full h-full object-contain" />
-        ) : (
-          <ImageIcon className="w-12 h-12 text-[#9CA3AF]" />
-        )}
+          <img 
+            src={imageUrl} 
+            alt={title || "Product image"} 
+            className="w-full h-full object-contain p-2"
+            onError={(e) => {
+              const img = e.target as HTMLImageElement;
+              img.style.display = 'none';
+              const placeholder = img.parentElement?.querySelector('.img-placeholder');
+              if (placeholder) (placeholder as HTMLElement).style.display = 'flex';
+            }}
+          />
+        ) : null}
+        <div className="img-placeholder w-full h-full flex items-center justify-center" style={{ display: imageUrl ? 'none' : 'flex' }}>
+          <ImageIcon className="w-16 h-16 text-[#9CA3AF]" />
+        </div>
       </div>
 
       {/* Product Title */}
-      <h3 className="text-base font-semibold text-[#111827] line-clamp-2 leading-[1.4] mb-1 min-h-[2.5rem]">
-        {title || "Product Title"}
-      </h3>
+      {title ? (
+        <h3 className="text-base font-semibold text-[#111827] line-clamp-2 leading-[1.4] mb-1 min-h-[2.5rem]">
+          {title}
+        </h3>
+      ) : (
+        <div className="text-sm text-[#9CA3AF] italic mb-1 min-h-[2.5rem]">
+          Title not available
+        </div>
+      )}
 
       {/* Brand Name */}
       {brand && brand !== "—" && (

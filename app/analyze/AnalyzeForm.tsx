@@ -948,13 +948,20 @@ export default function AnalyzeForm({
                       ? (aggregates?.total_monthly_revenue_est ?? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0))
                       : 0;
                     
-                    // Average Rating - always numeric when listings exist
-                    const ratingsList = normalizedListings.filter((l: any) => l.rating !== null && l.rating !== undefined && l.rating > 0);
-                    const avgRating = hasListings
-                      ? (aggregates?.avg_rating ?? (ratingsList.length > 0
-                          ? ratingsList.reduce((sum: number, l: any) => sum + (l.rating || 0), 0) / ratingsList.length
-                          : 0))
-                      : 0;
+                    // Average Rating - calculate from page_one_listings (canonical products) or aggregates
+                    let avgRating = 0;
+                    if (hasListings) {
+                      // Priority 1: Use aggregates.avg_rating (from canonical products)
+                      if (aggregates?.avg_rating && aggregates.avg_rating > 0) {
+                        avgRating = aggregates.avg_rating;
+                      } else {
+                        // Priority 2: Calculate from page_one_listings (they have rating field directly)
+                        const ratingsList = pageOneListings.filter((l: any) => l.rating !== null && l.rating !== undefined && l.rating > 0);
+                        if (ratingsList.length > 0) {
+                          avgRating = ratingsList.reduce((sum: number, l: any) => sum + (l.rating || 0), 0) / ratingsList.length;
+                        }
+                      }
+                    }
                     
                     // Search Volume
                     let searchVolume: string = "Estimating…";
@@ -1034,7 +1041,9 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Rating</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {hasListings && !isNaN(avgRating) && avgRating > 0 ? `${avgRating.toFixed(1)} ★` : (pageOneListings.length > 0 && avgRating > 0 ? `${avgRating.toFixed(1)} ★` : "Estimating…")}
+                              {hasListings && !isNaN(avgRating) && avgRating > 0 
+                                ? `${avgRating.toFixed(1)} ★` 
+                                : "Estimating…"}
                             </div>
                           </div>
                         </div>
@@ -1229,15 +1238,39 @@ export default function AnalyzeForm({
                               ? "FBA" 
                               : (listing.fulfillment === "FBM" ? "FBM" : "FBM"));
                           
-                          // Extract data with safe defaults
-                          const title = listing.title || "Product Title";
+                          // Extract data with safe defaults - map from canonical product fields
+                          // Title: preserve null if missing (don't fallback to "Product Title")
+                          const title = listing.title || null;
+                          // Brand: use "—" if missing
                           const brand = listing.brand || "—";
+                          // Price: must be > 0 to display
                           const price = listing.price ?? 0;
+                          // Rating: can be 0 (ProductCard handles this)
                           const rating = listing.rating ?? 0;
-                          const reviews = listing.reviews ?? listing.review_count ?? 0;
+                          // Reviews: page_one_listings uses review_count, ProductCard expects reviews prop
+                          const reviews = listing.review_count ?? listing.reviews ?? 0;
+                          // Revenue and units: from canonical product
                           const monthlyRevenue = (listing as any).estimated_monthly_revenue ?? 0;
                           const monthlyUnits = (listing as any).estimated_monthly_units ?? 0;
-                          const isSponsored = listing.sponsored ?? listing.is_sponsored ?? false;
+                          // Sponsored: check both fields
+                          const isSponsored = listing.is_sponsored ?? listing.sponsored ?? false;
+                          
+                          // Debug: Log first card data to verify fields are present
+                          if (idx === 0) {
+                            console.log("🔵 PRODUCT_CARD_DATA", {
+                              asin: listing.asin,
+                              title: listing.title,
+                              image_url: listing.image_url,
+                              image: listing.image,
+                              imageUrl: imageUrl,
+                              brand: listing.brand,
+                              rating: listing.rating,
+                              review_count: listing.review_count,
+                              price: listing.price,
+                              revenue: monthlyRevenue,
+                              units: monthlyUnits,
+                            });
+                          }
                           
                           return (
                             <ProductCard
