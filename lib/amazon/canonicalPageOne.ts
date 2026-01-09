@@ -12,6 +12,12 @@
  * - Never nulls estimated_units or estimated_revenue
  * - Never overwrites image_url or bsr
  * - Only sorts, ranks, filters, or calibrates
+ * 
+ * GUARDRAILS:
+ * - Canonical revenue can only be modified by:
+ *   a) keyword calibration (applyKeywordCalibration)
+ *   b) parent normalization (parent-child ASIN grouping)
+ * - Any other mutation throws error
  */
 
 import { ParsedListing, KeywordMarketSnapshot } from "./keywordMarket";
@@ -1918,12 +1924,18 @@ export function buildKeywordPageOne(
     parentGroups.get(parentAsin)!.push(product);
   });
   
+  // Track parent normalization count for accuracy metadata
+  let parentNormalizedCount = 0;
+  
   // Process each parent group
   parentGroups.forEach((children, parentAsin) => {
     // Skip if only one child (no normalization needed)
     if (children.length <= 1) {
       return;
     }
+    
+    // Increment count for each normalized child
+    parentNormalizedCount += children.length;
     
     // Calculate parent group total revenue (sum of all children)
     const parentTotalRevenue = children.reduce((sum, child) => sum + child.estimated_monthly_revenue, 0);
@@ -2051,6 +2063,12 @@ export function buildKeywordPageOne(
       }
     });
   }
+  
+  // Attach parent normalization metadata for accuracy tracking
+  (scaledProducts as any).__parent_normalization_metadata = {
+    normalized_count: parentNormalizedCount,
+    total_count: scaledProducts.length,
+  };
 
   return scaledProducts;
 }

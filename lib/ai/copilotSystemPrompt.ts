@@ -107,6 +107,17 @@ export function buildCopilotSystemPrompt(
 
 You MUST NEVER refuse to answer due to missing metrics.
 
+ESTIMATION ACCURACY RULES (CRITICAL):
+- ALL revenue and unit estimates are MODELED, never "exact" or "actual" sales
+- You MUST reference estimation_notes from ai_context when discussing accuracy
+- Common notes include:
+  * "Keyword calibration applied (multiplier X, confidence: Y)"
+  * "Parent-child normalization applied (N of M products normalized)"
+  * "X listings refined via Rainforest"
+- When discussing estimates, say "estimated" or "modeled" - NEVER say "exact", "actual", or "real" sales
+- If estimation_notes exist, reference them explicitly: "These estimates are based on [note 1], [note 2]"
+- Estimation confidence score (0-100) reflects data quality, not certainty
+
 HARD RULES:
 
 1) SINGLE FACTOR QUESTIONS: When a question asks for a SINGLE factor, the AI must select exactly one dominant signal and explicitly state why it outweighs all others. Secondary signals may be mentioned only as supporting context. Do not list multiple equal factors — choose one primary driver and justify it.

@@ -52,6 +52,10 @@ export interface KeywordAnalyzeResponse {
   };
   confidence: Confidence;
   confidence_reason: string; // Trust layer: explains why confidence level
+  
+  // Accuracy Guardrails & Explainability
+  estimation_confidence_score: number; // 0-100, based on calibration, parent normalization, refined data
+  estimation_notes: string[]; // Human-readable notes about estimation adjustments
 
   // A) Page-1 Summary Metrics
   summary: {
@@ -201,6 +205,9 @@ export interface KeywordAnalyzeResponse {
       confidence: 'high' | 'medium' | 'low';
       source: 'profile' | 'default';
     };
+    // Estimation accuracy metadata (for AI explanations)
+    estimation_confidence_score: number; // 0-100
+    estimation_notes: string[]; // Human-readable notes about estimation adjustments
   };
 }
 
@@ -319,7 +326,8 @@ export async function buildKeywordAnalyzeResponse(
   marketplace: Marketplace = "US",
   currency: Currency = "USD",
   supabase?: any,
-  canonicalProducts?: CanonicalProduct[] // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
+  canonicalProducts?: CanonicalProduct[], // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
+  refinedDataCount?: number // Number of listings with refined data (for accuracy scoring)
 ): Promise<KeywordAnalyzeResponse> {
   // Guard against null/undefined inputs
   if (!marketData) {
@@ -921,6 +929,31 @@ export async function buildKeywordAnalyzeResponse(
     delete (canonicalProducts as any).__calibration_metadata;
   }
   
+  // Extract parent normalization metadata from canonical products array (if present)
+  let parentNormalizationMetadata: {
+    normalized_count: number;
+    total_count: number;
+  } | null = null;
+  
+  if (canonicalProducts && (canonicalProducts as any).__parent_normalization_metadata) {
+    parentNormalizationMetadata = (canonicalProducts as any).__parent_normalization_metadata;
+    // Remove metadata from products array (cleanup)
+    delete (canonicalProducts as any).__parent_normalization_metadata;
+  }
+  
+  // Calculate estimation accuracy score and notes
+  const { calculateEstimationConfidence } = await import("@/lib/analyze/estimationAccuracy");
+  const estimationMetadata = {
+    calibration_applied: calibrationMetadata?.applied || false,
+    calibration_confidence: calibrationMetadata?.confidence || null,
+    calibration_multiplier: calibrationMetadata?.revenue_multiplier || null,
+    parent_normalized_count: parentNormalizationMetadata?.normalized_count || 0,
+    total_products: products.length,
+    refined_data_count: refinedDataCount || 0,
+  };
+  
+  const accuracyResult = calculateEstimationConfidence(estimationMetadata);
+  
   // Build AI context (read-only copy)
   const aiContext = {
     mode: "keyword" as const,
@@ -939,6 +972,9 @@ export async function buildKeywordAnalyzeResponse(
       confidence: 'low' as const,
       source: 'default' as const,
     },
+    // Estimation accuracy metadata (for AI explanations)
+    estimation_confidence_score: accuracyResult.confidence_score,
+    estimation_notes: accuracyResult.notes,
   };
   
   // Calculate aggregates from canonical Page-1 array
@@ -950,6 +986,13 @@ export async function buildKeywordAnalyzeResponse(
     total_monthly_revenue_est: summary.total_monthly_revenue_est,
     page1_product_count: uniquePageOneAsins.size, // Use unique ASIN count (matches Helium-10)
   };
+  
+  // Verify canonical revenue integrity (guardrail)
+  const { verifyCanonicalRevenueIntegrity } = await import("@/lib/analyze/estimationAccuracy");
+  verifyCanonicalRevenueIntegrity(products, {
+    calibration_applied: calibrationMetadata?.applied || false,
+    parent_normalization_applied: (parentNormalizationMetadata?.normalized_count || 0) > 0,
+  });
   
   return {
     keyword,
@@ -963,6 +1006,8 @@ export async function buildKeywordAnalyzeResponse(
     },
     confidence,
     confidence_reason: confidenceReason,
+    estimation_confidence_score: accuracyResult.confidence_score,
+    estimation_notes: accuracyResult.notes,
     summary,
     products, // Canonical Page-1 array
     page_one_listings: products, // Explicit canonical Page-1 array for UI (same as products) - ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array

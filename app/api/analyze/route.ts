@@ -21,6 +21,12 @@ You are NOT a data reporter.
 You are NOT a neutral analyst.
 You are a decision-maker who must provide clear verdicts.
 
+ESTIMATION ACCURACY RULES (CRITICAL):
+- ALL revenue and unit estimates are MODELED, never "exact" or "actual" sales
+- You MUST reference estimation_notes when discussing accuracy (if available in analysis response)
+- When discussing estimates, say "estimated" or "modeled" - NEVER say "exact", "actual", or "real" sales
+- Estimation confidence score (0-100) reflects data quality, not certainty
+
 CORE OPERATING PRINCIPLES (NON-NEGOTIABLE)
 
 1. Verdict-first decision making
@@ -2111,6 +2117,8 @@ export async function POST(req: NextRequest) {
         
         // Pass canonical products directly to data contract builder
         // This ensures canonical products are the final authority
+        // Note: refinedDataCount is tracked client-side in AnalyzeForm
+        // For now, pass 0 - it will be updated when refined data is loaded
         contractResponse = await buildKeywordAnalyzeResponse(
           body.input_value,
           keywordMarketData,
@@ -2118,7 +2126,8 @@ export async function POST(req: NextRequest) {
           marketplaceCode,
           "USD",
           supabase, // supabase client for keyword history blending
-          canonicalProducts // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
+          canonicalProducts, // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
+          0 // refinedDataCount - tracked client-side, not available here
         );
         
         // Canonical products are already set in contractResponse - no replacement needed
