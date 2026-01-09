@@ -560,14 +560,7 @@ CRITICAL AI RULES:
         ? `#${selectedListing.bsr.toLocaleString()}`
         : 'Not available';
       
-      // Check for enriched data (refined 30-day sales data)
-      const enrichedData = selectedListing.enriched_data;
-      const hasEnrichedData = enrichedData && 
-        typeof enrichedData === 'object' && 
-        !enrichedData.loading && 
-        !enrichedData.error &&
-        enrichedData.data_source === 'rainforest_refinement';
-
+      // v1: Canonical revenue only - no refinement
       contextParts.push(`=== SELECTED LISTING (USER CONTEXT) ===
 The user has selected this listing from Page 1. Reference it when answering questions.
 
@@ -581,25 +574,8 @@ Organic Rank: ${selectedListing.organic_rank !== null && selectedListing.organic
 Fulfillment: ${selectedListing.fulfillment || 'Not available'}
 Brand: ${selectedListing.brand || 'Not available'}
 Sponsored: ${selectedListing.is_sponsored ? 'Yes' : 'No'}
-
-${hasEnrichedData ? `=== VERIFIED 30-DAY SALES DATA (REFINEMENT LAYER) ===
-This ASIN has verified 30-day sales data from Rainforest API activity signals.
-IMPORTANT: This is a refinement layer for THIS ASIN ONLY. It does NOT affect market totals or brand moat calculations.
-
-Verified Units Range: ${enrichedData.refined_units_range?.min?.toLocaleString() || 0} - ${enrichedData.refined_units_range?.max?.toLocaleString() || 0} units/month
-Refined Estimated Revenue: $${enrichedData.refined_estimated_revenue?.toFixed(2) || '0.00'} / month
-Data Source: ${enrichedData.data_source || 'rainforest_refinement'}
-Confidence: ${enrichedData.confidence || 'medium'}
-${enrichedData.current_bsr ? `Current BSR: #${enrichedData.current_bsr.toLocaleString()}` : ''}
-${enrichedData.review_count ? `Review Count: ${enrichedData.review_count.toLocaleString()}` : ''}
-${enrichedData.fulfillment_type ? `Fulfillment Type: ${enrichedData.fulfillment_type}` : ''}
-
-CRITICAL AI RULES:
-- When referencing this ASIN, prefer the verified 30-day data over model estimates
-- Say "This ASIN shows verified 30-day activity of X-Y units/month" (NOT "Market revenue is updated")
-- Never recalculate market totals or brand moat using this refined data
-- This refinement applies ONLY to the selected ASIN, not to other listings
-- Market Snapshot totals remain model-based and unchanged` : ''}
+Estimated Monthly Revenue: ${selectedListing.estimated_monthly_revenue ? `$${selectedListing.estimated_monthly_revenue.toLocaleString()}` : 'Not available'}
+Estimated Monthly Units: ${selectedListing.estimated_monthly_units ? selectedListing.estimated_monthly_units.toLocaleString() : 'Not available'}
 
 When the user asks about a specific product or compares products, reference this selected listing's data.`);
     } catch (error) {

@@ -2117,8 +2117,7 @@ export async function POST(req: NextRequest) {
         
         // Pass canonical products directly to data contract builder
         // This ensures canonical products are the final authority
-        // Note: refinedDataCount is tracked client-side in AnalyzeForm
-        // For now, pass 0 - it will be updated when refined data is loaded
+        // v1: No refined data - canonical revenue only
         contractResponse = await buildKeywordAnalyzeResponse(
           body.input_value,
           keywordMarketData,
@@ -2127,7 +2126,7 @@ export async function POST(req: NextRequest) {
           "USD",
           supabase, // supabase client for keyword history blending
           canonicalProducts, // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
-          0 // refinedDataCount - tracked client-side, not available here
+          0 // refinedDataCount - v1 does not support refinement
         );
         
         // Canonical products are already set in contractResponse - no replacement needed
