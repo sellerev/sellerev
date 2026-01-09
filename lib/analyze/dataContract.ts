@@ -171,14 +171,11 @@ export interface KeywordAnalyzeResponse {
 
   // F) Brand Moat Analysis (Page-1 Only, Deterministic)
   brand_moat: {
-    dominant_brand: string | null;
-    moat_level: "HARD" | "SOFT" | "NONE";
-    signals: {
-      revenue_share_pct: number;
-      listing_count_on_page1: number;
-      avg_review_count: number;
-      max_rank: number;
-    };
+    level: "HARD" | "SOFT" | "NONE";
+    top_brand: string | null;
+    top_brand_share_pct: number;
+    top_3_share_pct: number;
+    unique_brand_count: number;
   };
 
   // G) AI Context (Read-only)
@@ -866,38 +863,31 @@ export async function buildKeywordAnalyzeResponse(
       brandMoat = analyzeBrandMoat(pageOneListings);
 
       console.log("[BrandMoat] Analysis complete", {
-        moat_level: brandMoat.moat_level,
-        dominant_brand: brandMoat.dominant_brand,
-        revenue_share_pct: brandMoat.signals.revenue_share_pct,
-        listing_count: brandMoat.signals.listing_count_on_page1,
-        avg_review_count: brandMoat.signals.avg_review_count,
-        max_rank: brandMoat.signals.max_rank,
+        level: brandMoat.level,
+        top_brand: brandMoat.top_brand,
+        top_brand_share_pct: brandMoat.top_brand_share_pct,
+        top_3_share_pct: brandMoat.top_3_share_pct,
+        unique_brand_count: brandMoat.unique_brand_count,
       });
     } catch (error) {
       console.warn("[BrandMoat] Error computing brand moat:", error);
       // Never throw or return null — default to NONE
       brandMoat = {
-        dominant_brand: null,
-        moat_level: "NONE",
-        signals: {
-          revenue_share_pct: 0,
-          listing_count_on_page1: 0,
-          avg_review_count: 0,
-          max_rank: 0,
-        },
+        level: "NONE",
+        top_brand: null,
+        top_brand_share_pct: 0,
+        top_3_share_pct: 0,
+        unique_brand_count: 0,
       };
     }
   } else {
     // No products — default to NONE
     brandMoat = {
-      dominant_brand: null,
-      moat_level: "NONE",
-      signals: {
-        revenue_share_pct: 0,
-        listing_count_on_page1: 0,
-        avg_review_count: 0,
-        max_rank: 0,
-      },
+      level: "NONE",
+      top_brand: null,
+      top_brand_share_pct: 0,
+      top_3_share_pct: 0,
+      unique_brand_count: 0,
     };
   }
 

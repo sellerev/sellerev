@@ -7,18 +7,16 @@
  * - Page-1 only (no historical inference)
  * - Deterministic output
  * - Missing brand = compute using available ones
- * - Never throw or return null — default to NO_MOAT
+ * - Never throw or return null — default to NONE
+ * - No additional API calls — uses existing Page-1 keyword data
  */
 
 export interface BrandMoatResult {
-  dominant_brand: string | null;
-  moat_level: "HARD" | "SOFT" | "NONE";
-  signals: {
-    revenue_share_pct: number;
-    listing_count_on_page1: number;
-    avg_review_count: number;
-    max_rank: number; // Best position (lowest rank number)
-  };
+  level: "HARD" | "SOFT" | "NONE";
+  top_brand: string | null;
+  top_brand_share_pct: number;
+  top_3_share_pct: number;
+  unique_brand_count: number;
 }
 
 export interface PageOneListing {
@@ -40,52 +38,35 @@ function normalizeBrand(brand: string | null | undefined): string | null {
   return brand.trim();
 }
 
-/**
- * Computes median review count from Page-1 listings
- */
-function computeMedianReviewCount(listings: PageOneListing[]): number {
-  const reviewCounts = listings
-    .map(l => l.review_count || 0)
-    .filter(r => r > 0)
-    .sort((a, b) => a - b);
-  
-  if (reviewCounts.length === 0) {
-    return 0;
-  }
-  
-  const mid = Math.floor(reviewCounts.length / 2);
-  return reviewCounts.length % 2 === 0
-    ? (reviewCounts[mid - 1] + reviewCounts[mid]) / 2
-    : reviewCounts[mid];
-}
 
 /**
  * Analyzes Brand Moat from Page-1 listings.
  * 
- * Groups listings by brand and computes:
- * - listing_count_on_page1
- * - total_estimated_revenue
+ * Aggregates Page-1 listings by brand and computes:
+ * - brand_name
+ * - asin_count
+ * - estimated_page1_revenue
  * - revenue_share_pct
- * - avg_review_count
- * - max_rank (best position)
  * 
- * @param listings - Page-1 listings with brand, revenue, review_count, rank
- * @returns Brand Moat result with dominant brand and moat level
+ * Classification rules:
+ * - HARD MOAT if: top_brand_revenue_share >= 50% OR top_3_brands_revenue_share >= 75% OR top brand has >= 3 listings ranking top 10
+ * - SOFT MOAT if: top_brand_revenue_share between 30%–49% AND top_3_brands_revenue_share between 50%–74%
+ * - NO MOAT otherwise
+ * 
+ * @param listings - Page-1 listings with brand, revenue, rank
+ * @returns Brand Moat result with level, top brand, and share percentages
  */
 export function analyzeBrandMoat(
   listings: PageOneListing[]
 ): BrandMoatResult {
-  // Guard: If no listings, return NO_MOAT
+  // Guard: If no listings, return NONE
   if (!listings || listings.length === 0) {
     return {
-      dominant_brand: null,
-      moat_level: "NONE",
-      signals: {
-        revenue_share_pct: 0,
-        listing_count_on_page1: 0,
-        avg_review_count: 0,
-        max_rank: 0,
-      },
+      level: "NONE",
+      top_brand: null,
+      top_brand_share_pct: 0,
+      top_3_share_pct: 0,
+      unique_brand_count: 0,
     };
   }
 
@@ -94,22 +75,16 @@ export function analyzeBrandMoat(
     l => normalizeBrand(l.brand) !== null
   );
 
-  // If no brands available, return NO_MOAT
+  // If no brands available, return NONE
   if (listingsWithBrand.length === 0) {
     return {
-      dominant_brand: null,
-      moat_level: "NONE",
-      signals: {
-        revenue_share_pct: 0,
-        listing_count_on_page1: 0,
-        avg_review_count: 0,
-        max_rank: 0,
-      },
+      level: "NONE",
+      top_brand: null,
+      top_brand_share_pct: 0,
+      top_3_share_pct: 0,
+      unique_brand_count: 0,
     };
   }
-
-  // Compute Page-1 median review count (for SOFT_MOAT threshold)
-  const page1MedianReviewCount = computeMedianReviewCount(listings);
 
   // Group listings by brand
   const brandGroups = new Map<string, PageOneListing[]>();
@@ -132,120 +107,104 @@ export function analyzeBrandMoat(
 
   // Compute metrics per brand
   const brandMetrics: Array<{
-    brand: string;
-    listing_count_on_page1: number;
-    total_estimated_revenue: number;
+    brand_name: string;
+    asin_count: number;
+    estimated_page1_revenue: number;
     revenue_share_pct: number;
-    avg_review_count: number;
-    max_rank: number;
+    top_10_listing_count: number; // Count of listings ranking in top 10
   }> = [];
 
   brandGroups.forEach((brandListings, brandName) => {
-    const listing_count_on_page1 = brandListings.length;
+    const asin_count = brandListings.length;
     
-    const total_estimated_revenue = brandListings.reduce(
+    const estimated_page1_revenue = brandListings.reduce(
       (sum, l) => sum + (l.estimated_monthly_revenue || 0),
       0
     );
     
     const revenue_share_pct =
       totalPage1Revenue > 0
-        ? (total_estimated_revenue / totalPage1Revenue) * 100
+        ? (estimated_page1_revenue / totalPage1Revenue) * 100
         : 0;
 
-    const reviewCounts = brandListings
-      .map(l => l.review_count || 0)
-      .filter(r => r > 0);
-    const avg_review_count =
-      reviewCounts.length > 0
-        ? reviewCounts.reduce((a, b) => a + b, 0) / reviewCounts.length
-        : 0;
-
-    // max_rank = best position (lowest rank number)
-    // Use page_position if available, otherwise rank
-    const ranks = brandListings
-      .map(l => {
-        const pos = l.page_position ?? l.rank;
-        return pos !== null && pos !== undefined && pos > 0 ? pos : 999;
-      })
-      .filter(r => r > 0 && r < 999);
-    const max_rank =
-      ranks.length > 0 ? Math.min(...ranks) : 0; // Lower is better
+    // Count listings ranking in top 10 (rank <= 10, lower is better)
+    const top_10_listing_count = brandListings.filter(l => {
+      const pos = l.page_position ?? l.rank;
+      return pos !== null && pos !== undefined && pos > 0 && pos <= 10;
+    }).length;
 
     brandMetrics.push({
-      brand: brandName,
-      listing_count_on_page1,
-      total_estimated_revenue,
+      brand_name: brandName,
+      asin_count,
+      estimated_page1_revenue,
       revenue_share_pct,
-      avg_review_count,
-      max_rank,
+      top_10_listing_count,
     });
   });
 
-  // Find dominant brand by revenue share
-  const dominantBrandMetric = brandMetrics.reduce((dominant, current) => {
-    return current.revenue_share_pct > dominant.revenue_share_pct
-      ? current
-      : dominant;
-  }, brandMetrics[0] || {
-    brand: "",
-    listing_count_on_page1: 0,
-    total_estimated_revenue: 0,
-    revenue_share_pct: 0,
-    avg_review_count: 0,
-    max_rank: 0,
-  });
+  // Sort by revenue share (descending)
+  brandMetrics.sort((a, b) => b.revenue_share_pct - a.revenue_share_pct);
+
+  // Get top brand
+  const topBrand = brandMetrics[0];
+  const top_brand_share_pct = topBrand ? topBrand.revenue_share_pct : 0;
+  const top_brand_name = topBrand && topBrand.revenue_share_pct > 0 ? topBrand.brand_name : null;
+
+  // Calculate top 3 brands revenue share
+  const top3Revenue = brandMetrics
+    .slice(0, 3)
+    .reduce((sum, b) => sum + b.estimated_page1_revenue, 0);
+  const top_3_share_pct =
+    totalPage1Revenue > 0 ? (top3Revenue / totalPage1Revenue) * 100 : 0;
+
+  // Unique brand count
+  const unique_brand_count = brandGroups.size;
 
   // ──────────────────────────────────────────────────────────────────────────────
   // BRAND MOAT CLASSIFICATION
   // ──────────────────────────────────────────────────────────────────────────────
-  // HARD_MOAT if:
-  //   - revenue_share_pct ≥ 60%
+  // HARD MOAT if:
+  //   - top_brand_revenue_share >= 50%
   //   OR
-  //   - listing_count_on_page1 ≥ 3 AND revenue_share_pct ≥ 40%
-  //
-  // SOFT_MOAT if:
-  //   - revenue_share_pct between 40–59% (inclusive)
+  //   - top_3_brands_revenue_share >= 75%
   //   OR
-  //   - listing_count_on_page1 ≥ 2 AND avg_review_count ≥ 2× page1 median
+  //   - top brand has >= 3 listings ranking top 10
   //
-  // NONE otherwise
+  // SOFT MOAT if:
+  //   - top_brand_revenue_share between 30%–49%
+  //   AND
+  //   - top_3_brands_revenue_share between 50%–74%
+  //
+  // NO MOAT otherwise
 
-  let moat_level: "HARD" | "SOFT" | "NONE" = "NONE";
+  let level: "HARD" | "SOFT" | "NONE" = "NONE";
 
-  // Check HARD_MOAT thresholds (must check first)
+  // Check HARD MOAT thresholds
   if (
-    dominantBrandMetric.revenue_share_pct >= 60 ||
-    (dominantBrandMetric.listing_count_on_page1 >= 3 &&
-      dominantBrandMetric.revenue_share_pct >= 40)
+    top_brand_share_pct >= 50 ||
+    top_3_share_pct >= 75 ||
+    (topBrand && topBrand.top_10_listing_count >= 3)
   ) {
-    moat_level = "HARD";
+    level = "HARD";
   }
-  // Check SOFT_MOAT thresholds (only if not HARD)
+  // Check SOFT MOAT thresholds (only if not HARD)
   else if (
-    (dominantBrandMetric.revenue_share_pct >= 40 &&
-      dominantBrandMetric.revenue_share_pct < 60) ||
-    (dominantBrandMetric.listing_count_on_page1 >= 2 &&
-      dominantBrandMetric.avg_review_count >= page1MedianReviewCount * 2 &&
-      page1MedianReviewCount > 0)
+    top_brand_share_pct >= 30 &&
+    top_brand_share_pct < 50 &&
+    top_3_share_pct >= 50 &&
+    top_3_share_pct < 75
   ) {
-    moat_level = "SOFT";
+    level = "SOFT";
   }
   // Otherwise NONE (already default)
 
   // Build result
   const result: BrandMoatResult = {
-    dominant_brand:
-      dominantBrandMetric.revenue_share_pct > 0
-        ? dominantBrandMetric.brand
-        : null,
-    moat_level,
-    signals: {
-      revenue_share_pct: Math.round(dominantBrandMetric.revenue_share_pct * 100) / 100,
-      listing_count_on_page1: dominantBrandMetric.listing_count_on_page1,
-      avg_review_count: Math.round(dominantBrandMetric.avg_review_count),
-      max_rank: dominantBrandMetric.max_rank,
-    },
+    level,
+    top_brand: top_brand_name,
+    top_brand_share_pct: Math.round(top_brand_share_pct * 100) / 100,
+    top_3_share_pct: Math.round(top_3_share_pct * 100) / 100,
+    unique_brand_count,
   };
 
   return result;
