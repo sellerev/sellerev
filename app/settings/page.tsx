@@ -8,15 +8,23 @@ import FinancialConstraintsTab from "./tabs/FinancialConstraintsTab";
 import SourcingLogisticsTab from "./tabs/SourcingLogisticsTab";
 import AIBehaviorTab from "./tabs/AIBehaviorTab";
 import DataSourcesTab from "./tabs/DataSourcesTab";
-import ProfileTab from "./tabs/ProfileTab";
 import PendingMemoryReview from "./components/PendingMemoryReview";
 
-type Tab = "profile" | "overview" | "preferences" | "financial" | "sourcing" | "ai" | "data";
+type Tab = "overview" | "preferences" | "financial" | "sourcing" | "ai" | "data";
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("profile");
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [pendingCount, setPendingCount] = useState(0);
   const [showPendingReview, setShowPendingReview] = useState(false);
+
+  const tabs = [
+    { id: "overview" as Tab, label: "Overview" },
+    { id: "preferences" as Tab, label: "Operating Preferences" },
+    { id: "financial" as Tab, label: "Financial Constraints" },
+    { id: "sourcing" as Tab, label: "Sourcing & Logistics" },
+    { id: "ai" as Tab, label: "AI Behavior" },
+    { id: "data" as Tab, label: "Data Sources" },
+  ];
 
   // Load pending memory count
   useEffect(() => {
@@ -70,23 +78,13 @@ export default function SettingsPage() {
     }
   }
 
-  const tabs = [
-    { id: "profile" as Tab, label: "Profile" },
-    { id: "overview" as Tab, label: "Overview" },
-    { id: "preferences" as Tab, label: "Operating Preferences" },
-    { id: "financial" as Tab, label: "Financial Constraints" },
-    { id: "sourcing" as Tab, label: "Sourcing & Logistics" },
-    { id: "ai" as Tab, label: "AI Behavior" },
-    { id: "data" as Tab, label: "Data Sources" },
-  ];
-
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-6xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            Seller Profile & Preferences
+            Business Preferences
           </h1>
           <p className="text-gray-600">
             Manage how Sellerev tailors analysis and AI responses to your business
@@ -146,7 +144,6 @@ export default function SettingsPage() {
 
         {/* Tab Content */}
         <div className="bg-white rounded-lg border border-gray-200 p-6">
-          {activeTab === "profile" && <ProfileTab />}
           {activeTab === "overview" && <OverviewTab onReviewPending={() => setShowPendingReview(true)} />}
           {activeTab === "preferences" && <OperatingPreferencesTab />}
           {activeTab === "financial" && <FinancialConstraintsTab />}

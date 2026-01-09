@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Settings } from "lucide-react";
+import ProfileDropdown from "./ProfileDropdown";
 
 export default function Navigation() {
   const pathname = usePathname();
@@ -43,20 +43,9 @@ export default function Navigation() {
             </div>
           </div>
           
-          {/* Right-aligned: Settings */}
+          {/* Right-aligned: Profile Dropdown */}
           <div className="flex items-center">
-            <Link
-              href="/settings"
-              className={`text-sm font-medium transition-colors flex items-center gap-2 px-3 py-2 rounded-lg ${
-                pathname?.startsWith("/settings")
-                  ? "text-[#111827] bg-gray-100"
-                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
-              }`}
-              title="Settings"
-            >
-              <Settings className="w-5 h-5" />
-              <span className="hidden sm:inline">Settings</span>
-            </Link>
+            <ProfileDropdown />
           </div>
         </div>
       </div>
