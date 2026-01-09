@@ -5,6 +5,7 @@ import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import FeasibilityCalculator from "./FeasibilityCalculator";
 import BrandMoatBlock from "./BrandMoatBlock";
+import { blendRefinedRevenue, isRefinedDataExpired } from "@/lib/analyze/asinRefinementBlend";
 
 /**
  * Sellerev Analyze Page - Core Product Component
@@ -460,6 +461,7 @@ export default function AnalyzeForm({
     fulfillment_type: string | null;
     data_source: "rainforest_refinement";
     confidence: "high" | "medium" | "low";
+    expires_at?: string | null;
     loading?: boolean;
     error?: string;
   }>>({});
@@ -1318,7 +1320,24 @@ export default function AnalyzeForm({
                                 const revenue = (listing as any).estimated_monthly_revenue;
                                 const units = (listing as any).estimated_monthly_units;
                                 const enrichedData = enrichedAsinData[listing.asin];
-                                const hasEnrichedData = enrichedData && !enrichedData.loading && !enrichedData.error;
+                                
+                                // Check if enriched data exists and is not expired
+                                const isExpired = enrichedData?.expires_at 
+                                  ? isRefinedDataExpired(enrichedData.expires_at)
+                                  : false;
+                                const hasEnrichedData = enrichedData && !enrichedData.loading && !enrichedData.error && !isExpired;
+                                
+                                // Blend refined revenue with canonical revenue if available
+                                let displayRevenue = revenue;
+                                let blendedResult = null;
+                                if (hasEnrichedData && enrichedData.refined_estimated_revenue && revenue) {
+                                  blendedResult = blendRefinedRevenue(
+                                    enrichedData.refined_estimated_revenue,
+                                    revenue,
+                                    enrichedData.confidence
+                                  );
+                                  displayRevenue = blendedResult.blended_revenue;
+                                }
                                 
                                 // Format revenue: round to nearest dollar, format with thousands separators, append "/ mo"
                                 const formatRevenue = (value: number | null | undefined): string => {
@@ -1402,16 +1421,18 @@ export default function AnalyzeForm({
                                   <div className="mt-3 pt-3 border-t border-gray-200 bg-gray-50 rounded -mx-4 px-4 py-3">
                                     {hasEnrichedData ? (
                                       <>
-                                        {/* Verified 30-Day Range (Refined Data) */}
+                                        {/* Blended Revenue Display */}
                                         <div className="mb-2">
                                           <div className="flex items-center gap-2 mb-1">
-                                            <div className="text-xs font-semibold text-green-700">Verified 30-Day Range</div>
+                                            <div className="text-xs font-semibold text-green-700">
+                                              Refined (confidence: {enrichedData.confidence})
+                                            </div>
                                             <div className="group relative">
                                               <svg className="w-3 h-3 text-gray-400 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                               </svg>
                                               <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-64 p-2 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                                                Refines estimated sales using Amazon activity signals. Market totals remain model-based.
+                                                Blended estimate combining refined ASIN data ({Math.round((blendedResult?.refined_weight || 0) * 100)}%) with canonical model ({Math.round((blendedResult?.canonical_weight || 0) * 100)}%). Refinement is per-listing only and does not affect market totals, brand moat, or aggregates.
                                               </div>
                                             </div>
                                           </div>
@@ -1419,13 +1440,8 @@ export default function AnalyzeForm({
                                             {enrichedData.refined_units_range.min.toLocaleString()} - {enrichedData.refined_units_range.max.toLocaleString()} units
                                           </div>
                                           <div className="text-xl font-bold text-gray-900">
-                                            {formatRevenue(enrichedData.refined_estimated_revenue)}
+                                            {formatRevenue(displayRevenue)}
                                           </div>
-                                          {enrichedData.confidence && (
-                                            <div className="text-xs text-gray-500 mt-1">
-                                              Confidence: {enrichedData.confidence}
-                                            </div>
-                                          )}
                                         </div>
                                         {/* Show original estimate as reference */}
                                         <div className="pt-2 border-t border-gray-300">

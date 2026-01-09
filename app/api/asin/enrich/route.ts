@@ -36,6 +36,7 @@ interface EnrichResponse {
     fulfillment_type: string | null;
     data_source: "rainforest_refinement";
     confidence: "high" | "medium" | "low";
+    expires_at?: string | null;
   };
 }
 
@@ -179,23 +180,32 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (cached && !cacheError) {
-      console.log(`[ASINEnrich] Cache hit for ${cleanAsin} (user: ${user.id})`);
-      return NextResponse.json(
-        {
-          success: true,
-          data: {
-            refined_units_range: cached.refined_units_range as RefinedUnitsRange,
-            refined_estimated_revenue: parseFloat(cached.refined_estimated_revenue.toString()),
-            current_price: cached.current_price ? parseFloat(cached.current_price.toString()) : currentPrice || 0,
-            current_bsr: cached.current_bsr,
-            review_count: cached.review_count,
-            fulfillment_type: cached.fulfillment_type,
-            data_source: cached.data_source as "rainforest_refinement",
-            confidence: cached.confidence as "high" | "medium" | "low",
+      // Check if cache is expired
+      const isExpired = cached.expires_at && new Date(cached.expires_at) < new Date();
+      
+      if (isExpired) {
+        console.log(`[ASINEnrich] Cache expired for ${cleanAsin} (user: ${user.id}), fetching fresh data`);
+        // Continue to fetch fresh data below
+      } else {
+        console.log(`[ASINEnrich] Cache hit for ${cleanAsin} (user: ${user.id})`);
+        return NextResponse.json(
+          {
+            success: true,
+            data: {
+              refined_units_range: cached.refined_units_range as RefinedUnitsRange,
+              refined_estimated_revenue: parseFloat(cached.refined_estimated_revenue.toString()),
+              current_price: cached.current_price ? parseFloat(cached.current_price.toString()) : currentPrice || 0,
+              current_bsr: cached.current_bsr,
+              review_count: cached.review_count,
+              fulfillment_type: cached.fulfillment_type,
+              data_source: cached.data_source as "rainforest_refinement",
+              confidence: cached.confidence as "high" | "medium" | "low",
+              expires_at: cached.expires_at,
+            },
           },
-        },
-        { headers: res.headers }
-      );
+          { headers: res.headers }
+        );
+      }
     }
 
     // 4. Fetch from Rainforest API
@@ -315,6 +325,10 @@ export async function POST(req: NextRequest) {
     }
 
     // 8. Return response
+    const expiresAt = unitsRange && price 
+      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() // 24 hours from now
+      : null;
+    
     const response: EnrichResponse = {
       success: true,
       data: {
@@ -326,6 +340,7 @@ export async function POST(req: NextRequest) {
         fulfillment_type: fulfillmentType,
         data_source: "rainforest_refinement",
         confidence,
+        expires_at: expiresAt,
       },
     };
 
