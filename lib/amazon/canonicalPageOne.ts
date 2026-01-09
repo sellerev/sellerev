@@ -831,8 +831,10 @@ export function buildKeywordPageOne(
       image_url = null;
     } else {
       // Check ParsedListing.image_url first (may be null if empty from Rainforest parsing)
-      if (l.image_url && typeof l.image_url === 'string' && l.image_url.trim().length > 0) {
-        image_url = l.image_url.trim();
+      // Also check for 'image' field (from normalizeListing compatibility)
+      const listingImageUrl = l.image_url || (l as any).image;
+      if (listingImageUrl && typeof listingImageUrl === 'string' && listingImageUrl.trim().length > 0) {
+        image_url = listingImageUrl.trim();
       } else {
         // Fallback to raw item data (preserved in _rawItem field)
         const rawItem = (l as any)._rawItem;
