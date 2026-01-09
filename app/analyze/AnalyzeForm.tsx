@@ -6,7 +6,7 @@ import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import FeasibilityCalculator from "./FeasibilityCalculator";
 import BrandMoatBlock from "./BrandMoatBlock";
 import { ProductCard } from "@/app/components/ProductCard";
-import { Search, Loader2 } from "lucide-react";
+import SearchBar from "@/app/components/SearchBar";
 
 /**
  * Sellerev Analyze Page - Core Product Component
@@ -698,94 +698,25 @@ export default function AnalyzeForm({
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* BLOCK 1: INPUT BAR (TOP - FULL WIDTH)                               */}
-      {/* In readOnly mode: inputs and button are disabled                    */}
+      {/* SEARCH BAR (STICKY - BELOW NAVIGATION)                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex gap-4 items-end">
-            {/* Keyword Input Field */}
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Search Keyword
-              </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Search className="h-5 w-5 text-gray-400" />
-                </div>
-                <input
-                  type="text"
-                  className={`w-full border rounded-xl pl-12 pr-4 py-3.5 text-base text-gray-900 placeholder-gray-400
-                    focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:border-transparent
-                    transition-all duration-200
-                    ${inputError 
-                      ? "border-red-300 bg-red-50 focus:ring-red-500 focus:bg-white" 
-                      : "border-gray-300 bg-white hover:border-gray-400 focus:bg-white"
-                    } 
-                    ${readOnly ? "bg-gray-50 cursor-not-allowed" : ""}`}
-                  value={inputValue}
-                  onChange={(e) => {
-                    if (!readOnly) {
-                      setInputValue(e.target.value);
-                      setInputError(null);
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !loading && !readOnly) {
-                      analyze();
-                    }
-                  }}
-                  disabled={loading || readOnly}
-                  placeholder="Enter an Amazon keyword (e.g., food warmer, chalk, coffee maker)"
-                  readOnly={readOnly}
-                />
-              </div>
-              {inputError && (
-                <p className="text-red-600 text-sm mt-1.5 flex items-center gap-1">
-                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                  </svg>
-                  {inputError}
-                </p>
-              )}
-            </div>
+      <SearchBar
+        inputValue={inputValue}
+        onInputChange={(value) => {
+          setInputValue(value);
+          setInputError(null);
+        }}
+        onAnalyze={analyze}
+        loading={loading}
+        readOnly={readOnly}
+        inputError={inputError}
+      />
 
-            {/* Analyze Button - Hidden in readOnly mode */}
-            {readOnly ? (
-              <div className="flex items-center gap-2 px-6 py-3.5 bg-gray-100 rounded-xl text-sm font-medium text-gray-500">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-                View Only
-              </div>
-            ) : (
-              <button
-                className="bg-[#3B82F6] text-white rounded-xl px-8 py-3.5 font-semibold text-base
-                  hover:bg-[#2563EB] active:bg-[#1D4ED8]
-                  disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#3B82F6]
-                  transition-all duration-200 shadow-sm hover:shadow-md
-                  flex items-center gap-2 min-w-[140px] justify-center"
-                onClick={analyze}
-                disabled={loading || !inputValue.trim()}
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    <span>Analyzing…</span>
-                  </>
-                ) : (
-                  <>
-                    <Search className="h-5 w-5" />
-                    <span>Analyze</span>
-                  </>
-                )}
-              </button>
-            )}
-          </div>
-
-          {/* Global Error */}
-          {error && (
-            <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+      {/* Global Error */}
+      {error && (
+        <div className="sticky top-[140px] z-30 px-6 pt-3">
+          <div className="max-w-7xl mx-auto">
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
               <div className="flex items-start gap-2">
                 <svg className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -805,11 +736,15 @@ export default function AnalyzeForm({
                 </button>
               </div>
             </div>
-          )}
+          </div>
+        </div>
+      )}
 
-          {/* Read-only banner */}
-          {readOnly && (
-            <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
+      {/* Read-only banner */}
+      {readOnly && (
+        <div className="sticky top-[140px] z-30 px-6 pt-3">
+          <div className="max-w-7xl mx-auto">
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
               <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -817,21 +752,18 @@ export default function AnalyzeForm({
                 Viewing saved analysis. Chat is available for follow-up questions.
               </p>
             </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* MAIN CONTENT: TWO-COLUMN LAYOUT                                     */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="flex flex-1">
+      <div className="flex flex-1 overflow-hidden">
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* LEFT COLUMN: MARKET DATA & PRODUCTS (~70%)                      */}
+        {/* LEFT COLUMN: MARKET DATA & PRODUCTS (SCROLLABLE)                */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div
-          className="flex-1 overflow-y-auto"
-          style={{ width: "70%" }}
-        >
+        <div className="flex-1 overflow-y-auto px-6">
           {!analysis ? (
             /* PRE-ANALYSIS STATE */
             <div className="flex items-center justify-center h-full">
@@ -1316,20 +1248,24 @@ export default function AnalyzeForm({
         </div>
 
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* RIGHT COLUMN: AI CHAT SIDEBAR (ALWAYS VISIBLE - SPELLBOOK STYLE) */}
-        {/* AI Copilot is always available - no expand/collapse, no special sections */}
+        {/* RIGHT COLUMN: AI CHAT SIDEBAR (STICKY/FIXED - STAYS VISIBLE)    */}
+        {/* AI Copilot is always available - stays with you as you scroll  */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <ChatSidebar
-          analysisRunId={analysis?.analysis_run_id || null}
-          initialMessages={chatMessages}
-          onMessagesChange={setChatMessages}
-          marketSnapshot={analysis?.market_snapshot || null}
-          analysisMode={analysisMode}
-          selectedListing={selectedListing ? {
-            ...selectedListing,
-            // Include enriched data if available for this ASIN
-          } : null}
-        />
+        <div className="w-[400px] border-l border-gray-200 bg-white flex-shrink-0">
+          <div className="sticky top-[140px] h-[calc(100vh-140px)] overflow-hidden">
+            <ChatSidebar
+              analysisRunId={analysis?.analysis_run_id || null}
+              initialMessages={chatMessages}
+              onMessagesChange={setChatMessages}
+              marketSnapshot={analysis?.market_snapshot || null}
+              analysisMode={analysisMode}
+              selectedListing={selectedListing ? {
+                ...selectedListing,
+                // Include enriched data if available for this ASIN
+              } : null}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

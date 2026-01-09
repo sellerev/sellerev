@@ -388,12 +388,9 @@ export default function ChatSidebar({
 
   return (
     <div 
-      className="border-l bg-white flex flex-col sticky top-0" 
+      className="h-full bg-white flex flex-col" 
       style={{ 
-        width: "30%", 
-        minWidth: "320px",
-        height: "100vh",
-        maxHeight: "100vh"
+        height: "100%"
       }}
     >
       {/* ─────────────────────────────────────────────────────────────────── */}
