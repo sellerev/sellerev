@@ -4,7 +4,7 @@ import { useState } from "react";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import FeasibilityCalculator from "./FeasibilityCalculator";
-import BrandMoatSummary from "./BrandMoatSummary";
+import BrandMoatBlock from "./BrandMoatBlock";
 
 /**
  * Sellerev Analyze Page - Core Product Component
@@ -141,17 +141,15 @@ interface AnalysisResponse {
     assumptions: string[];
   };
   brand_moat?: {
-    level: "HARD" | "SOFT" | "NONE";
-    top_brand: string | null;
-    top_brand_share_pct: number;
-    top_3_share_pct: number;
-    unique_brand_count: number;
-    brand_revenue_breakdown?: Array<{
+    moat_strength: "strong" | "moderate" | "weak" | "none";
+    total_brands_count: number;
+    top_brand_revenue_share_pct: number;
+    top_3_brands_revenue_share_pct: number;
+    brand_breakdown?: Array<{
       brand: string;
-      revenue: number;
-      share_pct: number;
       asin_count: number;
-      top10_count: number;
+      total_revenue: number;
+      revenue_share_pct: number;
     }>;
   };
   market_snapshot?: {
@@ -1007,18 +1005,6 @@ export default function AnalyzeForm({
                         
                         <h2 className="text-xl font-semibold text-gray-900 mb-4">Market Snapshot</h2>
                         
-                        {/* Brand Moat Summary */}
-                        {analysis.brand_moat && (
-                          <BrandMoatSummary
-                            level={analysis.brand_moat.level}
-                            top_brand={analysis.brand_moat.top_brand}
-                            top_brand_share_pct={analysis.brand_moat.top_brand_share_pct}
-                            top_3_share_pct={analysis.brand_moat.top_3_share_pct}
-                            unique_brand_count={analysis.brand_moat.unique_brand_count}
-                            brand_revenue_breakdown={analysis.brand_moat.brand_revenue_breakdown || []}
-                          />
-                        )}
-                        
                         {/* Canonical Metrics - Exact Order */}
                         <div className="grid grid-cols-3 gap-6">
                           {/* 1. Keyword */}
@@ -1068,6 +1054,23 @@ export default function AnalyzeForm({
                       </div>
                     );
                   })()}
+
+                  {/* ─────────────────────────────────────────────────────────── */}
+                  {/* BRAND MOAT BLOCK                                            */}
+                  {/* ─────────────────────────────────────────────────────────── */}
+                  {analysis.brand_moat && (
+                    <BrandMoatBlock
+                      moat_strength={analysis.brand_moat.moat_strength}
+                      total_brands_count={analysis.brand_moat.total_brands_count}
+                      top_brand_revenue_share_pct={analysis.brand_moat.top_brand_revenue_share_pct}
+                      top_3_brands_revenue_share_pct={analysis.brand_moat.top_3_brands_revenue_share_pct}
+                      brand_breakdown={analysis.brand_moat.brand_breakdown || []}
+                      onBrandHover={(brand) => {
+                        // Optional: Highlight listings with matching brand
+                        // This can be implemented later if needed
+                      }}
+                    />
+                  )}
 
                   {/* ─────────────────────────────────────────────────────────── */}
                   {/* PPC INDICATORS PANEL                                        */}

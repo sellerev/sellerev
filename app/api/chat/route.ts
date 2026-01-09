@@ -123,6 +123,30 @@ function buildCompactContext(
     (compact.market_snapshot as Record<string, unknown>).listings = topListings;
     (compact.market_snapshot as Record<string, unknown>).total_listings_count = allListings.length;
     
+    // Brand moat context (if available)
+    if (analysisResponse.brand_moat && typeof analysisResponse.brand_moat === 'object') {
+      const brandMoat = analysisResponse.brand_moat as {
+        moat_strength?: string;
+        total_brands_count?: number;
+        top_brand_revenue_share_pct?: number;
+        top_3_brands_revenue_share_pct?: number;
+        brand_breakdown?: Array<{
+          brand: string;
+          asin_count: number;
+          total_revenue: number;
+          revenue_share_pct: number;
+        }>;
+      };
+      
+      compact.brand_moat_context = {
+        moat_strength: brandMoat.moat_strength || 'none',
+        total_brands: brandMoat.total_brands_count || 0,
+        top_brand_share: brandMoat.top_brand_revenue_share_pct || 0,
+        top_3_brand_share: brandMoat.top_3_brands_revenue_share_pct || 0,
+        brand_breakdown: brandMoat.brand_breakdown || [],
+      };
+    }
+    
     // Selected listing details (if provided)
     if (selectedListing && typeof selectedListing === 'object') {
       compact.selected_listing = {
@@ -478,6 +502,45 @@ This margin snapshot is the single source of truth. Always reference it when ans
     } catch (error) {
       console.error("Error building margin snapshot context:", error);
       // Don't fail - just skip margin snapshot section
+    }
+  }
+
+  // Section 6.5: Brand Moat Context (if available)
+  const brandMoat = (analysisResponse.brand_moat as {
+    moat_strength?: string;
+    total_brands_count?: number;
+    top_brand_revenue_share_pct?: number;
+    top_3_brands_revenue_share_pct?: number;
+    brand_breakdown?: Array<{
+      brand: string;
+      asin_count: number;
+      total_revenue: number;
+      revenue_share_pct: number;
+    }>;
+  } | null) || null;
+  
+  if (brandMoat && typeof brandMoat === 'object') {
+    try {
+      const topBrand = brandMoat.brand_breakdown && brandMoat.brand_breakdown.length > 0
+        ? brandMoat.brand_breakdown[0]
+        : null;
+      
+      contextParts.push(`=== BRAND MOAT CONTEXT (PAGE-1 ONLY) ===
+Brand moat strength: ${brandMoat.moat_strength || 'none'} (strong/moderate/weak/none)
+Total brands on Page 1: ${brandMoat.total_brands_count || 0}
+Top brand revenue share: ${brandMoat.top_brand_revenue_share_pct?.toFixed(1) || '0.0'}%
+Top 3 brands revenue share: ${brandMoat.top_3_brands_revenue_share_pct?.toFixed(1) || '0.0'}%
+${topBrand ? `Top brand: ${topBrand.brand} (${topBrand.asin_count} ASINs, ${topBrand.revenue_share_pct.toFixed(1)}% share)` : 'Top brand: Not available'}
+
+CRITICAL AI RULES:
+- AI may cite brand dominance ONLY using this brand_moat_context data
+- AI must NEVER infer brands beyond this data
+- AI phrasing must say "Page-1 brands indicate..." NOT "Amazon data shows..."
+- This data is derived from canonical Page-1 listings only
+- Percentages must match market snapshot totals exactly
+- Never use lazy ASIN refinement data for brand moat calculations`);
+    } catch (error) {
+      console.error("Error formatting brand moat context:", error);
     }
   }
 

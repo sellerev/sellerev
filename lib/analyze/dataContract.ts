@@ -171,17 +171,15 @@ export interface KeywordAnalyzeResponse {
 
   // F) Brand Moat Analysis (Page-1 Only, Deterministic)
   brand_moat: {
-    level: "HARD" | "SOFT" | "NONE";
-    top_brand: string | null;
-    top_brand_share_pct: number;
-    top_3_share_pct: number;
-    unique_brand_count: number;
-    brand_revenue_breakdown: Array<{
+    moat_strength: "strong" | "moderate" | "weak" | "none";
+    total_brands_count: number;
+    top_brand_revenue_share_pct: number;
+    top_3_brands_revenue_share_pct: number;
+    brand_breakdown: Array<{
       brand: string;
-      revenue: number;
-      share_pct: number;
       asin_count: number;
-      top10_count: number;
+      total_revenue: number;
+      revenue_share_pct: number;
     }>;
   };
 
@@ -859,6 +857,7 @@ export async function buildKeywordAnalyzeResponse(
       const { analyzeBrandMoat } = await import("@/lib/market/brandMoatAnalysis");
       
       // Map products to PageOneListing format for moat analysis
+      // Uses ONLY canonical estimated_monthly_revenue - never recomputes
       const pageOneListings = products.map((p) => ({
         brand: p.brand || null,
         estimated_monthly_revenue: p.estimated_monthly_revenue || 0,
@@ -870,34 +869,31 @@ export async function buildKeywordAnalyzeResponse(
       brandMoat = analyzeBrandMoat(pageOneListings);
 
       console.log("[BrandMoat] Analysis complete", {
-        level: brandMoat.level,
-        top_brand: brandMoat.top_brand,
-        top_brand_share_pct: brandMoat.top_brand_share_pct,
-        top_3_share_pct: brandMoat.top_3_share_pct,
-        unique_brand_count: brandMoat.unique_brand_count,
-        breakdown_count: brandMoat.brand_revenue_breakdown?.length || 0,
+        moat_strength: brandMoat.moat_strength,
+        total_brands_count: brandMoat.total_brands_count,
+        top_brand_revenue_share_pct: brandMoat.top_brand_revenue_share_pct,
+        top_3_brands_revenue_share_pct: brandMoat.top_3_brands_revenue_share_pct,
+        breakdown_count: brandMoat.brand_breakdown?.length || 0,
       });
     } catch (error) {
       console.warn("[BrandMoat] Error computing brand moat:", error);
-      // Never throw or return null — default to NONE
+      // Never throw or return null — default to none
       brandMoat = {
-        level: "NONE",
-        top_brand: null,
-        top_brand_share_pct: 0,
-        top_3_share_pct: 0,
-        unique_brand_count: 0,
-        brand_revenue_breakdown: [],
+        moat_strength: "none",
+        total_brands_count: 0,
+        top_brand_revenue_share_pct: 0,
+        top_3_brands_revenue_share_pct: 0,
+        brand_breakdown: [],
       };
     }
   } else {
-    // No products — default to NONE
+    // No products — default to none
     brandMoat = {
-      level: "NONE",
-      top_brand: null,
-      top_brand_share_pct: 0,
-      top_3_share_pct: 0,
-      unique_brand_count: 0,
-      brand_revenue_breakdown: [],
+      moat_strength: "none",
+      total_brands_count: 0,
+      top_brand_revenue_share_pct: 0,
+      top_3_brands_revenue_share_pct: 0,
+      brand_breakdown: [],
     };
   }
 

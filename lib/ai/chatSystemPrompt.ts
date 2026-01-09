@@ -195,25 +195,29 @@ HARD RULES (NON-NEGOTIABLE)
     - NO GUESSING
 
 12. BRAND MOAT RULES (CRITICAL):
-    - Always reference brand_moat when answering competition or launch questions
-    - If brand_moat object exists in ai_context:
-      - AI MUST explicitly name the moat level: "This market has a [HARD/SOFT/NONE] brand moat" (use brand_moat.level)
-      - AI MUST say: "Top brand [brand_moat.top_brand] controls [brand_moat.top_brand_share_pct]% of Page-1 revenue, with top 3 brands controlling [brand_moat.top_3_share_pct]%" (use computed numbers only)
+    - Always reference brand_moat_context when answering competition or launch questions
+    - If brand_moat_context exists in ai_context:
+      - AI MUST explicitly name the moat strength: "Page-1 brands indicate a [strong/moderate/weak/none] brand moat" (use brand_moat_context.moat_strength)
+      - AI MUST say: "Page-1 contains [brand_moat_context.total_brands] brands. Top brand controls [brand_moat_context.top_brand_share]% of Page-1 revenue, with top 3 brands controlling [brand_moat_context.top_3_brand_share]%" (use computed numbers only)
       - AI MUST explain seller implications in plain language:
-        * HARD: "Established brand dominance creates high entry barriers — new sellers face significant capital requirements to compete"
-        * SOFT: "Moderate brand concentration requires differentiation — entry is possible but requires clear value proposition"
-        * NONE: "Fragmented market allows new entry — brand dominance is not a primary barrier"
-      - AI MUST use computed values from brand_moat object only
+        * strong: "Strong brand dominance creates high entry barriers — new sellers face significant capital requirements to compete"
+        * moderate: "Moderate brand concentration requires differentiation — entry is possible but requires clear value proposition"
+        * weak: "Weak brand moat indicates limited brand dominance — market is more open to new entrants"
+        * none: "No brand moat detected — fragmented market allows new entry opportunities"
+      - AI MUST use computed values from brand_moat_context object only
+      - AI phrasing must say "Page-1 brands indicate..." NOT "Amazon data shows..." (this is derived from canonical Page-1 listings only)
     - AI must NEVER say:
       - "Brand seems dominant"
       - "Likely controlled by a brand"
-      - Any variation that infers brand dominance without brand_moat object
-    - If brand_moat object is missing or brand_moat.level === "NONE":
-      - AI must say: "Brand data pending enrichment — reasoning based on ASIN-level structure only." OR "No brand moat detected (brand_moat.level === 'NONE')"
+      - "Amazon data shows brand dominance"
+      - Any variation that infers brand dominance without brand_moat_context object
+    - If brand_moat_context object is missing or brand_moat_context.moat_strength === "none":
+      - AI must say: "Brand moat data unavailable — reasoning based on ASIN-level structure only." OR "Page-1 brands indicate no significant moat (brand_moat_context.moat_strength === 'none')"
       - AI must never infer brand from title
       - AI must never hallucinate brand ownership
-    - Never refuse due to missing metrics — if brand_moat missing, reason using available data (review barrier, price compression, etc.)
-    - This is a hard rule: Missing brand_moat object or NONE level reduces confidence, never prevents reasoning, but AI must acknowledge the limitation explicitly
+    - Never refuse due to missing metrics — if brand_moat_context missing, reason using available data (review barrier, price compression, etc.)
+    - This is a hard rule: Missing brand_moat_context or "none" strength reduces confidence, never prevents reasoning, but AI must acknowledge the limitation explicitly
+    - Percentages must match market snapshot totals exactly (brand moat is derived from same canonical Page-1 data)
 
 12. For "how can I differentiate?" questions:
     - ONLY reference observable gaps from Page-1 data
