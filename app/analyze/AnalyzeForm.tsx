@@ -451,6 +451,21 @@ export default function AnalyzeForm({
   const [isEstimated, setIsEstimated] = useState(false);
   const [snapshotType, setSnapshotType] = useState<"estimated" | "snapshot">("snapshot");
 
+  // Track enriched ASIN data (refinement layer, scoped per ASIN)
+  // Key: ASIN, Value: enriched data from /api/asin/enrich
+  const [enrichedAsinData, setEnrichedAsinData] = useState<Record<string, {
+    refined_units_range: { min: number; max: number };
+    refined_estimated_revenue: number;
+    current_price: number;
+    current_bsr: number | null;
+    review_count: number | null;
+    fulfillment_type: string | null;
+    data_source: "rainforest_refinement";
+    confidence: "high" | "medium" | "low";
+    loading?: boolean;
+    error?: string;
+  }>>({});
+
   // Handler for margin snapshot updates from chat (Part G structure)
   const handleMarginSnapshotUpdate = (updatedSnapshot: AnalysisResponse['margin_snapshot']) => {
     setAnalysis((prev) => {
@@ -1292,14 +1307,8 @@ export default function AnalyzeForm({
                                 // Use canonical field: estimated_monthly_revenue
                                 const revenue = (listing as any).estimated_monthly_revenue;
                                 const units = (listing as any).estimated_monthly_units;
-                                
-                                // Log sample revenue for debugging
-                                if (typeof revenue === 'number' && revenue > 0) {
-                                  console.log("🔵 PRODUCT_CARD_REVENUE", {
-                                    asin: listing.asin,
-                                    estimated_monthly_revenue: revenue,
-                                  });
-                                }
+                                const enrichedData = enrichedAsinData[listing.asin];
+                                const hasEnrichedData = enrichedData && !enrichedData.loading && !enrichedData.error;
                                 
                                 // Format revenue: round to nearest dollar, format with thousands separators, append "/ mo"
                                 const formatRevenue = (value: number | null | undefined): string => {
@@ -1315,28 +1324,145 @@ export default function AnalyzeForm({
                                   }).format(rounded) + " / mo";
                                 };
                                 
-                                if (revenue === null && units === null) {
+                                // Handle "Load 30-Day Sales Data" button click
+                                const handleEnrichClick = async (e: React.MouseEvent) => {
+                                  e.stopPropagation(); // Prevent card selection
+                                  
+                                  if (!listing.asin || !analysis?.analysis_run_id) {
+                                    return;
+                                  }
+
+                                  // Set loading state
+                                  setEnrichedAsinData(prev => ({
+                                    ...prev,
+                                    [listing.asin]: {
+                                      ...prev[listing.asin],
+                                      loading: true,
+                                      error: undefined,
+                                    } as any,
+                                  }));
+
+                                  try {
+                                    const response = await fetch("/api/asin/enrich", {
+                                      method: "POST",
+                                      headers: {
+                                        "Content-Type": "application/json",
+                                      },
+                                      body: JSON.stringify({
+                                        asin: listing.asin,
+                                        analysisRunId: analysis.analysis_run_id,
+                                        currentPrice: listing.price || null,
+                                      }),
+                                    });
+
+                                    const data = await response.json();
+
+                                    if (data.success && data.data) {
+                                      setEnrichedAsinData(prev => ({
+                                        ...prev,
+                                        [listing.asin]: data.data,
+                                      }));
+                                    } else {
+                                      setEnrichedAsinData(prev => ({
+                                        ...prev,
+                                        [listing.asin]: {
+                                          ...prev[listing.asin],
+                                          loading: false,
+                                          error: data.error || "Failed to load sales data",
+                                        } as any,
+                                      }));
+                                    }
+                                  } catch (error) {
+                                    setEnrichedAsinData(prev => ({
+                                      ...prev,
+                                      [listing.asin]: {
+                                        ...prev[listing.asin],
+                                        loading: false,
+                                        error: error instanceof Error ? error.message : "Unknown error",
+                                      } as any,
+                                    }));
+                                  }
+                                };
+                                
+                                if (revenue === null && units === null && !hasEnrichedData) {
                                   return null;
                                 }
                                 
                                 return (
                                   <div className="mt-3 pt-3 border-t border-gray-200 bg-gray-50 rounded -mx-4 px-4 py-3">
-                                    {/* Est. Monthly Revenue - bold, largest text */}
-                                    <div className="mb-1.5">
-                                      <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Revenue</div>
-                                      <div className="text-xl font-bold text-gray-900">
-                                        {formatRevenue(revenue)}
-                                      </div>
-                                    </div>
-                                    
-                                    {/* Est. Monthly Units */}
-                                    {units !== null && units !== undefined && (
-                                      <div className="mb-1.5">
-                                        <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Units</div>
-                                        <div className="text-sm font-semibold text-gray-700">
-                                          {units.toLocaleString()}
+                                    {hasEnrichedData ? (
+                                      <>
+                                        {/* Verified 30-Day Range (Refined Data) */}
+                                        <div className="mb-2">
+                                          <div className="flex items-center gap-2 mb-1">
+                                            <div className="text-xs font-semibold text-green-700">Verified 30-Day Range</div>
+                                            <div className="group relative">
+                                              <svg className="w-3 h-3 text-gray-400 cursor-help" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                              </svg>
+                                              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-64 p-2 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                                                Refines estimated sales using Amazon activity signals. Market totals remain model-based.
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <div className="text-sm text-gray-600 mb-1">
+                                            {enrichedData.refined_units_range.min.toLocaleString()} - {enrichedData.refined_units_range.max.toLocaleString()} units
+                                          </div>
+                                          <div className="text-xl font-bold text-gray-900">
+                                            {formatRevenue(enrichedData.refined_estimated_revenue)}
+                                          </div>
+                                          {enrichedData.confidence && (
+                                            <div className="text-xs text-gray-500 mt-1">
+                                              Confidence: {enrichedData.confidence}
+                                            </div>
+                                          )}
                                         </div>
-                                      </div>
+                                        {/* Show original estimate as reference */}
+                                        <div className="pt-2 border-t border-gray-300">
+                                          <div className="text-xs text-gray-500 mb-0.5">Model Estimate</div>
+                                          <div className="text-sm text-gray-700">
+                                            {formatRevenue(revenue)}
+                                          </div>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <>
+                                        {/* Est. Monthly Revenue - bold, largest text */}
+                                        <div className="mb-1.5">
+                                          <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Revenue</div>
+                                          <div className="text-xl font-bold text-gray-900">
+                                            {formatRevenue(revenue)}
+                                          </div>
+                                        </div>
+                                        
+                                        {/* Est. Monthly Units */}
+                                        {units !== null && units !== undefined && (
+                                          <div className="mb-2">
+                                            <div className="text-xs text-gray-500 mb-0.5">Est. Monthly Units</div>
+                                            <div className="text-sm font-semibold text-gray-700">
+                                              {units.toLocaleString()}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        {/* Load 30-Day Sales Data Button */}
+                                        {analysis?.analysis_run_id && (
+                                          <button
+                                            onClick={handleEnrichClick}
+                                            disabled={enrichedAsinData[listing.asin]?.loading}
+                                            className="mt-2 w-full px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                          >
+                                            {enrichedAsinData[listing.asin]?.loading ? "Loading..." : "Load 30-Day Sales Data"}
+                                          </button>
+                                        )}
+
+                                        {/* Error message */}
+                                        {enrichedAsinData[listing.asin]?.error && (
+                                          <div className="mt-2 text-xs text-red-600">
+                                            {enrichedAsinData[listing.asin].error}
+                                          </div>
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                 );
@@ -1406,7 +1532,11 @@ export default function AnalyzeForm({
           onMessagesChange={setChatMessages}
           marketSnapshot={analysis?.market_snapshot || null}
           analysisMode={analysisMode}
-          selectedListing={selectedListing}
+          selectedListing={selectedListing ? {
+            ...selectedListing,
+            // Include enriched data if available for this ASIN
+            enriched_data: enrichedAsinData[selectedListing.asin] || null,
+          } : null}
         />
       </div>
     </div>
