@@ -181,7 +181,7 @@ export function analyzeBrandMoat(
     total_brands_count,
     top_brand_revenue_share_pct,
     top_3_brands_revenue_share_pct,
-    brand_breakdown,
+    brand_breakdown: brandBreakdown,
   };
 
   return result;
