@@ -388,7 +388,7 @@ export default function ChatSidebar({
   const isDisabled = !analysisRunId;
 
   return (
-    <div className="h-full bg-white/70 backdrop-blur-md flex flex-col overflow-hidden">
+    <div className="h-full bg-white/70 backdrop-blur-md flex flex-col overflow-hidden" style={{ minHeight: 0 }}>
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* ANALYSES RAIL (Cursor-style)                                        */}
       {/* ─────────────────────────────────────────────────────────────────── */}

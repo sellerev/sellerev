@@ -736,7 +736,7 @@ export default function AnalyzeForm({
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-[#F7F9FC] overflow-x-hidden flex flex-col">
+    <div className="h-full bg-[#F7F9FC] flex flex-col">
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* SEARCH BAR (STICKY HEADER)                                          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
@@ -797,18 +797,18 @@ export default function AnalyzeForm({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* MAIN CONTENT: TWO-COLUMN CSS GRID LAYOUT                            */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="flex-1 grid gap-x-6 overflow-hidden bg-[#F7F9FC]" style={{ gridTemplateColumns: '1fr 400px' }}>
+      <div className="flex-1 grid gap-x-4 overflow-hidden bg-[#F7F9FC]" style={{ gridTemplateColumns: '1fr 400px', minHeight: 0 }}>
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* LEFT COLUMN: MARKET DATA & PRODUCTS (SCROLLABLE)                 */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="overflow-y-auto bg-[#F7F9FC]">
+        <div className="overflow-y-auto bg-[#F7F9FC]" style={{ minHeight: 0 }}>
           {!analysis ? (
             /* PRE-ANALYSIS STATE */
-            <div className="flex items-center justify-center min-h-full py-12 px-6">
+            <div className="flex items-center justify-center min-h-full py-20 px-6">
               <div className="text-center max-w-md">
-                <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
+                <div className="w-20 h-20 mx-auto mb-6 bg-gray-100/60 backdrop-blur-sm rounded-full flex items-center justify-center">
                   <svg
-                    className="w-8 h-8 text-gray-400"
+                    className="w-10 h-10 text-gray-400"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -821,10 +821,10 @@ export default function AnalyzeForm({
                     />
                   </svg>
                 </div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-2">
+                <h2 className="text-2xl font-semibold text-gray-900 mb-3">
                   Ready to Search
                 </h2>
-                <p className="text-gray-500 text-sm">
+                <p className="text-gray-500 text-sm leading-relaxed">
                   Enter a product keyword above to see Page 1 results with market intelligence.
                   Click any product to ask questions about it.
                 </p>
@@ -1200,7 +1200,7 @@ export default function AnalyzeForm({
                       </div>
                     )}
                     {/* Product Cards Grid - auto-fill with minmax */}
-                    <div className="grid gap-4 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
+                    <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
                       {cardsToRender.map((listing: any, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
                           const imageUrl = listing.image_url || listing.image;
@@ -1281,7 +1281,7 @@ export default function AnalyzeForm({
         {/* RIGHT COLUMN: AI CHAT SIDEBAR (FIXED WIDTH, SCROLLS INTERNALLY) */}
         {/* AI Copilot is always available - fixed within app shell        */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="border-l border-gray-200 bg-white flex flex-col overflow-hidden">
+        <div className="border-l border-gray-200 bg-white flex flex-col overflow-hidden" style={{ minHeight: 0 }}>
           <ChatSidebar
             analysisRunId={analysis?.analysis_run_id || null}
             initialMessages={chatMessages}

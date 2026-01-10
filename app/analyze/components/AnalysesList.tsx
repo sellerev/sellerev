@@ -126,9 +126,9 @@ export default function AnalysesList() {
       {/* Header */}
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="w-full px-6 py-2.5 flex items-center justify-between hover:bg-gray-50/50 transition-colors group"
+        className="w-full px-6 py-2 flex items-center justify-between hover:bg-gray-50/50 transition-colors group"
       >
-        <h3 className="text-xs font-medium text-gray-500 group-hover:text-gray-700">
+        <h3 className="text-[11px] font-medium text-gray-500 group-hover:text-gray-700 uppercase tracking-wide">
           Analyses
         </h3>
         <svg
@@ -157,25 +157,25 @@ export default function AnalysesList() {
               <button
                 key={analysis.id}
                 onClick={() => handleAnalysisClick(analysis.id)}
-                className={`w-full px-6 py-1.5 text-left hover:bg-gray-50/50 transition-colors relative rounded-md ${
-                  isActive ? "bg-blue-50/60" : ""
+                className={`w-full px-6 py-1 text-left hover:bg-gray-50/60 transition-colors relative ${
+                  isActive ? "bg-blue-50/80" : ""
                 }`}
               >
                 {/* Left accent for active state */}
                 {isActive && (
-                  <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-blue-600 rounded-r" />
+                  <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-blue-600" />
                 )}
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div
-                      className={`text-xs font-medium truncate mb-0.5 ${
-                        isActive ? "text-gray-900" : "text-gray-700"
+                      className={`text-[11px] font-medium truncate mb-0.5 ${
+                        isActive ? "text-gray-900 font-semibold" : "text-gray-600"
                       }`}
                     >
                       {analysis.input_value}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-gray-500">
+                      <span className="text-[10px] text-gray-400">
                         {formatRelativeTime(analysis.created_at)}
                       </span>
                       {analysis.ai_verdict && (
