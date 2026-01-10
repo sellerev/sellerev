@@ -479,6 +479,13 @@ export default function AnalyzeForm({
   
   // Sort state for Page 1 Results (default to rank to preserve Amazon order)
   const [sortBy, setSortBy] = useState<"rank" | "price-asc" | "price-desc" | "revenue-desc" | "units-desc" | "reviews-desc" | "rating-desc">("rank");
+  
+  // Filter state for Page 1 Results
+  const [selectedBrands, setSelectedBrands] = useState<Set<string>>(new Set());
+  const [selectedFulfillment, setSelectedFulfillment] = useState<Set<"FBA" | "FBM">>(new Set());
+  const [sponsoredFilter, setSponsoredFilter] = useState<"only" | "exclude" | null>(null);
+  const [brandDropdownOpen, setBrandDropdownOpen] = useState(false);
+  const brandDropdownRef = useRef<HTMLDivElement>(null);
 
   // Chat sidebar resizing and collapsing state
   const [sidebarWidth, setSidebarWidth] = useState(420); // Default width
@@ -512,6 +519,22 @@ export default function AnalyzeForm({
     localStorage.setItem("chatSidebarWidth", sidebarWidth.toString());
     localStorage.setItem("chatSidebarCollapsed", isSidebarCollapsed.toString());
   }, [sidebarWidth, isSidebarCollapsed]);
+  
+  // Close brand dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (brandDropdownRef.current && !brandDropdownRef.current.contains(event.target as Node)) {
+        setBrandDropdownOpen(false);
+      }
+    };
+    
+    if (brandDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [brandDropdownOpen]);
 
   // Sync initialAnalysis prop to state when analysis_run_id changes
   // This handles URL navigation between different analyses (browser back/forward, refresh, direct URL entry)
@@ -526,6 +549,11 @@ export default function AnalyzeForm({
       setChatMessages(initialMessages);
       // Reset sort to default (Amazon rank) when new analysis loads
       setSortBy("rank");
+      // Reset filters when new analysis loads
+      setSelectedBrands(new Set());
+      setSelectedFulfillment(new Set());
+      setSponsoredFilter(null);
+      setBrandDropdownOpen(false);
     } else {
       // No initialAnalysis means no run param - reset to blank state
       // Only reset if we currently have an analysis loaded (avoid resetting on initial mount)
@@ -536,6 +564,11 @@ export default function AnalyzeForm({
         setSnapshotType("snapshot");
         setChatMessages([]);
         setSortBy("rank");
+        // Reset filters when resetting to blank state
+        setSelectedBrands(new Set());
+        setSelectedFulfillment(new Set());
+        setSponsoredFilter(null);
+        setBrandDropdownOpen(false);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -573,6 +606,11 @@ export default function AnalyzeForm({
     setIsEstimated(false); // Reset estimated flag
     setSnapshotType("snapshot"); // Reset snapshot type
     setSortBy("rank"); // Reset sort to default (Amazon rank)
+    // Reset filters when new analysis starts
+    setSelectedBrands(new Set());
+    setSelectedFulfillment(new Set());
+    setSponsoredFilter(null);
+    setBrandDropdownOpen(false);
 
     try {
       console.log("ANALYZE_REQUEST_START", { inputValue: inputValue.trim() });
@@ -1376,33 +1414,250 @@ export default function AnalyzeForm({
                           return aPosDefault - bPosDefault;
                       }
                     });
+                    
+                    // Extract brands from listings with counts for filter dropdown
+                    // Normalize brand names (trim, lowercase) for grouping
+                    const brandCounts = new Map<string, { normalized: string; display: string; count: number }>();
+                    pageOneListings.forEach((listing: any) => {
+                      const brand = listing.brand;
+                      let brandKey: string;
+                      let brandDisplay: string;
+                      
+                      if (brand === null || brand === undefined || brand.trim() === '') {
+                        brandKey = "unknown";
+                        brandDisplay = "Unknown";
+                      } else {
+                        brandDisplay = brand.trim();
+                        brandKey = brandDisplay.toLowerCase();
+                      }
+                      
+                      if (!brandCounts.has(brandKey)) {
+                        brandCounts.set(brandKey, { normalized: brandKey, display: brandDisplay, count: 0 });
+                      }
+                      const entry = brandCounts.get(brandKey)!;
+                      entry.count += 1;
+                    });
+                    
+                    // Convert to array and sort by count (descending), then by name
+                    const brandsList = Array.from(brandCounts.values()).sort((a, b) => {
+                      if (b.count !== a.count) {
+                        return b.count - a.count;
+                      }
+                      return a.display.localeCompare(b.display);
+                    });
+                    
+                    // Apply filters to sorted listings
+                    // Filtering composes with sorting (filter after sort)
+                    let filteredListings = sortedListings.filter((listing: any) => {
+                      // Brand filter
+                      if (selectedBrands.size > 0) {
+                        const listingBrand = listing.brand;
+                        let brandKey: string;
+                        
+                        if (listingBrand === null || listingBrand === undefined || listingBrand.trim() === '') {
+                          brandKey = "unknown";
+                        } else {
+                          brandKey = listingBrand.trim().toLowerCase();
+                        }
+                        
+                        if (!selectedBrands.has(brandKey)) {
+                          return false;
+                        }
+                      }
+                      
+                      // Fulfillment filter
+                      if (selectedFulfillment.size > 0) {
+                        const fulfillment = listing.fulfillment === "AMZ" 
+                          ? "AMZ" 
+                          : (listing.fulfillment === "FBA" 
+                            ? "FBA" 
+                            : (listing.fulfillment === "FBM" ? "FBM" : "FBM"));
+                        
+                        // Always include AMZ items regardless of filter
+                        if (fulfillment === "AMZ") {
+                          // AMZ always passes through
+                        } else if (fulfillment === "FBA" || fulfillment === "FBM") {
+                          // Filter FBA/FBM items based on selection
+                          if (!selectedFulfillment.has(fulfillment as "FBA" | "FBM")) {
+                            return false;
+                          }
+                        }
+                      }
+                      
+                      // Sponsored filter
+                      if (sponsoredFilter !== null) {
+                        const isSponsored = listing.is_sponsored ?? listing.sponsored ?? false;
+                        if (sponsoredFilter === "only" && !isSponsored) {
+                          return false;
+                        }
+                        if (sponsoredFilter === "exclude" && isSponsored) {
+                          return false;
+                        }
+                      }
+                      
+                      return true;
+                    });
+                    
+                    // Check if any filters are active
+                    const hasActiveFilters = selectedBrands.size > 0 || selectedFulfillment.size > 0 || sponsoredFilter !== null;
+                    
+                    // Helper function to clear all filters
+                    const clearFilters = () => {
+                      setSelectedBrands(new Set());
+                      setSelectedFulfillment(new Set());
+                      setSponsoredFilter(null);
+                      setBrandDropdownOpen(false);
+                    };
                 
                 return (
                   <div>
                     <div className="flex items-center justify-between mb-4">
                       <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
-                      {/* Sort Dropdown */}
-                      {pageOneListings.length > 0 && (
-                        <div className="flex items-center gap-2">
-                          <label htmlFor="sort-select" className="text-xs text-gray-500 font-medium">
-                            Sort:
-                          </label>
-                          <select
-                            id="sort-select"
-                            value={sortBy}
-                            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-                            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          >
-                            <option value="rank">Amazon Rank</option>
-                            <option value="price-asc">Price: Low → High</option>
-                            <option value="price-desc">Price: High → Low</option>
-                            <option value="revenue-desc">Monthly Revenue: High → Low</option>
-                            <option value="units-desc">Monthly Units: High → Low</option>
-                            <option value="reviews-desc">Reviews: High → Low</option>
-                            <option value="rating-desc">Rating: High → Low</option>
-                          </select>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-3">
+                        {/* Filters Section */}
+                        {pageOneListings.length > 0 && (
+                          <div className="flex items-center gap-3 flex-wrap">
+                            {/* Brand Filter - Button with dropdown */}
+                            <div className="relative" ref={brandDropdownRef}>
+                              <button
+                                type="button"
+                                onClick={() => setBrandDropdownOpen(!brandDropdownOpen)}
+                                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 flex items-center gap-1.5"
+                              >
+                                <span>Brand</span>
+                                {selectedBrands.size > 0 && (
+                                  <span className="bg-blue-500 text-white rounded-full px-1.5 py-0.5 text-[10px] font-medium">
+                                    {selectedBrands.size}
+                                  </span>
+                                )}
+                                <svg className={`w-3 h-3 transition-transform ${brandDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </button>
+                              {brandDropdownOpen && (
+                                <div className="absolute top-full left-0 mt-1 z-20 bg-white border border-gray-300 rounded shadow-lg max-h-64 overflow-y-auto min-w-[200px]">
+                                  <div className="p-2 space-y-1">
+                                    {brandsList.map((brand) => (
+                                      <label key={brand.normalized} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded cursor-pointer text-xs">
+                                        <input
+                                          type="checkbox"
+                                          checked={selectedBrands.has(brand.normalized)}
+                                          onChange={(e) => {
+                                            const newSelected = new Set(selectedBrands);
+                                            if (e.target.checked) {
+                                              newSelected.add(brand.normalized);
+                                            } else {
+                                              newSelected.delete(brand.normalized);
+                                            }
+                                            setSelectedBrands(newSelected);
+                                          }}
+                                          className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                        />
+                                        <span className="flex-1 text-gray-900">{brand.display}</span>
+                                        <span className="text-gray-500 text-[10px]">({brand.count})</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                            
+                            {/* Fulfillment Filter */}
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedFulfillment.has("FBA")}
+                                  onChange={(e) => {
+                                    const newSelected = new Set(selectedFulfillment);
+                                    if (e.target.checked) {
+                                      newSelected.add("FBA");
+                                    } else {
+                                      newSelected.delete("FBA");
+                                    }
+                                    setSelectedFulfillment(newSelected);
+                                  }}
+                                  className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                />
+                                <span>FBA</span>
+                              </label>
+                              <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedFulfillment.has("FBM")}
+                                  onChange={(e) => {
+                                    const newSelected = new Set(selectedFulfillment);
+                                    if (e.target.checked) {
+                                      newSelected.add("FBM");
+                                    } else {
+                                      newSelected.delete("FBM");
+                                    }
+                                    setSelectedFulfillment(newSelected);
+                                  }}
+                                  className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                />
+                                <span>FBM</span>
+                              </label>
+                            </div>
+                            
+                            {/* Sponsored Filter */}
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="sponsored-filter"
+                                  checked={sponsoredFilter === "only"}
+                                  onChange={() => setSponsoredFilter(sponsoredFilter === "only" ? null : "only")}
+                                  className="w-3.5 h-3.5 text-blue-600 border-gray-300 focus:ring-blue-500"
+                                />
+                                <span>Sponsored only</span>
+                              </label>
+                              <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="sponsored-filter"
+                                  checked={sponsoredFilter === "exclude"}
+                                  onChange={() => setSponsoredFilter(sponsoredFilter === "exclude" ? null : "exclude")}
+                                  className="w-3.5 h-3.5 text-blue-600 border-gray-300 focus:ring-blue-500"
+                                />
+                                <span>Exclude sponsored</span>
+                              </label>
+                            </div>
+                            
+                            {/* Clear Filters Button */}
+                            {hasActiveFilters && (
+                              <button
+                                type="button"
+                                onClick={clearFilters}
+                                className="text-xs text-gray-600 hover:text-gray-900 underline focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-1"
+                              >
+                                Clear filters
+                              </button>
+                            )}
+                            
+                            {/* Sort Dropdown */}
+                            <div className="flex items-center gap-2">
+                              <label htmlFor="sort-select" className="text-xs text-gray-500 font-medium">
+                                Sort:
+                              </label>
+                              <select
+                                id="sort-select"
+                                value={sortBy}
+                                onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              >
+                                <option value="rank">Amazon Rank</option>
+                                <option value="price-asc">Price: Low → High</option>
+                                <option value="price-desc">Price: High → Low</option>
+                                <option value="revenue-desc">Monthly Revenue: High → Low</option>
+                                <option value="units-desc">Monthly Units: High → Low</option>
+                                <option value="reviews-desc">Reviews: High → Low</option>
+                                <option value="rating-desc">Rating: High → Low</option>
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="mb-3 text-xs text-gray-500 italic">
                       Revenue and sales are estimated from live search position. Category rank is available in ASIN analysis.
@@ -1419,7 +1674,7 @@ export default function AnalyzeForm({
                     )}
                     {/* Product Cards Grid - auto-fill with minmax */}
                     <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-                      {sortedListings.map((listing: any, idx: number) => {
+                      {filteredListings.map((listing: any, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
                           // Extract image URL with fallback - preserve from stable source
                           const imageUrl = listing.image_url ?? listing.image ?? null;
