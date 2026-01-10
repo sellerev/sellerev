@@ -695,11 +695,11 @@ export default function AnalyzeForm({
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-gray-50">
+    <div className="min-h-screen bg-[#F7F9FC] overflow-x-hidden flex flex-col">
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* SEARCH BAR (FIXED HEIGHT - NO STICKY)                              */}
+      {/* SEARCH BAR (STICKY HEADER)                                          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="flex-shrink-0 bg-white border-b border-gray-200 shadow-sm">
+      <div className="sticky top-0 z-50 flex-shrink-0 bg-white border-b border-gray-200 shadow-sm">
         <SearchBar
           inputValue={inputValue}
           onInputChange={(value) => {
@@ -754,17 +754,17 @@ export default function AnalyzeForm({
       </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* MAIN CONTENT: TWO-COLUMN LAYOUT (FLEX ROW, NO OVERFLOW ON PARENT)   */}
+      {/* MAIN CONTENT: TWO-COLUMN CSS GRID LAYOUT                            */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden bg-gray-50">
+      <div className="flex-1 grid gap-x-6 overflow-hidden bg-[#F7F9FC]" style={{ gridTemplateColumns: '1fr 400px' }}>
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* LEFT COLUMN: MARKET DATA & PRODUCTS (ONLY SCROLLABLE AREA)      */}
+        {/* LEFT COLUMN: MARKET DATA & PRODUCTS (SCROLLABLE)                 */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto px-6 bg-gray-50" style={{ paddingRight: "500px" }}>
+        <div className="overflow-y-auto bg-[#F7F9FC]">
           {!analysis ? (
             /* PRE-ANALYSIS STATE */
-            <div className="flex items-center justify-center min-h-full py-12">
-              <div className="text-center max-w-md px-4">
+            <div className="flex items-center justify-center min-h-full py-12 px-6">
+              <div className="text-center max-w-md">
                 <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
                   <svg
                     className="w-8 h-8 text-gray-400"
@@ -790,7 +790,7 @@ export default function AnalyzeForm({
               </div>
             </div>
           ) : (
-            <div className="p-6 space-y-6">
+            <div className="px-6 py-6 space-y-6">
               {/* KEYWORD ANALYSIS: Interactive Amazon-style search */}
               {analysis.market_snapshot ? (
                 <>
@@ -909,7 +909,7 @@ export default function AnalyzeForm({
                     }
                     
                     return (
-                      <div className="bg-white border rounded-lg p-6 mb-6">
+                      <div className="bg-white border rounded-lg p-6">
                         {/* Data Source Badge */}
                         {snapshotType === "estimated" ? (
                           <div className="mb-4 flex items-center gap-2">
@@ -1158,8 +1158,8 @@ export default function AnalyzeForm({
                         </div>
                       </div>
                     )}
-                    {/* Product Cards Grid - 4 columns desktop */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {/* Product Cards Grid - auto-fill with minmax */}
+                    <div className="grid gap-4 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
                       {cardsToRender.map((listing: any, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
                           const imageUrl = listing.image_url || listing.image;
@@ -1237,10 +1237,10 @@ export default function AnalyzeForm({
         </div>
 
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* RIGHT COLUMN: AI CHAT SIDEBAR (RELATIVE - INSIDE SHELL)         */}
+        {/* RIGHT COLUMN: AI CHAT SIDEBAR (FIXED WIDTH, SCROLLS INTERNALLY) */}
         {/* AI Copilot is always available - fixed within app shell        */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="w-[480px] border-l border-gray-200 bg-white flex-shrink-0 flex flex-col overflow-hidden">
+        <div className="border-l border-gray-200 bg-white flex flex-col overflow-hidden">
           <ChatSidebar
             analysisRunId={analysis?.analysis_run_id || null}
             initialMessages={chatMessages}
