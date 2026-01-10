@@ -36,26 +36,31 @@ export default function ProfileDropdown() {
 
   // Close dropdown on outside click
   useEffect(() => {
+    if (!isOpen) return;
+
     function handleClickOutside(event: MouseEvent) {
+      // Check if click is outside the dropdown container (which includes the button)
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsOpen(false);
       }
     }
 
-    if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      // Close on escape key
-      const handleEscape = (e: KeyboardEvent) => {
-        if (e.key === "Escape") {
-          setIsOpen(false);
-        }
-      };
-      document.addEventListener("keydown", handleEscape);
-      return () => {
-        document.removeEventListener("mousedown", handleClickOutside);
-        document.removeEventListener("keydown", handleEscape);
-      };
+    // Close on escape key
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setIsOpen(false);
+      }
     }
+    
+    // Add event listeners
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    
+    // Cleanup
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
   }, [isOpen]);
 
   async function loadUser() {
@@ -138,9 +143,9 @@ export default function ProfileDropdown() {
         </div>
       </button>
 
-      {/* Dropdown Menu - Anchored to avatar button */}
+      {/* Dropdown Menu - Anchored to avatar button, positioned below with 8px offset */}
       {isOpen && (
-        <div className="absolute right-0 top-full mt-1 w-[280px] bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-[60]">
+        <div className="absolute right-0 top-full mt-2 w-[280px] bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-[100]">
           {/* Header */}
           <div className="px-4 py-3 border-b border-gray-200">
             <div className="font-semibold text-gray-900 text-sm">{getDisplayName()}</div>
