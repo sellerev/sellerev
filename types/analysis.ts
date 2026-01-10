@@ -69,7 +69,7 @@ export interface AnalysisResponse {
   };
   // Canonical Page-1 array (explicit for UI - ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array)
   page_one_listings?: Array<{
-    rank: number | null;
+    rank: number | null; // null for sponsored listings (legacy field, equals organic_rank for organic, null for sponsored)
     asin: string;
     title: string | null;
     image_url: string | null;
@@ -82,13 +82,13 @@ export interface AnalysisResponse {
     revenue_share_pct: number;
     fulfillment: "FBA" | "FBM" | "AMZ";
     brand: string | null;
-    seller_country?: "US" | "CN" | "Other" | "Unknown";
+    seller_country?: "US" | "CN" | "Other" | "Unknown"; // Optional - may be missing in stored data
     [key: string]: unknown; // Allow additional fields
   }>;
   
   // Products array (same as page_one_listings, kept for backward compatibility)
   products?: Array<{
-    rank: number | null;
+    rank: number | null; // null for sponsored listings (legacy field, equals organic_rank for organic, null for sponsored)
     asin: string;
     title: string | null;
     image_url: string | null;
@@ -101,7 +101,7 @@ export interface AnalysisResponse {
     revenue_share_pct: number;
     fulfillment: "FBA" | "FBM" | "AMZ";
     brand: string | null;
-    seller_country?: "US" | "CN" | "Other" | "Unknown";
+    seller_country?: "US" | "CN" | "Other" | "Unknown"; // Optional - may be missing in stored data
     [key: string]: unknown; // Allow additional fields
   }>;
   

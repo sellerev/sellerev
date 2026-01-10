@@ -78,7 +78,7 @@ interface AnalysisResponse {
   };
   // Canonical Page-1 array (explicit for UI - ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array)
   page_one_listings?: Array<{
-    rank: number;
+    rank: number | null; // null for sponsored listings
     asin: string;
     title: string | null; // From Rainforest SEARCH response - null if truly missing
     image_url: string | null;
@@ -91,7 +91,8 @@ interface AnalysisResponse {
     revenue_share_pct: number;
     fulfillment: "FBA" | "FBM" | "AMZ";
     brand: string | null;
-    seller_country: "US" | "CN" | "Other" | "Unknown";
+    seller_country?: "US" | "CN" | "Other" | "Unknown"; // Optional - may be missing in stored data
+    [key: string]: unknown; // Allow additional fields
   }>;
   
   // Aggregates derived from canonical Page-1 array (explicit for UI)
@@ -106,7 +107,7 @@ interface AnalysisResponse {
   
   // Products array (same as page_one_listings, kept for backward compatibility)
   products?: Array<{
-    rank: number;
+    rank: number | null; // null for sponsored listings
     asin: string;
     title: string | null; // From Rainforest SEARCH response - null if truly missing
     image_url: string | null;
@@ -119,7 +120,8 @@ interface AnalysisResponse {
     revenue_share_pct: number;
     fulfillment: "FBA" | "FBM" | "AMZ";
     brand: string | null;
-    seller_country: "US" | "CN" | "Other" | "Unknown";
+    seller_country?: "US" | "CN" | "Other" | "Unknown"; // Optional - may be missing in stored data
+    [key: string]: unknown; // Allow additional fields
   }>;
   
   // Optional: Aggregated keyword market snapshot (when input_type === "keyword")
