@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Copy, Check, ChevronRight } from "lucide-react";
-import AnalysesList from "./components/AnalysesList";
+import { Copy, Check, ChevronRight, History } from "lucide-react";
+import HistoryPanel from "./components/HistoryPanel";
 
 /**
  * ChatSidebar - Context-Locked Refinement Tool
@@ -253,6 +253,10 @@ export default function ChatSidebar({
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const userHasScrolledRef = useRef(false);
+  
+  // History panel state
+  const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
+  const historyButtonRef = useRef<HTMLButtonElement>(null);
   
   // Refs for auto-scroll
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -517,32 +521,39 @@ export default function ChatSidebar({
   return (
     <div className="h-full bg-white/70 backdrop-blur-md flex flex-col overflow-hidden" style={{ minHeight: 0 }}>
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* ANALYSES RAIL (Cursor-style)                                        */}
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      <AnalysesList />
-
-      {/* ─────────────────────────────────────────────────────────────────── */}
       {/* HEADER                                                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div className="px-6 py-4 shrink-0 flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-        <h2 className="font-semibold text-gray-900 text-sm">AI Assistant</h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          {analysisRunId
-            ? "Explains the visible Page-1 data only"
-            : "Complete an analysis to start chatting"}
-        </p>
+          <h2 className="font-semibold text-gray-900 text-sm">AI Assistant</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {analysisRunId
+              ? "Explains the visible Page-1 data only"
+              : "Complete an analysis to start chatting"}
+          </p>
         </div>
-        {onToggleCollapse && (
+        <div className="flex items-center gap-1">
+          {/* History button */}
           <button
-            onClick={onToggleCollapse}
+            ref={historyButtonRef}
+            onClick={() => setIsHistoryPanelOpen(!isHistoryPanelOpen)}
             className="flex-shrink-0 p-1.5 rounded-md hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300"
-            aria-label="Collapse chat sidebar"
-            title="Collapse sidebar"
+            aria-label="View analysis history"
+            title="View history"
           >
-            <ChevronRight className="w-4 h-4" />
+            <History className="w-4 h-4" />
           </button>
-        )}
+          {onToggleCollapse && (
+            <button
+              onClick={onToggleCollapse}
+              className="flex-shrink-0 p-1.5 rounded-md hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300"
+              aria-label="Collapse chat sidebar"
+              title="Collapse sidebar"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
@@ -889,6 +900,13 @@ export default function ChatSidebar({
           </p>
         )}
       </div>
+
+      {/* History Panel - Floating overlay */}
+      <HistoryPanel
+        isOpen={isHistoryPanelOpen}
+        onClose={() => setIsHistoryPanelOpen(false)}
+        anchorElement={historyButtonRef.current}
+      />
     </div>
   );
 }
