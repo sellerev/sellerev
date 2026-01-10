@@ -97,7 +97,7 @@ export default async function HistoryPage() {
             </p>
             <Link
               href="/analyze"
-              className="inline-flex items-center px-6 py-3 bg-black text-white rounded-lg font-medium text-sm hover:bg-gray-800 transition-colors"
+              className="inline-flex items-center px-6 py-3 bg-[#3B82F6] text-white rounded-lg font-medium text-sm hover:bg-[#2563EB] transition-colors"
             >
               Run your first analysis
             </Link>

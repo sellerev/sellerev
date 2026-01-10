@@ -162,10 +162,10 @@ function SourceChips() {
       {SOURCE_CHIPS.map((chip) => (
         <span
           key={chip}
-          className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium text-[#858585] bg-[#2a2a2a] rounded"
+          className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium text-gray-600 bg-gray-50 border border-gray-200 rounded"
         >
           <svg
-            className="w-2.5 h-2.5 mr-1 text-[#858585]"
+            className="w-2.5 h-2.5 mr-1 text-gray-500"
             fill="currentColor"
             viewBox="0 0 20 20"
           >
@@ -519,7 +519,7 @@ export default function ChatSidebar({
   const isDisabled = !analysisRunId;
 
   return (
-    <div className="h-full bg-white/70 backdrop-blur-md flex flex-col overflow-hidden" style={{ minHeight: 0 }}>
+    <div className="h-full bg-white flex flex-col overflow-hidden border-l border-[#E5E7EB]" style={{ minHeight: 0 }}>
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* HEADER                                                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}
@@ -561,15 +561,15 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-2.5 relative bg-[#1e1e1e]"
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-2.5 relative bg-gray-50"
         style={{ minHeight: 0 }}
       >
         {isDisabled ? (
           /* Pre-analysis: Show capabilities */
           <div className="text-center py-12">
-            <div className="w-14 h-14 mx-auto mb-4 bg-[#2a2a2a] rounded-full flex items-center justify-center">
+            <div className="w-14 h-14 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
               <svg
-                className="w-7 h-7 text-[#858585]"
+                className="w-7 h-7 text-gray-400"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -582,10 +582,10 @@ export default function ChatSidebar({
                 />
               </svg>
             </div>
-            <p className="text-[#cccccc] text-sm font-medium mb-3">
+            <p className="text-gray-900 text-sm font-medium mb-3">
               The AI assistant will help you:
             </p>
-            <ul className="text-xs text-[#858585] space-y-1.5 max-w-[280px] mx-auto">
+            <ul className="text-xs text-gray-600 space-y-1.5 max-w-[280px] mx-auto">
               <li>• Understand market data</li>
               <li>• Compare listings</li>
               <li>• Explore different scenarios</li>
@@ -595,13 +595,13 @@ export default function ChatSidebar({
         ) : messages.length === 0 && !isLoading ? (
           /* Post-analysis, no messages yet: Show suggested question chips (quiet by default) */
           <div className="space-y-2.5">
-            <p className="text-xs text-[#858585] text-center mb-4">
+            <p className="text-xs text-gray-500 text-center mb-4">
               Suggested questions:
             </p>
             {getSuggestedQuestions(analysisMode, marketSnapshot, selectedListing).slice(0, 4).map((question, idx) => (
               <button
                 key={idx}
-                className="w-full text-left text-sm px-4 py-2.5 bg-[#2a2a2a] rounded-lg hover:bg-[#333333] transition-colors text-[#cccccc] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full text-left text-sm px-4 py-2.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition-colors text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                 onClick={() => sendMessage(question)}
                 disabled={isLoading}
               >
@@ -635,10 +635,10 @@ export default function ChatSidebar({
                   }`}
                 >
                   <div
-                    className={`group relative max-w-[85%] px-4 py-3 rounded-lg ${
+                    className={`group relative max-w-[85%] px-4 py-3 rounded-lg border shadow-sm ${
                       msg.role === "user"
-                        ? "bg-[#2a2a2a] text-[#e4e4e4]"
-                        : "bg-[#1f1f1f] text-[#cccccc]"
+                        ? "bg-white border-gray-200 text-gray-900"
+                        : "bg-white border-gray-200 text-gray-900"
                     }`}
                   >
                     {/* Hover-reveal actions - Cursor-style: hidden by default, fade in on hover/focus */}
@@ -651,44 +651,32 @@ export default function ChatSidebar({
                             handleCopy(e);
                           }
                         }}
-                        className={`p-1.5 rounded-md transition-all focus:outline-none focus:ring-1 ${
-                          msg.role === "user"
-                            ? "hover:bg-white/10 focus:ring-white/50 focus:bg-white/10 text-[#a0a0a0] hover:text-[#e4e4e4]"
-                            : "hover:bg-white/10 focus:ring-white/50 focus:bg-white/10 text-[#858585] hover:text-[#cccccc]"
-                        }`}
+                        className="p-1.5 rounded-md transition-all focus:outline-none focus:ring-1 hover:bg-gray-100 focus:ring-gray-300 focus:bg-gray-100 text-gray-500 hover:text-gray-700"
                         aria-label="Copy message"
                         title="Copy message"
                         tabIndex={0}
                       >
                         {isCopied ? (
-                          <Check className={`w-3.5 h-3.5 ${msg.role === "user" ? "text-[#e4e4e4]" : "text-[#cccccc]"}`} />
+                          <Check className="w-3.5 h-3.5 text-gray-700" />
                         ) : (
-                          <Copy className={`w-3.5 h-3.5`} />
+                          <Copy className="w-3.5 h-3.5" />
                         )}
                       </button>
                     </div>
 
                     {/* Message header with role label */}
-                    <div
-                      className={`text-[11px] font-medium mb-2 ${
-                        msg.role === "user" ? "text-[#a0a0a0]" : "text-[#858585]"
-                      }`}
-                    >
+                    <div className="text-[11px] font-medium mb-2 text-gray-500">
                       {msg.role === "user" ? "You" : "Sellerev"}
                     </div>
                     
                     {/* Message content */}
-                    <div
-                      className={`text-sm whitespace-pre-wrap leading-relaxed ${
-                        msg.role === "user" ? "text-[#e4e4e4]" : "text-[#cccccc]"
-                      }`}
-                    >
+                    <div className="text-sm whitespace-pre-wrap leading-relaxed text-gray-900">
                       {messageContent}
                     </div>
                     
                     {/* Trust indicator chips - assistant messages only */}
                     {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
-                      <div className="mt-2 pt-2 border-t border-[#3e3e3e]">
+                      <div className="mt-2 pt-2 border-t border-gray-200">
                         <SourceChips />
                       </div>
                     )}
@@ -700,21 +688,21 @@ export default function ChatSidebar({
             {/* Streaming message indicator */}
             {isLoading && streamingContent && (
               <div className="w-full flex justify-start">
-                <div className="group relative max-w-[85%] bg-[#1f1f1f] rounded-lg text-[#cccccc] px-4 py-3">
+                <div className="group relative max-w-[85%] bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
                   {/* Message header */}
-                  <div className="text-[11px] font-medium mb-2 text-[#858585]">
+                  <div className="text-[11px] font-medium mb-2 text-gray-500">
                     Sellerev
                   </div>
                   
                   {/* Streaming content with blinking cursor */}
-                  <div className="text-sm whitespace-pre-wrap leading-relaxed text-[#cccccc]">
+                  <div className="text-sm whitespace-pre-wrap leading-relaxed text-gray-900">
                     {sanitizeVerdictLanguage(streamingContent)}
-                    <span className="inline-block w-0.5 h-4 bg-[#cccccc] ml-0.5 align-middle cursor-blink" />
+                    <span className="inline-block w-0.5 h-4 bg-gray-900 ml-0.5 align-middle cursor-blink" />
                   </div>
                   
                   {/* Show chips while streaming (faded) */}
                   {streamingContent && (
-                    <div className="mt-2 pt-2 border-t border-[#3e3e3e] opacity-50">
+                    <div className="mt-2 pt-2 border-t border-gray-200 opacity-50">
                       <SourceChips />
                     </div>
                   )}
@@ -725,18 +713,18 @@ export default function ChatSidebar({
             {/* Loading indicator (before streaming starts) */}
             {isLoading && !streamingContent && (
               <div className="w-full flex justify-start">
-                <div className="max-w-[85%] bg-[#1f1f1f] rounded-lg text-[#cccccc] px-4 py-3">
-                  <div className="text-[11px] font-medium mb-2 text-[#858585]">
+                <div className="max-w-[85%] bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
+                  <div className="text-[11px] font-medium mb-2 text-gray-500">
                     Sellerev
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 bg-[#858585] rounded-full animate-bounce" />
+                    <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
                     <span
-                      className="w-2 h-2 bg-[#858585] rounded-full animate-bounce"
+                      className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
                       style={{ animationDelay: "0.1s" }}
                     />
                     <span
-                      className="w-2 h-2 bg-[#858585] rounded-full animate-bounce"
+                      className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
                       style={{ animationDelay: "0.2s" }}
                     />
                   </div>
@@ -753,7 +741,7 @@ export default function ChatSidebar({
         {showJumpToBottom && (
           <button
             onClick={() => scrollToBottom(true)}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 bg-[#2a2a2a] border border-[#3e3e3e] rounded-full shadow-md hover:shadow-lg transition-all duration-200 hover:bg-[#333333] flex items-center gap-1.5 text-xs font-medium text-[#cccccc] hover:text-[#ffffff]"
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 bg-white border border-gray-300 rounded-full shadow-sm hover:shadow-md transition-all duration-200 hover:bg-gray-50 flex items-center gap-1.5 text-xs font-medium text-gray-700 hover:text-gray-900"
             aria-label="Jump to bottom"
           >
             <svg
@@ -812,7 +800,7 @@ export default function ChatSidebar({
                   alert("Failed to save preference");
                 }
               }}
-              className="px-3 py-1.5 bg-black text-white rounded-xl text-sm font-medium hover:bg-gray-800"
+              className="px-3 py-1.5 bg-[#3B82F6] text-white rounded-xl text-sm font-medium hover:bg-[#2563EB]"
             >
               Save it
             </button>
@@ -847,11 +835,11 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* INPUT AREA                                                          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="px-6 py-4 shrink-0">
-        <div className="flex gap-2 items-end bg-white/90 backdrop-blur-md rounded-full px-2 py-2 shadow-sm">
+      <div className="px-6 py-4 shrink-0 bg-white border-t border-[#E5E7EB]">
+        <div className="flex gap-2 items-end bg-white border border-gray-300 rounded-xl px-3 py-2 shadow-sm hover:border-gray-400 focus-within:ring-2 focus-within:ring-[#3B82F6] focus-within:border-transparent transition-all">
           <textarea
             ref={inputRef}
-            className="flex-1 bg-transparent border-0 rounded-full px-4 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none overflow-y-auto placeholder:text-gray-400"
+            className="flex-1 bg-transparent border-0 rounded-lg px-2 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none overflow-y-auto placeholder:text-gray-400"
             style={{
               minHeight: "36px",
               maxHeight: "144px",
@@ -865,7 +853,7 @@ export default function ChatSidebar({
             rows={1}
           />
           <button
-            className="w-9 h-9 bg-black text-white rounded-full flex items-center justify-center hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            className="w-9 h-9 bg-[#3B82F6] text-white rounded-lg flex items-center justify-center hover:bg-[#2563EB] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             onClick={() => sendMessage()}
             disabled={isDisabled || !input.trim() || isLoading}
           >
@@ -909,7 +897,7 @@ export default function ChatSidebar({
         
         {/* One-time trust disclaimer */}
         {!isDisabled && (
-          <p className="text-[10px] text-gray-400 mt-2 text-center leading-relaxed px-2">
+          <p className="text-[10px] text-gray-500 mt-2 text-center leading-relaxed px-2">
             Responses are based on Amazon market data, your seller profile, and this analysis. No live scraping or predictions.
           </p>
         )}

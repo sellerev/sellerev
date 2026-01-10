@@ -18,10 +18,9 @@ interface HistoryPanelProps {
 }
 
 /**
- * HistoryPanel - Cursor-style history overlay panel
+ * HistoryPanel - History overlay panel
  * 
- * Displays recent analyses in a floating dark overlay panel.
- * Matches Cursor's history panel design.
+ * Displays recent analyses in a floating panel matching app theme.
  */
 export default function HistoryPanel({ isOpen, onClose, anchorElement }: HistoryPanelProps) {
   const router = useRouter();
@@ -211,20 +210,20 @@ export default function HistoryPanel({ isOpen, onClose, anchorElement }: History
 
       {/* Panel */}
       <div
-        className="fixed z-50 bg-[#252526] border border-[#3e3e3e] rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+        className="fixed z-50 bg-white border border-[#E5E7EB] rounded-lg shadow-lg overflow-hidden flex flex-col max-h-[80vh]"
         style={panelStyle}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search input */}
-        <div className="p-3 border-b border-[#3e3e3e]">
+        <div className="p-3 border-b border-[#E5E7EB]">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#858585]" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
               placeholder="Search…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-[#3c3c3c] border border-[#3e3e3e] rounded text-sm text-[#cccccc] placeholder-[#858585] focus:outline-none focus:border-[#007acc] focus:bg-[#3c3c3c] transition-colors"
+              className="w-full pl-9 pr-3 py-2 bg-white border border-gray-300 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:border-transparent transition-colors"
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
@@ -236,20 +235,20 @@ export default function HistoryPanel({ isOpen, onClose, anchorElement }: History
         </div>
 
         {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto bg-gray-50">
           {loading ? (
-            <div className="p-4 text-center text-[#858585] text-sm">
+            <div className="p-4 text-center text-gray-500 text-sm">
               Loading…
             </div>
           ) : groupedAnalyses.length === 0 ? (
-            <div className="p-4 text-center text-[#858585] text-sm">
+            <div className="p-4 text-center text-gray-500 text-sm">
               {searchQuery ? "No analyses match your search" : "No analyses yet"}
             </div>
           ) : (
             groupedAnalyses.map((group) => (
-              <div key={group.label} className="border-b border-[#3e3e3e] last:border-b-0">
+              <div key={group.label} className="border-b border-[#E5E7EB] last:border-b-0">
                 {/* Group header */}
-                <div className="px-4 py-2 text-xs font-medium text-[#858585] uppercase tracking-wider">
+                <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider bg-white">
                   {group.label}
                 </div>
 
@@ -260,24 +259,24 @@ export default function HistoryPanel({ isOpen, onClose, anchorElement }: History
                     <div
                       key={analysis.id}
                       onClick={(e) => handleAnalysisClick(analysis.id, e)}
-                      className={`relative px-4 py-2.5 hover:bg-[#2a2d2e] cursor-pointer group transition-colors ${
-                        isActive ? "bg-[#094771] hover:bg-[#094771]" : ""
+                      className={`relative px-4 py-2.5 hover:bg-gray-100 cursor-pointer group transition-colors ${
+                        isActive ? "bg-blue-50 hover:bg-blue-50 border-l-2 border-[#3B82F6]" : ""
                       }`}
                     >
                       <div className="flex items-start gap-3">
                         {/* Magnifying glass icon */}
-                        <Search className="w-4 h-4 text-[#858585] mt-0.5 flex-shrink-0" />
+                        <Search className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isActive ? "text-[#3B82F6]" : "text-gray-400"}`} />
 
                         {/* Content */}
                         <div className="flex-1 min-w-0">
                           <div
                             className={`text-sm truncate mb-1 ${
-                              isActive ? "text-[#ffffff] font-medium" : "text-[#cccccc]"
+                              isActive ? "text-gray-900 font-medium" : "text-gray-900"
                             }`}
                           >
                             {analysis.input_value}
                           </div>
-                          <div className="text-xs text-[#858585]">
+                          <div className={`text-xs ${isActive ? "text-gray-600" : "text-gray-500"}`}>
                             {formatRelativeTime(analysis.created_at)}
                           </div>
                         </div>
@@ -285,11 +284,11 @@ export default function HistoryPanel({ isOpen, onClose, anchorElement }: History
                         {/* Delete icon - show on hover */}
                         <button
                           onClick={(e) => handleDeleteClick(analysis.id, e)}
-                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#3e3e3e] rounded transition-all flex-shrink-0"
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-all flex-shrink-0"
                           aria-label="Delete analysis"
                           title="Delete (read-only)"
                         >
-                          <Trash2 className="w-4 h-4 text-[#858585] hover:text-[#cccccc]" />
+                          <Trash2 className="w-4 h-4 text-gray-400 hover:text-gray-600" />
                         </button>
                       </div>
                     </div>
