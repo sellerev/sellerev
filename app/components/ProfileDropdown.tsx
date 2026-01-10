@@ -138,9 +138,9 @@ export default function ProfileDropdown() {
         </div>
       </button>
 
-      {/* Dropdown Menu */}
+      {/* Dropdown Menu - Anchored to avatar button */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-[280px] bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+        <div className="absolute right-0 top-full mt-1 w-[280px] bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-[60]">
           {/* Header */}
           <div className="px-4 py-3 border-b border-gray-200">
             <div className="font-semibold text-gray-900 text-sm">{getDisplayName()}</div>
