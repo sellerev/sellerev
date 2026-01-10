@@ -11,6 +11,8 @@ export default function ProfileDropdown() {
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [loading, setLoading] = useState(true);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [dropdownPosition, setDropdownPosition] = useState<{ top: number; right: number } | null>(null);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -34,14 +36,47 @@ export default function ProfileDropdown() {
     };
   }, []);
 
+  // Calculate dropdown position when opening
+  useEffect(() => {
+    if (!isOpen || !buttonRef.current) return;
+
+    const updatePosition = () => {
+      if (!buttonRef.current) return;
+      
+      const rect = buttonRef.current.getBoundingClientRect();
+      // Position: right-aligned to icon, 8px below (top + height + 8px)
+      setDropdownPosition({
+        top: rect.bottom + 8,
+        right: window.innerWidth - rect.right, // Distance from right edge
+      });
+    };
+
+    updatePosition();
+    
+    // Recalculate on window resize/scroll
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true); // Use capture to catch all scroll events
+    
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [isOpen]);
+
   // Close dropdown on outside click
   useEffect(() => {
     if (!isOpen) return;
 
     function handleClickOutside(event: MouseEvent) {
-      // Check if click is outside the dropdown container (which includes the button)
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      // Check if click is outside both the button and dropdown
+      if (
+        buttonRef.current && 
+        dropdownRef.current && 
+        !buttonRef.current.contains(event.target as Node) &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
         setIsOpen(false);
+        setDropdownPosition(null);
       }
     }
 
@@ -49,6 +84,7 @@ export default function ProfileDropdown() {
     function handleEscape(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setIsOpen(false);
+        setDropdownPosition(null);
       }
     }
     
@@ -130,10 +166,18 @@ export default function ProfileDropdown() {
   }
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <>
       {/* Avatar Button */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        ref={buttonRef}
+        onClick={() => {
+          if (isOpen) {
+            setIsOpen(false);
+            setDropdownPosition(null);
+          } else {
+            setIsOpen(true);
+          }
+        }}
         className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
         aria-label="Profile menu"
         aria-expanded={isOpen}
@@ -143,9 +187,16 @@ export default function ProfileDropdown() {
         </div>
       </button>
 
-      {/* Dropdown Menu - Anchored to avatar button, positioned below with 8px offset */}
-      {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-[280px] bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-[100]">
+      {/* Dropdown Menu - Positioned using getBoundingClientRect(), fixed to viewport */}
+      {isOpen && dropdownPosition && (
+        <div
+          ref={dropdownRef}
+          className="fixed w-[280px] bg-white rounded-lg shadow-sm border border-[#E5E7EB] py-2 z-[9999]"
+          style={{
+            top: `${dropdownPosition.top}px`,
+            right: `${dropdownPosition.right}px`,
+          }}
+        >
           {/* Header */}
           <div className="px-4 py-3 border-b border-gray-200">
             <div className="font-semibold text-gray-900 text-sm">{getDisplayName()}</div>
@@ -247,7 +298,7 @@ export default function ProfileDropdown() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
