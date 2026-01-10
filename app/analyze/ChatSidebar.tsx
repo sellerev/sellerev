@@ -158,14 +158,14 @@ const SOURCE_CHIPS = [
  */
 function SourceChips() {
   return (
-    <div className="flex flex-wrap gap-1.5 mt-2 pt-2">
+    <div className="flex flex-wrap gap-1.5">
       {SOURCE_CHIPS.map((chip) => (
         <span
           key={chip}
-          className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium text-gray-500 bg-white/60 backdrop-blur-sm rounded"
+          className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium text-[#858585] bg-[#2a2a2a] rounded"
         >
           <svg
-            className="w-2.5 h-2.5 mr-1 text-gray-400"
+            className="w-2.5 h-2.5 mr-1 text-[#858585]"
             fill="currentColor"
             viewBox="0 0 20 20"
           >
@@ -561,15 +561,15 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto px-6 py-6 space-y-3 relative"
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-2.5 relative bg-[#1e1e1e]"
         style={{ minHeight: 0 }}
       >
         {isDisabled ? (
           /* Pre-analysis: Show capabilities */
           <div className="text-center py-12">
-            <div className="w-14 h-14 mx-auto mb-4 bg-gray-100/60 backdrop-blur-sm rounded-full flex items-center justify-center">
+            <div className="w-14 h-14 mx-auto mb-4 bg-[#2a2a2a] rounded-full flex items-center justify-center">
               <svg
-                className="w-7 h-7 text-gray-400"
+                className="w-7 h-7 text-[#858585]"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -582,10 +582,10 @@ export default function ChatSidebar({
                 />
               </svg>
             </div>
-            <p className="text-gray-600 text-sm font-medium mb-3">
+            <p className="text-[#cccccc] text-sm font-medium mb-3">
               The AI assistant will help you:
             </p>
-            <ul className="text-xs text-gray-500 space-y-1.5 max-w-[280px] mx-auto">
+            <ul className="text-xs text-[#858585] space-y-1.5 max-w-[280px] mx-auto">
               <li>• Understand market data</li>
               <li>• Compare listings</li>
               <li>• Explore different scenarios</li>
@@ -595,13 +595,13 @@ export default function ChatSidebar({
         ) : messages.length === 0 && !isLoading ? (
           /* Post-analysis, no messages yet: Show suggested question chips (quiet by default) */
           <div className="space-y-2.5">
-            <p className="text-xs text-gray-500 text-center mb-4">
+            <p className="text-xs text-[#858585] text-center mb-4">
               Suggested questions:
             </p>
             {getSuggestedQuestions(analysisMode, marketSnapshot, selectedListing).slice(0, 4).map((question, idx) => (
               <button
                 key={idx}
-                className="w-full text-left text-sm px-4 py-2.5 bg-white/80 backdrop-blur-sm rounded-xl hover:bg-white/90 transition-colors text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full text-left text-sm px-4 py-2.5 bg-[#2a2a2a] rounded-lg hover:bg-[#333333] transition-colors text-[#cccccc] disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={() => sendMessage(question)}
                 disabled={isLoading}
               >
@@ -630,102 +630,116 @@ export default function ChatSidebar({
               return (
                 <div
                   key={idx}
-                  className={`group relative max-w-[85%] px-4 py-2.5 rounded-xl ${
-                    msg.role === "user"
-                      ? "bg-black text-white ml-auto"
-                      : "bg-gray-100/80 backdrop-blur-sm text-gray-900 mr-auto"
+                  className={`group relative w-full flex ${
+                    msg.role === "user" ? "justify-start" : "justify-start"
                   }`}
                 >
-                  {/* Hover-reveal actions - Cursor-style: hidden by default, fade in on hover/focus */}
-                  <div className="absolute right-2 top-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 has-[:focus]:opacity-100 transition-all duration-150 ease-out translate-y-[-2px] group-hover:translate-y-0 has-[:focus]:translate-y-0">
-                    <button
-                      onClick={handleCopy}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleCopy(e);
-                        }
-                      }}
-                      className={`p-1.5 rounded-md transition-all focus:outline-none focus:ring-1 focus:ring-offset-1 ${
-                        msg.role === "user"
-                          ? "hover:bg-white/10 focus:ring-white/50 focus:bg-white/10 text-gray-300"
-                          : "hover:bg-gray-200/60 focus:ring-gray-400 focus:bg-gray-200/60 text-gray-400"
-                      }`}
-                      aria-label="Copy message"
-                      title="Copy message"
-                      tabIndex={0}
-                    >
-                      {isCopied ? (
-                        <Check className={`w-3.5 h-3.5 ${msg.role === "user" ? "text-gray-200" : "text-gray-500"}`} />
-                      ) : (
-                        <Copy className={`w-3.5 h-3.5 ${msg.role === "user" ? "text-gray-400" : "text-gray-400"}`} />
-                      )}
-                    </button>
-                  </div>
+                  <div
+                    className={`group relative max-w-[85%] px-4 py-3 rounded-lg ${
+                      msg.role === "user"
+                        ? "bg-[#2a2a2a] text-[#e4e4e4]"
+                        : "bg-[#1f1f1f] text-[#cccccc]"
+                    }`}
+                  >
+                    {/* Hover-reveal actions - Cursor-style: hidden by default, fade in on hover/focus */}
+                    <div className="absolute right-2 top-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 has-[:focus]:opacity-100 transition-all duration-150 ease-out translate-y-[-2px] group-hover:translate-y-0 has-[:focus]:translate-y-0">
+                      <button
+                        onClick={handleCopy}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            handleCopy(e);
+                          }
+                        }}
+                        className={`p-1.5 rounded-md transition-all focus:outline-none focus:ring-1 ${
+                          msg.role === "user"
+                            ? "hover:bg-white/10 focus:ring-white/50 focus:bg-white/10 text-[#a0a0a0] hover:text-[#e4e4e4]"
+                            : "hover:bg-white/10 focus:ring-white/50 focus:bg-white/10 text-[#858585] hover:text-[#cccccc]"
+                        }`}
+                        aria-label="Copy message"
+                        title="Copy message"
+                        tabIndex={0}
+                      >
+                        {isCopied ? (
+                          <Check className={`w-3.5 h-3.5 ${msg.role === "user" ? "text-[#e4e4e4]" : "text-[#cccccc]"}`} />
+                        ) : (
+                          <Copy className={`w-3.5 h-3.5`} />
+                        )}
+                      </button>
+                    </div>
 
-                  <div
-                    className={`text-[11px] font-medium mb-1.5 ${
-                      msg.role === "user" ? "text-gray-300" : "text-gray-600"
-                    }`}
-                  >
-                    {msg.role === "user" ? "You" : "Sellerev"}
+                    {/* Message header with role label */}
+                    <div
+                      className={`text-[11px] font-medium mb-2 ${
+                        msg.role === "user" ? "text-[#a0a0a0]" : "text-[#858585]"
+                      }`}
+                    >
+                      {msg.role === "user" ? "You" : "Sellerev"}
+                    </div>
+                    
+                    {/* Message content */}
+                    <div
+                      className={`text-sm whitespace-pre-wrap leading-relaxed ${
+                        msg.role === "user" ? "text-[#e4e4e4]" : "text-[#cccccc]"
+                      }`}
+                    >
+                      {messageContent}
+                    </div>
+                    
+                    {/* Trust indicator chips - assistant messages only */}
+                    {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
+                      <div className="mt-2 pt-2 border-t border-[#3e3e3e]">
+                        <SourceChips />
+                      </div>
+                    )}
                   </div>
-                  <div
-                    className={`text-sm whitespace-pre-wrap leading-relaxed ${
-                      msg.role === "user" ? "text-white" : "text-gray-800"
-                    }`}
-                  >
-                    {messageContent}
-                  </div>
-                  {/* Trust indicator chips - assistant messages only */}
-                  {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
-                    <SourceChips />
-                  )}
                 </div>
               );
             })}
 
             {/* Streaming message indicator */}
             {isLoading && streamingContent && (
-              <div className="group relative max-w-[85%] bg-gray-100/80 backdrop-blur-sm rounded-xl px-4 py-2.5 mr-auto">
-                {/* Actions hidden during streaming */}
-                <div className="text-[11px] font-medium mb-1.5 text-gray-600">
-                  Sellerev
-                </div>
-                <div className="text-sm whitespace-pre-wrap text-gray-800 leading-relaxed">
-                  {sanitizeVerdictLanguage(streamingContent)}
-                  <span className="inline-block w-1.5 h-4 bg-gray-400 animate-pulse ml-0.5" />
-                </div>
-                {/* Show chips while streaming (faded) */}
-                <div className="flex flex-wrap gap-1.5 mt-2 pt-2 opacity-50">
-                  {SOURCE_CHIPS.map((chip) => (
-                    <span
-                      key={chip}
-                      className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium text-gray-500 bg-white/60 rounded"
-                    >
-                      {chip}
-                    </span>
-                  ))}
+              <div className="w-full flex justify-start">
+                <div className="group relative max-w-[85%] bg-[#1f1f1f] rounded-lg text-[#cccccc] px-4 py-3">
+                  {/* Message header */}
+                  <div className="text-[11px] font-medium mb-2 text-[#858585]">
+                    Sellerev
+                  </div>
+                  
+                  {/* Streaming content with blinking cursor */}
+                  <div className="text-sm whitespace-pre-wrap leading-relaxed text-[#cccccc]">
+                    {sanitizeVerdictLanguage(streamingContent)}
+                    <span className="inline-block w-0.5 h-4 bg-[#cccccc] ml-0.5 align-middle cursor-blink" />
+                  </div>
+                  
+                  {/* Show chips while streaming (faded) */}
+                  {streamingContent && (
+                    <div className="mt-2 pt-2 border-t border-[#3e3e3e] opacity-50">
+                      <SourceChips />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
             {/* Loading indicator (before streaming starts) */}
             {isLoading && !streamingContent && (
-              <div className="max-w-[85%] bg-gray-100/80 backdrop-blur-sm rounded-xl px-4 py-2.5 mr-auto">
-                <div className="text-[11px] font-medium mb-1.5 text-gray-600">
-                  Sellerev
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                  <span
-                    className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                    style={{ animationDelay: "0.1s" }}
-                  />
-                  <span
-                    className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                    style={{ animationDelay: "0.2s" }}
-                  />
+              <div className="w-full flex justify-start">
+                <div className="max-w-[85%] bg-[#1f1f1f] rounded-lg text-[#cccccc] px-4 py-3">
+                  <div className="text-[11px] font-medium mb-2 text-[#858585]">
+                    Sellerev
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 bg-[#858585] rounded-full animate-bounce" />
+                    <span
+                      className="w-2 h-2 bg-[#858585] rounded-full animate-bounce"
+                      style={{ animationDelay: "0.1s" }}
+                    />
+                    <span
+                      className="w-2 h-2 bg-[#858585] rounded-full animate-bounce"
+                      style={{ animationDelay: "0.2s" }}
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -739,7 +753,7 @@ export default function ChatSidebar({
         {showJumpToBottom && (
           <button
             onClick={() => scrollToBottom(true)}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 bg-white/95 backdrop-blur-sm border border-gray-200 rounded-full shadow-md hover:shadow-lg transition-all duration-200 hover:bg-white flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900"
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 bg-[#2a2a2a] border border-[#3e3e3e] rounded-full shadow-md hover:shadow-lg transition-all duration-200 hover:bg-[#333333] flex items-center gap-1.5 text-xs font-medium text-[#cccccc] hover:text-[#ffffff]"
             aria-label="Jump to bottom"
           >
             <svg

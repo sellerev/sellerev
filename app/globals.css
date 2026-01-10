@@ -36,3 +36,17 @@ body {
   height: 100%;
   overflow: hidden;
 }
+
+/* Blinking cursor animation for streaming text */
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
+.cursor-blink {
+  animation: blink 1s infinite;
+}
