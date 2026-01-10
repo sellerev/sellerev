@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { Copy, Check } from "lucide-react";
 import AnalysesList from "./components/AnalysesList";
 
 /**
@@ -234,6 +235,7 @@ export default function ChatSidebar({
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [pendingMemoryConfirmation, setPendingMemoryConfirmation] = useState<{
     pendingMemoryId: string;
     message: string;
@@ -498,39 +500,83 @@ export default function ChatSidebar({
         ) : (
           /* Chat messages */
           <>
-            {messages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`max-w-[85%] px-4 py-2.5 rounded-xl ${
-                  msg.role === "user"
-                    ? "bg-black text-white ml-auto"
-                    : "bg-gray-100/80 backdrop-blur-sm text-gray-900"
-                }`}
-              >
+            {messages.map((msg, idx) => {
+              const messageContent = msg.role === "assistant" ? sanitizeVerdictLanguage(msg.content) : msg.content;
+              const isCopied = copiedIndex === idx;
+              
+              const handleCopy = async (e: React.MouseEvent | React.KeyboardEvent) => {
+                e.stopPropagation();
+                try {
+                  await navigator.clipboard.writeText(messageContent);
+                  setCopiedIndex(idx);
+                  setTimeout(() => setCopiedIndex(null), 2000);
+                } catch (err) {
+                  console.error("Failed to copy message:", err);
+                }
+              };
+
+              return (
                 <div
-                  className={`text-[11px] font-medium mb-1.5 ${
-                    msg.role === "user" ? "text-gray-300" : "text-gray-600"
+                  key={idx}
+                  className={`group relative max-w-[85%] px-4 py-2.5 rounded-xl ${
+                    msg.role === "user"
+                      ? "bg-black text-white ml-auto"
+                      : "bg-gray-100/80 backdrop-blur-sm text-gray-900 mr-auto"
                   }`}
                 >
-                  {msg.role === "user" ? "You" : "Sellerev"}
+                  {/* Hover-reveal actions - Cursor-style: hidden by default, fade in on hover/focus */}
+                  <div className="absolute right-2 top-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 has-[:focus]:opacity-100 transition-all duration-150 ease-out translate-y-[-2px] group-hover:translate-y-0 has-[:focus]:translate-y-0">
+                    <button
+                      onClick={handleCopy}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleCopy(e);
+                        }
+                      }}
+                      className={`p-1.5 rounded-md transition-all focus:outline-none focus:ring-1 focus:ring-offset-1 ${
+                        msg.role === "user"
+                          ? "hover:bg-white/10 focus:ring-white/50 focus:bg-white/10 text-gray-300"
+                          : "hover:bg-gray-200/60 focus:ring-gray-400 focus:bg-gray-200/60 text-gray-400"
+                      }`}
+                      aria-label="Copy message"
+                      title="Copy message"
+                      tabIndex={0}
+                    >
+                      {isCopied ? (
+                        <Check className={`w-3.5 h-3.5 ${msg.role === "user" ? "text-gray-200" : "text-gray-500"}`} />
+                      ) : (
+                        <Copy className={`w-3.5 h-3.5 ${msg.role === "user" ? "text-gray-400" : "text-gray-400"}`} />
+                      )}
+                    </button>
+                  </div>
+
+                  <div
+                    className={`text-[11px] font-medium mb-1.5 ${
+                      msg.role === "user" ? "text-gray-300" : "text-gray-600"
+                    }`}
+                  >
+                    {msg.role === "user" ? "You" : "Sellerev"}
+                  </div>
+                  <div
+                    className={`text-sm whitespace-pre-wrap leading-relaxed ${
+                      msg.role === "user" ? "text-white" : "text-gray-800"
+                    }`}
+                  >
+                    {messageContent}
+                  </div>
+                  {/* Trust indicator chips - assistant messages only */}
+                  {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
+                    <SourceChips />
+                  )}
                 </div>
-                <div
-                  className={`text-sm whitespace-pre-wrap leading-relaxed ${
-                    msg.role === "user" ? "text-white" : "text-gray-800"
-                  }`}
-                >
-                  {msg.role === "assistant" ? sanitizeVerdictLanguage(msg.content) : msg.content}
-                </div>
-                {/* Trust indicator chips - assistant messages only */}
-                {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
-                  <SourceChips />
-                )}
-              </div>
-            ))}
+              );
+            })}
 
             {/* Streaming message indicator */}
             {isLoading && streamingContent && (
-              <div className="max-w-[85%] bg-gray-100/80 backdrop-blur-sm rounded-xl px-4 py-2.5 mr-auto">
+              <div className="group relative max-w-[85%] bg-gray-100/80 backdrop-blur-sm rounded-xl px-4 py-2.5 mr-auto">
+                {/* Actions hidden during streaming */}
                 <div className="text-[11px] font-medium mb-1.5 text-gray-600">
                   Sellerev
                 </div>
