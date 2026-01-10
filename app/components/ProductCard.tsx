@@ -1,4 +1,7 @@
-import { Star, Image as ImageIcon, Check } from "lucide-react";
+"use client";
+
+import { useState } from "react";
+import { Star, Image as ImageIcon, Check, Copy, ExternalLink } from "lucide-react";
 
 interface ProductCardProps {
   rank: number;
@@ -7,11 +10,12 @@ interface ProductCardProps {
   price: number;
   rating: number;
   reviews: number;
-  monthlyRevenue: number;
-  monthlyUnits: number;
+  monthlyRevenue: number | null;
+  monthlyUnits: number | null;
   fulfillment: "FBA" | "FBM" | "AMZ";
   isSponsored: boolean;
   imageUrl?: string | null;
+  asin?: string | null;
   isSelected?: boolean;
   onSelect?: () => void;
 }
@@ -28,9 +32,12 @@ export function ProductCard({
   fulfillment,
   isSponsored,
   imageUrl,
+  asin,
   isSelected = false,
   onSelect,
 }: ProductCardProps) {
+  const [copied, setCopied] = useState(false);
+
   const getFulfillmentBadgeStyle = () => {
     switch (fulfillment) {
       case "FBA":
@@ -40,6 +47,23 @@ export function ProductCard({
       case "AMZ":
         return "bg-[#FED7AA] text-[#9A3412]";
     }
+  };
+
+  const handleCopyASIN = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (asin) {
+      try {
+        await navigator.clipboard.writeText(asin);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (err) {
+        console.error("Failed to copy ASIN:", err);
+      }
+    }
+  };
+
+  const handleAmazonLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
   };
 
   return (
@@ -71,6 +95,20 @@ export function ProductCard({
                       rounded-md flex items-center justify-center font-bold text-xs z-10 shadow-sm">
         #{rank}
       </div>
+
+      {/* Amazon Link Icon */}
+      {asin && (
+        <a
+          href={`https://www.amazon.com/dp/${asin}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={handleAmazonLink}
+          className="absolute top-4 right-14 w-7 h-7 bg-white border border-gray-300 rounded-md flex items-center justify-center hover:bg-gray-50 transition-colors z-10 shadow-sm"
+          title="View on Amazon"
+        >
+          <ExternalLink className="w-3.5 h-3.5 text-gray-600" />
+        </a>
+      )}
 
       {/* Selected Checkmark Badge */}
       {isSelected && (
@@ -113,7 +151,26 @@ export function ProductCard({
 
       {/* Brand Name */}
       {brand && brand !== "—" && (
-        <p className="text-sm text-[#6B7280] truncate mb-3">{brand}</p>
+        <p className="text-sm text-[#6B7280] truncate mb-2">{brand}</p>
+      )}
+
+      {/* ASIN with Copy Button */}
+      {asin && (
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-xs font-mono text-gray-500">ASIN: {asin}</span>
+          <button
+            onClick={handleCopyASIN}
+            className="p-1 hover:bg-gray-100 rounded transition-colors"
+            title="Copy ASIN"
+            type="button"
+          >
+            {copied ? (
+              <Check className="w-3.5 h-3.5 text-green-600" />
+            ) : (
+              <Copy className="w-3.5 h-3.5 text-gray-400" />
+            )}
+          </button>
+        </div>
       )}
 
       {/* Price */}
@@ -145,12 +202,16 @@ export function ProductCard({
 
       {/* Revenue Section - Prominent */}
       <div className="bg-[#F9FAFB] -mx-4 -mb-4 px-4 py-3 mt-3 rounded-b-xl border-t border-[#E5E7EB]">
-        {monthlyRevenue > 0 ? (
+        {monthlyRevenue !== null && monthlyRevenue !== undefined ? (
           <div className="mb-2">
             <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Revenue</div>
-            <div className="text-xl font-bold text-[#111827]">
-              ${(monthlyRevenue / 1000).toFixed(1)}K<span className="text-sm font-normal text-[#6B7280]"> / mo</span>
-            </div>
+            {monthlyRevenue > 0 ? (
+              <div className="text-xl font-bold text-[#111827]">
+                ${(monthlyRevenue / 1000).toFixed(1)}K<span className="text-sm font-normal text-[#6B7280]"> / mo</span>
+              </div>
+            ) : (
+              <div className="text-sm text-[#9CA3AF]">—</div>
+            )}
           </div>
         ) : (
           <div className="mb-2">
@@ -158,12 +219,16 @@ export function ProductCard({
             <div className="text-sm text-[#9CA3AF]">—</div>
           </div>
         )}
-        {monthlyUnits > 0 ? (
+        {monthlyUnits !== null && monthlyUnits !== undefined ? (
           <div>
             <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Units</div>
-            <div className="text-sm font-medium text-[#111827]">
-              {monthlyUnits.toLocaleString()} units
-            </div>
+            {monthlyUnits > 0 ? (
+              <div className="text-sm font-medium text-[#111827]">
+                {monthlyUnits.toLocaleString()} units
+              </div>
+            ) : (
+              <div className="text-sm text-[#9CA3AF]">—</div>
+            )}
           </div>
         ) : (
           <div>

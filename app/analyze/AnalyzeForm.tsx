@@ -913,15 +913,17 @@ export default function AnalyzeForm({
                           : null))
                       : null;
                     
-                    // Monthly Units - always numeric when listings exist
-                    const monthlyUnits = hasListings
-                      ? (aggregates?.total_monthly_units_est ?? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_units || 0), 0))
-                      : 0;
+                    // Monthly Units - read directly from market_snapshot
+                    const monthlyUnits = snapshot?.est_total_monthly_units_min 
+                      ?? (snapshot as any)?.monthly_units
+                      ?? (snapshot as any)?.total_monthly_units
+                      ?? (hasListings ? (aggregates?.total_monthly_units_est ?? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_units || 0), 0)) : null);
                     
-                    // Monthly Revenue - always numeric when listings exist
-                    const monthlyRevenue = hasListings
-                      ? (aggregates?.total_monthly_revenue_est ?? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0))
-                      : 0;
+                    // Monthly Revenue - read directly from market_snapshot
+                    const monthlyRevenue = snapshot?.est_total_monthly_revenue_min
+                      ?? (snapshot as any)?.monthly_revenue
+                      ?? (snapshot as any)?.total_monthly_revenue
+                      ?? (hasListings ? (aggregates?.total_monthly_revenue_est ?? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0)) : null);
                     
                     // Average Rating - calculate from page_one_listings (canonical products) or aggregates
                     let avgRating = 0;
@@ -1000,7 +1002,9 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {hasListings && monthlyUnits > 0 ? monthlyUnits.toLocaleString() : (pageOneListings.length > 0 ? monthlyUnits.toLocaleString() : "Estimating…")}
+                              {monthlyUnits !== null && monthlyUnits !== undefined && monthlyUnits > 0 
+                                ? monthlyUnits.toLocaleString() 
+                                : "—"}
                             </div>
                           </div>
                           
@@ -1008,7 +1012,9 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {hasListings && monthlyRevenue > 0 ? formatCurrency(monthlyRevenue) : (pageOneListings.length > 0 ? formatCurrency(monthlyRevenue || 0) : "Estimating…")}
+                              {monthlyRevenue !== null && monthlyRevenue !== undefined && monthlyRevenue > 0 
+                                ? formatCurrency(monthlyRevenue) 
+                                : "—"}
                             </div>
                           </div>
                           
@@ -1224,9 +1230,9 @@ export default function AnalyzeForm({
                           const rating = listing.rating ?? 0;
                           // Reviews: page_one_listings uses review_count, ProductCard expects reviews prop
                           const reviews = listing.review_count ?? listing.reviews ?? 0;
-                          // Revenue and units: from canonical product
-                          const monthlyRevenue = (listing as any).estimated_monthly_revenue ?? 0;
-                          const monthlyUnits = (listing as any).estimated_monthly_units ?? 0;
+                          // Revenue and units: from canonical product (preserve null if missing)
+                          const monthlyRevenue = (listing as any).estimated_monthly_revenue ?? (listing as any).est_monthly_revenue ?? null;
+                          const monthlyUnits = (listing as any).estimated_monthly_units ?? (listing as any).est_monthly_units ?? null;
                           // Sponsored: check both fields
                           const isSponsored = listing.is_sponsored ?? listing.sponsored ?? false;
                           
@@ -1247,9 +1253,12 @@ export default function AnalyzeForm({
                             });
                           }
                           
+                          // Extract ASIN with fallback
+                          const asin = listing.asin || normalizeListing(listing).asin || null;
+                          
                           return (
                             <ProductCard
-                              key={`${listing.asin}-${idx}`}
+                              key={`${asin || idx}-${idx}`}
                               rank={rank}
                               title={title}
                               brand={brand}
@@ -1261,6 +1270,7 @@ export default function AnalyzeForm({
                               fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
                               isSponsored={isSponsored}
                               imageUrl={imageUrl}
+                              asin={asin}
                               isSelected={isSelected}
                               onSelect={() => setSelectedListing(isSelected ? null : listing)}
                             />
