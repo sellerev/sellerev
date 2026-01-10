@@ -168,9 +168,7 @@ export default function SearchBar({
   };
 
   return (
-    <div className="border-b border-gray-200 bg-white flex-shrink-0 z-40 shadow-sm">
-      <div className="w-full px-6 py-4">
-        <div className="flex gap-4 items-end">
+    <div className="flex gap-4 items-end">
           {/* Keyword Input Field */}
           <div className="flex-1 max-w-3xl">
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -268,8 +266,6 @@ export default function SearchBar({
               )}
             </button>
           )}
-        </div>
-      </div>
     </div>
   );
 }
