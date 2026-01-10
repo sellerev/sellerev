@@ -181,6 +181,42 @@ function SourceChips() {
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Sanitizes verdict language from chat messages (presentation-layer only)
+ * Replaces explicit verdict headers with neutral, Cursor-style framing
+ * This is UI-only cleanup - does not modify stored data or backend logic
+ */
+function sanitizeVerdictLanguage(content: string): string {
+  if (!content) return content;
+  
+  let sanitized = content;
+  
+  // Replace "VERDICT:" headers (case-insensitive, handles various formats)
+  sanitized = sanitized.replace(/^VERDICT:\s*(GO|NO-GO|NO\s+GO|CAUTION|CONDITIONAL)/gim, 'KEY OBSERVATIONS:');
+  sanitized = sanitized.replace(/^VERDICT:\s*$/gim, 'KEY OBSERVATIONS:');
+  sanitized = sanitized.replace(/VERDICT:\s*(GO|NO-GO|NO\s+GO|CAUTION|CONDITIONAL)/gim, 'KEY OBSERVATIONS:');
+  
+  // Replace standalone verdict labels on their own lines
+  sanitized = sanitized.replace(/^(GO|NO-GO|NO\s+GO|CAUTION|CONDITIONAL)\s*$/gim, (match) => {
+    // If it's a standalone line, remove it entirely or replace with neutral text
+    // For now, just remove standalone verdict labels
+    return '';
+  });
+  
+  // Replace "WHY:" with "WHAT STANDS OUT:" for neutral framing
+  sanitized = sanitized.replace(/^WHY:\s*$/gim, 'WHAT STANDS OUT:');
+  sanitized = sanitized.replace(/^WHY\s*$/gim, 'WHAT STANDS OUT:');
+  
+  // Replace "THIS FAILS UNLESS" with neutral framing
+  sanitized = sanitized.replace(/THIS FAILS UNLESS ALL OF THE FOLLOWING ARE TRUE:/gim, 'CONSTRAINTS TO CONSIDER: Entry would require ALL of the following conditions:');
+  sanitized = sanitized.replace(/THIS FAILS UNLESS:/gim, 'CONSTRAINTS TO CONSIDER: Entry would require the following conditions:');
+  
+  // Clean up any double line breaks that might result from removals
+  sanitized = sanitized.replace(/\n\n\n+/g, '\n\n');
+  
+  return sanitized.trim();
+}
+
 export default function ChatSidebar({
   analysisRunId,
   initialMessages = [],
@@ -483,7 +519,7 @@ export default function ChatSidebar({
                     msg.role === "user" ? "text-white" : "text-gray-800"
                   }`}
                 >
-                  {msg.content}
+                  {msg.role === "assistant" ? sanitizeVerdictLanguage(msg.content) : msg.content}
                 </div>
                 {/* Trust indicator chips - assistant messages only */}
                 {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
@@ -499,7 +535,7 @@ export default function ChatSidebar({
                   Sellerev
                 </div>
                 <div className="text-sm whitespace-pre-wrap text-gray-800 leading-relaxed">
-                  {streamingContent}
+                  {sanitizeVerdictLanguage(streamingContent)}
                   <span className="inline-block w-1.5 h-4 bg-gray-400 animate-pulse ml-0.5" />
                 </div>
                 {/* Show chips while streaming (faded) */}
