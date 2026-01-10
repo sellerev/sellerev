@@ -8,9 +8,9 @@ export default function Navigation() {
   const pathname = usePathname();
 
   return (
-    <nav className="border-b border-gray-200 bg-white sticky top-0 z-50 shadow-sm">
-      <div className="w-full px-6">
-        <div className="flex items-center justify-between h-16">
+    <nav className="border-b border-gray-200 bg-white flex-shrink-0 z-50 shadow-sm h-16">
+      <div className="w-full h-full px-6">
+        <div className="flex items-center justify-between h-full">
           {/* Left-aligned: Brand + Navigation */}
           <div className="flex items-center gap-8">
             <Link

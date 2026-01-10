@@ -387,12 +387,7 @@ export default function ChatSidebar({
   const isDisabled = !analysisRunId;
 
   return (
-    <div 
-      className="h-full bg-white flex flex-col" 
-      style={{ 
-        height: "100%"
-      }}
-    >
+    <div className="h-full bg-white flex flex-col overflow-hidden">
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* HEADER                                                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}

@@ -46,7 +46,7 @@ export default async function HistoryPage() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
+      <div className="h-full overflow-y-auto bg-gray-50 p-6">
         <div className="max-w-6xl mx-auto">
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Analysis History</h1>
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mt-4">
@@ -58,7 +58,7 @@ export default async function HistoryPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-full overflow-y-auto bg-gray-50">
       <div className="max-w-6xl mx-auto px-4 py-8">
         {/* ─────────────────────────────────────────────────────────────────── */}
         {/* BLOCK 1: HEADER                                                     */}

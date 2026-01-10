@@ -25,12 +25,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="h-full">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased h-full overflow-hidden bg-white`}
       >
-        <Navigation />
-        {children}
+        <div className="h-full flex flex-col overflow-hidden bg-white">
+          <Navigation />
+          <div className="flex-1 overflow-hidden">
+            {children}
+          </div>
+        </div>
       </body>
     </html>
   );

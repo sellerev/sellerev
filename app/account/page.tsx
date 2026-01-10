@@ -33,7 +33,7 @@ function AccountPageContent() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-full overflow-y-auto bg-gray-50">
       <div className="max-w-4xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-8">
@@ -83,7 +83,7 @@ function AccountPageContent() {
 
 export default function AccountPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center">Loading...</div>}>
+    <Suspense fallback={<div className="h-full bg-gray-50 flex items-center justify-center">Loading...</div>}>
       <AccountPageContent />
     </Suspense>
   );
