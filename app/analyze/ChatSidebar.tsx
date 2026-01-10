@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import AnalysesList from "./components/AnalysesList";
 
 /**
  * ChatSidebar - Context-Locked Refinement Tool
@@ -388,6 +389,11 @@ export default function ChatSidebar({
 
   return (
     <div className="h-full bg-white/70 backdrop-blur-md flex flex-col overflow-hidden">
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* ANALYSES RAIL (Cursor-style)                                        */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      <AnalysesList />
+
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* HEADER                                                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}
