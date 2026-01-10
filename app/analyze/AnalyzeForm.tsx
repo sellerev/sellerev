@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import BrandMoatBlock from "./BrandMoatBlock";
@@ -431,6 +432,11 @@ export default function AnalyzeForm({
   readOnly = false,
 }: AnalyzeFormProps) {
   // ─────────────────────────────────────────────────────────────────────────
+  // ROUTER
+  // ─────────────────────────────────────────────────────────────────────────
+  const router = useRouter();
+
+  // ─────────────────────────────────────────────────────────────────────────
   // STATE
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -471,6 +477,35 @@ export default function AnalyzeForm({
   
   // Sort state for Page 1 Results (default to revenue descending)
   const [sortBy, setSortBy] = useState<"revenue" | "units" | "bsr" | "reviews" | "price">("revenue");
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // EFFECTS: Sync props to state when URL changes (page refresh or navigation)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Sync initialAnalysis prop to state when analysis_run_id changes
+  // This handles URL navigation between different analyses (browser back/forward, refresh, direct URL entry)
+  // Note: When creating new analysis via router.replace(), props won't change, so state is updated directly in analyze()
+  useEffect(() => {
+    // Sync analysis state when initialAnalysis prop changes (indicates URL navigation or refresh)
+    if (initialAnalysis) {
+      setAnalysis(normalizeAnalysis(initialAnalysis));
+      setInputValue(initialAnalysis.input_value || "");
+      setIsEstimated(false);
+      setSnapshotType("snapshot");
+      setChatMessages(initialMessages);
+    } else {
+      // No initialAnalysis means no run param - reset to blank state
+      // Only reset if we currently have an analysis loaded (avoid resetting on initial mount)
+      if (analysis !== null) {
+        setAnalysis(null);
+        setInputValue("");
+        setIsEstimated(false);
+        setSnapshotType("snapshot");
+        setChatMessages([]);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialAnalysis?.analysis_run_id]); // Sync when analysis_run_id changes (different analysis loaded)
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -668,6 +703,12 @@ export default function AnalyzeForm({
       // Normalize and set analysis
       setAnalysis(normalizeAnalysis(analysisData));
       setError(null);
+
+      // Update URL with the new analysis run ID for persistence
+      // Use replace() to avoid adding to history stack
+      if (data.analysisRunId) {
+        router.replace(`/analyze?run=${data.analysisRunId}`, { scroll: false });
+      }
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Analysis failed";
       console.error("ANALYZE_EXCEPTION", { error: errorMessage, exception: e });

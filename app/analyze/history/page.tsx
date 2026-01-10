@@ -131,7 +131,7 @@ export default async function AnalyzeHistoryPage() {
             return (
               <Link
                 key={run.id}
-                href={`/analyze?id=${run.id}`}
+                href={`/analyze?run=${run.id}`}
                 className="block border rounded-lg p-4 hover:bg-gray-50 hover:border-gray-400 transition-colors cursor-pointer"
               >
                 <div className="flex items-start justify-between mb-2">

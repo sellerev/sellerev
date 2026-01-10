@@ -5,7 +5,7 @@ import type { AnalysisResponse, RiskLevel } from "@/types/analysis";
 import AnalyzeForm from "./AnalyzeForm";
 
 interface AnalyzePageProps {
-  searchParams: Promise<{ id?: string }>;
+  searchParams: Promise<{ run?: string }>;
 }
 
 /**
@@ -14,10 +14,10 @@ interface AnalyzePageProps {
  * Handles:
  * - Authentication check
  * - Seller profile validation
- * - Loading existing analysis if `id` query param is provided
+ * - Loading existing analysis if `run` query param is provided
  * 
- * The `id` param allows restoring a previous analysis from history,
- * enabling continuity for chat conversations.
+ * The `run` param allows restoring a previous analysis from history,
+ * enabling continuity for chat conversations and URL-based persistence.
  */
 export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
   const supabase = await createClient();
@@ -43,16 +43,16 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
     redirect("/onboarding");
   }
 
-  // If an analysis ID is provided, load it from the database
+  // If an analysis run ID is provided, load it from the database
   let initialAnalysis: AnalysisResponse | null = null;
   let initialMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
 
-  if (params.id) {
+  if (params.run) {
     // Fetch the analysis run
     const { data: analysisRun } = await supabase
       .from("analysis_runs")
       .select("*")
-      .eq("id", params.id)
+      .eq("id", params.run)
       .eq("user_id", user.id) // Security: ensure user owns this analysis
       .single();
 
@@ -113,7 +113,7 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
       const { data: chatMessages } = await supabase
         .from("analysis_messages")
         .select("role, content")
-        .eq("analysis_run_id", params.id)
+        .eq("analysis_run_id", params.run)
         .order("created_at", { ascending: true });
 
       if (chatMessages && chatMessages.length > 0) {

@@ -147,7 +147,7 @@ export default function HistoryGrid({ runs }: HistoryGridProps) {
             return (
               <Link
                 key={run.id}
-                href={`/analyze/${run.id}`}
+                href={`/analyze?run=${run.id}`}
                 className="bg-white border rounded-xl p-5 hover:border-gray-400 hover:shadow-md transition-all cursor-pointer group"
               >
                 {/* Header: Verdict Badge + Confidence */}
