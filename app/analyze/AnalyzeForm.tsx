@@ -477,8 +477,8 @@ export default function AnalyzeForm({
   // Selected listing state (for AI context)
   const [selectedListing, setSelectedListing] = useState<any | null>(null);
   
-  // Sort state for Page 1 Results (default to revenue descending)
-  const [sortBy, setSortBy] = useState<"revenue" | "units" | "bsr" | "reviews" | "price">("revenue");
+  // Sort state for Page 1 Results (default to rank to preserve Amazon order)
+  const [sortBy, setSortBy] = useState<"rank" | "price-asc" | "price-desc" | "revenue-desc" | "units-desc" | "reviews-desc" | "rating-desc">("rank");
 
   // Chat sidebar resizing and collapsing state
   const [sidebarWidth, setSidebarWidth] = useState(420); // Default width
@@ -524,6 +524,8 @@ export default function AnalyzeForm({
       setIsEstimated(false);
       setSnapshotType("snapshot");
       setChatMessages(initialMessages);
+      // Reset sort to default (Amazon rank) when new analysis loads
+      setSortBy("rank");
     } else {
       // No initialAnalysis means no run param - reset to blank state
       // Only reset if we currently have an analysis loaded (avoid resetting on initial mount)
@@ -533,6 +535,7 @@ export default function AnalyzeForm({
         setIsEstimated(false);
         setSnapshotType("snapshot");
         setChatMessages([]);
+        setSortBy("rank");
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -569,6 +572,7 @@ export default function AnalyzeForm({
     setChatMessages([]); // Clear previous chat
     setIsEstimated(false); // Reset estimated flag
     setSnapshotType("snapshot"); // Reset snapshot type
+    setSortBy("rank"); // Reset sort to default (Amazon rank)
 
     try {
       console.log("ANALYZE_REQUEST_START", { inputValue: inputValue.trim() });
@@ -1282,14 +1286,123 @@ export default function AnalyzeForm({
                     }
                     // CRITICAL: Do NOT assign empty array if pageOneListings already has data (prevent data loss on re-render)
                     // If none of the above match, pageOneListings remains empty [] (intentional)
-                    
-                    // Use stable source for rendering - same reference as pageOneListings to prevent inconsistencies
-                    const cardsToRender = pageOneListings;
+                
+                    // Sort listings based on selected sort option
+                    // Create a derived sorted array (do NOT mutate original)
+                    const sortedListings = [...pageOneListings].sort((a: any, b: any) => {
+                      switch (sortBy) {
+                        case "rank":
+                          // Default: preserve Amazon order using page_position
+                          const aPos = a.page_position ?? a.organic_rank ?? 999;
+                          const bPos = b.page_position ?? b.organic_rank ?? 999;
+                          return aPos - bPos;
+                        
+                        case "price-asc":
+                          // Price: Low → High
+                          const aPrice = a.price ?? 0;
+                          const bPrice = b.price ?? 0;
+                          if (aPrice === bPrice) {
+                            // Tie-breaker: use rank
+                            const aPos2 = a.page_position ?? a.organic_rank ?? 999;
+                            const bPos2 = b.page_position ?? b.organic_rank ?? 999;
+                            return aPos2 - bPos2;
+                          }
+                          return aPrice - bPrice;
+                        
+                        case "price-desc":
+                          // Price: High → Low
+                          const aPrice2 = a.price ?? 0;
+                          const bPrice2 = b.price ?? 0;
+                          if (aPrice2 === bPrice2) {
+                            // Tie-breaker: use rank
+                            const aPos3 = a.page_position ?? a.organic_rank ?? 999;
+                            const bPos3 = b.page_position ?? b.organic_rank ?? 999;
+                            return aPos3 - bPos3;
+                          }
+                          return bPrice2 - aPrice2;
+                        
+                        case "revenue-desc":
+                          // Monthly Revenue: High → Low
+                          const aRev = a.estimated_monthly_revenue ?? 0;
+                          const bRev = b.estimated_monthly_revenue ?? 0;
+                          if (aRev === bRev) {
+                            // Tie-breaker: use rank
+                            const aPos4 = a.page_position ?? a.organic_rank ?? 999;
+                            const bPos4 = b.page_position ?? b.organic_rank ?? 999;
+                            return aPos4 - bPos4;
+                          }
+                          return bRev - aRev;
+                        
+                        case "units-desc":
+                          // Monthly Units: High → Low
+                          const aUnits = a.estimated_monthly_units ?? 0;
+                          const bUnits = b.estimated_monthly_units ?? 0;
+                          if (aUnits === bUnits) {
+                            // Tie-breaker: use rank
+                            const aPos5 = a.page_position ?? a.organic_rank ?? 999;
+                            const bPos5 = b.page_position ?? b.organic_rank ?? 999;
+                            return aPos5 - bPos5;
+                          }
+                          return bUnits - aUnits;
+                        
+                        case "reviews-desc":
+                          // Reviews: High → Low
+                          const aReviews = a.review_count ?? a.reviews ?? 0;
+                          const bReviews = b.review_count ?? b.reviews ?? 0;
+                          if (aReviews === bReviews) {
+                            // Tie-breaker: use rank
+                            const aPos6 = a.page_position ?? a.organic_rank ?? 999;
+                            const bPos6 = b.page_position ?? b.organic_rank ?? 999;
+                            return aPos6 - bPos6;
+                          }
+                          return bReviews - aReviews;
+                        
+                        case "rating-desc":
+                          // Rating: High → Low
+                          const aRating = a.rating ?? 0;
+                          const bRating = b.rating ?? 0;
+                          if (aRating === bRating) {
+                            // Tie-breaker: use rank
+                            const aPos7 = a.page_position ?? a.organic_rank ?? 999;
+                            const bPos7 = b.page_position ?? b.organic_rank ?? 999;
+                            return aPos7 - bPos7;
+                          }
+                          return bRating - aRating;
+                        
+                        default:
+                          // Fallback to rank
+                          const aPosDefault = a.page_position ?? a.organic_rank ?? 999;
+                          const bPosDefault = b.page_position ?? b.organic_rank ?? 999;
+                          return aPosDefault - bPosDefault;
+                      }
+                    });
                 
                 return (
                   <div>
                     <div className="flex items-center justify-between mb-4">
                       <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
+                      {/* Sort Dropdown */}
+                      {pageOneListings.length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <label htmlFor="sort-select" className="text-xs text-gray-500 font-medium">
+                            Sort:
+                          </label>
+                          <select
+                            id="sort-select"
+                            value={sortBy}
+                            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          >
+                            <option value="rank">Amazon Rank</option>
+                            <option value="price-asc">Price: Low → High</option>
+                            <option value="price-desc">Price: High → Low</option>
+                            <option value="revenue-desc">Monthly Revenue: High → Low</option>
+                            <option value="units-desc">Monthly Units: High → Low</option>
+                            <option value="reviews-desc">Reviews: High → Low</option>
+                            <option value="rating-desc">Rating: High → Low</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
                     <div className="mb-3 text-xs text-gray-500 italic">
                       Revenue and sales are estimated from live search position. Category rank is available in ASIN analysis.
@@ -1306,12 +1419,13 @@ export default function AnalyzeForm({
                     )}
                     {/* Product Cards Grid - auto-fill with minmax */}
                     <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-                      {cardsToRender.map((listing: any, idx: number) => {
+                      {sortedListings.map((listing: any, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
                           // Extract image URL with fallback - preserve from stable source
                           const imageUrl = listing.image_url ?? listing.image ?? null;
-                          // Rank = Page-1 position (array index + 1)
-                          const rank = idx + 1;
+                          // Rank = Page-1 position (use page_position if available, else use array index + 1 for display)
+                          // Note: When sorted, we still show the original page_position for rank display
+                          const rank = listing.page_position ?? listing.organic_rank ?? (idx + 1);
                           // Fulfillment from canonical product (map AMZ → FBA, default to FBM if null)
                           const fulfillment = listing.fulfillment === "AMZ" 
                             ? "AMZ" 
