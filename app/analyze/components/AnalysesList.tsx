@@ -8,7 +8,6 @@ interface AnalysisRun {
   id: string;
   input_value: string;
   created_at: string;
-  ai_verdict?: string | null;
 }
 
 /**
@@ -44,7 +43,7 @@ export default function AnalysesList() {
 
       const { data, error } = await supabaseBrowser
         .from("analysis_runs")
-        .select("id, input_value, created_at, ai_verdict")
+        .select("id, input_value, created_at")
         .eq("user_id", user.id)
         .eq("input_type", "keyword") // Only keyword analyses for now
         .order("created_at", { ascending: false })
@@ -79,20 +78,6 @@ export default function AnalysesList() {
     if (diffDays < 7) return `${diffDays}d ago`;
     if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  }
-
-  function getVerdictBadge(verdict: string | null | undefined): string {
-    if (!verdict) return "";
-    switch (verdict) {
-      case "GO":
-        return "text-green-600";
-      case "CAUTION":
-        return "text-yellow-600";
-      case "NO_GO":
-        return "text-red-600";
-      default:
-        return "text-gray-500";
-    }
   }
 
   function handleAnalysisClick(runId: string) {
@@ -200,15 +185,6 @@ export default function AnalysesList() {
                       <span className="text-[10px] text-gray-400">
                         {formatRelativeTime(analysis.created_at)}
                       </span>
-                      {analysis.ai_verdict && (
-                        <span
-                          className={`text-[10px] font-medium ${getVerdictBadge(
-                            analysis.ai_verdict
-                          )}`}
-                        >
-                          {analysis.ai_verdict === "NO_GO" ? "NO GO" : analysis.ai_verdict}
-                        </span>
-                      )}
                     </div>
                   </div>
                 </div>
