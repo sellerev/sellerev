@@ -682,13 +682,6 @@ export default function AnalyzeForm({
         aggregates_derived_from_page_one: data.decision.aggregates_derived_from_page_one,
       };
       
-      // Log market snapshot counts for debugging
-      console.log("UI_MARKET_SNAPSHOT_COUNTS", {
-        listings: analysisData?.market_snapshot?.listings?.length || 0,
-        sponsored: analysisData?.market_snapshot?.sponsored_count || 0,
-        total: analysisData?.market_snapshot?.total_page1_listings || 0,
-      });
-
       console.log("ANALYZE_SUCCESS", { 
         analysisRunId: data.analysisRunId,
         has_analysis: !!analysisData,
@@ -913,17 +906,29 @@ export default function AnalyzeForm({
                           : null))
                       : null;
                     
-                    // Monthly Units - read directly from market_snapshot
-                    const monthlyUnits = snapshot?.est_total_monthly_units_min 
-                      ?? (snapshot as any)?.monthly_units
-                      ?? (snapshot as any)?.total_monthly_units
-                      ?? (hasListings ? (aggregates?.total_monthly_units_est ?? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_units || 0), 0)) : null);
+                    // Monthly Units - SUM from page-one products (not from snapshot aggregates)
+                    // Use the actual pageOneListings array (canonical source)
+                    const monthlyUnits = hasListings && pageOneListings.length > 0
+                      ? pageOneListings.reduce((sum: number, product: any) => {
+                          const units = product.estimated_monthly_units 
+                            ?? product.est_monthly_units 
+                            ?? product.units 
+                            ?? 0;
+                          return sum + (typeof units === 'number' && units > 0 ? units : 0);
+                        }, 0)
+                      : null;
                     
-                    // Monthly Revenue - read directly from market_snapshot
-                    const monthlyRevenue = snapshot?.est_total_monthly_revenue_min
-                      ?? (snapshot as any)?.monthly_revenue
-                      ?? (snapshot as any)?.total_monthly_revenue
-                      ?? (hasListings ? (aggregates?.total_monthly_revenue_est ?? normalizedListings.reduce((sum: number, l: any) => sum + (l.est_monthly_revenue || 0), 0)) : null);
+                    // Monthly Revenue - SUM from page-one products (not from snapshot aggregates)
+                    // Use the actual pageOneListings array (canonical source)
+                    const monthlyRevenue = hasListings && pageOneListings.length > 0
+                      ? pageOneListings.reduce((sum: number, product: any) => {
+                          const revenue = product.estimated_monthly_revenue 
+                            ?? product.est_monthly_revenue 
+                            ?? product.revenue 
+                            ?? 0;
+                          return sum + (typeof revenue === 'number' && revenue > 0 ? revenue : 0);
+                        }, 0)
+                      : null;
                     
                     // Average Rating - calculate from page_one_listings (canonical products) or aggregates
                     let avgRating = 0;
@@ -1002,8 +1007,8 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {monthlyUnits !== null && monthlyUnits !== undefined && monthlyUnits > 0 
-                                ? monthlyUnits.toLocaleString() 
+                              {monthlyUnits !== null && monthlyUnits !== undefined
+                                ? (monthlyUnits > 0 ? monthlyUnits.toLocaleString() : "0")
                                 : "—"}
                             </div>
                           </div>
@@ -1012,8 +1017,8 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {monthlyRevenue !== null && monthlyRevenue !== undefined && monthlyRevenue > 0 
-                                ? formatCurrency(monthlyRevenue) 
+                              {monthlyRevenue !== null && monthlyRevenue !== undefined
+                                ? (monthlyRevenue > 0 ? formatCurrency(monthlyRevenue) : "$0.00")
                                 : "—"}
                             </div>
                           </div>
@@ -1148,44 +1153,27 @@ export default function AnalyzeForm({
                     const snapshot = analysis.market_snapshot;
                     
                     // ═══════════════════════════════════════════════════════════════════════════
-                    // UI MUST NOT SECOND-GUESS DATA
-                    // Always use canonical Page-1 listings when available
+                    // STABLE SOURCE: Use single canonical source to prevent data loss on re-render
+                    // Priority: page_one_listings > products > snapshot.listings
                     // ═══════════════════════════════════════════════════════════════════════════
+                    // Use stable source - once determined, don't recalculate
                     let pageOneListings: any[] = [];
                     
-                    // Priority 1: Use canonical page_one_listings
-                    if (analysis.page_one_listings && analysis.page_one_listings.length > 0) {
+                    // Priority 1: Use canonical page_one_listings (final authority)
+                    if (analysis.page_one_listings && Array.isArray(analysis.page_one_listings) && analysis.page_one_listings.length > 0) {
                       pageOneListings = analysis.page_one_listings;
                     }
-                    // Priority 2: Use products (same as page_one_listings)
-                    else if (analysis.products && analysis.products.length > 0) {
+                    // Priority 2: Use products (same as page_one_listings, different field name)
+                    else if (analysis.products && Array.isArray(analysis.products) && analysis.products.length > 0) {
                       pageOneListings = analysis.products;
                     }
-                    // Priority 3: Fallback to snapshot listings (for backward compatibility)
-                    else if (snapshot?.listings && snapshot.listings.length > 0) {
+                    // Priority 3: Fallback to snapshot listings (for backward compatibility only)
+                    else if (snapshot?.listings && Array.isArray(snapshot.listings) && snapshot.listings.length > 0) {
                       pageOneListings = snapshot.listings;
                     }
                     
-                    console.log("🔵 UI_PAGE_ONE_LISTINGS_ARRAY", pageOneListings);
-                    console.log("🔵 UI_PAGE_ONE_LISTINGS_LENGTH_BEFORE_RENDER", pageOneListings.length);
-                    console.log("🔵 ANALYSIS_PAGE_ONE_LISTINGS", analysis.page_one_listings?.length || 0);
-                    console.log("🔵 ANALYSIS_PRODUCTS", analysis.products?.length || 0);
-                    console.log("🔵 SNAPSHOT_LISTINGS", snapshot?.listings?.length || 0);
-                    
-                    // TEMPORARY: Bypass ALL filters, sorts, and conditions - render unconditionally
-                    // Always use whatever listings we have, with fallback priority
-                    const cardsToRender = pageOneListings.length > 0 
-                      ? pageOneListings 
-                      : ((analysis.products && analysis.products.length > 0)
-                        ? analysis.products 
-                        : (snapshot?.listings || []));
-                    console.log("🔵 CARDS_TO_RENDER_LENGTH", cardsToRender.length);
-                    console.log("🔵 CARDS_TO_RENDER_SAMPLE", cardsToRender[0]);
-                    // TEMPORARY: Log title and image_url for debugging
-                    if (cardsToRender.length > 0) {
-                      console.log("🔵 CARD_0_TITLE", cardsToRender[0]?.title);
-                      console.log("🔵 CARD_0_IMAGE_URL", cardsToRender[0]?.image_url);
-                    }
+                    // Use stable source for rendering - same as pageOneListings to prevent inconsistencies
+                    const cardsToRender = pageOneListings;
                 
                 return (
                   <div>
@@ -1209,7 +1197,8 @@ export default function AnalyzeForm({
                     <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
                       {cardsToRender.map((listing: any, idx: number) => {
                           const isSelected = selectedListing?.asin === listing.asin;
-                          const imageUrl = listing.image_url || listing.image;
+                          // Extract image URL with fallback - preserve from stable source
+                          const imageUrl = listing.image_url ?? listing.image ?? null;
                           // Rank = Page-1 position (array index + 1)
                           const rank = idx + 1;
                           // Fulfillment from canonical product (map AMZ → FBA, default to FBM if null)
@@ -1230,28 +1219,22 @@ export default function AnalyzeForm({
                           const rating = listing.rating ?? 0;
                           // Reviews: page_one_listings uses review_count, ProductCard expects reviews prop
                           const reviews = listing.review_count ?? listing.reviews ?? 0;
-                          // Revenue and units: from canonical product (preserve null if missing)
-                          const monthlyRevenue = (listing as any).estimated_monthly_revenue ?? (listing as any).est_monthly_revenue ?? null;
-                          const monthlyUnits = (listing as any).estimated_monthly_units ?? (listing as any).est_monthly_units ?? null;
+                          
+                          // Revenue and units: use safe fallback chain with legacy field support
+                          // Priority: estimated_monthly_revenue > est_monthly_revenue > revenue (legacy)
+                          const monthlyRevenue = (listing as any).estimated_monthly_revenue 
+                            ?? (listing as any).est_monthly_revenue 
+                            ?? (listing as any).revenue 
+                            ?? null;
+                          
+                          // Priority: estimated_monthly_units > est_monthly_units > units (legacy)
+                          const monthlyUnits = (listing as any).estimated_monthly_units 
+                            ?? (listing as any).est_monthly_units 
+                            ?? (listing as any).units 
+                            ?? null;
+                          
                           // Sponsored: check both fields
                           const isSponsored = listing.is_sponsored ?? listing.sponsored ?? false;
-                          
-                          // Debug: Log first card data to verify fields are present
-                          if (idx === 0) {
-                            console.log("🔵 PRODUCT_CARD_DATA", {
-                              asin: listing.asin,
-                              title: listing.title,
-                              image_url: listing.image_url,
-                              image: listing.image,
-                              imageUrl: imageUrl,
-                              brand: listing.brand,
-                              rating: listing.rating,
-                              review_count: listing.review_count,
-                              price: listing.price,
-                              revenue: monthlyRevenue,
-                              units: monthlyUnits,
-                            });
-                          }
                           
                           // Extract ASIN with fallback
                           const asin = listing.asin || normalizeListing(listing).asin || null;

@@ -210,7 +210,7 @@ export function ProductCard({
                 ${(monthlyRevenue / 1000).toFixed(1)}K<span className="text-sm font-normal text-[#6B7280]"> / mo</span>
               </div>
             ) : (
-              <div className="text-sm text-[#9CA3AF]">—</div>
+              <div className="text-sm text-[#9CA3AF]">$0.00</div>
             )}
           </div>
         ) : (
@@ -227,7 +227,7 @@ export function ProductCard({
                 {monthlyUnits.toLocaleString()} units
               </div>
             ) : (
-              <div className="text-sm text-[#9CA3AF]">—</div>
+              <div className="text-sm text-[#9CA3AF]">0 units</div>
             )}
           </div>
         ) : (
