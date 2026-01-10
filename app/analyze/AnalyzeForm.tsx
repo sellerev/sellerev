@@ -1016,6 +1016,35 @@ export default function AnalyzeForm({
                       }
                     }
                     
+                    // Brands on Page 1 - count unique brands from Page 1 listings
+                    // Normalize brand names (trim, lowercase) for uniqueness
+                    // Missing/null brands are grouped as "Unknown" (count as 1 brand)
+                    let brandCount = 0;
+                    if (hasListings && pageOneListings.length > 0) {
+                      const uniqueBrands = new Set<string>();
+                      let hasUnknownBrand = false;
+                      
+                      pageOneListings.forEach((listing: any) => {
+                        const brand = listing.brand;
+                        // Check for null/undefined first, then check for empty string
+                        if (brand === null || brand === undefined) {
+                          hasUnknownBrand = true;
+                        } else {
+                          // Normalize: trim and lowercase
+                          const trimmedBrand = brand.trim();
+                          if (trimmedBrand.length === 0) {
+                            hasUnknownBrand = true;
+                          } else {
+                            const normalizedBrand = trimmedBrand.toLowerCase();
+                            uniqueBrands.add(normalizedBrand);
+                          }
+                        }
+                      });
+                      
+                      // Count unique brands + "Unknown" if any null/missing brands exist
+                      brandCount = uniqueBrands.size + (hasUnknownBrand ? 1 : 0);
+                    }
+                    
                     // Search Volume
                     let searchVolume: string = "Estimating…";
                     if (snapshot?.search_volume && typeof snapshot.search_volume === 'object') {
@@ -1066,7 +1095,15 @@ export default function AnalyzeForm({
                             <div className="text-lg font-semibold text-gray-900">{page1Count}</div>
                           </div>
                           
-                          {/* 3. Average Price */}
+                          {/* 3. Brands on Page 1 */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Brands on Page 1</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {hasListings ? brandCount : "—"}
+                            </div>
+                          </div>
+                          
+                          {/* 4. Average Price */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Price</div>
                             <div className="text-lg font-semibold text-gray-900">
@@ -1074,7 +1111,7 @@ export default function AnalyzeForm({
                             </div>
                           </div>
                           
-                          {/* 4. Monthly Units */}
+                          {/* 5. Monthly Units */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
                             <div className="text-lg font-semibold text-gray-900">
@@ -1084,7 +1121,7 @@ export default function AnalyzeForm({
                             </div>
                           </div>
                           
-                          {/* 5. Monthly Revenue */}
+                          {/* 6. Monthly Revenue */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
                             <div className="text-lg font-semibold text-gray-900">
@@ -1094,7 +1131,7 @@ export default function AnalyzeForm({
                             </div>
                           </div>
                           
-                          {/* 6. Average Rating */}
+                          {/* 7. Average Rating */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Rating</div>
                             <div className="text-lg font-semibold text-gray-900">
