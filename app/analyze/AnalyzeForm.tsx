@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
@@ -480,9 +480,38 @@ export default function AnalyzeForm({
   // Sort state for Page 1 Results (default to revenue descending)
   const [sortBy, setSortBy] = useState<"revenue" | "units" | "bsr" | "reviews" | "price">("revenue");
 
+  // Chat sidebar resizing and collapsing state
+  const [sidebarWidth, setSidebarWidth] = useState(420); // Default width
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const sidebarResizeRef = useRef<HTMLDivElement>(null);
+
   // ─────────────────────────────────────────────────────────────────────────
   // EFFECTS: Sync props to state when URL changes (page refresh or navigation)
   // ─────────────────────────────────────────────────────────────────────────
+
+  // Load sidebar width and collapsed state from localStorage on mount
+  useEffect(() => {
+    const savedWidth = localStorage.getItem("chatSidebarWidth");
+    const savedCollapsed = localStorage.getItem("chatSidebarCollapsed");
+    
+    if (savedWidth) {
+      const width = parseInt(savedWidth, 10);
+      if (width >= 360 && width <= 620) {
+        setSidebarWidth(width);
+      }
+    }
+    
+    if (savedCollapsed === "true") {
+      setIsSidebarCollapsed(true);
+    }
+  }, []);
+
+  // Save sidebar width and collapsed state to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem("chatSidebarWidth", sidebarWidth.toString());
+    localStorage.setItem("chatSidebarCollapsed", isSidebarCollapsed.toString());
+  }, [sidebarWidth, isSidebarCollapsed]);
 
   // Sync initialAnalysis prop to state when analysis_run_id changes
   // This handles URL navigation between different analyses (browser back/forward, refresh, direct URL entry)
@@ -714,6 +743,38 @@ export default function AnalyzeForm({
   };
 
   // ─────────────────────────────────────────────────────────────────────────
+  // SIDEBAR RESIZE HANDLERS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      // When dragging left (negative diff), increase width. When dragging right (positive diff), decrease width.
+      const diff = startX - moveEvent.clientX;
+      const newWidth = Math.max(360, Math.min(620, startWidth + diff));
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  }, [sidebarWidth]);
+
+  const handleToggleCollapse = useCallback(() => {
+    setIsSidebarCollapsed((prev) => !prev);
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────
   // ANALYSIS MODE DERIVATION
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -790,13 +851,13 @@ export default function AnalyzeForm({
       </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* MAIN CONTENT: TWO-COLUMN CSS GRID LAYOUT                            */}
+      {/* MAIN CONTENT: TWO-COLUMN FLEXBOX LAYOUT                             */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="flex-1 grid gap-x-4 overflow-hidden bg-[#F7F9FC]" style={{ gridTemplateColumns: '1fr 400px', minHeight: 0 }}>
+      <div className="flex-1 relative overflow-hidden bg-[#F7F9FC] flex" style={{ minHeight: 0 }}>
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* LEFT COLUMN: MARKET DATA & PRODUCTS (SCROLLABLE)                 */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="overflow-y-auto bg-[#F7F9FC]" style={{ minHeight: 0 }}>
+        <div className="flex-1 overflow-y-auto bg-[#F7F9FC]" style={{ minHeight: 0 }}>
           {!analysis ? (
             /* PRE-ANALYSIS STATE */
             <div className="flex items-center justify-center min-h-full py-20 px-6">
@@ -1284,10 +1345,41 @@ export default function AnalyzeForm({
         </div>
 
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* RIGHT COLUMN: AI CHAT SIDEBAR (FIXED WIDTH, SCROLLS INTERNALLY) */}
+        {/* RIGHT COLUMN: AI CHAT SIDEBAR (RESIZABLE, SCROLLS INTERNALLY)   */}
         {/* AI Copilot is always available - fixed within app shell        */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="border-l border-gray-200 bg-white flex flex-col overflow-hidden" style={{ minHeight: 0 }}>
+        <div 
+          className={`relative border-l border-gray-200 bg-white flex flex-col transition-all duration-[250ms] ease-in-out ${
+            isSidebarCollapsed ? 'pointer-events-none overflow-hidden' : 'overflow-hidden'
+          }`}
+          style={{ 
+            minHeight: 0,
+            width: isSidebarCollapsed ? 0 : sidebarWidth,
+            minWidth: isSidebarCollapsed ? 0 : sidebarWidth,
+            maxWidth: isSidebarCollapsed ? 0 : sidebarWidth,
+            opacity: isSidebarCollapsed ? 0 : 1,
+          }}
+        >
+          {/* Resize handle - only visible when not collapsed */}
+          {!isSidebarCollapsed && (
+            <div
+              ref={sidebarResizeRef}
+              onMouseDown={handleResizeStart}
+              className={`absolute left-0 top-0 bottom-0 cursor-col-resize transition-all z-10 group ${
+                isResizing ? 'bg-blue-500' : 'bg-transparent hover:bg-gray-300'
+              }`}
+              style={{
+                marginLeft: '-4px',
+                width: '8px',
+              }}
+              title="Drag to resize"
+            >
+              {/* Hover indicator dot */}
+              {!isResizing && (
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-8 bg-gray-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+              )}
+            </div>
+          )}
           <ChatSidebar
             analysisRunId={analysis?.analysis_run_id || null}
             initialMessages={chatMessages}
@@ -1298,8 +1390,22 @@ export default function AnalyzeForm({
               ...selectedListing,
               // Include enriched data if available for this ASIN
             } : null}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapse={handleToggleCollapse}
           />
         </div>
+        
+        {/* Collapsed Chat Tab - shown when sidebar is collapsed */}
+        {isSidebarCollapsed && (
+          <button
+            onClick={handleToggleCollapse}
+            className="fixed right-0 top-1/2 -translate-y-1/2 z-50 bg-white border-l border-t border-b border-gray-200 rounded-l-lg px-3 py-12 shadow-md hover:shadow-lg transition-all duration-200 hover:bg-gray-50"
+            style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
+            aria-label="Open chat sidebar"
+          >
+            <span className="text-sm font-medium text-gray-700">Chat</span>
+          </button>
+        )}
       </div>
     </div>
   );

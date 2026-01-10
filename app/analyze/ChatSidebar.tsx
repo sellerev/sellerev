@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, ChevronRight } from "lucide-react";
 import AnalysesList from "./components/AnalysesList";
 
 /**
@@ -66,6 +66,10 @@ interface ChatSidebarProps {
   analysisMode?: 'KEYWORD' | null;
   /** Selected listing (for AI context) */
   selectedListing?: any | null;
+  /** Whether the sidebar is collapsed */
+  isCollapsed?: boolean;
+  /** Callback to toggle collapse state */
+  onToggleCollapse?: () => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -226,6 +230,8 @@ export default function ChatSidebar({
   onMarginSnapshotUpdate,
   analysisMode = null,
   selectedListing = null,
+  isCollapsed = false,
+  onToggleCollapse,
 }: ChatSidebarProps) {
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
@@ -435,13 +441,25 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* HEADER                                                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="px-6 py-4 shrink-0">
-        <h2 className="font-semibold text-gray-900 text-sm">AI Assistant</h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          {analysisRunId
-            ? "Explains the visible Page-1 data only"
-            : "Complete an analysis to start chatting"}
-        </p>
+      <div className="px-6 py-4 shrink-0 flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <h2 className="font-semibold text-gray-900 text-sm">AI Assistant</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {analysisRunId
+              ? "Explains the visible Page-1 data only"
+              : "Complete an analysis to start chatting"}
+          </p>
+        </div>
+        {onToggleCollapse && (
+          <button
+            onClick={onToggleCollapse}
+            className="flex-shrink-0 p-1.5 rounded-md hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300"
+            aria-label="Collapse chat sidebar"
+            title="Collapse sidebar"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
