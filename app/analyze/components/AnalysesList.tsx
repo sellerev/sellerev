@@ -102,37 +102,59 @@ export default function AnalysesList() {
 
   if (loading) {
     return (
-      <div className="px-6 py-2.5 border-b border-gray-100/50 shrink-0">
-        <div className="text-xs text-gray-400">Loading analyses...</div>
+      <div className="px-5 py-2 border-b border-gray-100/30 shrink-0">
+        <div className="text-[11px] text-gray-400">Loading analyses...</div>
       </div>
     );
   }
 
   if (analyses.length === 0) {
     return (
-      <div className="border-b border-gray-100/50 shrink-0">
-        <div className="px-6 py-2.5">
-          <h3 className="text-xs font-medium text-gray-500 mb-2">Analyses</h3>
-        </div>
-        <div className="px-6 pb-3">
-          <div className="text-xs text-gray-400">No saved analyses yet</div>
-        </div>
+      <div className="border-b border-gray-100/30 shrink-0">
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          className="w-full px-5 py-2 flex items-center justify-between hover:bg-gray-50/40 transition-colors group"
+        >
+          <h3 className="text-[11px] font-medium text-gray-500 group-hover:text-gray-700 uppercase tracking-wider">
+            Analyses
+          </h3>
+          <svg
+            className={`w-3 h-3 text-gray-400 transition-transform ${
+              collapsed ? "" : "rotate-180"
+            }`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 9l-7 7-7-7"
+            />
+          </svg>
+        </button>
+        {!collapsed && (
+          <div className="px-5 pb-3 pt-1">
+            <div className="text-[11px] text-gray-400">No saved analyses yet</div>
+          </div>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="border-b border-gray-100/50 shrink-0">
+    <div className="border-b border-gray-100/30 shrink-0">
       {/* Header */}
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="w-full px-6 py-2 flex items-center justify-between hover:bg-gray-50/50 transition-colors group"
+        className="w-full px-5 py-2 flex items-center justify-between hover:bg-gray-50/40 transition-colors group"
       >
-        <h3 className="text-[11px] font-medium text-gray-500 group-hover:text-gray-700 uppercase tracking-wide">
+        <h3 className="text-[11px] font-medium text-gray-500 group-hover:text-gray-700 uppercase tracking-wider">
           Analyses
         </h3>
         <svg
-          className={`w-3 h-3 text-gray-400 transition-transform ${
+          className={`w-3 h-3 text-gray-400 transition-transform duration-200 ${
             collapsed ? "" : "rotate-180"
           }`}
           fill="none"
@@ -151,30 +173,30 @@ export default function AnalysesList() {
       {/* List */}
       {!collapsed && (
         <div className="max-h-[320px] overflow-y-auto">
-          {analyses.map((analysis) => {
+          {analyses.map((analysis, idx) => {
             const isActive = analysis.id === activeRunId;
             return (
               <button
                 key={analysis.id}
                 onClick={() => handleAnalysisClick(analysis.id)}
-                className={`w-full px-6 py-1 text-left hover:bg-gray-50/60 transition-colors relative ${
-                  isActive ? "bg-blue-50/80" : ""
+                className={`w-full px-5 py-1.5 text-left hover:bg-gray-50/50 transition-colors relative rounded-md mx-1 my-0.5 ${
+                  isActive ? "bg-blue-50/70" : ""
                 }`}
               >
                 {/* Left accent for active state */}
                 {isActive && (
-                  <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-blue-600" />
+                  <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-blue-500 rounded-r" />
                 )}
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start justify-between gap-2 pl-0.5">
                   <div className="flex-1 min-w-0">
                     <div
-                      className={`text-[11px] font-medium truncate mb-0.5 ${
-                        isActive ? "text-gray-900 font-semibold" : "text-gray-600"
+                      className={`text-[12px] truncate mb-0.5 leading-tight ${
+                        isActive ? "text-gray-900 font-semibold" : "text-gray-700 font-medium"
                       }`}
                     >
                       {analysis.input_value}
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <span className="text-[10px] text-gray-400">
                         {formatRelativeTime(analysis.created_at)}
                       </span>
