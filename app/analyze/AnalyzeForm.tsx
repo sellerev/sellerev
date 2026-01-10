@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronLeft } from "lucide-react";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import BrandMoatBlock from "./BrandMoatBlock";
@@ -1800,19 +1801,19 @@ export default function AnalyzeForm({
             onToggleCollapse={handleToggleCollapse}
           />
         </div>
-        
-        {/* Collapsed Chat Tab - shown when sidebar is collapsed */}
-        {isSidebarCollapsed && (
-          <button
-            onClick={handleToggleCollapse}
-            className="fixed right-0 top-1/2 -translate-y-1/2 z-50 bg-white border-l border-t border-b border-gray-200 rounded-l-lg px-3 py-12 shadow-md hover:shadow-lg transition-all duration-200 hover:bg-gray-50"
-            style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
-            aria-label="Open chat sidebar"
-          >
-            <span className="text-sm font-medium text-gray-700">Chat</span>
-          </button>
-        )}
       </div>
+      
+      {/* Collapsed Chat Chevron - small icon in top-right edge when collapsed */}
+      {isSidebarCollapsed && (
+        <button
+          onClick={handleToggleCollapse}
+          className="fixed right-0 top-16 z-50 bg-white border-l border-t border-b border-gray-200 rounded-l-lg px-2 py-2 shadow-sm hover:shadow-md transition-all duration-200 hover:bg-gray-50"
+          aria-label="Expand chat sidebar"
+          title="Expand chat"
+        >
+          <ChevronLeft className="w-4 h-4 text-gray-600" />
+        </button>
+      )}
     </div>
   );
 }
