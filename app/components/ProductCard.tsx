@@ -202,40 +202,33 @@ export function ProductCard({
 
       {/* Revenue Section - Prominent */}
       <div className="bg-[#F9FAFB] -mx-4 -mb-4 px-4 py-3 mt-3 rounded-b-xl border-t border-[#E5E7EB]">
-        {monthlyRevenue !== null && monthlyRevenue !== undefined ? (
-          <div className="mb-2">
-            <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Revenue</div>
-            {monthlyRevenue > 0 ? (
-              <div className="text-xl font-bold text-[#111827]">
-                ${(monthlyRevenue / 1000).toFixed(1)}K<span className="text-sm font-normal text-[#6B7280]"> / mo</span>
-              </div>
-            ) : (
-              <div className="text-sm text-[#9CA3AF]">$0.00</div>
-            )}
-          </div>
-        ) : (
-          <div className="mb-2">
-            <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Revenue</div>
+        {/* Est. Monthly Revenue - EXPLICIT rendering */}
+        <div className="mb-2">
+          <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Revenue</div>
+          {monthlyRevenue === null || monthlyRevenue === undefined ? (
             <div className="text-sm text-[#9CA3AF]">—</div>
-          </div>
-        )}
-        {monthlyUnits !== null && monthlyUnits !== undefined ? (
-          <div>
-            <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Units</div>
-            {monthlyUnits > 0 ? (
-              <div className="text-sm font-medium text-[#111827]">
-                {monthlyUnits.toLocaleString()} units
-              </div>
-            ) : (
-              <div className="text-sm text-[#9CA3AF]">0 units</div>
-            )}
-          </div>
-        ) : (
-          <div>
-            <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Units</div>
+          ) : monthlyRevenue === 0 ? (
+            <div className="text-sm text-[#9CA3AF]">$0.00</div>
+          ) : (
+            <div className="text-xl font-bold text-[#111827]">
+              ${(monthlyRevenue / 1000).toFixed(1)}K<span className="text-sm font-normal text-[#6B7280]"> / mo</span>
+            </div>
+          )}
+        </div>
+        
+        {/* Est. Monthly Units - EXPLICIT rendering */}
+        <div>
+          <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Units</div>
+          {monthlyUnits === null || monthlyUnits === undefined ? (
             <div className="text-sm text-[#9CA3AF]">—</div>
-          </div>
-        )}
+          ) : monthlyUnits === 0 ? (
+            <div className="text-sm text-[#9CA3AF]">0 units</div>
+          ) : (
+            <div className="text-sm font-medium text-[#111827]">
+              {monthlyUnits.toLocaleString()} units
+            </div>
+          )}
+        </div>
         {/* Badges Row */}
         <div className="flex gap-2 mt-3">
           {fulfillment && (

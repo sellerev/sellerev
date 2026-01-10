@@ -840,18 +840,20 @@ export default function AnalyzeForm({
                     // ═══════════════════════════════════════════════════════════════════════════
                     let pageOneListings: any[] = [];
                     
-                    // Priority 1: Use canonical page_one_listings
-                    if (analysis.page_one_listings && analysis.page_one_listings.length > 0) {
+                    // Priority 1: Use canonical page_one_listings (EXPLICIT check - prevent empty array overwrite)
+                    if (analysis.page_one_listings && Array.isArray(analysis.page_one_listings) && analysis.page_one_listings.length > 0) {
                       pageOneListings = analysis.page_one_listings;
                     }
-                    // Priority 2: Use products (same as page_one_listings)
-                    else if (analysis.products && analysis.products.length > 0) {
+                    // Priority 2: Use products (same as page_one_listings, different field name)
+                    else if (analysis.products && Array.isArray(analysis.products) && analysis.products.length > 0) {
                       pageOneListings = analysis.products;
                     }
-                    // Priority 3: Fallback to snapshot listings (for backward compatibility)
-                    else if (snapshot?.listings && snapshot.listings.length > 0) {
+                    // Priority 3: Fallback to snapshot listings (for backward compatibility only)
+                    else if (snapshot?.listings && Array.isArray(snapshot.listings) && snapshot.listings.length > 0) {
                       pageOneListings = snapshot.listings;
                     }
+                    // CRITICAL: Do NOT assign empty array if pageOneListings already has data (prevent data loss on re-render)
+                    // If none of the above match, pageOneListings remains empty [] (intentional)
                     
                     // Normalize listings to calculate metrics
                     // CRITICAL: Do NOT filter out listings without titles - title is optional
@@ -906,27 +908,33 @@ export default function AnalyzeForm({
                           : null))
                       : null;
                     
-                    // Monthly Units - SUM from page-one products (not from snapshot aggregates)
-                    // Use the actual pageOneListings array (canonical source)
+                    // Monthly Units - SUM from page-one products (EXPLICIT: estimated_monthly_units only)
+                    // Use the actual pageOneListings array (canonical source) - SAME source as cards
+                    // Do NOT use snapshot aggregates, legacy fields, or calculated values
                     const monthlyUnits = hasListings && pageOneListings.length > 0
                       ? pageOneListings.reduce((sum: number, product: any) => {
-                          const units = product.estimated_monthly_units 
-                            ?? product.est_monthly_units 
-                            ?? product.units 
-                            ?? 0;
-                          return sum + (typeof units === 'number' && units > 0 ? units : 0);
+                          // EXPLICIT: Only use estimated_monthly_units field - no fallbacks
+                          const units = product.estimated_monthly_units;
+                          // Include ALL numeric values (including 0) - only exclude null/undefined
+                          if (typeof units === 'number') {
+                            return sum + units; // Include 0 values too
+                          }
+                          return sum; // Skip null/undefined
                         }, 0)
                       : null;
                     
-                    // Monthly Revenue - SUM from page-one products (not from snapshot aggregates)
-                    // Use the actual pageOneListings array (canonical source)
+                    // Monthly Revenue - SUM from page-one products (EXPLICIT: estimated_monthly_revenue only)
+                    // Use the actual pageOneListings array (canonical source) - SAME source as cards
+                    // Do NOT use snapshot aggregates, legacy fields, or calculated values
                     const monthlyRevenue = hasListings && pageOneListings.length > 0
                       ? pageOneListings.reduce((sum: number, product: any) => {
-                          const revenue = product.estimated_monthly_revenue 
-                            ?? product.est_monthly_revenue 
-                            ?? product.revenue 
-                            ?? 0;
-                          return sum + (typeof revenue === 'number' && revenue > 0 ? revenue : 0);
+                          // EXPLICIT: Only use estimated_monthly_revenue field - no fallbacks
+                          const revenue = product.estimated_monthly_revenue;
+                          // Include ALL numeric values (including 0) - only exclude null/undefined
+                          if (typeof revenue === 'number') {
+                            return sum + revenue; // Include 0 values too
+                          }
+                          return sum; // Skip null/undefined
                         }, 0)
                       : null;
                     
@@ -1008,7 +1016,7 @@ export default function AnalyzeForm({
                             <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
                             <div className="text-lg font-semibold text-gray-900">
                               {monthlyUnits !== null && monthlyUnits !== undefined
-                                ? (monthlyUnits > 0 ? monthlyUnits.toLocaleString() : "0")
+                                ? (monthlyUnits === 0 ? "0" : monthlyUnits.toLocaleString())
                                 : "—"}
                             </div>
                           </div>
@@ -1018,7 +1026,7 @@ export default function AnalyzeForm({
                             <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
                             <div className="text-lg font-semibold text-gray-900">
                               {monthlyRevenue !== null && monthlyRevenue !== undefined
-                                ? (monthlyRevenue > 0 ? formatCurrency(monthlyRevenue) : "$0.00")
+                                ? (monthlyRevenue === 0 ? "$0.00" : formatCurrency(monthlyRevenue))
                                 : "—"}
                             </div>
                           </div>
@@ -1154,12 +1162,13 @@ export default function AnalyzeForm({
                     
                     // ═══════════════════════════════════════════════════════════════════════════
                     // STABLE SOURCE: Use single canonical source to prevent data loss on re-render
+                    // MUST match Market Snapshot section priority logic exactly
                     // Priority: page_one_listings > products > snapshot.listings
                     // ═══════════════════════════════════════════════════════════════════════════
-                    // Use stable source - once determined, don't recalculate
+                    // Use stable source - EXACT SAME LOGIC as Market Snapshot section above
                     let pageOneListings: any[] = [];
                     
-                    // Priority 1: Use canonical page_one_listings (final authority)
+                    // Priority 1: Use canonical page_one_listings (EXPLICIT check - prevent empty array overwrite)
                     if (analysis.page_one_listings && Array.isArray(analysis.page_one_listings) && analysis.page_one_listings.length > 0) {
                       pageOneListings = analysis.page_one_listings;
                     }
@@ -1171,8 +1180,10 @@ export default function AnalyzeForm({
                     else if (snapshot?.listings && Array.isArray(snapshot.listings) && snapshot.listings.length > 0) {
                       pageOneListings = snapshot.listings;
                     }
+                    // CRITICAL: Do NOT assign empty array if pageOneListings already has data (prevent data loss on re-render)
+                    // If none of the above match, pageOneListings remains empty [] (intentional)
                     
-                    // Use stable source for rendering - same as pageOneListings to prevent inconsistencies
+                    // Use stable source for rendering - same reference as pageOneListings to prevent inconsistencies
                     const cardsToRender = pageOneListings;
                 
                 return (
@@ -1220,18 +1231,18 @@ export default function AnalyzeForm({
                           // Reviews: page_one_listings uses review_count, ProductCard expects reviews prop
                           const reviews = listing.review_count ?? listing.reviews ?? 0;
                           
-                          // Revenue and units: use safe fallback chain with legacy field support
-                          // Priority: estimated_monthly_revenue > est_monthly_revenue > revenue (legacy)
-                          const monthlyRevenue = (listing as any).estimated_monthly_revenue 
-                            ?? (listing as any).est_monthly_revenue 
-                            ?? (listing as any).revenue 
-                            ?? null;
+                          // Revenue and units: EXPLICIT extraction - ONLY use estimated_monthly_revenue/estimated_monthly_units
+                          // Do NOT use legacy fields (revenue, units, est_monthly_revenue, est_monthly_units)
+                          // Explicit check: preserve value if it exists (including 0), set null if undefined/null
+                          const monthlyRevenueRaw = (listing as any).estimated_monthly_revenue;
+                          const monthlyRevenue = monthlyRevenueRaw !== undefined && monthlyRevenueRaw !== null
+                            ? monthlyRevenueRaw
+                            : null;
                           
-                          // Priority: estimated_monthly_units > est_monthly_units > units (legacy)
-                          const monthlyUnits = (listing as any).estimated_monthly_units 
-                            ?? (listing as any).est_monthly_units 
-                            ?? (listing as any).units 
-                            ?? null;
+                          const monthlyUnitsRaw = (listing as any).estimated_monthly_units;
+                          const monthlyUnits = monthlyUnitsRaw !== undefined && monthlyUnitsRaw !== null
+                            ? monthlyUnitsRaw
+                            : null;
                           
                           // Sponsored: check both fields
                           const isSponsored = listing.is_sponsored ?? listing.sponsored ?? false;
