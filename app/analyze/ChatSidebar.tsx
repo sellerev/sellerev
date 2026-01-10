@@ -249,6 +249,11 @@ export default function ChatSidebar({
     subtext?: string;
   } | null>(null);
   
+  // Smart scrolling state
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const userHasScrolledRef = useRef(false);
+  
   // Refs for auto-scroll
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -276,21 +281,99 @@ export default function ChatSidebar({
     // No need to force a re-render - the component will naturally show updated suggestions
   }, [selectedListing]);
 
-  // Auto-scroll to bottom when new messages arrive or streaming updates
-  // Scrolls the messages container, not the page (prevents page from scrolling)
+  // Check if user is near bottom (within 50px threshold)
+  const checkIfNearBottom = useCallback(() => {
+    if (!messagesContainerRef.current) return false;
+    const container = messagesContainerRef.current;
+    const threshold = 50;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    return distanceFromBottom <= threshold;
+  }, []);
+
+  // Initial check on mount - assume user starts at bottom
+  useEffect(() => {
+    if (messagesContainerRef.current) {
+      const nearBottom = checkIfNearBottom();
+      setIsNearBottom(nearBottom);
+      if (nearBottom) {
+        userHasScrolledRef.current = false;
+        setShowJumpToBottom(false);
+      }
+    }
+  }, [checkIfNearBottom]);
+
+  // Handle scroll events to detect user scrolling
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const nearBottom = checkIfNearBottom();
+      setIsNearBottom(nearBottom);
+      
+      // If user scrolls up, mark that they've manually scrolled
+      if (!nearBottom) {
+        userHasScrolledRef.current = true;
+        setShowJumpToBottom(true);
+      } else {
+        // User scrolled back to bottom, reset flag and hide button
+        setShowJumpToBottom(false);
+        userHasScrolledRef.current = false;
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [checkIfNearBottom]);
+
+  // Auto-scroll to bottom ONLY if user is already at bottom
+  // This prevents interrupting user when they're reading previous messages
   useEffect(() => {
     if (messagesContainerRef.current) {
       // Use requestAnimationFrame to ensure DOM has updated
       requestAnimationFrame(() => {
         if (messagesContainerRef.current) {
           const container = messagesContainerRef.current;
-          // Always scroll to bottom during streaming or when new messages arrive
-          // This keeps the chat viewport fixed while content scrolls internally
-          container.scrollTop = container.scrollHeight;
+          
+          // Re-check if near bottom after DOM update (content may have changed)
+          const currentlyNearBottom = checkIfNearBottom();
+          
+          // Only auto-scroll if user is near bottom (hasn't scrolled up)
+          // This allows auto-scroll during streaming if user stays at bottom
+          if (currentlyNearBottom && !userHasScrolledRef.current) {
+            container.scrollTop = container.scrollHeight;
+            setIsNearBottom(true);
+            setShowJumpToBottom(false);
+          } else if (userHasScrolledRef.current) {
+            // User has scrolled up and new content arrived, show jump to bottom button
+            // Don't auto-scroll - let user control their view
+            if (!currentlyNearBottom) {
+              setShowJumpToBottom(true);
+            }
+          }
         }
       });
     }
-  }, [messages, streamingContent, isLoading]);
+  }, [messages, streamingContent, isLoading, checkIfNearBottom]);
+
+  // Smooth scroll to bottom function
+  const scrollToBottom = useCallback((smooth = true) => {
+    if (!messagesContainerRef.current) return;
+    const container = messagesContainerRef.current;
+    
+    if (smooth) {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: 'smooth',
+      });
+    } else {
+      container.scrollTop = container.scrollHeight;
+    }
+    
+    setIsNearBottom(true);
+    setShowJumpToBottom(false);
+    userHasScrolledRef.current = false;
+  }, []);
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -443,12 +526,12 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div className="px-6 py-4 shrink-0 flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <h2 className="font-semibold text-gray-900 text-sm">AI Assistant</h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {analysisRunId
-              ? "Explains the visible Page-1 data only"
-              : "Complete an analysis to start chatting"}
-          </p>
+        <h2 className="font-semibold text-gray-900 text-sm">AI Assistant</h2>
+        <p className="text-xs text-gray-500 mt-0.5">
+          {analysisRunId
+            ? "Explains the visible Page-1 data only"
+            : "Complete an analysis to start chatting"}
+        </p>
         </div>
         {onToggleCollapse && (
           <button
@@ -467,7 +550,7 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto px-6 py-6 space-y-3"
+        className="flex-1 overflow-y-auto px-6 py-6 space-y-3 relative"
         style={{ minHeight: 0 }}
       >
         {isDisabled ? (
@@ -639,6 +722,30 @@ export default function ChatSidebar({
             {/* Scroll anchor */}
             <div ref={messagesEndRef} />
           </>
+        )}
+        
+        {/* Jump to bottom button - appears when user scrolls up during streaming */}
+        {showJumpToBottom && (
+          <button
+            onClick={() => scrollToBottom(true)}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 bg-white/95 backdrop-blur-sm border border-gray-200 rounded-full shadow-md hover:shadow-lg transition-all duration-200 hover:bg-white flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900"
+            aria-label="Jump to bottom"
+          >
+            <svg
+              className="w-3.5 h-3.5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 14l-7 7m0 0l-7-7m7 7V3"
+              />
+            </svg>
+            <span>Jump to bottom</span>
+          </button>
         )}
       </div>
 
