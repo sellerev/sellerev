@@ -67,6 +67,54 @@ export interface AnalysisResponse {
     breakeven_price_max: number | null;
     assumptions: string[];
   };
+  // Canonical Page-1 array (explicit for UI - ensures UI, aggregates, and cards all derive from ONE canonical Page-1 array)
+  page_one_listings?: Array<{
+    rank: number | null;
+    asin: string;
+    title: string | null;
+    image_url: string | null;
+    price: number;
+    rating: number;
+    review_count: number;
+    bsr: number | null;
+    estimated_monthly_units: number;
+    estimated_monthly_revenue: number;
+    revenue_share_pct: number;
+    fulfillment: "FBA" | "FBM" | "AMZ";
+    brand: string | null;
+    seller_country?: "US" | "CN" | "Other" | "Unknown";
+    [key: string]: unknown; // Allow additional fields
+  }>;
+  
+  // Products array (same as page_one_listings, kept for backward compatibility)
+  products?: Array<{
+    rank: number | null;
+    asin: string;
+    title: string | null;
+    image_url: string | null;
+    price: number;
+    rating: number;
+    review_count: number;
+    bsr: number | null;
+    estimated_monthly_units: number;
+    estimated_monthly_revenue: number;
+    revenue_share_pct: number;
+    fulfillment: "FBA" | "FBM" | "AMZ";
+    brand: string | null;
+    seller_country?: "US" | "CN" | "Other" | "Unknown";
+    [key: string]: unknown; // Allow additional fields
+  }>;
+  
+  // Aggregates derived from canonical Page-1 array (explicit for UI)
+  aggregates_derived_from_page_one?: {
+    avg_price: number;
+    avg_rating: number;
+    avg_bsr: number | null;
+    total_monthly_units_est: number;
+    total_monthly_revenue_est: number;
+    page1_product_count: number;
+  };
+  
   market_snapshot?: {
     keyword: string;
     avg_price: number | null;
@@ -82,6 +130,27 @@ export interface AnalysisResponse {
       asin_used: string;
       price_used: number;
     };
+    // Page 1 product listings (for data-first display)
+    listings?: Array<{
+      asin: string | null;
+      title: string | null;
+      price: number | null;
+      rating: number | null;
+      reviews: number | null;
+      bsr?: number | null;
+      organic_rank?: number | null;
+      fulfillment?: "FBA" | "FBM" | "Amazon" | null;
+      is_sponsored: boolean;
+      position: number;
+      brand: string | null;
+      image_url?: string | null;
+      est_monthly_revenue?: number | null;
+      est_monthly_units?: number | null;
+      estimated_monthly_revenue?: number | null;
+      estimated_monthly_units?: number | null;
+      revenue_confidence?: "low" | "medium";
+      [key: string]: unknown; // Allow additional fields
+    }>;
   };
 }
 

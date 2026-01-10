@@ -73,6 +73,50 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
         response.risks as Record<string, { level: string; explanation: string }> | undefined
       );
       
+      // Extract page_one_listings and products from response (these fields exist in stored JSON)
+      // DO NOT derive, recalc, or normalize - just pass through what's stored
+      const pageOneListings = Array.isArray(response.page_one_listings) ? response.page_one_listings : [];
+      const products = Array.isArray(response.products) ? response.products : [];
+      
+      // Extract aggregates if present
+      const aggregates = (response.aggregates_derived_from_page_one && typeof response.aggregates_derived_from_page_one === 'object' && !Array.isArray(response.aggregates_derived_from_page_one))
+        ? response.aggregates_derived_from_page_one as {
+            avg_price: number;
+            avg_rating: number;
+            avg_bsr: number | null;
+            total_monthly_units_est: number;
+            total_monthly_revenue_est: number;
+            page1_product_count: number;
+          }
+        : undefined;
+      
+      // Extract market_snapshot, preserving listings array if present
+      const marketSnapshotRaw = response.market_snapshot;
+      let marketSnapshot: AnalysisResponse['market_snapshot'] | undefined = undefined;
+      
+      if (marketSnapshotRaw && typeof marketSnapshotRaw === 'object' && !Array.isArray(marketSnapshotRaw)) {
+        const snapshot = marketSnapshotRaw as Record<string, unknown>;
+        marketSnapshot = {
+          keyword: snapshot.keyword as string,
+          avg_price: snapshot.avg_price as number | null,
+          avg_reviews: snapshot.avg_reviews as number | null,
+          avg_rating: snapshot.avg_rating as number | null,
+          total_page1_listings: snapshot.total_page1_listings as number,
+          sponsored_count: snapshot.sponsored_count as number,
+          dominance_score: snapshot.dominance_score as number,
+          representative_asin: snapshot.representative_asin as string | null | undefined,
+          fba_fees: snapshot.fba_fees ? (snapshot.fba_fees as {
+            total_fee: number | null;
+            source: "sp_api" | "estimated";
+            asin_used: string;
+            price_used: number;
+          }) : undefined,
+          // Preserve listings array if present (DO NOT strip it)
+          // Type assertion: listings structure is flexible, matches type definition with [key: string]: unknown
+          listings: Array.isArray(snapshot.listings) ? (snapshot.listings as any) : undefined,
+        };
+      }
+      
       // Ensure initialAnalysis is explicitly typed
       initialAnalysis = {
         analysis_run_id: analysisRun.id,
@@ -87,26 +131,14 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
         assumptions_and_limits: response.assumptions_and_limits as string[],
         // Include market data if available (from rainforest_data column)
         market_data: analysisRun.rainforest_data as Record<string, unknown> | undefined,
-        // Include keyword market snapshot if available (from response.market_snapshot)
-        // Represents Page 1 results only
-        market_snapshot: (response.market_snapshot && typeof response.market_snapshot === 'object' && !Array.isArray(response.market_snapshot))
-          ? response.market_snapshot as {
-              keyword: string;
-              avg_price: number | null;
-              avg_reviews: number | null;
-              avg_rating: number | null;
-              total_page1_listings: number;
-              sponsored_count: number;
-              dominance_score: number; // 0-100
-              representative_asin?: string | null;
-              fba_fees?: {
-                total_fee: number | null;
-                source: "sp_api" | "estimated";
-                asin_used: string;
-                price_used: number;
-              };
-            }
-          : undefined,
+        // Include keyword market snapshot with listings array preserved
+        market_snapshot: marketSnapshot,
+        // Extract canonical Page-1 listings (CRITICAL: these contain estimated_monthly_revenue and estimated_monthly_units)
+        page_one_listings: pageOneListings.length > 0 ? pageOneListings as AnalysisResponse['page_one_listings'] : undefined,
+        // Extract products array (same as page_one_listings, kept for backward compatibility)
+        products: products.length > 0 ? products as AnalysisResponse['products'] : undefined,
+        // Extract aggregates if present
+        aggregates_derived_from_page_one: aggregates,
       };
 
       // Fetch chat history for this analysis
