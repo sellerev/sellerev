@@ -248,6 +248,17 @@ export async function batchFetchBsrWithBackoff(
     allProducts.push(...validProducts);
     successfulFetches += validProducts.length;
     failedFetches += (batchResults.length - validProducts.length);
+    
+    // Log batch progress
+    const batchNumber = Math.floor(i / CONCURRENCY_LIMIT) + 1;
+    const totalBatches = Math.ceil(uniqueAsins.length / CONCURRENCY_LIMIT);
+    console.log("🔵 BSR_BATCH_PROGRESS", {
+      keyword,
+      batch: `${batchNumber}/${totalBatches}`,
+      successful: validProducts.length,
+      failed: batchResults.length - validProducts.length,
+      total_fetched: allProducts.length,
+    });
   }
   
   // Log summary
@@ -259,6 +270,12 @@ export async function batchFetchBsrWithBackoff(
     coverage_percent: uniqueAsins.length > 0 
       ? `${((successfulFetches / uniqueAsins.length) * 100).toFixed(1)}%`
       : "0%",
+  });
+  
+  console.log("✅ BSR_FETCH_COMPLETE", {
+    keyword,
+    total_products: allProducts.length,
+    timestamp: new Date().toISOString(),
   });
   
   // Return array of products (same format as batch response would be)

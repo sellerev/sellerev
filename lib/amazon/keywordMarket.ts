@@ -1359,6 +1359,12 @@ export async function fetchKeywordMarketSnapshot(
             bsr_data_extracted: freshEntries.filter(e => e.main_category_bsr !== null && e.main_category_bsr >= 1).length,
             excluded_count: excludedAsins.length,
           });
+        } else {
+          console.log("BSR_BATCH_FETCH_NO_DATA", {
+            keyword,
+            requested_asins: missingAsins.length,
+            message: "Batch fetch returned null/empty - no products received",
+          });
         }
       } catch (error) {
         console.error("BSR_BATCH_FETCH_EXCEPTION", {
@@ -1369,7 +1375,17 @@ export async function fetchKeywordMarketSnapshot(
         });
         // Continue with cached data - don't crash analysis
       }
+    } else {
+      console.log("BSR_BATCH_FETCH_SKIPPED", {
+        keyword,
+        message: "No missing ASINs - all BSR data from cache",
+      });
     }
+
+    console.log("🔵 BSR_PROCESSING_COMPLETE", {
+      keyword,
+      timestamp: new Date().toISOString(),
+    });
 
     // STEP E: Log final BSR coverage
     const listingsWithBSR = Object.values(bsrDataMap).filter(Boolean).length;
@@ -1610,7 +1626,17 @@ export async function fetchKeywordMarketSnapshot(
     // CRITICAL: This runs regardless of snapshot state - metadata must be populated
     // as soon as ASINs are discovered, not gated behind snapshot finalization.
     // Only enriches missing fields - does NOT overwrite existing data.
+    console.log("🔵 STARTING_METADATA_ENRICHMENT", {
+      keyword,
+      listings_count: listings.length,
+      timestamp: new Date().toISOString(),
+    });
     listings = await enrichListingsMetadata(listings, keyword, rainforestApiKey);
+    console.log("✅ METADATA_ENRICHMENT_DONE", {
+      keyword,
+      listings_count: listings.length,
+      timestamp: new Date().toISOString(),
+    });
 
     // Aggregate metrics from Page 1 listings only (using canonical `listings` variable)
     const total_page1_listings = listings.length;
