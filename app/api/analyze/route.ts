@@ -2979,9 +2979,10 @@ Convert this plain text decision into the required JSON contract format. Extract
       let enrichedImageCount = 0;
       
       // Create a map of ASIN -> raw listing data for fallback lookup
+      // Use keywordMarketData.listings which contains the parsed listings with raw fields
       const rawListingMap = new Map<string, any>();
-      if (rawListings && Array.isArray(rawListings)) {
-        for (const listing of rawListings) {
+      if (keywordMarketData?.listings && Array.isArray(keywordMarketData.listings)) {
+        for (const listing of keywordMarketData.listings) {
           if (listing.asin) {
             rawListingMap.set(listing.asin, listing);
           }
