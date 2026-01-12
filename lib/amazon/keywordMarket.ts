@@ -644,10 +644,11 @@ export async function enrichListingsMetadata(
     return listings;
   }
 
-  // Identify listings needing enrichment (missing title, image_url, rating, or reviews)
+  // Identify listings needing enrichment (missing title, image_url, rating, reviews, or brand)
+  // CRITICAL: Include brand in the check so brand enrichment always runs when brand is missing
   const listingsNeedingEnrichment = listings.filter(l => 
     l.asin && 
-    (!l.title || !l.image_url || l.rating === null || l.reviews === null)
+    (!l.title || !l.image_url || l.rating === null || l.reviews === null || !l.brand)
   );
 
   if (listingsNeedingEnrichment.length === 0) {
@@ -664,6 +665,7 @@ export async function enrichListingsMetadata(
       missing_image: listingsNeedingEnrichment.filter(l => !l.image_url).length,
       missing_rating: listingsNeedingEnrichment.filter(l => l.rating === null).length,
       missing_reviews: listingsNeedingEnrichment.filter(l => l.reviews === null).length,
+      missing_brand: listingsNeedingEnrichment.filter(l => !l.brand).length,
     },
   });
 
