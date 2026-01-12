@@ -1961,7 +1961,13 @@ export async function POST(req: NextRequest) {
             has_image: !!rawListings[0].image_url,
             has_rating: rawListings[0].rating !== null,
             has_reviews: rawListings[0].reviews !== null,
+            has_brand: !!rawListings[0].brand,
+            brand: rawListings[0].brand,
           } : null,
+          brand_sample: rawListings.slice(0, 5).map((l: any) => ({
+            asin: l.asin,
+            brand: l.brand,
+          })),
         });
       }
       

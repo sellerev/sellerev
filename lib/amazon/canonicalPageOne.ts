@@ -894,6 +894,11 @@ export function buildKeywordPageOne(
       image_url, // Preserved from listing (or null for ESTIMATED only)
       fulfillment, // Normalized: Prime → FBA, else → FBM, Amazon Retail → AMZ
       brand: l.brand ?? null,
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Log brand in canonical product (first 5)
+      // ═══════════════════════════════════════════════════════════════════════════
+      ...(i < 5 ? { _debug_brand: l.brand } : {}),
       seller_country: "Unknown" as const,
       snapshot_inferred: false,
       // Algorithm boost tracking (Sellerev-only insight for AI/Spellbook)
