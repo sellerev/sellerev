@@ -132,21 +132,23 @@ export async function bulkUpsertBsrCache(
 }
 
 /**
- * Batch fetch BSR data from Rainforest API with exponential backoff and deduplication
+ * Fetch BSR data from Rainforest API using individual ASIN requests with concurrency limiting
+ * 
+ * CRITICAL: Rainforest API does NOT support comma-separated ASINs in batch requests
+ * This function fetches each ASIN individually but processes them in parallel for speed
  * 
  * Rate limit handling:
- * - Retry up to 3 times on HTTP 429
- * - Exponential backoff: 1s → 2s → 4s
- * - Other errors fail fast
+ * - Individual ASIN failures are logged but don't stop the process
+ * - Failed ASINs are skipped, successful ones are returned
  * 
- * Deduplication:
- * - Prevents multiple identical batch calls from running concurrently
- * - Uses in-memory map keyed by sorted ASIN list
+ * Concurrency:
+ * - Processes 5-8 ASINs concurrently to respect rate limits
+ * - Uses Promise.all with batching to control parallelism
  * 
  * @param rainforestApiKey - Rainforest API key
- * @param asins - Array of ASINs to fetch (will be sorted for dedup key)
+ * @param asins - Array of ASINs to fetch
  * @param keyword - Keyword for logging context
- * @returns Promise resolving to batch response data
+ * @returns Promise resolving to array of product objects (same format as batch response would be)
  */
 export async function batchFetchBsrWithBackoff(
   rainforestApiKey: string,
@@ -157,117 +159,114 @@ export async function batchFetchBsrWithBackoff(
     return null;
   }
 
-  // Create dedup key from sorted ASIN list
-  const sortedAsins = [...asins].sort();
-  const dedupKey = sortedAsins.join(",");
+  // Remove duplicates
+  const uniqueAsins = Array.from(new Set(asins));
+  
+  console.log("🟡 BSR_FETCH_START", {
+    keyword,
+    total_asins: uniqueAsins.length,
+    fetch_strategy: "individual_parallel",
+  });
 
-  // Check if request is already in-flight
-  if (inflightRequests.has(dedupKey)) {
-    console.log("BSR_INFLIGHT_DEDUP_HIT", {
-      keyword,
-      asin_count: asins.length,
-      dedup_key: dedupKey.substring(0, 50) + (dedupKey.length > 50 ? "..." : ""),
-      message: "Awaiting existing in-flight batch request",
-    });
-    return inflightRequests.get(dedupKey)!;
-  }
+  // Fetch ASINs individually with concurrency limiting
+  const CONCURRENCY_LIMIT = 6; // Process 6 ASINs at a time
+  const allProducts: any[] = [];
+  let successfulFetches = 0;
+  let failedFetches = 0;
 
-  // Create the batch fetch promise with exponential backoff
-  const batchPromise = (async () => {
-    const maxRetries = 3;
-    let retryCount = 0;
-
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
+  // Process ASINs in batches to respect rate limits
+  for (let i = 0; i < uniqueAsins.length; i += CONCURRENCY_LIMIT) {
+    const asinBatch = uniqueAsins.slice(i, i + CONCURRENCY_LIMIT);
+    
+    // Fetch this batch in parallel
+    const batchPromises = asinBatch.map(async (asin) => {
+      console.log("🟡 BSR_FETCH_START", { asin, keyword });
+      
+      const productUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${asin}`;
+      
       try {
-        const batchAsinString = sortedAsins.join(",");
-        const batchProductUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${batchAsinString}`;
-        
-        const batchResponse = await fetch(batchProductUrl, {
+        const response = await fetch(productUrl, {
           method: "GET",
           headers: { "Accept": "application/json" },
         });
 
-        // Check for rate limit (HTTP 429)
-        if (batchResponse.status === 429) {
-          retryCount++;
-          if (attempt < maxRetries - 1) {
-            const backoffMs = 2 ** attempt * 1000; // 1s → 2s → 4s
-            console.log("BSR_BATCH_RETRY_COUNT", {
-              keyword,
-              retry_count: retryCount,
-              attempt: attempt + 1,
-              max_retries: maxRetries,
-              backoff_ms: backoffMs,
-              status: 429,
-              message: "Rate limited, applying exponential backoff",
-            });
-            await new Promise(resolve => setTimeout(resolve, backoffMs));
-            continue;
-          } else {
-            // Max retries reached for rate limit
-            console.error("BSR_BATCH_RATE_LIMIT_EXHAUSTED", {
-              keyword,
-              retry_count: retryCount,
-              max_retries: maxRetries,
-              asin_count: asins.length,
-              message: "Rate limit retries exhausted",
-            });
-            throw new Error(`Rate limit exceeded after ${maxRetries} retries`);
-          }
-        }
-
-        // Non-429 errors fail fast
-        if (!batchResponse.ok) {
-          const errorText = await batchResponse.text().catch(() => "Unable to read error response");
-          console.error("BSR_BATCH_FETCH_FAILED", {
+        if (!response.ok) {
+          console.error("🔴 BSR_FETCH_FAILED", {
+            asin,
             keyword,
-            status: batchResponse.status,
-            statusText: batchResponse.statusText,
-            asin_count: asins.length,
-            attempt: attempt + 1,
-            error_preview: errorText.substring(0, 200),
-            message: "Non-rate-limit error, failing fast",
+            status: response.status,
+            statusText: response.statusText,
           });
-          throw new Error(`Batch fetch failed: ${batchResponse.status} ${batchResponse.statusText}`);
+          return null;
         }
 
-        // Success - parse and return
-        const batchData = await batchResponse.json();
-        return batchData;
-
-      } catch (error) {
-        // Only retry on rate limit errors
-        if (error instanceof Error && error.message.includes("Rate limit")) {
-          // Already handled in the if block above
-          continue;
+        const data = await response.json();
+        
+        // Check for API-level errors in response
+        if (data && data.error) {
+          console.error("🔴 BSR_FETCH_FAILED", {
+            asin,
+            keyword,
+            status: response.status,
+            api_error: data.error,
+          });
+          return null;
         }
-
-        // Other errors fail fast
-        console.error("BSR_BATCH_FETCH_EXCEPTION", {
+        
+        // Extract product from response (Rainforest returns { product: {...} } or just product)
+        const product = data?.product || data;
+        if (product && product.asin) {
+          console.log("🟢 BSR_FETCH_SUCCESS", {
+            asin,
+            keyword,
+            has_bsr: !!(product.bestsellers_rank || product.bsr),
+          });
+          return product;
+        }
+        
+        console.error("🔴 BSR_FETCH_FAILED", {
+          asin,
           keyword,
-          error: error instanceof Error ? error.message : String(error),
-          asin_count: asins.length,
-          attempt: attempt + 1,
-          message: "Non-retryable error, failing fast",
+          reason: "no_product_data",
         });
-        throw error;
+        return null;
+      } catch (fetchError) {
+        console.error("🔴 BSR_FETCH_FAILED", {
+          asin,
+          keyword,
+          error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+        });
+        return null;
       }
-    }
-
-    // Should never reach here, but TypeScript needs it
-    throw new Error("Batch fetch failed after all retries");
-  })();
-
-  // Store promise in map and clean up after completion
-  inflightRequests.set(dedupKey, batchPromise);
-  batchPromise
-    .then(() => {
-      inflightRequests.delete(dedupKey);
-    })
-    .catch(() => {
-      inflightRequests.delete(dedupKey);
     });
-
-  return batchPromise;
+    
+    // Wait for this batch to complete
+    const batchResults = await Promise.all(batchPromises);
+    
+    // Filter out null results and add to allProducts
+    const validProducts = batchResults.filter((p): p is any => p !== null);
+    allProducts.push(...validProducts);
+    successfulFetches += validProducts.length;
+    failedFetches += (batchResults.length - validProducts.length);
+  }
+  
+  // Log summary
+  console.log("📊 FINAL_BSR_COVERAGE_PERCENT", {
+    keyword,
+    total: uniqueAsins.length,
+    with_bsr: successfulFetches,
+    failed: failedFetches,
+    coverage_percent: uniqueAsins.length > 0 
+      ? `${((successfulFetches / uniqueAsins.length) * 100).toFixed(1)}%`
+      : "0%",
+  });
+  
+  // Return array of products (same format as batch response would be)
+  // Return null if all fetches failed (to match original behavior)
+  if (allProducts.length === 0) {
+    return null;
+  }
+  
+  return allProducts;
 }
 

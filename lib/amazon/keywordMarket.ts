@@ -1245,7 +1245,7 @@ export async function fetchKeywordMarketSnapshot(
         keyword,
         missing_asins: missingAsins,
         asin_count: missingAsins.length,
-        message: "Fetching all missing ASINs in ONE batch request",
+        message: "Fetching missing ASINs individually with parallel requests",
       });
 
       try {
