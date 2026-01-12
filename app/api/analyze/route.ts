@@ -876,6 +876,14 @@ function validateDecisionContract(data: any): data is DecisionContract {
 }
 
 export async function POST(req: NextRequest) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2: Top-level execution log
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log("🔥 ANALYZE ROUTE HIT", {
+    path: "app/api/analyze/route.ts",
+    timestamp: new Date().toISOString(),
+  });
+  
   // Create a response object that can be modified for cookie handling
   let res = new NextResponse();
   const supabase = createApiClient(req, res);
@@ -1372,6 +1380,27 @@ export async function POST(req: NextRequest) {
           rawRainforestListings = [...realMarketData.listings]; // Store raw listings for assertions
           dataSource = "market";
           snapshotStatus = 'market'; // Mark as real market data
+          
+          // ═══════════════════════════════════════════════════════════════════════════
+          // STEP 3: Trace raw Page-1 listings BEFORE any processing
+          // ═══════════════════════════════════════════════════════════════════════════
+          console.log("🔍 RAW PAGE-1 LISTINGS (SOURCE)", {
+            count: rawRainforestListings?.length,
+            sample: rawRainforestListings?.slice(0, 3).map((l: any) => ({
+              asin: l.asin,
+              brand: l.brand,
+              image_url: l.image_url,
+              fulfillment: l.fulfillment,
+              rating: l.rating,
+              reviews: l.reviews,
+            })),
+            hasImages: rawRainforestListings?.some((l: any) => !!l.image || !!l.image_url),
+            hasBrands: rawRainforestListings?.some((l: any) => !!l.brand),
+            fulfillmentCounts: {
+              FBA: rawRainforestListings?.filter((l: any) => l.fulfillment === "FBA").length,
+              FBM: rawRainforestListings?.filter((l: any) => l.fulfillment === "FBM").length,
+            },
+          });
           
           // SKIP snapshot lookup entirely when real listings exist
           // This ensures snapshot-based Page-1 generation NEVER runs
@@ -1944,6 +1973,19 @@ export async function POST(req: NextRequest) {
           raw_listings_count: rawListings.length,
         });
         
+        // ═══════════════════════════════════════════════════════════════════════════
+        // STEP 4: Log BEFORE canonical builder
+        // ═══════════════════════════════════════════════════════════════════════════
+        console.log("🔧 BEFORE CANONICAL BUILDER", {
+          listingsCount: rawListings.length,
+          fieldsPresent: {
+            image: rawListings.some((l: any) => !!l.image_url),
+            brand: rawListings.some((l: any) => !!l.brand),
+            fulfillment: rawListings.some((l: any) => !!l.fulfillment),
+            rating: rawListings.some((l: any) => !!l.rating),
+          },
+        });
+        
         // Get search volume for keyword demand scaling
         let searchVolumeLow: number | undefined;
         let searchVolumeHigh: number | undefined;
@@ -1976,6 +2018,24 @@ export async function POST(req: NextRequest) {
         }
         
         pageOneProducts = buildKeywordPageOne(rawListings, searchVolumeLow, searchVolumeHigh);
+        
+        // ═══════════════════════════════════════════════════════════════════════════
+        // STEP 5: Log AFTER canonical builder
+        // ═══════════════════════════════════════════════════════════════════════════
+        console.log("✅ AFTER CANONICAL BUILDER", {
+          listingsCount: pageOneProducts.length,
+          sample: pageOneProducts.slice(0, 3).map((p: any) => ({
+            asin: p.asin,
+            brand: p.brand,
+            image_url: p.image_url,
+            fulfillment: p.fulfillment,
+            rating: p.rating,
+            review_count: p.review_count,
+          })),
+          imageMissingCount: pageOneProducts.filter((p: any) => !p.image_url).length,
+          brandMissingCount: pageOneProducts.filter((p: any) => !p.brand).length,
+          fbaCount: pageOneProducts.filter((p: any) => p.fulfillment === "FBA").length,
+        });
         
         console.log("✅ KEYWORD PAGE-1 COUNT", pageOneProducts.length);
         if (pageOneProducts.length > 0) {
@@ -3387,6 +3447,17 @@ Convert this plain text decision into the required JSON contract format. Extract
         console.log(`[BrandEnrichment] Triggered lazy enrichment for ${top10Asins.length} ASINs`);
       }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 6: Log BEFORE response is returned
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log("📦 FINAL RESPONSE PAYLOAD", {
+      hasPageOneListings: !!finalResponse.page_one_listings,
+      pageOneCount: finalResponse.page_one_listings?.length,
+      hasProducts: !!finalResponse.products,
+      productCount: finalResponse.products?.length,
+      snapshotHasListings: !!finalResponse.market_snapshot?.listings,
+    });
 
     return NextResponse.json(
       {
