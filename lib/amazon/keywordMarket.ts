@@ -712,12 +712,12 @@ export async function enrichListingsMetadata(
   });
 
   // Only enrich top 3 listings if brand is still missing
+  // CRITICAL: Enrich when brand is missing OR when critical fields (title/image) are missing
   const listingsNeedingEnrichment = listingsWithLocalBrand
     .slice(0, MAX_METADATA_ENRICHMENT) // Only top 3
     .filter(l => 
       l.asin && 
-      !l.brand && // Only if brand is still missing after local extraction
-      (l.title && l.image_url && l.rating !== null && l.reviews !== null) // Only if other fields exist
+      (!l.brand || !l.title || !l.image_url) // Enrich if brand is missing OR title/image is missing
     );
 
   if (listingsNeedingEnrichment.length === 0) {
