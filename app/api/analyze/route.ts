@@ -2038,6 +2038,17 @@ export async function POST(req: NextRequest) {
           searchVolumeHigh = estimated.max;
         }
         
+        // ═══════════════════════════════════════════════════════════════════════════
+        // BRAND FREQUENCY RESOLUTION (AFTER metadata enrichment, BEFORE canonical builder)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Remove junk brands extracted from titles (e.g., "Under Sink Organizer", "Multi")
+        // while preserving real brands. A brand is valid if:
+        // - It appears 2+ times (frequency indicates it's real), OR
+        // - Any listing has it from metadata enrichment (API source is authoritative)
+        // This is a logic-only fix - no API calls.
+        const { resolveBrandFrequency } = await import("@/lib/amazon/resolveBrandFrequency");
+        rawListings = resolveBrandFrequency(rawListings);
+        
         pageOneProducts = buildKeywordPageOne(rawListings, searchVolumeLow, searchVolumeHigh);
         
         // ═══════════════════════════════════════════════════════════════════════════

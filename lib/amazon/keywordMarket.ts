@@ -986,6 +986,8 @@ export async function enrichListingsMetadata(
         const brand = productData.brand || productData.by_line?.name || null;
         if (brand && typeof brand === "string" && brand.trim().length > 0) {
           enriched.brand = brand.trim();
+          // Track that brand came from metadata enrichment (for frequency resolution)
+          (enriched as any)._debug_brand_source = "metadata";
           enrichedFieldsCount++;
           listingEnriched = true;
           // ═══════════════════════════════════════════════════════════════════════════
