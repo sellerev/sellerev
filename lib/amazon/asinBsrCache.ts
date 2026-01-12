@@ -153,7 +153,8 @@ export async function bulkUpsertBsrCache(
 export async function batchFetchBsrWithBackoff(
   rainforestApiKey: string,
   asins: string[],
-  keyword: string
+  keyword: string,
+  apiCallCounter?: { count: number; max: number }
 ): Promise<any> {
   if (!asins || asins.length === 0) {
     return null;
