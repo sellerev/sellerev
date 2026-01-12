@@ -843,6 +843,18 @@ export async function enrichListingsMetadata(
               source: productData.brand ? "productData.brand" : "productData.by_line.name",
             });
           }
+        } else {
+          // Log when brand enrichment is attempted but no brand found
+          if (enrichedListingsCount < 5) {
+            console.log("🟡 BRAND ENRICHMENT ATTEMPTED (NO BRAND FOUND)", {
+              asin: listing.asin,
+              brand_before: listing.brand,
+              productData_has_brand: !!productData.brand,
+              productData_brand: productData.brand,
+              productData_has_by_line: !!productData.by_line,
+              productData_by_line_name: productData.by_line?.name,
+            });
+          }
         }
         // If brand missing, leave as null (do NOT fabricate)
       }
@@ -1420,11 +1432,16 @@ export async function fetchKeywordMarketSnapshot(
       
       const fulfillment = parseFulfillment(item); // Nullable
       
-      // Extract brand: ONLY from item.brand field (do NOT infer or guess)
+      // Extract brand: Check multiple fields (item.brand, item.brand_name, item.by_line?.name)
       // Missing brand = null (will be normalized to "Unknown" in brand moat analysis)
+      // CRITICAL: Check multiple sources similar to image_url extraction
       const brand = (item.brand && typeof item.brand === 'string' && item.brand.trim().length > 0)
         ? item.brand.trim()
-        : null;
+        : (item.brand_name && typeof item.brand_name === 'string' && item.brand_name.trim().length > 0)
+          ? item.brand_name.trim()
+          : (item.by_line?.name && typeof item.by_line.name === 'string' && item.by_line.name.trim().length > 0)
+            ? item.by_line.name.trim()
+            : null;
       
       // ═══════════════════════════════════════════════════════════════════════════
       // STEP 1: Log raw brand data from Rainforest (first 5 listings)
@@ -1435,6 +1452,7 @@ export async function fetchKeywordMarketSnapshot(
           asin,
           brand: brand,
           brand_name: item.brand_name,
+          by_line_name: item.by_line?.name,
           seller_name: item.seller?.name,
           raw_brand: item.brand,
           raw_brand_type: typeof item.brand,
