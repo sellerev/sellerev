@@ -1694,6 +1694,19 @@ export default function AnalyzeForm({
                           const title = listing.title || null;
                           // Brand: use "—" if missing
                           const brand = listing.brand || "—";
+                          
+                          // ═══════════════════════════════════════════════════════════════════════════
+                          // STEP 3: Log final product card data (first 5 cards)
+                          // ═══════════════════════════════════════════════════════════════════════════
+                          if (idx < 5) {
+                            console.log("🔵 FINAL PRODUCT CARD DATA", {
+                              index: idx,
+                              asin: listing.asin,
+                              brand: listing.brand,
+                              brand_final: brand,
+                              listing_keys: Object.keys(listing),
+                            });
+                          }
                           // Price: must be > 0 to display
                           const price = listing.price ?? 0;
                           // Rating: can be 0 (ProductCard handles this)

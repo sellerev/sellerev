@@ -826,12 +826,23 @@ export async function enrichListingsMetadata(
       }
 
       // Enrich brand (only if missing, from product.brand or by_line?.name)
-      if (!enriched.brand || enriched.brand.trim().length === 0) {
+      if (!enriched.brand || (typeof enriched.brand === 'string' && enriched.brand.trim().length === 0)) {
         const brand = productData.brand || productData.by_line?.name || null;
         if (brand && typeof brand === "string" && brand.trim().length > 0) {
           enriched.brand = brand.trim();
           enrichedFieldsCount++;
           listingEnriched = true;
+          // ═══════════════════════════════════════════════════════════════════════════
+          // Log brand enrichment
+          // ═══════════════════════════════════════════════════════════════════════════
+          if (enrichedListingsCount < 5) {
+            console.log("🟡 BRAND ENRICHED", {
+              asin: listing.asin,
+              brand_before: listing.brand,
+              brand_after: enriched.brand,
+              source: productData.brand ? "productData.brand" : "productData.by_line.name",
+            });
+          }
         }
         // If brand missing, leave as null (do NOT fabricate)
       }
@@ -1414,6 +1425,21 @@ export async function fetchKeywordMarketSnapshot(
       const brand = (item.brand && typeof item.brand === 'string' && item.brand.trim().length > 0)
         ? item.brand.trim()
         : null;
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // STEP 1: Log raw brand data from Rainforest (first 5 listings)
+      // ═══════════════════════════════════════════════════════════════════════════
+      if (index < 5) {
+        console.log("🟣 RAW BRAND SAMPLE", {
+          index,
+          asin,
+          brand: brand,
+          brand_name: item.brand_name,
+          seller_name: item.seller?.name,
+          raw_brand: item.brand,
+          raw_brand_type: typeof item.brand,
+        });
+      }
 
       // Extract image URL from Rainforest search_results[].image
       // CRITICAL: Check multiple sources and never allow empty strings
