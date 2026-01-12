@@ -134,6 +134,10 @@ export function normalizeListing(raw: any): ParsedListing {
   const explicitBrand = raw.brand ?? raw.Brand ?? null;
   const brand = explicitBrand || (title ? extractBrandFromTitle(title) : null);
   
+  // Extract raw fields for presentation fallback (preserve if they exist)
+  const raw_title = raw.raw_title ?? null;
+  const raw_image_url = raw.raw_image_url ?? null;
+  
   return {
     asin: raw.asin ?? raw.ASIN ?? "",
     title,
@@ -148,5 +152,8 @@ export function normalizeListing(raw: any): ParsedListing {
     sponsored: !!raw.is_sponsored || !!raw.IsSponsored || false,
     organic_rank: raw.organic_rank ?? raw.position ?? raw.Position ?? null,
     brand, // Extracted from title if not explicitly provided
-  };
+    // Preserve raw fields for presentation fallback
+    raw_title,
+    raw_image_url,
+  } as ParsedListing & { raw_title?: string | null; raw_image_url?: string | null };
 }

@@ -2965,17 +2965,87 @@ Convert this plain text decision into the required JSON contract format. Extract
     if (finalResponse.page_one_listings && finalResponse.page_one_listings.length > 0) {
       // Recompute aggregates from canonical Page-1 listings to ensure correctness
       const pageOne = finalResponse.page_one_listings;
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // PRESENTATION FALLBACK: Apply raw search result data if enriched values are missing
+      // ═══════════════════════════════════════════════════════════════════════════
+      // This ensures 100% product card completeness using existing Rainforest search data
+      // Priority: Enriched (from API) > Raw (from search) > null
+      // Do NOT overwrite enriched values - only fill in when enriched is null/missing
+      
+      let fallbackTitleCount = 0;
+      let fallbackImageCount = 0;
+      let enrichedTitleCount = 0;
+      let enrichedImageCount = 0;
+      
+      // Create a map of ASIN -> raw listing data for fallback lookup
+      const rawListingMap = new Map<string, any>();
+      if (rawListings && Array.isArray(rawListings)) {
+        for (const listing of rawListings) {
+          if (listing.asin) {
+            rawListingMap.set(listing.asin, listing);
+          }
+        }
+      }
+      
+      // Apply fallback to each canonical product
+      for (const product of pageOne) {
+        const rawListing = rawListingMap.get(product.asin);
+        
+        // Apply title fallback: use raw_title if enriched title is missing
+        const hasEnrichedTitle = product.title && typeof product.title === 'string' && product.title.trim().length > 0;
+        if (hasEnrichedTitle) {
+          enrichedTitleCount++;
+        } else if (rawListing?.raw_title && typeof rawListing.raw_title === 'string' && rawListing.raw_title.trim().length > 0) {
+          product.title = rawListing.raw_title.trim();
+          fallbackTitleCount++;
+        }
+        
+        // Apply image_url fallback: use raw_image_url if enriched image_url is missing
+        const hasEnrichedImage = product.image_url && typeof product.image_url === 'string' && product.image_url.trim().length > 0;
+        if (hasEnrichedImage) {
+          enrichedImageCount++;
+        } else if (rawListing?.raw_image_url && typeof rawListing.raw_image_url === 'string' && rawListing.raw_image_url.trim().length > 0) {
+          product.image_url = rawListing.raw_image_url.trim();
+          fallbackImageCount++;
+        }
+      }
+      
+      // Log fallback application
+      if (fallbackTitleCount > 0 || fallbackImageCount > 0) {
+        console.log("🟡 PRESENTATION_FALLBACK_APPLIED", {
+          total_products: pageOne.length,
+          fallback_title_count: fallbackTitleCount,
+          fallback_image_count: fallbackImageCount,
+          enriched_title_count: enrichedTitleCount,
+          enriched_image_count: enrichedImageCount,
+          message: "Applied raw search result data as presentation fallback",
+        });
+      }
+      
+      // Log full fallback statistics
+      console.log("📊 PRESENTATION_FALLBACK_STATS", {
+        total_products: pageOne.length,
+        fallback_title_count: fallbackTitleCount,
+        fallback_image_count: fallbackImageCount,
+        enriched_title_count: enrichedTitleCount,
+        enriched_image_count: enrichedImageCount,
+      });
+      
       const prices = pageOne.map((p: any) => p.price).filter((p: any): p is number => p !== null && p !== undefined && p > 0);
       const ratings = pageOne.map((p: any) => p.rating).filter((r: any): r is number => r !== null && r !== undefined && r > 0);
       const bsrs = pageOne.map((p: any) => p.bsr).filter((b: any): b is number => b !== null && b !== undefined && b > 0);
       
-      // HARD INVARIANT CHECK: Log error if title or image_url are empty strings
-      const invalidProducts = pageOne.filter((p: any) => 
-        (!p.title || (typeof p.title === 'string' && p.title.trim().length === 0)) ||
-        (p.image_url !== null && p.image_url !== undefined && typeof p.image_url === 'string' && p.image_url.trim().length === 0)
-      );
+      // HARD INVARIANT CHECK: Only fail if BOTH enriched AND raw values are missing
+      // After fallback, check if any products still lack title/image_url
+      const invalidProducts = pageOne.filter((p: any) => {
+        const missingTitle = !p.title || (typeof p.title === 'string' && p.title.trim().length === 0);
+        const missingImage = !p.image_url || (typeof p.image_url === 'string' && p.image_url.trim().length === 0);
+        return missingTitle || missingImage;
+      });
+      
       if (invalidProducts.length > 0) {
-        console.error("🔴 HARD INVARIANT VIOLATION: Products with empty title or image_url", {
+        console.error("🔴 HARD INVARIANT VIOLATION: Products with missing title or image_url after fallback", {
           invalid_count: invalidProducts.length,
           sample: invalidProducts[0],
           all_invalid: invalidProducts.map((p: any) => ({
@@ -2983,6 +3053,7 @@ Convert this plain text decision into the required JSON contract format. Extract
             title: p.title,
             image_url: p.image_url,
           })),
+          message: "Both enriched AND raw values are missing - data integrity issue",
         });
       }
       

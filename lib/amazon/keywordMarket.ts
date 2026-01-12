@@ -33,6 +33,8 @@ export interface ParsedListing {
   revenue_confidence?: "low" | "medium"; // Confidence level for revenue estimate
   bsr_invalid_reason?: string | null; // Reason why BSR was marked invalid (e.g., "duplicate_bug")
   parent_asin?: string | null; // Parent ASIN for variant grouping (null if listing is its own parent)
+  raw_title?: string | null; // Raw title from search result (for presentation fallback)
+  raw_image_url?: string | null; // Raw image URL from search result (for presentation fallback)
 }
 
 export interface KeywordMarketSnapshot {
@@ -917,6 +919,9 @@ export async function enrichListingsMetadata(
 
       const productData = enrichmentMap.get(listing.asin.toUpperCase())!;
       const enriched: ParsedListing = { ...listing };
+      // Preserve raw fields for presentation fallback (do not overwrite)
+      (enriched as any).raw_title = (listing as any).raw_title;
+      (enriched as any).raw_image_url = (listing as any).raw_image_url;
       let listingEnriched = false;
 
       // Enrich title (only if missing)
@@ -1627,9 +1632,13 @@ export async function fetchKeywordMarketSnapshot(
       
       // Step 4: Normalize all fields (nullable where appropriate)
       // CRITICAL: Never allow empty strings - use null instead, so buildKeywordPageOne can handle fallback
-      const title = (item.title && typeof item.title === 'string' && item.title.trim().length > 0) 
-        ? item.title.trim() 
-        : null; // Use null instead of empty string
+      
+      // Store raw title from search result (for presentation fallback)
+      const raw_title = (item.title && typeof item.title === 'string' && item.title.trim().length > 0)
+        ? item.title.trim()
+        : null;
+      
+      const title = raw_title; // Use raw title as processed title initially
       const price = parsePrice(item); // Nullable
       const rating = parseRating(item); // Nullable
       const reviews = parseReviews(item); // Nullable
@@ -1707,7 +1716,9 @@ export async function fetchKeywordMarketSnapshot(
 
       // Extract image URL from Rainforest search_results[].image
       // CRITICAL: Check multiple sources and never allow empty strings
-      const image_url = (item.image && typeof item.image === 'string' && item.image.trim().length > 0)
+      
+      // Store raw image URL from search result (for presentation fallback)
+      const raw_image_url = (item.image && typeof item.image === 'string' && item.image.trim().length > 0)
         ? item.image.trim()
         : (item.image_url && typeof item.image_url === 'string' && item.image_url.trim().length > 0)
           ? item.image_url.trim()
@@ -1716,6 +1727,8 @@ export async function fetchKeywordMarketSnapshot(
             : (Array.isArray(item.images) && item.images.length > 0 && typeof item.images[0] === 'string' && item.images[0].trim().length > 0)
               ? item.images[0].trim()
               : null; // Use null instead of empty string
+      
+      const image_url = raw_image_url; // Use raw image URL as processed image_url initially
       
       // Extract seller and is_prime for fulfillment mix detection
       const seller = item.seller ?? null; // Nullable
@@ -1742,6 +1755,9 @@ export async function fetchKeywordMarketSnapshot(
         is_prime, // Boolean
         // PHASE 1: BSR invalid reason (if BSR was marked invalid)
         bsr_invalid_reason, // Optional (nullable) - reason why BSR is invalid
+        // PRESENTATION FALLBACK: Store raw fields from search result
+        raw_title, // Raw title from search result (for presentation fallback)
+        raw_image_url, // Raw image URL from search result (for presentation fallback)
         // PRESERVE RAW ITEM DATA for fallback in buildKeywordPageOne
         _rawItem: item, // Preserve original Rainforest item for title/image fallback
       } as ParsedListing & { seller?: string | null; is_prime?: boolean; _rawItem?: any };
