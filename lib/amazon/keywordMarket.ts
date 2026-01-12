@@ -680,83 +680,133 @@ export async function enrichListingsMetadata(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // SYNCHRONOUS BATCH FETCH (NO RETRIES, NO BACKOFF, SINGLE ATTEMPT)
+    // SYNCHRONOUS BATCH FETCH WITH CHUNKING (NO RETRIES, NO BACKOFF, SINGLE ATTEMPT)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Perform single batched Rainforest product lookup as part of request lifecycle
+    // Perform batched Rainforest product lookup as part of request lifecycle
+    // CRITICAL: Rainforest API has limits on batch size - chunk into smaller batches
     // No retries, no fire-and-forget, no async background tasks
     // If fetch fails, preserve listings with null fields (do NOT fabricate placeholders)
     
-    const batchAsinString = asinsToEnrich.join(",");
-    const batchProductUrl = `https://api.rainforestapi.com/request?api_key=${apiKey}&type=product&amazon_domain=amazon.com&asin=${batchAsinString}`;
+    // Remove duplicates from ASIN list
+    const uniqueAsins = Array.from(new Set(asinsToEnrich));
     
-    let batchData: any = null;
+    // Chunk ASINs into batches of 10 (Rainforest API limit is typically 10-20 ASINs per request)
+    const BATCH_SIZE = 10;
+    const asinChunks: string[][] = [];
+    for (let i = 0; i < uniqueAsins.length; i += BATCH_SIZE) {
+      asinChunks.push(uniqueAsins.slice(i, i + BATCH_SIZE));
+    }
     
-    try {
-      const batchResponse = await fetch(batchProductUrl, {
-        method: "GET",
-        headers: { "Accept": "application/json" },
-      });
-
-      if (!batchResponse.ok) {
-        console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
-          keyword: keyword || "unknown",
-          reason: "batch_fetch_http_error",
-          status: batchResponse.status,
-          statusText: batchResponse.statusText,
-          listings_needing_enrichment: listingsNeedingEnrichment.length,
-          message: "Batch fetch HTTP error - preserving listings with null fields",
-        });
-        // Return original listings with null fields (do NOT fabricate placeholders)
-        return listings;
-      }
-
-      batchData = await batchResponse.json();
+    console.log("🔵 BRAND_ENRICHMENT_BATCHING", {
+      keyword: keyword || "unknown",
+      total_asins: uniqueAsins.length,
+      chunks: asinChunks.length,
+      batch_size: BATCH_SIZE,
+    });
+    
+    // Fetch all chunks and combine results
+    const allProducts: any[] = [];
+    let successfulChunks = 0;
+    let failedChunks = 0;
+    
+    for (let chunkIndex = 0; chunkIndex < asinChunks.length; chunkIndex++) {
+      const chunk = asinChunks[chunkIndex];
+      const batchAsinString = chunk.join(",");
+      const batchProductUrl = `https://api.rainforestapi.com/request?api_key=${apiKey}&type=product&amazon_domain=amazon.com&asin=${batchAsinString}`;
       
-      // Check for API-level errors in response
-      if (batchData && batchData.error) {
-        console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
-          keyword: keyword || "unknown",
-          reason: "batch_fetch_api_error",
-          api_error: batchData.error,
-          listings_needing_enrichment: listingsNeedingEnrichment.length,
-          message: "Batch fetch API error - preserving listings with null fields",
+      try {
+        const batchResponse = await fetch(batchProductUrl, {
+          method: "GET",
+          headers: { "Accept": "application/json" },
         });
-        // Return original listings with null fields
-        return listings;
+
+        if (!batchResponse.ok) {
+          console.warn("⚠️ BRAND_ENRICHMENT_CHUNK_FAILED", {
+            keyword: keyword || "unknown",
+            chunk_index: chunkIndex + 1,
+            total_chunks: asinChunks.length,
+            chunk_size: chunk.length,
+            status: batchResponse.status,
+            statusText: batchResponse.statusText,
+            asins_in_chunk: chunk.slice(0, 3), // Log first 3 ASINs for debugging
+          });
+          failedChunks++;
+          continue; // Skip this chunk, continue with others
+        }
+
+        const chunkData = await batchResponse.json();
+        
+        // Check for API-level errors in response
+        if (chunkData && chunkData.error) {
+          console.warn("⚠️ BRAND_ENRICHMENT_CHUNK_API_ERROR", {
+            keyword: keyword || "unknown",
+            chunk_index: chunkIndex + 1,
+            total_chunks: asinChunks.length,
+            api_error: chunkData.error,
+          });
+          failedChunks++;
+          continue; // Skip this chunk, continue with others
+        }
+        
+        // Parse chunk response (can be array or object with products array)
+        let chunkProducts: any[] = [];
+        if (Array.isArray(chunkData)) {
+          chunkProducts = chunkData;
+        } else if (chunkData.products && Array.isArray(chunkData.products)) {
+          chunkProducts = chunkData.products;
+        } else if (chunkData.product) {
+          chunkProducts = Array.isArray(chunkData.product) ? chunkData.product : [chunkData.product];
+        } else if (chunkData.asin || chunkData.title) {
+          chunkProducts = [chunkData];
+        }
+        
+        allProducts.push(...chunkProducts);
+        successfulChunks++;
+        
+        if (chunkIndex < 3) {
+          console.log("✅ BRAND_ENRICHMENT_CHUNK_SUCCESS", {
+            chunk_index: chunkIndex + 1,
+            total_chunks: asinChunks.length,
+            products_found: chunkProducts.length,
+            asins_in_chunk: chunk.length,
+          });
+        }
+      } catch (fetchError) {
+        console.warn("⚠️ BRAND_ENRICHMENT_CHUNK_EXCEPTION", {
+          keyword: keyword || "unknown",
+          chunk_index: chunkIndex + 1,
+          total_chunks: asinChunks.length,
+          error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+        });
+        failedChunks++;
+        continue; // Skip this chunk, continue with others
       }
-    } catch (fetchError) {
+    }
+    
+    // Log batch fetch summary
+    console.log("🔵 BRAND_ENRICHMENT_BATCH_SUMMARY", {
+      keyword: keyword || "unknown",
+      total_chunks: asinChunks.length,
+      successful_chunks: successfulChunks,
+      failed_chunks: failedChunks,
+      total_products_fetched: allProducts.length,
+      total_asins_requested: uniqueAsins.length,
+    });
+    
+    // If all chunks failed, return original listings
+    if (allProducts.length === 0) {
       console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
         keyword: keyword || "unknown",
-        reason: "batch_fetch_exception",
-        error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+        reason: "all_chunks_failed",
+        total_chunks: asinChunks.length,
         listings_needing_enrichment: listingsNeedingEnrichment.length,
-        message: "Batch fetch exception - preserving listings with null fields",
+        message: "All batch chunks failed - preserving listings with null fields",
       });
-      // Return original listings with null fields
       return listings;
     }
-
-    if (!batchData) {
-      console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
-        keyword: keyword || "unknown",
-        reason: "batch_fetch_returned_null",
-        listings_needing_enrichment: listingsNeedingEnrichment.length,
-        message: "Batch fetch returned null - preserving listings with null fields",
-      });
-      return listings; // Return original listings if enrichment fails
-    }
-
-    // Parse batch response (can be array or object with products array)
-    let products: any[] = [];
-    if (Array.isArray(batchData)) {
-      products = batchData;
-    } else if (batchData.products && Array.isArray(batchData.products)) {
-      products = batchData.products;
-    } else if (batchData.product) {
-      products = Array.isArray(batchData.product) ? batchData.product : [batchData.product];
-    } else if (batchData.asin || batchData.title) {
-      products = [batchData];
-    }
+    
+    // Parse all products from all chunks
+    const products = allProducts;
 
     // Create enrichment map: ASIN -> product data
     const enrichmentMap = new Map<string, any>();
