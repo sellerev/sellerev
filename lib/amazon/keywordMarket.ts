@@ -598,13 +598,58 @@ function parseFulfillment(item: any): "FBA" | "FBM" | "Amazon" | null {
 }
 
 /**
- * Attempts to infer brand from title if brand field is missing.
+ * Extracts brand from title locally (NO API CALLS)
+ * 
+ * Rules:
+ * - Extract first capitalized word(s) before common separators
+ * - Normalize common brand names (Amazon Basics, BELLA, etc.)
+ * - Return null if no brand pattern found
  */
-function inferBrandFromTitle(title: string | null): string | null {
-  if (!title) return null;
-  // Simple heuristic: first word or two words before common separators
-  const match = title.match(/^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)/);
-  return match ? match[1] : null;
+function extractBrandFromTitle(title: string | null): string | null {
+  if (!title || typeof title !== 'string' || title.trim().length === 0) {
+    return null;
+  }
+
+  // Common brand name patterns and normalizations
+  const brandNormalizations: Record<string, string> = {
+    'amazon basics': 'Amazon Basics',
+    'amazonbasics': 'Amazon Basics',
+    'bella': 'BELLA',
+    'chefman': 'Chefman',
+    'cuisinart': 'Cuisinart',
+    'hamilton beach': 'Hamilton Beach',
+    'instant pot': 'Instant Pot',
+    'kitchenaid': 'KitchenAid',
+    'ninja': 'Ninja',
+    'oster': 'Oster',
+    'presto': 'Presto',
+    'sunbeam': 'Sunbeam',
+  };
+
+  // Pattern 1: First 1-3 capitalized words before common separators
+  // Matches: "BELLA Electric Kettle" -> "BELLA"
+  // Matches: "Amazon Basics Coffee Maker" -> "Amazon Basics"
+  const pattern1 = title.match(/^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,2})/);
+  if (pattern1) {
+    const candidate = pattern1[1].trim();
+    // Normalize if known brand
+    const normalized = brandNormalizations[candidate.toLowerCase()];
+    if (normalized) {
+      return normalized;
+    }
+    // Return as-is if it looks like a brand (2-3 words max, all capitalized start)
+    if (candidate.split(/\s+/).length <= 3) {
+      return candidate;
+    }
+  }
+
+  // Pattern 2: All caps brand at start (e.g., "BESIGN", "FERVINOW")
+  const pattern2 = title.match(/^([A-Z]{2,}(?:\s+[A-Z]{2,})?)/);
+  if (pattern2) {
+    return pattern2[1].trim();
+  }
+
+  return null;
 }
 
 /**
@@ -627,7 +672,8 @@ function inferBrandFromTitle(title: string | null): string | null {
 export async function enrichListingsMetadata(
   listings: ParsedListing[],
   keyword?: string,
-  rainforestApiKey?: string
+  rainforestApiKey?: string,
+  apiCallCounter?: { count: number; max: number }
 ): Promise<ParsedListing[]> {
   if (!listings || listings.length === 0) {
     return listings;
@@ -644,16 +690,44 @@ export async function enrichListingsMetadata(
     return listings;
   }
 
-  // Identify listings needing enrichment (missing title, image_url, rating, reviews, or brand)
-  // CRITICAL: Include brand in the check so brand enrichment always runs when brand is missing
-  const listingsNeedingEnrichment = listings.filter(l => 
-    l.asin && 
-    (!l.title || !l.image_url || l.rating === null || l.reviews === null || !l.brand)
-  );
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🚨 COST OPTIMIZATION: METADATA ENRICHMENT HARD CAP (MAX 3 ASINs, TOP RANKED ONLY)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CRITICAL: Only enrich top 3 listings if brand is missing
+  // Rules:
+  // - Only top 3 ranked listings
+  // - Only if brand is missing
+  // - Never enrich more than 3 ASINs per analysis
+  const MAX_METADATA_ENRICHMENT = 3;
+  
+  // First, try to extract brand from title locally (NO API CALL)
+  const listingsWithLocalBrand = listings.map(l => {
+    if (!l.brand && l.title) {
+      const extractedBrand = extractBrandFromTitle(l.title);
+      if (extractedBrand) {
+        return { ...l, brand: extractedBrand };
+      }
+    }
+    return l;
+  });
+
+  // Only enrich top 3 listings if brand is still missing
+  const listingsNeedingEnrichment = listingsWithLocalBrand
+    .slice(0, MAX_METADATA_ENRICHMENT) // Only top 3
+    .filter(l => 
+      l.asin && 
+      !l.brand && // Only if brand is still missing after local extraction
+      (l.title && l.image_url && l.rating !== null && l.reviews !== null) // Only if other fields exist
+    );
 
   if (listingsNeedingEnrichment.length === 0) {
-    // All listings already have metadata - no enrichment needed
-    return listings;
+    // All listings already have metadata or brand extracted locally - no enrichment needed
+    console.log("✅ METADATA_ENRICHMENT_SKIPPED", {
+      keyword: keyword || "unknown",
+      reason: "No listings need enrichment (brand extracted locally or all fields present)",
+      total_listings: listingsWithLocalBrand.length,
+    });
+    return listingsWithLocalBrand; // Return listings with locally extracted brands
   }
 
   console.log("🔵 ASIN_METADATA_ENRICHMENT_START", {
@@ -708,6 +782,23 @@ export async function enrichListingsMetadata(
       
       // Fetch this batch in parallel
       const batchPromises = asinBatch.map(async (asin) => {
+        // 🚨 API SAFETY LIMIT: Check before each call
+        if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
+          console.warn("🚨 API_CALL_LIMIT_REACHED", {
+            asin,
+            keyword: keyword || "unknown",
+            current_count: apiCallCounter.count,
+            max_allowed: apiCallCounter.max,
+            message: "Metadata enrichment skipped - limit reached",
+          });
+          return null;
+        }
+        
+        // Increment counter before API call
+        if (apiCallCounter) {
+          apiCallCounter.count++;
+        }
+        
         const productUrl = `https://api.rainforestapi.com/request?api_key=${apiKey}&type=product&amazon_domain=amazon.com&asin=${asin}`;
         
         try {
@@ -808,9 +899,18 @@ export async function enrichListingsMetadata(
     }
 
     // Enrich listings with fetched metadata
+    // CRITICAL: Merge with locally extracted brands from listingsWithLocalBrand
     let enrichedListingsCount = 0;
     let enrichedFieldsCount = 0;
-    const enrichedListings = listings.map(listing => {
+    const enrichedListings = listingsWithLocalBrand.map(listing => {
+      // If this listing was enriched via API, use that data
+      if (listing.asin && enrichmentMap.has(listing.asin.toUpperCase())) {
+        // Will be enriched below
+      } else {
+        // No API enrichment - return with locally extracted brand
+        return listing;
+      }
+      
       if (!listing.asin || !enrichmentMap.has(listing.asin.toUpperCase())) {
         return listing; // No enrichment data available
       }
@@ -927,10 +1027,28 @@ export async function enrichListingsMetadata(
       listings_enriched: enrichedListingsCount,
       fields_enriched: enrichedFieldsCount,
       total_listings: enrichedListings.length,
-      enrichment_success_rate: `${((enrichedListingsCount / listingsNeedingEnrichment.length) * 100).toFixed(1)}%`,
+      enrichment_success_rate: listingsNeedingEnrichment.length > 0 
+        ? `${((enrichedListingsCount / listingsNeedingEnrichment.length) * 100).toFixed(1)}%`
+        : "0%",
+      api_calls_made: allProducts.length,
+      max_allowed: MAX_METADATA_ENRICHMENT,
     });
 
-    return enrichedListings;
+    // Merge locally extracted brands back into all listings
+    const finalListings = enrichedListings.map(enriched => {
+      // If brand was enriched via API, keep it; otherwise use local extraction
+      if (enriched.brand) {
+        return enriched;
+      }
+      // Find original listing to get locally extracted brand
+      const original = listingsWithLocalBrand.find(l => l.asin === enriched.asin);
+      if (original && original.brand) {
+        return { ...enriched, brand: original.brand };
+      }
+      return enriched;
+    });
+
+    return finalListings;
   } catch (error) {
     console.warn("⚠️ ASIN_METADATA_ENRICHMENT_ERROR", {
       keyword: keyword || "unknown",
@@ -952,7 +1070,8 @@ export async function enrichListingsMetadata(
 export async function fetchKeywordMarketSnapshot(
   keyword: string,
   supabase?: any,
-  marketplace: string = "US"
+  marketplace: string = "US",
+  apiCallCounter?: { count: number; max: number }
 ): Promise<KeywordMarketData | null> {
   const rainforestApiKey = process.env.RAINFOREST_API_KEY;
   
@@ -969,8 +1088,30 @@ export async function fetchKeywordMarketSnapshot(
     // ═══════════════════════════════════════════════════════════════════════════
     // PAGE-1 ONLY: Hard-coded page=1 parameter ensures Page-1 results only
     // ═══════════════════════════════════════════════════════════════════════════
+    
+    // 🚨 API SAFETY LIMIT: Check before search call
+    if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
+      console.warn("🚨 API_CALL_LIMIT_REACHED", {
+        keyword,
+        current_count: apiCallCounter.count,
+        max_allowed: apiCallCounter.max,
+        message: "Search request skipped - API call limit reached",
+      });
+      return null;
+    }
+    
+    // Increment counter for search call
+    if (apiCallCounter) {
+      apiCallCounter.count++;
+    }
+    
     const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1`;
-    console.log("RAINFOREST_API_REQUEST", { keyword, url: apiUrl.replace(rainforestApiKey, "***") });
+    console.log("RAINFOREST_API_REQUEST", { 
+      keyword, 
+      url: apiUrl.replace(rainforestApiKey, "***"),
+      api_call_count: apiCallCounter?.count || 0,
+      api_calls_remaining: apiCallCounter ? apiCallCounter.max - apiCallCounter.count : "unlimited",
+    });
     
     // Fetch Amazon search results via Rainforest API
     const response = await fetch(apiUrl, {
@@ -1239,22 +1380,47 @@ export async function fetchKeywordMarketSnapshot(
       });
     }
 
-    // Then, batch fetch missing ASINs if any
-    if (missingAsins.length > 0) {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 🚨 COST OPTIMIZATION: BSR ENRICHMENT HARD CAP (MAX 5 ASINs)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Only fetch BSR for top 5 ASINs to reduce API costs by 80%+
+    // Rules:
+    // - Prefer top-ranked listings (positions 1-5)
+    // - Skip if already cached
+    // - Stop immediately on failure (no retry)
+    const MAX_BSR_ASINS = 5;
+    
+    // Get top-ranked ASINs that need BSR (prioritize by position)
+    const asinsForBSR = searchResults
+      .slice(0, MAX_BSR_ASINS * 2) // Check more to account for duplicates/cached
+      .map((item: any) => item.asin)
+      .filter((asin: string | null): asin is string => 
+        asin !== null && 
+        asin !== undefined && 
+        missingAsins.includes(asin) &&
+        !cacheMap.has(asin) // Skip if already cached
+      )
+      .slice(0, MAX_BSR_ASINS); // Hard cap at 5
+
+    // Then, batch fetch missing ASINs if any (HARD CAP: max 5)
+    if (asinsForBSR.length > 0) {
       console.log("BSR_BATCH_FETCH_ASINS", {
         keyword,
-        missing_asins: missingAsins,
-        asin_count: missingAsins.length,
-        message: "Fetching missing ASINs individually with parallel requests",
+        missing_asins: asinsForBSR,
+        asin_count: asinsForBSR.length,
+        total_missing: missingAsins.length,
+        message: `Fetching top ${asinsForBSR.length} ASINs for BSR (HARD CAP: max 5)`,
       });
 
       try {
         // Use batch fetch with exponential backoff and deduplication
+        // 🚨 API SAFETY LIMIT: Use shared counter (search already counted)
         const { batchFetchBsrWithBackoff } = await import("./asinBsrCache");
         const batchData = await batchFetchBsrWithBackoff(
           rainforestApiKey,
-          missingAsins,
-          keyword
+          asinsForBSR, // Only fetch top 5
+          keyword,
+          apiCallCounter // Pass shared counter
         );
 
         if (batchData) {
@@ -1370,15 +1536,17 @@ export async function fetchKeywordMarketSnapshot(
         console.error("BSR_BATCH_FETCH_EXCEPTION", {
           keyword,
           error: error instanceof Error ? error.message : String(error),
-          asin_count: missingAsins.length,
-          message: "Batch fetch failed, continuing with cached data only",
+          asin_count: asinsForBSR.length,
+          message: "BSR fetch failed - STOPPING immediately (no retry). Continuing with cached data only.",
         });
+        // 🚨 COST OPTIMIZATION: Stop immediately on failure, no retry
         // Continue with cached data - don't crash analysis
       }
     } else {
       console.log("BSR_BATCH_FETCH_SKIPPED", {
         keyword,
-        message: "No missing ASINs - all BSR data from cache",
+        total_missing: missingAsins.length,
+        message: "No ASINs need BSR fetch (all cached or cap reached)",
       });
     }
 
@@ -1504,16 +1672,20 @@ export async function fetchKeywordMarketSnapshot(
       
       const fulfillment = parseFulfillment(item); // Nullable
       
-      // Extract brand: Check multiple fields (item.brand, item.brand_name, item.by_line?.name)
-      // Missing brand = null (will be normalized to "Unknown" in brand moat analysis)
-      // CRITICAL: Check multiple sources similar to image_url extraction
-      const brand = (item.brand && typeof item.brand === 'string' && item.brand.trim().length > 0)
+      // 🚨 COST OPTIMIZATION: Extract brand locally (NO API CALLS)
+      // Priority: 1) Explicit brand field, 2) brand_name, 3) by_line.name, 4) Extract from title
+      let brand = (item.brand && typeof item.brand === 'string' && item.brand.trim().length > 0)
         ? item.brand.trim()
         : (item.brand_name && typeof item.brand_name === 'string' && item.brand_name.trim().length > 0)
           ? item.brand_name.trim()
           : (item.by_line?.name && typeof item.by_line.name === 'string' && item.by_line.name.trim().length > 0)
             ? item.by_line.name.trim()
             : null;
+      
+      // If brand still missing, extract from title locally
+      if (!brand && title) {
+        brand = extractBrandFromTitle(title);
+      }
       
       // ═══════════════════════════════════════════════════════════════════════════
       // STEP 1: Log raw brand data from Rainforest (first 5 listings)

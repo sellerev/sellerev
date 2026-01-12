@@ -66,7 +66,57 @@ function extractMainCategoryBSR(raw: any): { rank: number; category: string } | 
 }
 
 /**
+ * Extracts brand from title locally (NO API CALLS)
+ * Same logic as in keywordMarket.ts
+ */
+function extractBrandFromTitle(title: string | null): string | null {
+  if (!title || typeof title !== 'string' || title.trim().length === 0) {
+    return null;
+  }
+
+  // Common brand name patterns and normalizations
+  const brandNormalizations: Record<string, string> = {
+    'amazon basics': 'Amazon Basics',
+    'amazonbasics': 'Amazon Basics',
+    'bella': 'BELLA',
+    'chefman': 'Chefman',
+    'cuisinart': 'Cuisinart',
+    'hamilton beach': 'Hamilton Beach',
+    'instant pot': 'Instant Pot',
+    'kitchenaid': 'KitchenAid',
+    'ninja': 'Ninja',
+    'oster': 'Oster',
+    'presto': 'Presto',
+    'sunbeam': 'Sunbeam',
+  };
+
+  // Pattern 1: First 1-3 capitalized words before common separators
+  const pattern1 = title.match(/^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,2})/);
+  if (pattern1) {
+    const candidate = pattern1[1].trim();
+    // Normalize if known brand
+    const normalized = brandNormalizations[candidate.toLowerCase()];
+    if (normalized) {
+      return normalized;
+    }
+    // Return as-is if it looks like a brand (2-3 words max, all capitalized start)
+    if (candidate.split(/\s+/).length <= 3) {
+      return candidate;
+    }
+  }
+
+  // Pattern 2: All caps brand at start (e.g., "BESIGN", "FERVINOW")
+  const pattern2 = title.match(/^([A-Z]{2,}(?:\s+[A-Z]{2,})?)/);
+  if (pattern2) {
+    return pattern2[1].trim();
+  }
+
+  return null;
+}
+
+/**
  * Normalizes a raw listing object from any source into a consistent ParsedListing format
+ * 🚨 COST OPTIMIZATION: Extracts brand from title locally (NO API CALLS)
  */
 export function normalizeListing(raw: any): ParsedListing {
   // Extract main category BSR (preferred method)
@@ -77,9 +127,16 @@ export function normalizeListing(raw: any): ParsedListing {
   // Legacy bsr field (for backward compatibility)
   const bsr = main_category_bsr ?? raw.bsr ?? raw.BSR ?? raw.best_seller_rank ?? raw.rank ?? null;
   
+  // Extract title
+  const title = raw.title ?? raw.Title ?? "";
+  
+  // 🚨 COST OPTIMIZATION: Extract brand from title locally if brand field is missing
+  const explicitBrand = raw.brand ?? raw.Brand ?? null;
+  const brand = explicitBrand || (title ? extractBrandFromTitle(title) : null);
+  
   return {
     asin: raw.asin ?? raw.ASIN ?? "",
-    title: raw.title ?? raw.Title ?? "",
+    title,
     price: raw.price?.value ?? raw.price ?? raw.Price ?? null,
     rating: raw.rating ?? raw.Rating ?? null,
     reviews: raw.reviews?.count ?? raw.reviews ?? raw.Reviews ?? raw.review_count ?? null,
@@ -90,6 +147,6 @@ export function normalizeListing(raw: any): ParsedListing {
     fulfillment: raw.fulfillment ?? raw.Fulfillment ?? null,
     sponsored: !!raw.is_sponsored || !!raw.IsSponsored || false,
     organic_rank: raw.organic_rank ?? raw.position ?? raw.Position ?? null,
-    brand: raw.brand ?? raw.Brand ?? null,
+    brand, // Extracted from title if not explicitly provided
   };
 }

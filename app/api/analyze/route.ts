@@ -1329,6 +1329,9 @@ export async function POST(req: NextRequest) {
       timestamp: new Date().toISOString(),
     });
     
+    // 🚨 API SAFETY LIMIT: Create shared counter at route level (max 6 calls per analysis)
+    const apiCallCounter = { count: 0, max: 6 };
+    
     try {
       // Rehydrate cache if available, otherwise fetch from Rainforest
       let realMarketData: KeywordMarketData | null = null;
@@ -1352,7 +1355,8 @@ export async function POST(req: NextRequest) {
           realMarketData = await fetchKeywordMarketSnapshot(
             body.input_value,
             supabase,
-            "US"
+            "US",
+            apiCallCounter // Pass shared counter
           );
         }
         // If confidence is HIGH but no cache, we'll fall through to snapshot lookup
@@ -1950,8 +1954,9 @@ export async function POST(req: NextRequest) {
       // snapshot finalization. This fixes issues like "food warming mat" where
       // snapshot never finalizes but ASINs still need metadata.
       if (rawListings.length > 0) {
+        // 🚨 API SAFETY LIMIT: Use shared counter (already tracks search + BSR calls)
         const { enrichListingsMetadata } = await import("@/lib/amazon/keywordMarket");
-        rawListings = await enrichListingsMetadata(rawListings, body.input_value);
+        rawListings = await enrichListingsMetadata(rawListings, body.input_value, undefined, apiCallCounter);
         console.log("✅ METADATA_ENRICHMENT_COMPLETE_BEFORE_CANONICAL", {
           keyword: body.input_value,
           enriched_listings_count: rawListings.length,
@@ -3481,6 +3486,15 @@ Convert this plain text decision into the required JSON contract format. Extract
       hasProducts: !!finalResponse.products,
       productCount: finalResponse.products?.length,
       snapshotHasListings: !!finalResponse.market_snapshot?.listings,
+    });
+    
+    // 🚨 API COST SUMMARY: Log total API calls made
+    console.log("💰 API_COST_SUMMARY", {
+      keyword: body.input_value,
+      total_api_calls: apiCallCounter.count,
+      max_allowed: apiCallCounter.max,
+      calls_remaining: apiCallCounter.max - apiCallCounter.count,
+      cost_reduction: apiCallCounter.count <= 6 ? "✅ Within limit" : "⚠️ Exceeded limit",
     });
 
     return NextResponse.json(

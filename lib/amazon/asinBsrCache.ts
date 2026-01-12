@@ -159,13 +159,25 @@ export async function batchFetchBsrWithBackoff(
     return null;
   }
 
-  // Remove duplicates
-  const uniqueAsins = Array.from(new Set(asins));
+  // Remove duplicates and apply hard cap
+  const uniqueAsins = Array.from(new Set(asins)).slice(0, 5); // 🚨 HARD CAP: Max 5 ASINs
+  
+  // 🚨 API SAFETY LIMIT: Check if we've exceeded max calls
+  if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
+    console.warn("🚨 API_CALL_LIMIT_REACHED", {
+      keyword,
+      current_count: apiCallCounter.count,
+      max_allowed: apiCallCounter.max,
+      message: "BSR fetch skipped - API call limit reached",
+    });
+    return null;
+  }
   
   console.log("🟡 BSR_FETCH_START", {
     keyword,
     total_asins: uniqueAsins.length,
     fetch_strategy: "individual_parallel",
+    api_calls_remaining: apiCallCounter ? apiCallCounter.max - apiCallCounter.count : "unlimited",
   });
 
   // Fetch ASINs individually with concurrency limiting
@@ -178,17 +190,34 @@ export async function batchFetchBsrWithBackoff(
   for (let i = 0; i < uniqueAsins.length; i += CONCURRENCY_LIMIT) {
     const asinBatch = uniqueAsins.slice(i, i + CONCURRENCY_LIMIT);
     
-    // Fetch this batch in parallel
-    const batchPromises = asinBatch.map(async (asin) => {
-      console.log("🟡 BSR_FETCH_START", { asin, keyword });
-      
-      const productUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${asin}`;
-      
-      try {
-        const response = await fetch(productUrl, {
-          method: "GET",
-          headers: { "Accept": "application/json" },
-        });
+      // Fetch this batch in parallel
+      const batchPromises = asinBatch.map(async (asin) => {
+        // 🚨 API SAFETY LIMIT: Check before each call
+        if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
+          console.warn("🚨 API_CALL_LIMIT_REACHED", {
+            asin,
+            keyword,
+            current_count: apiCallCounter.count,
+            max_allowed: apiCallCounter.max,
+            message: "BSR fetch skipped for this ASIN - limit reached",
+          });
+          return null;
+        }
+        
+        console.log("🟡 BSR_FETCH_START", { asin, keyword });
+        
+        // Increment counter before API call
+        if (apiCallCounter) {
+          apiCallCounter.count++;
+        }
+        
+        const productUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${asin}`;
+        
+        try {
+          const response = await fetch(productUrl, {
+            method: "GET",
+            headers: { "Accept": "application/json" },
+          });
 
         if (!response.ok) {
           console.error("🔴 BSR_FETCH_FAILED", {
