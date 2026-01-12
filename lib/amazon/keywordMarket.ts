@@ -680,132 +680,122 @@ export async function enrichListingsMetadata(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // SYNCHRONOUS BATCH FETCH WITH CHUNKING (NO RETRIES, NO BACKOFF, SINGLE ATTEMPT)
+    // INDIVIDUAL PARALLEL FETCH (NO RETRIES, NO BACKOFF, SINGLE ATTEMPT)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Perform batched Rainforest product lookup as part of request lifecycle
-    // CRITICAL: Rainforest API has limits on batch size - chunk into smaller batches
+    // CRITICAL: Rainforest API does NOT support comma-separated ASINs in batch requests
+    // Must fetch each ASIN individually, but we can do it in parallel for speed
     // No retries, no fire-and-forget, no async background tasks
     // If fetch fails, preserve listings with null fields (do NOT fabricate placeholders)
     
     // Remove duplicates from ASIN list
     const uniqueAsins = Array.from(new Set(asinsToEnrich));
     
-    // Chunk ASINs into batches of 10 (Rainforest API limit is typically 10-20 ASINs per request)
-    const BATCH_SIZE = 10;
-    const asinChunks: string[][] = [];
-    for (let i = 0; i < uniqueAsins.length; i += BATCH_SIZE) {
-      asinChunks.push(uniqueAsins.slice(i, i + BATCH_SIZE));
-    }
-    
-    console.log("🔵 BRAND_ENRICHMENT_BATCHING", {
+    console.log("🔵 METADATA_ENRICHMENT_FETCH_START", {
       keyword: keyword || "unknown",
       total_asins: uniqueAsins.length,
-      chunks: asinChunks.length,
-      batch_size: BATCH_SIZE,
+      fetch_strategy: "individual_parallel",
     });
     
-    // Fetch all chunks and combine results
+    // Fetch all ASINs in parallel (but limit concurrency to avoid rate limits)
+    const CONCURRENCY_LIMIT = 5; // Process 5 ASINs at a time
     const allProducts: any[] = [];
-    let successfulChunks = 0;
-    let failedChunks = 0;
+    let successfulFetches = 0;
+    let failedFetches = 0;
     
-    for (let chunkIndex = 0; chunkIndex < asinChunks.length; chunkIndex++) {
-      const chunk = asinChunks[chunkIndex];
-      const batchAsinString = chunk.join(",");
-      const batchProductUrl = `https://api.rainforestapi.com/request?api_key=${apiKey}&type=product&amazon_domain=amazon.com&asin=${batchAsinString}`;
+    // Process ASINs in batches to respect rate limits
+    for (let i = 0; i < uniqueAsins.length; i += CONCURRENCY_LIMIT) {
+      const asinBatch = uniqueAsins.slice(i, i + CONCURRENCY_LIMIT);
       
-      try {
-        const batchResponse = await fetch(batchProductUrl, {
-          method: "GET",
-          headers: { "Accept": "application/json" },
-        });
+      // Fetch this batch in parallel
+      const batchPromises = asinBatch.map(async (asin) => {
+        const productUrl = `https://api.rainforestapi.com/request?api_key=${apiKey}&type=product&amazon_domain=amazon.com&asin=${asin}`;
+        
+        try {
+          const response = await fetch(productUrl, {
+            method: "GET",
+            headers: { "Accept": "application/json" },
+          });
 
-        if (!batchResponse.ok) {
-          console.warn("⚠️ BRAND_ENRICHMENT_CHUNK_FAILED", {
-            keyword: keyword || "unknown",
-            chunk_index: chunkIndex + 1,
-            total_chunks: asinChunks.length,
-            chunk_size: chunk.length,
-            status: batchResponse.status,
-            statusText: batchResponse.statusText,
-            asins_in_chunk: chunk.slice(0, 3), // Log first 3 ASINs for debugging
-          });
-          failedChunks++;
-          continue; // Skip this chunk, continue with others
-        }
+          if (!response.ok) {
+            console.warn("⚠️ METADATA_ENRICHMENT_FETCH_FAILED", {
+              keyword: keyword || "unknown",
+              asin: asin,
+              status: response.status,
+              statusText: response.statusText,
+            });
+            return null;
+          }
 
-        const chunkData = await batchResponse.json();
-        
-        // Check for API-level errors in response
-        if (chunkData && chunkData.error) {
-          console.warn("⚠️ BRAND_ENRICHMENT_CHUNK_API_ERROR", {
+          const data = await response.json();
+          
+          // Check for API-level errors in response
+          if (data && data.error) {
+            console.warn("⚠️ METADATA_ENRICHMENT_API_ERROR", {
+              keyword: keyword || "unknown",
+              asin: asin,
+              api_error: data.error,
+            });
+            return null;
+          }
+          
+          // Extract product from response
+          const product = data?.product || data;
+          if (product && product.asin) {
+            return product;
+          }
+          
+          return null;
+        } catch (fetchError) {
+          console.warn("⚠️ METADATA_ENRICHMENT_FETCH_EXCEPTION", {
             keyword: keyword || "unknown",
-            chunk_index: chunkIndex + 1,
-            total_chunks: asinChunks.length,
-            api_error: chunkData.error,
+            asin: asin,
+            error: fetchError instanceof Error ? fetchError.message : String(fetchError),
           });
-          failedChunks++;
-          continue; // Skip this chunk, continue with others
+          return null;
         }
-        
-        // Parse chunk response (can be array or object with products array)
-        let chunkProducts: any[] = [];
-        if (Array.isArray(chunkData)) {
-          chunkProducts = chunkData;
-        } else if (chunkData.products && Array.isArray(chunkData.products)) {
-          chunkProducts = chunkData.products;
-        } else if (chunkData.product) {
-          chunkProducts = Array.isArray(chunkData.product) ? chunkData.product : [chunkData.product];
-        } else if (chunkData.asin || chunkData.title) {
-          chunkProducts = [chunkData];
-        }
-        
-        allProducts.push(...chunkProducts);
-        successfulChunks++;
-        
-        if (chunkIndex < 3) {
-          console.log("✅ BRAND_ENRICHMENT_CHUNK_SUCCESS", {
-            chunk_index: chunkIndex + 1,
-            total_chunks: asinChunks.length,
-            products_found: chunkProducts.length,
-            asins_in_chunk: chunk.length,
-          });
-        }
-      } catch (fetchError) {
-        console.warn("⚠️ BRAND_ENRICHMENT_CHUNK_EXCEPTION", {
-          keyword: keyword || "unknown",
-          chunk_index: chunkIndex + 1,
-          total_chunks: asinChunks.length,
-          error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+      });
+      
+      // Wait for this batch to complete
+      const batchResults = await Promise.all(batchPromises);
+      
+      // Filter out null results and add to allProducts
+      const validProducts = batchResults.filter((p): p is any => p !== null);
+      allProducts.push(...validProducts);
+      successfulFetches += validProducts.length;
+      failedFetches += (batchResults.length - validProducts.length);
+      
+      // Log progress for first batch
+      if (i === 0 && validProducts.length > 0) {
+        console.log("✅ METADATA_ENRICHMENT_FETCH_PROGRESS", {
+          batch_index: Math.floor(i / CONCURRENCY_LIMIT) + 1,
+          total_batches: Math.ceil(uniqueAsins.length / CONCURRENCY_LIMIT),
+          products_fetched: validProducts.length,
+          asins_in_batch: asinBatch.length,
         });
-        failedChunks++;
-        continue; // Skip this chunk, continue with others
       }
     }
     
-    // Log batch fetch summary
-    console.log("🔵 BRAND_ENRICHMENT_BATCH_SUMMARY", {
+    // Log fetch summary
+    console.log("🔵 METADATA_ENRICHMENT_FETCH_SUMMARY", {
       keyword: keyword || "unknown",
-      total_chunks: asinChunks.length,
-      successful_chunks: successfulChunks,
-      failed_chunks: failedChunks,
+      total_asins: uniqueAsins.length,
+      successful_fetches: successfulFetches,
+      failed_fetches: failedFetches,
       total_products_fetched: allProducts.length,
-      total_asins_requested: uniqueAsins.length,
     });
     
-    // If all chunks failed, return original listings
+    // If all fetches failed, return original listings
     if (allProducts.length === 0) {
       console.warn("⚠️ ASIN_METADATA_ENRICHMENT_FAILED", {
         keyword: keyword || "unknown",
-        reason: "all_chunks_failed",
-        total_chunks: asinChunks.length,
+        reason: "all_fetches_failed",
         listings_needing_enrichment: listingsNeedingEnrichment.length,
-        message: "All batch chunks failed - preserving listings with null fields",
+        message: "All product fetches failed - preserving listings with null fields",
       });
       return listings;
     }
     
-    // Parse all products from all chunks
+    // Use all fetched products
     const products = allProducts;
 
     // Create enrichment map: ASIN -> product data
@@ -834,6 +824,13 @@ export async function enrichListingsMetadata(
         enriched.title = productData.title;
         enrichedFieldsCount++;
         listingEnriched = true;
+        if (enrichedListingsCount < 5) {
+          console.log("🟡 TITLE ENRICHED", {
+            asin: listing.asin,
+            title_before: listing.title,
+            title_after: enriched.title,
+          });
+        }
       }
 
       // Enrich image_url (only if missing, check multiple sources)
@@ -848,6 +845,13 @@ export async function enrichListingsMetadata(
           enriched.image_url = imageUrl;
           enrichedFieldsCount++;
           listingEnriched = true;
+          if (enrichedListingsCount < 5) {
+            console.log("🟡 IMAGE ENRICHED", {
+              asin: listing.asin,
+              image_before: listing.image_url,
+              image_after: enriched.image_url,
+            });
+          }
         }
       }
 
