@@ -1774,6 +1774,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EXTRACT SELECTED ASINS (MUST BE DONE EARLY - USED IN MULTIPLE PLACES)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Extract selected ASINs (multi-select support)
+    // Priority: selectedAsins array > selectedListing (backward compatibility)
+    const selectedAsins = body.selectedAsins && body.selectedAsins.length > 0
+      ? body.selectedAsins
+      : (body.selectedListing?.asin ? [body.selectedListing.asin] : []);
+    
+    // For backward compatibility and single-ASIN logic, also extract first ASIN
+    const selectedAsin = selectedAsins.length > 0 ? selectedAsins[0] : null;
+    
     // 8. Build grounded context message
     // ─────────────────────────────────────────────────────────────────────
     // WHY VERDICTS CANNOT SILENTLY CHANGE:
@@ -1823,6 +1835,7 @@ export async function POST(req: NextRequest) {
     // ═══════════════════════════════════════════════════════════════════════════
     // Check if this question requires escalation to type=product API calls
     // This enforces the Escalation Policy and Credit & Pricing Policy
+    // Note: selectedAsins and selectedAsin are already defined above
     
     // Build Page-1 context for escalation decision
     const products = (analysisResponse.products as any[]) || (analysisResponse.page_one_listings as any[]) || [];
@@ -1865,10 +1878,8 @@ export async function POST(req: NextRequest) {
     // Check credit balance
     const creditContext = await checkCreditBalance(user.id, supabase, body.analysisRunId);
     
-    // Extract selected ASIN (hard lock)
-    const selectedAsin = body.selectedListing?.asin || null;
-    
     // Make escalation decision (with selected ASINs lock)
+    // Note: selectedAsins and selectedAsin are already defined above
     const escalationDecision = decideEscalation(
       body.message,
       page1Context,
@@ -1876,6 +1887,19 @@ export async function POST(req: NextRequest) {
       selectedAsin, // Backward compatibility
       selectedAsins // Multi-ASIN support
     );
+    
+    // STEP 5: GUARANTEED LOGGING - Log escalation decision BEFORE LLM runs
+    console.log("[ESCALATION_GATE]", {
+      question: body.message,
+      selected_asins: selectedAsins,
+      requires_escalation: escalationDecision.requires_escalation,
+      can_answer_from_page1: escalationDecision.can_answer_from_page1,
+      reason: escalationDecision.escalation_reason,
+      required_asins: escalationDecision.required_asins,
+      required_credits: escalationDecision.required_credits,
+      available_credits: creditContext.available_credits,
+      timestamp: new Date().toISOString(),
+    });
     
     // Log escalation decision (structured logging)
     console.log("ESCALATION_DECISION", {
@@ -2029,6 +2053,41 @@ export async function POST(req: NextRequest) {
       );
     }
     
+    // STEP 2: BLOCK LLM ANSWERS WHEN ESCALATION IS REQUIRED
+    // If escalation is required, inject a hard rule that prevents answering from Page-1
+    if (escalationDecision.requires_escalation && escalationDecision.required_asins.length > 0) {
+      // Check if escalation was blocked (insufficient credits, limits)
+      const hasEnoughCredits = creditContext.available_credits >= escalationDecision.required_credits;
+      const sessionLimitOk = (creditContext.session_credits_used + escalationDecision.required_credits) <= (creditContext.max_session_credits ?? 10);
+      const dailyLimitOk = (creditContext.daily_credits_used + escalationDecision.required_credits) <= (creditContext.max_daily_credits ?? 50);
+      
+      if (!hasEnoughCredits || !sessionLimitOk || !dailyLimitOk) {
+        // Escalation blocked - inject rule to use insufficient credit message only
+        systemPrompt += `\n\n=== ESCALATION REQUIRED BUT BLOCKED ===
+This question requires product specifications that can only be answered via escalation.
+However, escalation is blocked due to insufficient credits or limits.
+
+CRITICAL RULES:
+- DO NOT attempt to answer this question from Page-1 data
+- DO NOT say "Amazon does not expose..." or "I cannot provide..."
+- DO NOT suggest external tools
+- The escalation message will be shown to the user explaining the credit situation
+- Wait for escalated data before answering product specification questions`;
+      } else {
+        // Escalation will proceed - inject rule to wait for escalated data
+        systemPrompt += `\n\n=== ESCALATION REQUIRED (IN PROGRESS) ===
+This question requires product specifications that can only be answered via escalation.
+Escalation is in progress and product data will be provided shortly.
+
+CRITICAL RULES:
+- DO NOT attempt to answer this question from Page-1 data
+- DO NOT say "Amazon does not expose..." or "I cannot provide..."
+- DO NOT suggest external tools
+- Wait for escalated product data to be injected before answering
+- Once escalated data is provided, answer using ONLY that data`;
+      }
+    }
+    
     // Log AI reasoning inputs for audit/debugging
     console.log("AI_COPILOT_INPUT", {
       analysisRunId: body.analysisRunId,
@@ -2095,19 +2154,18 @@ export async function POST(req: NextRequest) {
       
       // Inject escalation context into system prompt
       // STRICT RULE: All product data comes from the single API response per ASIN
-      // If data is missing, Copilot must state that Amazon does not expose it
+      // If data is missing, Copilot must state that the information is not available (but NOT use forbidden phrases)
       systemPrompt += `\n\n=== ESCALATION CONTEXT ===
 ${JSON.stringify(escalationContext, null, 2)}
 
 CRITICAL RULES FOR ESCALATED DATA:
 1. All product data comes from a SINGLE Rainforest API call per ASIN (type=product)
-2. If a field is missing from the response, it means Amazon does not expose it for that ASIN
-3. You MUST state explicitly when data is missing: "Amazon does not expose [field] for ASIN [asin]"
-4. Do NOT infer or guess missing data - only use what is present in the response
-5. Do NOT suggest making additional API calls - this is the only data available
-6. If the response is incomplete, acknowledge the limitation clearly
-
-Use this escalated product data to answer the user's question. If data is missing, state that Amazon does not expose it.`;
+2. If a field is missing from the response, it means that specific information is not available in the product listing
+3. You may state: "This information is not available in the product listing" (but ONLY if the field is truly missing)
+4. DO NOT use the phrase "Amazon does not expose" - this is FORBIDDEN
+5. Do NOT infer, guess, or suggest additional API calls for missing data
+6. Use only the data present in the single response object
+7. Answer the user's question using the escalated product data provided above`;
     }
     
     // 12. Append the new user message

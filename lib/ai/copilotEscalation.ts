@@ -293,6 +293,44 @@ function canAnswerWithPage1Data(question: string, page1Context: Page1Context): b
 }
 
 /**
+ * HARD ESCALATION RULE: Check if question requires product specifications
+ * 
+ * These questions MUST ALWAYS escalate - they cannot be answered from Page-1 data.
+ * This check happens FIRST and OVERRIDES all other logic.
+ */
+function requiresHardEscalation(question: string): boolean {
+  const normalized = question.toLowerCase();
+  
+  const hardEscalationKeywords = [
+    'dimension', 'dimensions',
+    'size',
+    'weight',
+    'material', 'materials',
+    'construction',
+    'build quality',
+    'certification', 'certifications',
+    'compliance',
+    'variation', 'variations',
+    'color option', 'color options',
+    'size option', 'size options',
+    "what's included",
+    'in the box',
+    'package contents',
+    'what comes with',
+    'includes',
+    'specification', 'specifications', 'specs',
+    'measurement', 'measurements',
+    'length', 'width', 'height', 'depth', 'thickness',
+    'capacity',
+    'warranty',
+    'ingredient', 'ingredients',
+    'composition',
+  ];
+  
+  return hardEscalationKeywords.some(keyword => normalized.includes(keyword));
+}
+
+/**
  * Main escalation decision function
  * 
  * This function implements the exact decision logic from the Escalation Policy.
@@ -304,6 +342,62 @@ export function decideEscalation(
   selectedAsin?: string | null,
   selectedAsins?: string[] // Multi-ASIN support
 ): EscalationDecision {
+  // STEP 0: HARD ESCALATION RULE (MUST CHECK FIRST - OVERRIDES ALL OTHER LOGIC)
+  // If question requires product specifications, ALWAYS escalate
+  if (requiresHardEscalation(question)) {
+    // Get effective selected ASINs
+    const effectiveSelectedAsins = selectedAsins && selectedAsins.length > 0
+      ? selectedAsins
+      : (selectedAsin ? [selectedAsin] : []);
+    
+    // CRITICAL: Must have at least 1 selected ASIN to escalate
+    if (effectiveSelectedAsins.length === 0) {
+      return {
+        can_answer_from_page1: false,
+        requires_escalation: false, // Block escalation if no ASIN selected
+        required_asins: [],
+        required_credits: 0,
+        escalation_reason: "Select a product from Page-1 to analyze it. This question requires product specifications that are only available via product API lookup.",
+      };
+    }
+    
+    // Limit to max 2 ASINs for escalation
+    if (effectiveSelectedAsins.length > 2) {
+      return {
+        can_answer_from_page1: false,
+        requires_escalation: false,
+        required_asins: [],
+        required_credits: 0,
+        escalation_reason: `You have ${effectiveSelectedAsins.length} products selected, but I can only look up product specifications for up to 2 products at a time. Please select 1-2 products to analyze.`,
+      };
+    }
+    
+    // HARD ESCALATION: Always require escalation for product specs
+    const requiredAsins = effectiveSelectedAsins.slice(0, 2);
+    const requiredCredits = requiredAsins.length;
+    
+    // Check if user has enough credits
+    if (creditContext.available_credits < requiredCredits) {
+      return {
+        can_answer_from_page1: false,
+        requires_escalation: true, // Still mark as requiring escalation
+        required_asins: requiredAsins,
+        required_credits: requiredCredits,
+        escalation_reason: `This question requires product specifications. Looking up details for ${requiredAsins.length === 1 ? 'this product' : 'these products'} will use ${requiredCredits} Seller Credit${requiredCredits === 1 ? '' : 's'}, but you have insufficient credits.`,
+      };
+    }
+    
+    // HARD ESCALATION: Return decision to escalate
+    return {
+      can_answer_from_page1: false, // CRITICAL: Cannot answer from Page-1
+      requires_escalation: true,
+      required_asins: requiredAsins,
+      required_credits: requiredCredits,
+      escalation_reason: "product_specs_required", // Special flag for logging
+      required_data: ["product_specifications"],
+    };
+  }
+  
   // Step 1: Check if question can be answered with Page-1 data
   const canAnswerPage1 = canAnswerWithPage1Data(question, page1Context);
   
