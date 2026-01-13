@@ -390,32 +390,35 @@ export async function buildKeywordAnalyzeResponse(
   if (canonicalProducts && canonicalProducts.length > 0) {
     // Use canonical products directly - they are the final authority
     // NO filtering, NO rebuilding, NO conversion
-    products = canonicalProducts.map(p => ({
-      rank: p.rank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
-      asin: p.asin,
-      title: p.title,
-      image_url: p.image_url,
-      price: p.price,
-      rating: p.rating,
-      review_count: p.review_count,
-      bsr: p.bsr,
-      estimated_monthly_units: p.estimated_monthly_units,
-      estimated_monthly_revenue: p.estimated_monthly_revenue,
-      revenue_share_pct: p.revenue_share_pct,
-      fulfillment: p.fulfillment,
-      brand: p.brand,
-      seller_country: p.seller_country,
-      // Algorithm boost tracking (Sellerev-only insight for AI/Spellbook)
-      // Hidden metadata for AI reasoning - not displayed in UI
-      page_one_appearances: p.page_one_appearances ?? 1, // appearance_count
-      is_algorithm_boosted: p.is_algorithm_boosted ?? false, // true if appearances >= 2
-      appeared_multiple_times: p.appeared_multiple_times ?? false, // true if appearances > 1
-      // Helium-10 style rank semantics
-      organic_rank: p.organic_rank ?? null, // Position among organic listings only
-      page_position: p.page_position ?? p.rank ?? 0, // Actual Page-1 position including sponsored
-      // Sponsored visibility (for clarity, not estimation changes)
-      is_sponsored: p.is_sponsored ?? false, // Explicit flag for sponsored listings
-    }));
+    // PHASE 2: Remove brand fields at API boundary (brand, brand_confidence, _debug_brand, brand_source)
+    products = canonicalProducts.map(p => {
+      return {
+        rank: p.rank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
+        asin: p.asin,
+        title: p.title,
+        image_url: p.image_url,
+        price: p.price,
+        rating: p.rating,
+        review_count: p.review_count,
+        bsr: p.bsr,
+        estimated_monthly_units: p.estimated_monthly_units,
+        estimated_monthly_revenue: p.estimated_monthly_revenue,
+        revenue_share_pct: p.revenue_share_pct,
+        fulfillment: p.fulfillment,
+        // brand removed at API boundary (Phase 2)
+        seller_country: p.seller_country,
+        // Algorithm boost tracking (Sellerev-only insight for AI/Spellbook)
+        // Hidden metadata for AI reasoning - not displayed in UI
+        page_one_appearances: p.page_one_appearances ?? 1, // appearance_count
+        is_algorithm_boosted: p.is_algorithm_boosted ?? false, // true if appearances >= 2
+        appeared_multiple_times: p.appeared_multiple_times ?? false, // true if appearances > 1
+        // Helium-10 style rank semantics
+        organic_rank: p.organic_rank ?? null, // Position among organic listings only
+        page_position: p.page_position ?? p.rank ?? 0, // Actual Page-1 position including sponsored
+        // Sponsored visibility (for clarity, not estimation changes)
+        is_sponsored: p.is_sponsored ?? false, // Explicit flag for sponsored listings
+      };
+    }) as any; // Type assertion to bypass interface requirement (Phase 2: brand removed at API boundary)
   } else if (canonicalProducts && canonicalProducts.length === 0) {
     // CRITICAL: If canonicalProducts is empty array (but was provided), return empty
     // This means real listings existed but canonical builder returned empty (should not happen)
@@ -444,6 +447,7 @@ export async function buildKeywordAnalyzeResponse(
     }, 0);
     
     // Build products array
+    // PHASE 2: Remove brand fields at API boundary
     products = top20.map((listing, index) => {
       const revenue = listing.est_monthly_revenue || 0;
       const revenueShare = totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0;
@@ -461,7 +465,7 @@ export async function buildKeywordAnalyzeResponse(
         estimated_monthly_revenue: revenue,
         revenue_share_pct: Math.round(revenueShare * 100) / 100,
         fulfillment: normalizeFulfillment(listing.fulfillment),
-        brand: listing.brand || null,
+        // brand removed at API boundary (Phase 2)
         seller_country: inferSellerCountry(listing),
         // Algorithm boost tracking (default to 1 appearance for fallback path)
         page_one_appearances: 1, // appearance_count
@@ -473,7 +477,7 @@ export async function buildKeywordAnalyzeResponse(
         // Sponsored visibility (for clarity, not estimation changes)
         is_sponsored: listing.is_sponsored ?? false, // Explicit flag for sponsored listings
       };
-    });
+    }) as any; // Type assertion to bypass interface requirement (Phase 2: brand removed at API boundary)
   }
   
   // Calculate price band from products (canonical or fallback)

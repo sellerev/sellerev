@@ -1194,34 +1194,10 @@ export default function AnalyzeForm({
                       }
                     }
                     
-                    // Brands on Page 1 - count unique brands from Page 1 listings
-                    // Normalize brand names (trim, lowercase) for uniqueness
-                    // Missing/null brands are grouped as "Unknown" (count as 1 brand)
-                    let brandCount = 0;
-                    if (hasListings && pageOneListings.length > 0) {
-                      const uniqueBrands = new Set<string>();
-                      let hasUnknownBrand = false;
-                      
-                      pageOneListings.forEach((listing: any) => {
-                        const brand = listing.brand;
-                        // Check for null/undefined first, then check for empty string
-                        if (brand === null || brand === undefined) {
-                          hasUnknownBrand = true;
-                        } else {
-                          // Normalize: trim and lowercase
-                          const trimmedBrand = brand.trim();
-                          if (trimmedBrand.length === 0) {
-                            hasUnknownBrand = true;
-                          } else {
-                            const normalizedBrand = trimmedBrand.toLowerCase();
-                            uniqueBrands.add(normalizedBrand);
-                          }
-                        }
-                      });
-                      
-                      // Count unique brands + "Unknown" if any null/missing brands exist
-                      brandCount = uniqueBrands.size + (hasUnknownBrand ? 1 : 0);
-                    }
+                    // Brand stats from snapshot (Phase 3: use brand_stats instead of computing from listings)
+                    const brandStats = (snapshot as any)?.brand_stats;
+                    const page1BrandCount = brandStats?.page1_brand_count ?? null;
+                    const top5BrandSharePct = brandStats?.top_5_brand_share_pct ?? null;
                     
                     // Search Volume
                     let searchVolume: string = "Estimating…";
@@ -1286,9 +1262,9 @@ export default function AnalyzeForm({
                           
                           {/* 3. Brands on Page 1 */}
                           <div>
-                            <div className="text-xs text-gray-500 mb-1">Brands on Page 1</div>
+                            <div className="text-xs text-gray-500 mb-1">Page-1 Brands</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {hasListings ? brandCount : "—"}
+                              {page1BrandCount !== null ? page1BrandCount : "—"}
                             </div>
                           </div>
                           
@@ -1331,26 +1307,12 @@ export default function AnalyzeForm({
                           </div>
                           
                           {/* 8. Top 5 Brands Control */}
-                          {snapshot?.top_5_brand_revenue_share_pct != null && (
-                            <div className="relative group">
+                          {top5BrandSharePct !== null && (
+                            <div>
                               <div className="text-xs text-gray-500 mb-1">Top 5 Brands Control</div>
                               <div className="text-lg font-semibold text-gray-900">
-                                {snapshot.top_5_brand_revenue_share_pct.toFixed(1)}%
+                                {top5BrandSharePct.toFixed(1)}%
                               </div>
-                              {/* Tooltip with brand breakdown */}
-                              {snapshot.top_5_brands && snapshot.top_5_brands.length > 0 && (
-                                <div className="absolute left-0 top-full mt-2 w-64 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                                  <div className="font-semibold mb-2">Top Brands:</div>
-                                  <ul className="space-y-1">
-                                    {snapshot.top_5_brands.map((brand, idx) => (
-                                      <li key={idx} className="flex justify-between">
-                                        <span className="truncate mr-2">{brand.brand}</span>
-                                        <span className="font-medium flex-shrink-0">{brand.revenue_share_pct.toFixed(1)}%</span>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              )}
                             </div>
                           )}
                         </div>
@@ -1862,8 +1824,7 @@ export default function AnalyzeForm({
                           // Extract data with safe defaults - map from canonical product fields
                           // Title: preserve null if missing (don't fallback to "Product Title")
                           const title = listing.title || null;
-                          // Brand: use "—" if missing
-                          const brand = listing.brand || "—";
+                          // Brand removed (Phase 3: brands not displayed at product level)
                           
                           // ═══════════════════════════════════════════════════════════════════════════
                           // STEP 3: Log final product card data (first 5 cards)
@@ -1872,8 +1833,6 @@ export default function AnalyzeForm({
                             console.log("🔵 FINAL PRODUCT CARD DATA", {
                               index: idx,
                               asin: listing.asin,
-                              brand: listing.brand,
-                              brand_final: brand,
                               listing_keys: Object.keys(listing),
                             });
                           }
@@ -1908,7 +1867,7 @@ export default function AnalyzeForm({
                               key={`${asin || idx}-${idx}`}
                               rank={rank}
                               title={title}
-                              brand={brand}
+                              // brand removed (Phase 3: brands not displayed at product level)
                               price={price}
                               rating={rating}
                               reviews={reviews}

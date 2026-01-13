@@ -6,7 +6,7 @@ import { Star, Image as ImageIcon, Check, Copy, ExternalLink } from "lucide-reac
 interface ProductCardProps {
   rank: number;
   title: string | null;
-  brand: string;
+  // brand removed (Phase 3: brands not displayed at product level)
   price: number;
   rating: number;
   reviews: number;
@@ -23,7 +23,7 @@ interface ProductCardProps {
 export function ProductCard({
   rank,
   title,
-  brand,
+  // brand removed (Phase 3: brands not displayed at product level)
   price,
   rating,
   reviews,
@@ -149,10 +149,7 @@ export function ProductCard({
         </div>
       )}
 
-      {/* Brand Name */}
-      {brand && brand !== "—" && (
-        <p className="text-sm text-[#6B7280] truncate mb-2">{brand}</p>
-      )}
+      {/* Brand removed (Phase 3: brands not displayed at product level) */}
 
       {/* ASIN with Copy Button */}
       {asin && (
