@@ -3592,8 +3592,29 @@ Convert this plain text decision into the required JSON contract format. Extract
       );
     }
 
+    // Guard: Ensure insertedRun and id exist
+    if (!insertedRun || !insertedRun.id) {
+      console.error("ANALYSIS_RUN_INSERT_MISSING_ID", {
+        has_insertedRun: !!insertedRun,
+        insertedRun_keys: insertedRun ? Object.keys(insertedRun) : null,
+        insertedRun_id: insertedRun?.id,
+        user_id: user.id,
+        input_value: body.input_value,
+      });
+      
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: "Failed to save analysis run: missing ID",
+          details: "Database insert succeeded but did not return an ID",
+        },
+        { status: 500, headers: res.headers }
+      );
+    }
+
     console.log("AFTER_INSERT_SUCCESS", {
       analysis_run_id: insertedRun.id,
+      user_id: user.id,
     });
 
     // 12.5. Insert confidence observation and compute confidence metadata (non-blocking)

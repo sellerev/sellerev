@@ -1334,6 +1334,22 @@ export async function POST(req: NextRequest) {
     // This is critical for anti-hallucination: we only use data that was
     // already validated and stored during the original analysis.
     // ❗ CHAT MUST NEVER RE-CALL RAINFOREST - only use cached data
+    
+    // Validate analysisRunId format (should be UUID)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(body.analysisRunId)) {
+      console.error("CHAT_INVALID_ANALYSIS_RUN_ID", {
+        analysisRunId: body.analysisRunId,
+        userId: user.id,
+        timestamp: new Date().toISOString(),
+      });
+      
+      return NextResponse.json(
+        { ok: false, error: "Invalid analysis run ID format" },
+        { status: 400, headers: res.headers }
+      );
+    }
+    
     const { data: analysisRun, error: analysisError } = await supabase
       .from("analysis_runs")
       .select("*")
@@ -1342,6 +1358,36 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (analysisError || !analysisRun) {
+      // Enhanced error logging for debugging
+      console.error("CHAT_ANALYSIS_FETCH_ERROR", {
+        analysisRunId: body.analysisRunId,
+        userId: user.id,
+        error: analysisError,
+        errorCode: analysisError?.code,
+        errorMessage: analysisError?.message,
+        errorDetails: analysisError?.details,
+        errorHint: analysisError?.hint,
+        foundAnalysis: !!analysisRun,
+        // Try to find if analysis exists with different user_id (for debugging)
+        timestamp: new Date().toISOString(),
+      });
+      
+      // Try to check if analysis exists but with different user_id (for debugging only)
+      const { data: analysisExists } = await supabase
+        .from("analysis_runs")
+        .select("id, user_id")
+        .eq("id", body.analysisRunId)
+        .single();
+      
+      if (analysisExists) {
+        console.error("CHAT_ANALYSIS_EXISTS_BUT_WRONG_USER", {
+          analysisRunId: body.analysisRunId,
+          analysisUserId: analysisExists.user_id,
+          currentUserId: user.id,
+          usersMatch: analysisExists.user_id === user.id,
+        });
+      }
+      
       return NextResponse.json(
         { ok: false, error: "Analysis not found or access denied" },
         { status: 404, headers: res.headers }
