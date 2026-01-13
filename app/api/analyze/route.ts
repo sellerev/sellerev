@@ -2413,7 +2413,16 @@ export async function POST(req: NextRequest) {
             confidence: 50, // Default until Tier-2 refines
             executive_summary: "Tier-1 analysis complete. Refinement in progress...",
           },
-          market_snapshot: tier1Snapshot.snapshot.market_snapshot || {},
+          market_snapshot: {
+            keyword: tier1Snapshot.snapshot.keyword,
+            avg_price: tier1Snapshot.snapshot.aggregates.avg_price,
+            avg_reviews: tier1Snapshot.snapshot.aggregates.avg_reviews,
+            avg_rating: tier1Snapshot.snapshot.aggregates.avg_rating,
+            page1_count: tier1Snapshot.snapshot.products.length,
+            total_page1_listings: tier1Snapshot.snapshot.products.length,
+            total_monthly_units_est: tier1Snapshot.snapshot.aggregates.total_page1_units,
+            total_monthly_revenue_est: tier1Snapshot.snapshot.aggregates.total_page1_revenue,
+          },
           page_one_listings: tier1Snapshot.snapshot.products || [],
           tier: "tier1" as const,
           snapshot_id: tier1Snapshot.snapshot.snapshot_id,
