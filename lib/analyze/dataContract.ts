@@ -590,6 +590,8 @@ export async function buildKeywordAnalyzeResponse(
   const marketStructure = {
     brand_dominance_pct: snapshot.dominance_score || 0,
     top_3_brand_share_pct: calculateTop3BrandShare(products),
+    top_5_brand_revenue_share_pct: snapshot.top_5_brand_revenue_share_pct ?? null, // Top 5 Brands Control (%)
+    top_5_brands: snapshot.top_5_brands ?? null, // Top 5 brands breakdown
     brand_dominance_summary: brandDominanceSummary, // Add brand aggregation when available
     price_band: {
       min: priceMin,

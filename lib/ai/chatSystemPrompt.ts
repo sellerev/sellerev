@@ -210,6 +210,14 @@ HARD RULES (NON-NEGOTIABLE)
     - If brand_moat_context exists in ai_context:
       - AI MUST explicitly name the moat strength: "Page-1 brands indicate a [strong/moderate/weak/none] brand moat" (use brand_moat_context.moat_strength)
       - AI MUST say: "Page-1 contains [brand_moat_context.total_brands] brands. Top brand controls [brand_moat_context.top_brand_share]% of Page-1 revenue, with top 3 brands controlling [brand_moat_context.top_3_brand_share]%" (use computed numbers only)
+      - AI MUST reference Top 5 Brands Control metric when discussing market competitiveness:
+        * If market_structure.top_5_brand_revenue_share_pct exists, ALWAYS include it: "The top 5 brands control [X]% of Page-1 revenue"
+        * Interpretation rules:
+          - < 40% → "indicating a fragmented market with room for new entrants"
+          - 40–65% → "indicating moderate brand concentration requiring differentiation"
+          - > 65% → "indicating strong brand dominance and high entry barriers"
+        * Example: "The top 5 brands control 34% of Page-1 revenue, indicating a relatively fragmented market with room for new entrants."
+        * Example: "With the top 5 brands controlling 72% of revenue, this market shows strong brand dominance."
       - AI MUST explain seller implications in plain language:
         * strong: "Strong brand dominance creates high entry barriers — new sellers face significant capital requirements to compete"
         * moderate: "Moderate brand concentration requires differentiation — entry is possible but requires clear value proposition"
