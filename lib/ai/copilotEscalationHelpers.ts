@@ -104,7 +104,7 @@ export async function checkCreditBalance(
         .eq("analysis_run_id", analysisRunId);
       
       if (!sessionError && sessionUsage) {
-        session_credits_used = sessionUsage.reduce((sum, log) => sum + (log.credits_used || 0), 0);
+        session_credits_used = sessionUsage.reduce((sum: number, log: { credits_used?: number }) => sum + (log.credits_used || 0), 0);
       }
     }
     
@@ -120,7 +120,7 @@ export async function checkCreditBalance(
     
     let daily_credits_used = 0;
     if (!dailyError && dailyUsage) {
-      daily_credits_used = dailyUsage.reduce((sum, log) => sum + (log.credits_used || 0), 0);
+      daily_credits_used = dailyUsage.reduce((sum: number, log: { credits_used?: number }) => sum + (log.credits_used || 0), 0);
     }
     
     return {
