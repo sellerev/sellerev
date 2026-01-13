@@ -11,6 +11,9 @@ import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import { buildKeywordPageOne, buildAsinPageOne } from "@/lib/amazon/canonicalPageOne";
 import { enrichAsinBrandIfMissing } from "@/lib/amazon/asinData";
+import { buildTier1Snapshot } from "@/lib/analyze/tier1Snapshot";
+import { refineTier2Estimates, Tier2RefinementContext } from "@/lib/estimators/tier2Refinement";
+import { TieredAnalyzeResponse } from "@/types/tierContracts";
 
 // PASS 1: Decision Brain - Plain text verdict and reasoning
 const DECISION_BRAIN_PROMPT = `You are a senior Amazon seller allocating capital to product opportunities.
@@ -1911,6 +1914,11 @@ export async function POST(req: NextRequest) {
     // ═══════════════════════════════════════════════════════════════════════════
     let canonicalProducts: any[] = [];
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TIER-1 SNAPSHOT (FAST PATH) - Declare at function scope
+    // ═══════════════════════════════════════════════════════════════════════════
+    let tier1Snapshot: TieredAnalyzeResponse | null = null;
+    
     // Build contract-compliant response
     if (keywordMarketData) {
       // CANONICAL PAGE-1 BUILDER: Replace raw listings with deterministic Page-1 reconstruction
@@ -2224,10 +2232,93 @@ export async function POST(req: NextRequest) {
         }
         
         // ═══════════════════════════════════════════════════════════════════════════
-        // APPLY KEYWORD CALIBRATION (DETERMINISTIC)
+        // TIER-1 SNAPSHOT BUILD (FAST PATH - ≤10s)
         // ═══════════════════════════════════════════════════════════════════════════
-        // Apply calibration AFTER buildKeywordPageOne and BEFORE buildKeywordAnalyzeResponse
-        // This adjusts canonical revenue based on keyword intent archetype and category
+        // Build Tier-1 snapshot from canonicalized listings BEFORE calibration
+        // Tier-1 uses fast estimation (no BSR, no calibration)
+        // This snapshot is returned immediately to UI
+        if (pageOneProducts.length > 0 && body.input_type === "keyword") {
+          try {
+            // Build Tier-1 snapshot from raw listings (before full canonical builder)
+            // This uses fast estimation without BSR or calibration
+            const tier1Products = buildTier1Snapshot(
+              rawListings, // Use raw listings for Tier-1 (fast path)
+              body.input_value,
+              marketplace as 'US' | 'CA',
+              'complete'
+            );
+            
+            // Generate snapshot ID
+            const snapshotId = tier1Products.snapshot_id;
+            
+            tier1Snapshot = {
+              snapshot: tier1Products,
+              ui_hints: {
+                show_refining_badge: true,
+                next_update_expected_sec: 15,
+              },
+            };
+            
+            console.log("✅ TIER1_SNAPSHOT_BUILT", {
+              snapshot_id: snapshotId,
+              product_count: tier1Products.products.length,
+              total_revenue: tier1Products.aggregates.total_page1_revenue,
+              total_units: tier1Products.aggregates.total_page1_units,
+              timestamp: new Date().toISOString(),
+            });
+            
+            // ═══════════════════════════════════════════════════════════════════════════
+            // TIER-2 REFINEMENT (ASYNC - NON-BLOCKING)
+            // ═══════════════════════════════════════════════════════════════════════════
+            // Trigger Tier-2 refinement asynchronously AFTER Tier-1 response
+            // This runs in background and does NOT block /api/analyze
+            const tier2Context: Tier2RefinementContext = {
+              snapshot_id: snapshotId,
+              keyword: body.input_value,
+              marketplace: marketplace as 'US' | 'CA',
+              listings: rawListings,
+              tier1_products: tier1Products.products,
+              supabase,
+              apiCallCounter,
+            };
+            
+            // Fire-and-forget: Do NOT await - let it run in background
+            refineTier2Estimates(tier2Context)
+              .then((tier2Enrichment) => {
+                console.log("✅ TIER2_REFINEMENT_COMPLETE", {
+                  snapshot_id: snapshotId,
+                  refinements_applied: Object.keys(tier2Enrichment.refinements).length,
+                  timestamp: new Date().toISOString(),
+                });
+                
+                // TODO: Update snapshot in database with Tier-2 refinements
+                // This allows UI to re-hydrate refined snapshot via snapshot_id
+              })
+              .catch((error) => {
+                console.error("❌ TIER2_REFINEMENT_ERROR", {
+                  snapshot_id: snapshotId,
+                  error: error instanceof Error ? error.message : String(error),
+                  timestamp: new Date().toISOString(),
+                });
+                // Fail silently - Tier-1 data is still usable
+              });
+            
+          } catch (tier1Error) {
+            console.error("❌ TIER1_SNAPSHOT_ERROR", {
+              keyword: body.input_value,
+              error: tier1Error instanceof Error ? tier1Error.message : String(tier1Error),
+              timestamp: new Date().toISOString(),
+            });
+            // Continue with legacy path if Tier-1 fails
+          }
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════════════
+        // APPLY KEYWORD CALIBRATION (TIER-2 ONLY - MOVED TO ASYNC)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // NOTE: Calibration is now Tier-2 only and runs asynchronously
+        // Tier-1 uses fast estimation without calibration
+        // This section is kept for backward compatibility but will be removed
         if (pageOneProducts.length > 0) {
           try {
             const { applyKeywordCalibration } = await import("@/lib/amazon/keywordCalibration");
@@ -2300,6 +2391,40 @@ export async function POST(req: NextRequest) {
       }
       
       console.log("🔵 PAGE_ONE_PRODUCTS_LENGTH_AFTER_CANONICAL", pageOneProducts.length);
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // TIER-1 EARLY RETURN PATH (FAST PATH - ≤10s)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // If Tier-1 snapshot was built, we can return it immediately
+      // This bypasses heavy computations (calibration, full contract building, etc.)
+      // Tier-2 refinement runs asynchronously in background
+      if (tier1Snapshot && body.input_type === "keyword") {
+        console.log("🚀 TIER1_EARLY_RETURN", {
+          snapshot_id: tier1Snapshot.snapshot.snapshot_id,
+          product_count: tier1Snapshot.snapshot.products.length,
+          timestamp: new Date().toISOString(),
+        });
+        
+        // TODO: Still do AI analysis with Tier-1 data (needed for UI)
+        // For now, return Tier-1 snapshot immediately
+        // AI can be added to Tier-1 response in future iteration
+        
+        return NextResponse.json(
+          {
+            success: true,
+            status: "partial", // Tier-1 is partial until Tier-2 refines
+            tier: "tier1",
+            snapshot: tier1Snapshot.snapshot,
+            ui_hints: tier1Snapshot.ui_hints,
+            analysisRunId: null, // Will be created in Tier-2
+            message: "Tier-1 snapshot returned. Refinement in progress...",
+          },
+          { 
+            status: 200,
+            headers: res.headers,
+          }
+        );
+      }
       
       // Assign to function-scope variable (final authority)
       canonicalProducts = pageOneProducts;
