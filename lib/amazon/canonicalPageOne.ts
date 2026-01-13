@@ -982,8 +982,16 @@ export function buildKeywordPageOne(
       revenue_share_pct: 0, // Will be calculated after all products are built
       image_url, // Preserved from listing (or null for ESTIMATED only)
       fulfillment, // Normalized: Prime → FBA, else → FBM, Amazon Retail → AMZ
-      brand: l.brand ?? "Unknown", // Always have a brand (never null)
-      brand_confidence: (l as any)._brand_confidence || "low", // Use stored confidence or default to low
+      // Brand mapping: use brand_display if available, otherwise brand (for backward compatibility)
+      // brand_entity is used internally for aggregation, but brand field is kept for compatibility
+      brand: (l as any)._brand_display ?? l.brand ?? null, // Use brand_display from search result resolution
+      brand_confidence: (() => {
+        const confidence = (l as any)._brand_confidence;
+        // Map new confidence values to existing interface: 'none' → 'low'
+        if (confidence === 'none') return 'low';
+        if (confidence === 'high' || confidence === 'medium') return confidence;
+        return 'low'; // Default fallback
+      })(),
       
       // ═══════════════════════════════════════════════════════════════════════════
       // Log brand in canonical product (first 5)

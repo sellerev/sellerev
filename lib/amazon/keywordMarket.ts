@@ -715,62 +715,84 @@ function extractBrandFromProduct(product: any): string | null {
 }
 
 /**
- * Resolves brand with strict priority order and confidence level
- * 
- * Priority:
- * 1. brand_name (explicit Rainforest field) → "high"
- * 2. by_line_name (e.g., "Brand: X") → "high"
- * 3. cached_brand (from asin_bsr_cache) → "high" (cached brands are authoritative)
- * 4. seller_name ONLY if it matches brand-like pattern → "medium"
- * 5. Deterministic fallback extraction from title → "low"
- * 6. "Unknown" → "low"
+ * Normalizes brand name (lightweight, safe only)
+ * - lowercase
+ * - trim
+ * - collapse whitespace
+ * - remove trailing category nouns (e.g., "kitchen", "home", "store")
  */
-function resolveBrandWithConfidence(
-  item: any,
-  title: string | null,
-  cachedBrand?: string | null
-): { brand: string; confidence: "high" | "medium" | "low" } {
-  // Priority 1: brand_name (explicit Rainforest field)
-  if (item.brand_name && typeof item.brand_name === 'string' && item.brand_name.trim().length > 0) {
-    return { brand: item.brand_name.trim(), confidence: "high" };
+function normalizeBrand(brand: string): string {
+  if (!brand || typeof brand !== 'string') return brand;
+  
+  let normalized = brand
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' '); // Collapse whitespace
+  
+  // Remove trailing category nouns
+  const categoryNouns = ['kitchen', 'home', 'store', 'shop', 'outlet', 'warehouse'];
+  const words = normalized.split(' ');
+  if (words.length > 1 && categoryNouns.includes(words[words.length - 1])) {
+    words.pop();
+    normalized = words.join(' ');
   }
+  
+  return normalized.trim();
+}
 
-  // Priority 2: by_line_name (e.g., "Brand: X")
-  if (item.by_line?.name && typeof item.by_line.name === 'string' && item.by_line.name.trim().length > 0) {
-    return { brand: item.by_line.name.trim(), confidence: "high" };
+/**
+ * Resolves brand from search results ONLY (low-cost, Helium-10 style)
+ * 
+ * ALLOWED SOURCES (ONLY):
+ * - item.brand (search result brand field)
+ * - item.is_amazon_brand
+ * - item.is_exclusive_to_amazon
+ * - item.featured_from_our_brands
+ * 
+ * NOT ALLOWED:
+ * - Title extraction
+ * - Manufacturer
+ * - Product API by default
+ * - Seller name inference
+ */
+function resolveBrandFromSearchResult(
+  item: any
+): { 
+  brand_display: string | null;
+  brand_entity: string | 'Amazon' | 'Unknown';
+  brand_confidence: 'high' | 'medium' | 'none';
+  brand_source: 'search' | 'amazon_flag' | 'unknown';
+} {
+  // Priority 1: Amazon brand flags
+  if (item.is_amazon_brand === true || 
+      item.is_exclusive_to_amazon === true || 
+      item.featured_from_our_brands === true) {
+    return {
+      brand_display: 'Amazon',
+      brand_entity: 'Amazon',
+      brand_confidence: 'high',
+      brand_source: 'amazon_flag'
+    };
   }
-
-  // Priority 3: cached_brand (from asin_bsr_cache) - authoritative source
-  if (cachedBrand && typeof cachedBrand === 'string' && cachedBrand.trim().length > 0) {
-    return { brand: cachedBrand.trim(), confidence: "high" };
+  
+  // Priority 2: search_result.brand field
+  if (item.brand && typeof item.brand === 'string' && item.brand.trim().length > 0) {
+    const normalized = normalizeBrand(item.brand.trim());
+    return {
+      brand_display: item.brand.trim(), // Keep original for display
+      brand_entity: normalized,
+      brand_confidence: 'medium',
+      brand_source: 'search'
+    };
   }
-
-  // Priority 4: seller_name ONLY if it matches brand-like pattern
-  // Brand-like pattern: starts with capital, 2-4 words, no generic words
-  if (item.seller?.name && typeof item.seller.name === 'string') {
-    const sellerName = item.seller.name.trim();
-    // Check if it looks like a brand (not a generic seller name)
-    const words = sellerName.split(/\s+/);
-    if (words.length >= 2 && words.length <= 4 && /^[A-Z]/.test(sellerName)) {
-      // Check it's not obviously a seller name (contains "Store", "Shop", etc.)
-      const lowerName = sellerName.toLowerCase();
-      if (!lowerName.includes('store') && !lowerName.includes('shop') && 
-          !lowerName.includes('seller') && !lowerName.includes('marketplace')) {
-        return { brand: sellerName, confidence: "medium" };
-      }
-    }
-  }
-
-  // Priority 5: Deterministic fallback extraction from title
-  if (title) {
-    const extracted = extractBrandFromTitle(title);
-    if (extracted && extracted.length > 0) {
-      return { brand: extracted, confidence: "low" };
-    }
-  }
-
-  // Priority 6: "Unknown"
-  return { brand: "Unknown", confidence: "low" };
+  
+  // Priority 3: Unknown (no brand found)
+  return {
+    brand_display: null,
+    brand_entity: 'Unknown',
+    brand_confidence: 'none',
+    brand_source: 'unknown'
+  };
 }
 
 /**
@@ -1021,11 +1043,10 @@ export async function enrichListingsMetadata(
       }
     }
 
-    // Enrich listings with fetched metadata
-    // CRITICAL: Use strict brand priority order with confidence
+    // Enrich listings with fetched metadata (title, image, rating, reviews)
+    // NOTE: Brands come from search results only, not from product API enrichment
     let enrichedListingsCount = 0;
     let enrichedFieldsCount = 0;
-    let brandEnrichmentAppliedCount = 0;
     const enrichedListings = listings.map(listing => {
       // If this listing was enriched via API, use that data
       if (listing.asin && enrichmentMap.has(listing.asin.toUpperCase())) {
@@ -1108,37 +1129,9 @@ export async function enrichListingsMetadata(
         }
       }
 
-      // Enrich brand using strict priority order
-      // Priority: 1) brand_name, 2) by_line_name, 3) seller_name (if brand-like), 4) title extraction, 5) "Unknown"
-      const brandResolution = resolveBrandWithConfidence(productData, enriched.title);
-      const previousBrand = enriched.brand;
-      const previousConfidence = (enriched as any)._brand_confidence;
+      // NOTE: Brand enrichment removed - brands come from search results only (low-cost, Helium-10 style)
+      // Brands are resolved in fetchKeywordMarketSnapshot using resolveBrandFromSearchResult()
       
-      // Always update brand if we got a higher confidence resolution
-      const shouldUpdateBrand = 
-        !previousConfidence || // No previous confidence
-        (brandResolution.confidence === "high" && previousConfidence !== "high") || // Upgrade to high
-        (brandResolution.confidence === "medium" && previousConfidence === "low"); // Upgrade to medium
-      
-      if (shouldUpdateBrand) {
-        enriched.brand = brandResolution.brand;
-        (enriched as any)._brand_confidence = brandResolution.confidence;
-        (enriched as any)._debug_brand_source = "metadata_enrichment";
-        enrichedFieldsCount++;
-        listingEnriched = true;
-        brandEnrichmentAppliedCount++;
-        
-        if (enrichedListingsCount < 5) {
-          console.log("🟡 BRAND ENRICHED", {
-            asin: listing.asin,
-            brand_before: previousBrand,
-            brand_after: enriched.brand,
-            confidence: brandResolution.confidence,
-            source: productData.brand_name ? "brand_name" : (productData.by_line?.name ? "by_line_name" : "title_extraction"),
-          });
-        }
-      }
-
       if (listingEnriched) {
         enrichedListingsCount++;
       }
@@ -1158,24 +1151,12 @@ export async function enrichListingsMetadata(
       max_allowed: MAX_METADATA_ENRICHMENT,
     });
 
-    // Ensure every listing has a brand (use "Unknown" if missing)
-    const finalListings = enrichedListings.map(enriched => {
-      // If brand is missing or empty, resolve it with fallback
-      if (!enriched.brand || (typeof enriched.brand === 'string' && enriched.brand.trim().length === 0)) {
-        const brandResolution = resolveBrandWithConfidence(
-          (enriched as any)._rawItem || {},
-          enriched.title
-        );
-        enriched.brand = brandResolution.brand;
-        (enriched as any)._brand_confidence = brandResolution.confidence;
-      }
-      return enriched;
-    });
+    // NOTE: Brand resolution removed - brands come from search results only
+    const finalListings = enrichedListings;
 
-    // Log brand enrichment stats
+    // Log brand stats (for debugging - brands should already be set from search results)
     const brandMissingAfterEnrichment = finalListings.filter(l => !l.brand || l.brand === "").length;
-    console.log("BRAND_ENRICHMENT_APPLIED", {
-      count: brandEnrichmentAppliedCount,
+    console.log("BRAND_STATS_AFTER_ENRICHMENT", {
       keyword: keyword || "unknown",
     });
     console.log("BRAND_MISSING_AFTER_ENRICHMENT", {
@@ -1824,14 +1805,17 @@ export async function fetchKeywordMarketSnapshot(
       const fulfillment = parseFulfillment(item); // Nullable
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // BRAND RESOLUTION: Strict priority order with confidence
+      // BRAND RESOLUTION: Search-based only (low-cost, Helium-10 style)
       // ═══════════════════════════════════════════════════════════════════════════
-      // Priority: 1) brand_name, 2) by_line_name, 3) cached_brand, 4) seller_name (if brand-like), 5) title extraction, 6) "Unknown"
-      const cachedBrand = asin ? brandCacheMap.get(asin) : null;
-      const brandResolution = resolveBrandWithConfidence(item, title, cachedBrand);
-      const brand = brandResolution.brand;
-      // Store brand confidence for later use (will be added to ParsedListing if needed)
-      (item as any)._brand_confidence = brandResolution.confidence;
+      // Uses ONLY: item.brand, item.is_amazon_brand, item.is_exclusive_to_amazon, item.featured_from_our_brands
+      // NO title extraction, NO product API, NO seller inference
+      const brandResolution = resolveBrandFromSearchResult(item);
+      const brand = brandResolution.brand_entity === 'Unknown' ? null : brandResolution.brand_display;
+      // Store brand metadata for backward compatibility and new fields
+      (item as any)._brand_confidence = brandResolution.brand_confidence;
+      (item as any)._brand_entity = brandResolution.brand_entity;
+      (item as any)._brand_display = brandResolution.brand_display;
+      (item as any)._brand_source = brandResolution.brand_source;
       
       // ═══════════════════════════════════════════════════════════════════════════
       // STEP 1: Log raw brand data from Rainforest (first 5 listings)
@@ -1840,13 +1824,14 @@ export async function fetchKeywordMarketSnapshot(
         console.log("🟣 RAW BRAND SAMPLE", {
           index,
           asin,
-          brand: brand,
-          brand_confidence: brandResolution.confidence,
-          brand_name: item.brand_name,
-          by_line_name: item.by_line?.name,
-          seller_name: item.seller?.name,
+          brand_display: brandResolution.brand_display,
+          brand_entity: brandResolution.brand_entity,
+          brand_confidence: brandResolution.brand_confidence,
+          brand_source: brandResolution.brand_source,
           raw_brand: item.brand,
-          raw_brand_type: typeof item.brand,
+          is_amazon_brand: item.is_amazon_brand,
+          is_exclusive_to_amazon: item.is_exclusive_to_amazon,
+          featured_from_our_brands: item.featured_from_our_brands,
         });
       }
 

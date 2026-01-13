@@ -93,15 +93,22 @@ export function analyzeBrandMoat(
   });
 
   // Calculate total Page-1 revenue (from ALL listings, including Unknown brands)
+  // This is used as the denominator for revenue share calculations (Helium-10 style)
   const totalPage1Revenue = listings.reduce(
     (sum, l) => sum + (l.estimated_monthly_revenue || 0),
     0
   );
 
-  // Compute metrics per brand
+  // HELIUM-10 "CHEAT": Exclude "Unknown" from brand list, but include in denominator
+  // Compute metrics per brand (EXCLUDE "Unknown" from breakdown list)
   const brandBreakdown: BrandBreakdown[] = [];
 
   brandGroups.forEach((brandListings, brandName) => {
+    // Skip "Unknown" brands in breakdown list (but they're already included in totalPage1Revenue)
+    if (brandName === "Unknown") {
+      return;
+    }
+    
     const asin_count = brandListings.length;
     
     const total_revenue = brandListings.reduce(
@@ -109,6 +116,7 @@ export function analyzeBrandMoat(
       0
     );
     
+    // Revenue share uses totalPage1Revenue as denominator (includes Unknown revenue)
     const revenue_share_pct =
       totalPage1Revenue > 0
         ? (total_revenue / totalPage1Revenue) * 100
@@ -125,19 +133,19 @@ export function analyzeBrandMoat(
   // Sort by revenue share (descending)
   brandBreakdown.sort((a, b) => b.revenue_share_pct - a.revenue_share_pct);
 
-  // Get top brand share
+  // Get top brand share (from non-Unknown brands only)
   const topBrand = brandBreakdown[0];
   const top_brand_revenue_share_pct = topBrand ? topBrand.revenue_share_pct : 0;
 
-  // Calculate top 3 brands revenue share
+  // Calculate top 3 brands revenue share (from non-Unknown brands only, denominator includes Unknown)
   const top3Revenue = brandBreakdown
     .slice(0, 3)
     .reduce((sum, b) => sum + b.total_revenue, 0);
   const top_3_brands_revenue_share_pct =
     totalPage1Revenue > 0 ? Math.round((top3Revenue / totalPage1Revenue) * 100 * 100) / 100 : 0;
 
-  // Total brands count
-  const total_brands_count = brandGroups.size;
+  // Total brands count (EXCLUDE "Unknown" - Helium-10 style)
+  const total_brands_count = brandBreakdown.length;
 
   // ──────────────────────────────────────────────────────────────────────────────
   // BRAND MOAT CLASSIFICATION (HARD RULES)
