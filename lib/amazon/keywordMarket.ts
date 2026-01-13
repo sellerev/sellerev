@@ -636,55 +636,109 @@ function parseFulfillment(item: any): "FBA" | "FBM" | "Amazon" | null {
  * Extracts brand from title locally (NO API CALLS)
  * 
  * Rules:
- * - Extract first capitalized word(s) before common separators
- * - Normalize common brand names (Amazon Basics, BELLA, etc.)
- * - Return null if no brand pattern found
+ * - Extract first 1-3 capitalized tokens before generic words
+ * - Stop on generic words (Electric, Coffee, Grinder, Burr, etc.)
+ * - Normalize casing
+ * - Never return empty
  */
 function extractBrandFromTitle(title: string | null): string | null {
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return null;
   }
 
-  // Common brand name patterns and normalizations
-  const brandNormalizations: Record<string, string> = {
-    'amazon basics': 'Amazon Basics',
-    'amazonbasics': 'Amazon Basics',
-    'bella': 'BELLA',
-    'chefman': 'Chefman',
-    'cuisinart': 'Cuisinart',
-    'hamilton beach': 'Hamilton Beach',
-    'instant pot': 'Instant Pot',
-    'kitchenaid': 'KitchenAid',
-    'ninja': 'Ninja',
-    'oster': 'Oster',
-    'presto': 'Presto',
-    'sunbeam': 'Sunbeam',
-  };
+  // Generic words that indicate end of brand name
+  const genericWords = new Set([
+    'electric', 'coffee', 'grinder', 'burr', 'bean', 'maker', 'machine',
+    'kettle', 'pot', 'cup', 'oz', 'ounce', 'pound', 'lb', 'pack', 'set',
+    'with', 'for', 'and', 'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to',
+    'black', 'white', 'red', 'blue', 'green', 'stainless', 'steel', 'silver',
+    'professional', 'premium', 'deluxe', 'basic', 'standard', 'mini', 'large'
+  ]);
 
-  // Pattern 1: First 1-3 capitalized words before common separators
-  // Matches: "BELLA Electric Kettle" -> "BELLA"
-  // Matches: "Amazon Basics Coffee Maker" -> "Amazon Basics"
-  const pattern1 = title.match(/^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,2})/);
-  if (pattern1) {
-    const candidate = pattern1[1].trim();
-    // Normalize if known brand
-    const normalized = brandNormalizations[candidate.toLowerCase()];
-    if (normalized) {
-      return normalized;
-    }
-    // Return as-is if it looks like a brand (2-3 words max, all capitalized start)
-    if (candidate.split(/\s+/).length <= 3) {
-      return candidate;
+  // Split title into tokens
+  const tokens = title.trim().split(/\s+/);
+  const brandTokens: string[] = [];
+  
+  // Collect first 1-3 capitalized tokens, stopping at generic words
+  for (let i = 0; i < Math.min(tokens.length, 3); i++) {
+    const token = tokens[i];
+    // Check if token starts with capital letter
+    if (token && /^[A-Z]/.test(token)) {
+      const lowerToken = token.toLowerCase().replace(/[^a-z]/g, '');
+      // Stop if we hit a generic word
+      if (genericWords.has(lowerToken)) {
+        break;
+      }
+      brandTokens.push(token);
+    } else {
+      break; // Stop at first non-capitalized token
     }
   }
 
-  // Pattern 2: All caps brand at start (e.g., "BESIGN", "FERVINOW")
-  const pattern2 = title.match(/^([A-Z]{2,}(?:\s+[A-Z]{2,})?)/);
-  if (pattern2) {
-    return pattern2[1].trim();
+  if (brandTokens.length > 0) {
+    // Normalize: capitalize first letter of each word, lowercase rest
+    const normalized = brandTokens.map(t => {
+      const cleaned = t.replace(/[^a-zA-Z]/g, '');
+      if (cleaned.length === 0) return '';
+      return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase();
+    }).filter(t => t.length > 0).join(' ');
+    
+    return normalized.length > 0 ? normalized : null;
   }
 
   return null;
+}
+
+/**
+ * Resolves brand with strict priority order and confidence level
+ * 
+ * Priority:
+ * 1. brand_name (explicit Rainforest field) → "high"
+ * 2. by_line_name (e.g., "Brand: X") → "high"
+ * 3. seller_name ONLY if it matches brand-like pattern → "medium"
+ * 4. Deterministic fallback extraction from title → "low"
+ * 5. "Unknown" → "low"
+ */
+function resolveBrandWithConfidence(
+  item: any,
+  title: string | null
+): { brand: string; confidence: "high" | "medium" | "low" } {
+  // Priority 1: brand_name (explicit Rainforest field)
+  if (item.brand_name && typeof item.brand_name === 'string' && item.brand_name.trim().length > 0) {
+    return { brand: item.brand_name.trim(), confidence: "high" };
+  }
+
+  // Priority 2: by_line_name (e.g., "Brand: X")
+  if (item.by_line?.name && typeof item.by_line.name === 'string' && item.by_line.name.trim().length > 0) {
+    return { brand: item.by_line.name.trim(), confidence: "high" };
+  }
+
+  // Priority 3: seller_name ONLY if it matches brand-like pattern
+  // Brand-like pattern: starts with capital, 2-4 words, no generic words
+  if (item.seller?.name && typeof item.seller.name === 'string') {
+    const sellerName = item.seller.name.trim();
+    // Check if it looks like a brand (not a generic seller name)
+    const words = sellerName.split(/\s+/);
+    if (words.length >= 2 && words.length <= 4 && /^[A-Z]/.test(sellerName)) {
+      // Check it's not obviously a seller name (contains "Store", "Shop", etc.)
+      const lowerName = sellerName.toLowerCase();
+      if (!lowerName.includes('store') && !lowerName.includes('shop') && 
+          !lowerName.includes('seller') && !lowerName.includes('marketplace')) {
+        return { brand: sellerName, confidence: "medium" };
+      }
+    }
+  }
+
+  // Priority 4: Deterministic fallback extraction from title
+  if (title) {
+    const extracted = extractBrandFromTitle(title);
+    if (extracted && extracted.length > 0) {
+      return { brand: extracted, confidence: "low" };
+    }
+  }
+
+  // Priority 5: "Unknown"
+  return { brand: "Unknown", confidence: "low" };
 }
 
 /**
@@ -728,41 +782,43 @@ export async function enrichListingsMetadata(
   // ═══════════════════════════════════════════════════════════════════════════
   // 🚨 COST OPTIMIZATION: METADATA ENRICHMENT HARD CAP (MAX 3 ASINs, TOP RANKED ONLY)
   // ═══════════════════════════════════════════════════════════════════════════
-  // CRITICAL: Only enrich top 3 listings if brand is missing
+  // CRITICAL: Never skip enrichment if brand_name is undefined
   // Rules:
   // - Only top 3 ranked listings
-  // - Only if brand is missing
+  // - Enrich if brand_name is undefined (even if we have title-extracted brand)
+  // - A guessed brand string (from title) ≠ resolved brand (from brand_name/by_line_name)
   // - Never enrich more than 3 ASINs per analysis
   const MAX_METADATA_ENRICHMENT = 3;
   
-  // First, try to extract brand from title locally (NO API CALL)
-  const listingsWithLocalBrand = listings.map(l => {
-    if (!l.brand && l.title) {
-      const extractedBrand = extractBrandFromTitle(l.title);
-      if (extractedBrand) {
-        return { ...l, brand: extractedBrand };
-      }
-    }
-    return l;
-  });
-
-  // Only enrich top 3 listings if brand is still missing
-  // CRITICAL: Enrich when brand is missing OR when critical fields (title/image) are missing
-  const listingsNeedingEnrichment = listingsWithLocalBrand
+  // Check which listings need enrichment
+  // CRITICAL: Never skip enrichment if brand_name is undefined
+  // A guessed brand string (from title) ≠ resolved brand (from brand_name/by_line_name)
+  const listingsNeedingEnrichment = listings
     .slice(0, MAX_METADATA_ENRICHMENT) // Only top 3
-    .filter(l => 
-      l.asin && 
-      (!l.brand || !l.title || !l.image_url) // Enrich if brand is missing OR title/image is missing
-    );
+    .filter(l => {
+      if (!l.asin) return false;
+      
+      // Check if we have brand_name or by_line_name from raw item data
+      // If not, we need enrichment even if we have a title-extracted brand
+      const rawItem = (l as any)._rawItem;
+      const hasBrandName = rawItem?.brand_name && typeof rawItem.brand_name === 'string' && rawItem.brand_name.trim().length > 0;
+      const hasByLineName = rawItem?.by_line?.name && typeof rawItem.by_line.name === 'string' && rawItem.by_line.name.trim().length > 0;
+      
+      // Enrich if:
+      // 1. brand_name is undefined (CRITICAL: never skip)
+      // 2. by_line_name is undefined (CRITICAL: never skip)
+      // 3. Critical fields (title/image) are missing
+      return !hasBrandName || !hasByLineName || !l.title || !l.image_url;
+    });
 
   if (listingsNeedingEnrichment.length === 0) {
-    // All listings already have metadata or brand extracted locally - no enrichment needed
+    // All listings have brand_name/by_line_name from raw data - no enrichment needed
     console.log("✅ METADATA_ENRICHMENT_SKIPPED", {
       keyword: keyword || "unknown",
-      reason: "No listings need enrichment (brand extracted locally or all fields present)",
-      total_listings: listingsWithLocalBrand.length,
+      reason: "All listings have brand_name or by_line_name from raw data",
+      total_listings: listings.length,
     });
-    return listingsWithLocalBrand; // Return listings with locally extracted brands
+    return listings;
   }
 
   console.log("🔵 ASIN_METADATA_ENRICHMENT_START", {
@@ -934,10 +990,11 @@ export async function enrichListingsMetadata(
     }
 
     // Enrich listings with fetched metadata
-    // CRITICAL: Merge with locally extracted brands from listingsWithLocalBrand
+    // CRITICAL: Use strict brand priority order with confidence
     let enrichedListingsCount = 0;
     let enrichedFieldsCount = 0;
-    const enrichedListings = listingsWithLocalBrand.map(listing => {
+    let brandEnrichmentAppliedCount = 0;
+    const enrichedListings = listings.map(listing => {
       // If this listing was enriched via API, use that data
       if (listing.asin && enrichmentMap.has(listing.asin.toUpperCase())) {
         // Will be enriched below
@@ -1019,40 +1076,35 @@ export async function enrichListingsMetadata(
         }
       }
 
-      // Enrich brand (only if missing, from product.brand or by_line?.name)
-      if (!enriched.brand || (typeof enriched.brand === 'string' && enriched.brand.trim().length === 0)) {
-        const brand = productData.brand || productData.by_line?.name || null;
-        if (brand && typeof brand === "string" && brand.trim().length > 0) {
-          enriched.brand = brand.trim();
-          // Track that brand came from metadata enrichment (for frequency resolution)
-          (enriched as any)._debug_brand_source = "metadata";
-          enrichedFieldsCount++;
-          listingEnriched = true;
-          // ═══════════════════════════════════════════════════════════════════════════
-          // Log brand enrichment
-          // ═══════════════════════════════════════════════════════════════════════════
-          if (enrichedListingsCount < 5) {
-            console.log("🟡 BRAND ENRICHED", {
-              asin: listing.asin,
-              brand_before: listing.brand,
-              brand_after: enriched.brand,
-              source: productData.brand ? "productData.brand" : "productData.by_line.name",
-            });
-          }
-        } else {
-          // Log when brand enrichment is attempted but no brand found
-          if (enrichedListingsCount < 5) {
-            console.log("🟡 BRAND ENRICHMENT ATTEMPTED (NO BRAND FOUND)", {
-              asin: listing.asin,
-              brand_before: listing.brand,
-              productData_has_brand: !!productData.brand,
-              productData_brand: productData.brand,
-              productData_has_by_line: !!productData.by_line,
-              productData_by_line_name: productData.by_line?.name,
-            });
-          }
+      // Enrich brand using strict priority order
+      // Priority: 1) brand_name, 2) by_line_name, 3) seller_name (if brand-like), 4) title extraction, 5) "Unknown"
+      const brandResolution = resolveBrandWithConfidence(productData, enriched.title);
+      const previousBrand = enriched.brand;
+      const previousConfidence = (enriched as any)._brand_confidence;
+      
+      // Always update brand if we got a higher confidence resolution
+      const shouldUpdateBrand = 
+        !previousConfidence || // No previous confidence
+        (brandResolution.confidence === "high" && previousConfidence !== "high") || // Upgrade to high
+        (brandResolution.confidence === "medium" && previousConfidence === "low"); // Upgrade to medium
+      
+      if (shouldUpdateBrand) {
+        enriched.brand = brandResolution.brand;
+        (enriched as any)._brand_confidence = brandResolution.confidence;
+        (enriched as any)._debug_brand_source = "metadata_enrichment";
+        enrichedFieldsCount++;
+        listingEnriched = true;
+        brandEnrichmentAppliedCount++;
+        
+        if (enrichedListingsCount < 5) {
+          console.log("🟡 BRAND ENRICHED", {
+            asin: listing.asin,
+            brand_before: previousBrand,
+            brand_after: enriched.brand,
+            confidence: brandResolution.confidence,
+            source: productData.brand_name ? "brand_name" : (productData.by_line?.name ? "by_line_name" : "title_extraction"),
+          });
         }
-        // If brand missing, leave as null (do NOT fabricate)
       }
 
       if (listingEnriched) {
@@ -1074,18 +1126,29 @@ export async function enrichListingsMetadata(
       max_allowed: MAX_METADATA_ENRICHMENT,
     });
 
-    // Merge locally extracted brands back into all listings
+    // Ensure every listing has a brand (use "Unknown" if missing)
     const finalListings = enrichedListings.map(enriched => {
-      // If brand was enriched via API, keep it; otherwise use local extraction
-      if (enriched.brand) {
-        return enriched;
-      }
-      // Find original listing to get locally extracted brand
-      const original = listingsWithLocalBrand.find(l => l.asin === enriched.asin);
-      if (original && original.brand) {
-        return { ...enriched, brand: original.brand };
+      // If brand is missing or empty, resolve it with fallback
+      if (!enriched.brand || (typeof enriched.brand === 'string' && enriched.brand.trim().length === 0)) {
+        const brandResolution = resolveBrandWithConfidence(
+          (enriched as any)._rawItem || {},
+          enriched.title
+        );
+        enriched.brand = brandResolution.brand;
+        (enriched as any)._brand_confidence = brandResolution.confidence;
       }
       return enriched;
+    });
+
+    // Log brand enrichment stats
+    const brandMissingAfterEnrichment = finalListings.filter(l => !l.brand || l.brand === "").length;
+    console.log("BRAND_ENRICHMENT_APPLIED", {
+      count: brandEnrichmentAppliedCount,
+      keyword: keyword || "unknown",
+    });
+    console.log("BRAND_MISSING_AFTER_ENRICHMENT", {
+      count: brandMissingAfterEnrichment,
+      keyword: keyword || "unknown",
     });
 
     return finalListings;
@@ -1716,20 +1779,14 @@ export async function fetchKeywordMarketSnapshot(
       
       const fulfillment = parseFulfillment(item); // Nullable
       
-      // 🚨 COST OPTIMIZATION: Extract brand locally (NO API CALLS)
-      // Priority: 1) Explicit brand field, 2) brand_name, 3) by_line.name, 4) Extract from title
-      let brand = (item.brand && typeof item.brand === 'string' && item.brand.trim().length > 0)
-        ? item.brand.trim()
-        : (item.brand_name && typeof item.brand_name === 'string' && item.brand_name.trim().length > 0)
-          ? item.brand_name.trim()
-          : (item.by_line?.name && typeof item.by_line.name === 'string' && item.by_line.name.trim().length > 0)
-            ? item.by_line.name.trim()
-            : null;
-      
-      // If brand still missing, extract from title locally
-      if (!brand && title) {
-        brand = extractBrandFromTitle(title);
-      }
+      // ═══════════════════════════════════════════════════════════════════════════
+      // BRAND RESOLUTION: Strict priority order with confidence
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Priority: 1) brand_name, 2) by_line_name, 3) seller_name (if brand-like), 4) title extraction, 5) "Unknown"
+      const brandResolution = resolveBrandWithConfidence(item, title);
+      const brand = brandResolution.brand;
+      // Store brand confidence for later use (will be added to ParsedListing if needed)
+      (item as any)._brand_confidence = brandResolution.confidence;
       
       // ═══════════════════════════════════════════════════════════════════════════
       // STEP 1: Log raw brand data from Rainforest (first 5 listings)
@@ -1739,6 +1796,7 @@ export async function fetchKeywordMarketSnapshot(
           index,
           asin,
           brand: brand,
+          brand_confidence: brandResolution.confidence,
           brand_name: item.brand_name,
           by_line_name: item.by_line?.name,
           seller_name: item.seller?.name,

@@ -38,6 +38,7 @@ export interface CanonicalProduct {
   revenue_share_pct: number;
   fulfillment: "FBA" | "FBM" | "AMZ";
   brand: string | null;
+  brand_confidence: "high" | "medium" | "low";
   seller_country: "US" | "CN" | "Other" | "Unknown";
   snapshot_inferred: boolean;
   snapshot_inferred_fields?: string[];
@@ -391,11 +392,98 @@ export function buildKeywordPageOne(
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // PAGE-1 HARD CAP: Enforce 49 product limit (Amazon Page-1 max)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CORRECT ORDER (MANDATORY):
+  // 1. Ingest Rainforest results
+  // 2. Canonicalize + dedupe ASINs
+  // 3. Sort by organic_rank ASC
+  // 4. Slice to first 49
+  // 5. ONLY THEN: Allocate demand, Aggregate brands, Persist
+  //
+  // HARD RULES:
+  // - Sponsored listings do not expand Page-1
+  // - organic_rank must be 1-49
+  // - Any item with rank >= 50 is discarded
+  // - Nothing beyond 49 may reach DB
+  const PAGE1_HARD_CAP = 49;
+  const preCapCount = deduplicatedListings.length;
+  
+  // Sort by organic rank (best rank first)
+  // Filter to only organic listings for ranking, then slice to 49
+  const organicListings = deduplicatedListings.filter(l => !l.is_sponsored);
+  const sponsoredListings = deduplicatedListings.filter(l => l.is_sponsored);
+  
+  // Sort organic listings by position (best rank first)
+  organicListings.sort((a, b) => (a.position || 999) - (b.position || 999));
+  
+  // Take first 49 organic listings
+  const cappedOrganicListings = organicListings.slice(0, PAGE1_HARD_CAP);
+  
+  // Combine: capped organic + all sponsored (sponsored don't expand Page-1, but we include them)
+  // Actually, per requirements: "Sponsored listings do not expand Page-1"
+  // So we only take organic listings up to 49
+  const cappedListings = cappedOrganicListings;
+  
+  console.log("PAGE1_PRE_CAP_COUNT", {
+    count: preCapCount,
+    organic_count: organicListings.length,
+    sponsored_count: sponsoredListings.length,
+  });
+  
+  console.log("PAGE1_POST_CAP_COUNT", {
+    count: cappedListings.length,
+    cap: PAGE1_HARD_CAP,
+  });
+
+  // Rebuild metadata structure from capped listings
+  // Create a map of ASIN -> metadata for capped listings
+  const cappedAsinMap = new Map<string, { 
+    listing: ParsedListing; 
+    bestRank: number;
+    appearanceCount: number;
+    isAlgorithmBoosted: boolean;
+  }>();
+  
+  cappedListings.forEach((listing, index) => {
+    const asin = listing.asin || `KEYWORD-${index + 1}`;
+    const position = listing.position || index + 1;
+    
+    if (cappedAsinMap.has(asin)) {
+      const existing = cappedAsinMap.get(asin)!;
+      // Keep the one with better (lower) rank
+      if (position < existing.bestRank) {
+        existing.bestRank = position;
+        existing.listing = listing;
+      }
+      existing.appearanceCount += 1;
+      existing.isAlgorithmBoosted = existing.appearanceCount >= 2;
+    } else {
+      cappedAsinMap.set(asin, {
+        listing,
+        bestRank: position,
+        appearanceCount: 1,
+        isAlgorithmBoosted: false,
+      });
+    }
+  });
+  
+  // Create capped listings with metadata
+  const cappedListingsWithMetadata = Array.from(cappedAsinMap.entries())
+    .map(([asin, value]) => ({
+      listing: value.listing,
+      bestRank: value.bestRank,
+      appearanceCount: value.appearanceCount,
+      isAlgorithmBoosted: value.appearanceCount >= 2,
+    }))
+    .sort((a, b) => a.bestRank - b.bestRank);
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // STEP 1: ESTIMATE TOTAL PAGE-1 DEMAND (Helium-10 Style)
   // ═══════════════════════════════════════════════════════════════════════════
-  // Use deduplicated listings for all subsequent logic
+  // Use capped listings for all subsequent logic
   // Calculate average price for demand estimation
-  const prices = deduplicatedListings
+  const prices = cappedListings
     .map(l => l.price)
     .filter((p): p is number => p !== null && p > 0);
   const avgPrice = prices.length > 0
@@ -403,14 +491,14 @@ export function buildKeywordPageOne(
     : null;
 
   // Infer category from listings (check main_category if available)
-  const categories = deduplicatedListings
+  const categories = cappedListings
     .map(l => l.main_category)
     .filter((c): c is string => c !== null && c !== undefined);
   const category = categories.length > 0 ? categories[0] : null;
 
-  // Estimate total Page-1 demand (using deduplicated listings)
+  // Estimate total Page-1 demand (using capped listings)
   const pageOneDemand = estimatePageOneDemand({
-    listings: deduplicatedListings,
+    listings: cappedListings,
     category,
     avgPrice,
   });
@@ -421,14 +509,14 @@ export function buildKeywordPageOne(
   // ═══════════════════════════════════════════════════════════════════════════
   // CALIBRATION LAYER: Normalize into trusted bands
   // ═══════════════════════════════════════════════════════════════════════════
-  // Use deduplicated listings for calibration
-  const organicListings = deduplicatedListings.filter(l => !l.is_sponsored);
-  const sponsoredCount = deduplicatedListings.filter(l => l.is_sponsored).length;
-  const sponsoredDensity = deduplicatedListings.length > 0
-    ? (sponsoredCount / deduplicatedListings.length) * 100
+  // Use capped listings for calibration
+  const organicListingsForCalibration = cappedListings.filter(l => !l.is_sponsored);
+  const sponsoredCount = cappedListings.filter(l => l.is_sponsored).length;
+  const sponsoredDensity = cappedListings.length > 0
+    ? (sponsoredCount / cappedListings.length) * 100
     : 0;
 
-  const reviewDispersion = calculateReviewDispersionFromListings(deduplicatedListings);
+  const reviewDispersion = calculateReviewDispersionFromListings(cappedListings);
   
   const priceMin = prices.length > 0 ? Math.min(...prices) : 0;
   const priceMax = prices.length > 0 ? Math.max(...prices) : 0;
@@ -438,7 +526,7 @@ export function buildKeywordPageOne(
     raw_revenue: totalPage1Revenue,
     category,
     price_band: { min: priceMin, max: priceMax },
-    listing_count: organicListings.length,
+    listing_count: organicListingsForCalibration.length,
     review_dispersion: reviewDispersion,
     sponsored_density: sponsoredDensity,
   });
@@ -516,9 +604,9 @@ export function buildKeywordPageOne(
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: ALLOCATE DEMAND ACROSS PRODUCTS
   // ═══════════════════════════════════════════════════════════════════════════
-  // Use deduplicated listings for allocation
+  // Use capped listings for allocation
   // Calculate median review count for comparison
-  const reviews = deduplicatedListings
+  const reviews = cappedListings
     .map(l => l.reviews)
     .filter((r): r is number => r !== null && r > 0);
   const medianReviews = reviews.length > 0
@@ -526,7 +614,7 @@ export function buildKeywordPageOne(
     : 0;
 
   // Calculate median rating for comparison
-  const ratings = deduplicatedListings
+  const ratings = cappedListings
     .map(l => l.rating)
     .filter((r): r is number => r !== null && r > 0);
   const medianRating = ratings.length > 0
@@ -544,10 +632,11 @@ export function buildKeywordPageOne(
   // Sponsored listings do NOT inflate organic rank
   
   // Separate organic and sponsored listings for rank assignment
-  const organicListingsWithMetadata = deduplicatedListingsWithMetadata.filter(
+  // Use capped listings with metadata
+  const organicListingsWithMetadata = cappedListingsWithMetadata.filter(
     item => !item.listing.is_sponsored
   );
-  const sponsoredListingsWithMetadata = deduplicatedListingsWithMetadata.filter(
+  const sponsoredListingsWithMetadata = cappedListingsWithMetadata.filter(
     item => item.listing.is_sponsored
   );
   
@@ -567,7 +656,7 @@ export function buildKeywordPageOne(
     ...sponsoredListingsWithMetadata.map(item => ({ ...item, organicRank: null })),
   ].sort((a, b) => a.bestRank - b.bestRank);
   
-  // Build products with allocation weights (using deduplicated listings)
+  // Build products with allocation weights (using capped listings)
   // Use organic_rank for estimation logic
   const productsWithWeights = allListingsWithRanks.map((item, i) => {
     const l = item.listing;
@@ -893,7 +982,8 @@ export function buildKeywordPageOne(
       revenue_share_pct: 0, // Will be calculated after all products are built
       image_url, // Preserved from listing (or null for ESTIMATED only)
       fulfillment, // Normalized: Prime → FBA, else → FBM, Amazon Retail → AMZ
-      brand: l.brand ?? null,
+      brand: l.brand ?? "Unknown", // Always have a brand (never null)
+      brand_confidence: (l as any)._brand_confidence || "low", // Use stored confidence or default to low
       
       // ═══════════════════════════════════════════════════════════════════════════
       // Log brand in canonical product (first 5)
@@ -949,7 +1039,7 @@ export function buildKeywordPageOne(
     : avgPrice ?? 0;
   
   // Get estimated total market units (use market demand estimate or totalPage1Units)
-  const organicCountForDemand = deduplicatedListings.filter(l => !l.is_sponsored).length;
+  const organicCountForDemand = cappedListings.filter(l => !l.is_sponsored).length;
   const avgPriceForDemand = avgPrice ?? 0;
   const marketDemandEstimate = estimateMarketDemand({
     marketShape,
@@ -1168,7 +1258,7 @@ export function buildKeywordPageOne(
   
   // Determine competition level for ceiling calculation
   // Reuse reviewDispersion and sponsoredDensity already calculated above for calibration
-  const organicCount = deduplicatedListings.filter(l => !l.is_sponsored).length;
+  const organicCount = cappedListings.filter(l => !l.is_sponsored).length;
   
   // Determine competition level (same logic as calibration)
   let competitionLevel: "low_competition" | "medium_competition" | "high_competition";
