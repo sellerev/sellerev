@@ -2405,6 +2405,51 @@ export async function POST(req: NextRequest) {
           timestamp: new Date().toISOString(),
         });
         
+        // Save analysis run immediately so chat can work (even with Tier-1 data)
+        // Build minimal response object for analysis_runs table
+        const tier1Response = {
+          decision: {
+            verdict: "CAUTION" as const, // Default until Tier-2 refines
+            confidence: 50, // Default until Tier-2 refines
+            executive_summary: "Tier-1 analysis complete. Refinement in progress...",
+          },
+          market_snapshot: tier1Snapshot.snapshot.market_snapshot || {},
+          page_one_listings: tier1Snapshot.snapshot.products || [],
+          tier: "tier1" as const,
+          snapshot_id: tier1Snapshot.snapshot.snapshot_id,
+        };
+        
+        const { data: insertedRun, error: insertError } = await supabase
+          .from("analysis_runs")
+          .insert({
+            user_id: user.id,
+            input_type: "keyword",
+            input_value: body.input_value,
+            ai_verdict: "CAUTION", // Default until Tier-2 refines
+            ai_confidence: 50, // Default until Tier-2 refines
+            seller_stage: sellerProfile.stage,
+            seller_experience_months: sellerProfile.experience_months,
+            seller_monthly_revenue_range: sellerProfile.monthly_revenue_range,
+            response: tier1Response,
+          })
+          .select("id")
+          .single();
+        
+        if (insertError || !insertedRun || !insertedRun.id) {
+          console.error("TIER1_ANALYSIS_RUN_INSERT_ERROR", {
+            error: insertError,
+            has_insertedRun: !!insertedRun,
+            insertedRun_id: insertedRun?.id,
+          });
+          // Continue anyway - return response without analysisRunId
+          // Chat won't work until Tier-2 completes, but at least UI can display data
+        } else {
+          console.log("TIER1_ANALYSIS_RUN_INSERT_SUCCESS", {
+            analysis_run_id: insertedRun.id,
+            snapshot_id: tier1Snapshot.snapshot.snapshot_id,
+          });
+        }
+        
         // TODO: Still do AI analysis with Tier-1 data (needed for UI)
         // For now, return Tier-1 snapshot immediately
         // AI can be added to Tier-1 response in future iteration
@@ -2416,7 +2461,7 @@ export async function POST(req: NextRequest) {
             tier: "tier1",
             snapshot: tier1Snapshot.snapshot,
             ui_hints: tier1Snapshot.ui_hints,
-            analysisRunId: null, // Will be created in Tier-2
+            analysisRunId: insertedRun?.id || null, // Return ID if insert succeeded
             message: "Tier-1 snapshot returned. Refinement in progress...",
           },
           { 
@@ -3615,6 +3660,15 @@ Convert this plain text decision into the required JSON contract format. Extract
     console.log("AFTER_INSERT_SUCCESS", {
       analysis_run_id: insertedRun.id,
       user_id: user.id,
+      input_value: body.input_value,
+      timestamp: new Date().toISOString(),
+    });
+    
+    // Log the analysisRunId that will be returned to frontend
+    console.log("ANALYSIS_RUN_ID_FOR_FRONTEND", {
+      analysisRunId: insertedRun.id,
+      will_be_returned: true,
+      timestamp: new Date().toISOString(),
     });
 
     // 12.5. Insert confidence observation and compute confidence metadata (non-blocking)
@@ -3862,6 +3916,16 @@ Convert this plain text decision into the required JSON contract format. Extract
       cost_reduction: apiCallCounter.count <= 6 ? "✅ Within limit" : "⚠️ Exceeded limit",
     });
 
+    // Final log before returning response
+    console.log("RETURNING_ANALYSIS_RESPONSE", {
+      analysisRunId: insertedRun.id,
+      has_analysisRunId: !!insertedRun.id,
+      responseStatus,
+      data_quality: dataQuality,
+      estimated: isEstimated,
+      timestamp: new Date().toISOString(),
+    });
+    
     return NextResponse.json(
       {
         success: true,
