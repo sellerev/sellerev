@@ -18,6 +18,18 @@ import {
   recordAnalyzedAsin,
 } from "@/lib/ai/memoryUpdates";
 import { sanitizeFinancialDirectives } from "@/lib/ai/financialDirectiveFilter";
+import {
+  decideEscalation,
+  buildEscalationMessage,
+  buildInsufficientCreditsMessage,
+  type Page1Context,
+  type CreditContext,
+  type EscalationDecision,
+} from "@/lib/ai/copilotEscalation";
+import {
+  checkCreditBalance,
+  executeEscalation,
+} from "@/lib/ai/copilotEscalationHelpers";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -1707,6 +1719,110 @@ export async function POST(req: NextRequest) {
     // Determine analysis mode from input_type
     const analysisMode: 'KEYWORD' = 'KEYWORD'; // All analyses are keyword-only
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ESCALATION DECISION ENGINE (NEW)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Check if this question requires escalation to type=product API calls
+    // This enforces the Escalation Policy and Credit & Pricing Policy
+    
+    // Build Page-1 context for escalation decision
+    const products = (analysisResponse.products as any[]) || (analysisResponse.page_one_listings as any[]) || [];
+    const page1Context: Page1Context = {
+      products: products.map(p => ({
+        asin: p.asin,
+        title: p.title || null,
+        price: p.price || 0,
+        rating: p.rating || 0,
+        review_count: p.review_count || 0,
+        bsr: p.bsr || null,
+        estimated_monthly_units: p.estimated_monthly_units || 0,
+        estimated_monthly_revenue: p.estimated_monthly_revenue || 0,
+        revenue_share_pct: p.revenue_share_pct || 0,
+        fulfillment: p.fulfillment || "FBM",
+        organic_rank: p.organic_rank || null,
+        page_position: p.page_position || 0,
+        is_sponsored: p.is_sponsored || false,
+        page_one_appearances: p.page_one_appearances || 1,
+        is_algorithm_boosted: p.is_algorithm_boosted || false,
+      })),
+      market_snapshot: {
+        avg_price: (analysisResponse.summary as any)?.avg_price || 0,
+        avg_rating: (analysisResponse.summary as any)?.avg_rating || 0,
+        avg_bsr: (analysisResponse.summary as any)?.avg_bsr || null,
+        total_monthly_units_est: (analysisResponse.summary as any)?.total_monthly_units_est || 0,
+        total_monthly_revenue_est: (analysisResponse.summary as any)?.total_monthly_revenue_est || 0,
+        page1_product_count: (analysisResponse.summary as any)?.page1_product_count || 0,
+        sponsored_count: (analysisResponse.summary as any)?.sponsored_count || null,
+      },
+      market_structure: {
+        price_band: (analysisResponse.market_structure as any)?.price_band || { min: 0, max: 0, tightness: "moderate" },
+        fulfillment_mix: (analysisResponse.market_structure as any)?.fulfillment_mix || { fba_pct: 0, fbm_pct: 0, amazon_pct: 0 },
+        review_barrier: (analysisResponse.market_structure as any)?.review_barrier || { median_reviews: 0, top_5_avg_reviews: 0 },
+        page1_density: (analysisResponse.market_structure as any)?.page1_density || 0,
+      },
+      brand_moat: (analysisResponse.brand_moat as any) || undefined,
+    };
+    
+    // Check credit balance
+    const creditContext = await checkCreditBalance(user.id, supabase, body.analysisRunId);
+    
+    // Make escalation decision
+    const escalationDecision = decideEscalation(
+      body.message,
+      page1Context,
+      creditContext
+    );
+    
+    // Log escalation decision
+    console.log("ESCALATION_DECISION", {
+      question: body.message,
+      requires_escalation: escalationDecision.requires_escalation,
+      can_answer_from_page1: escalationDecision.can_answer_from_page1,
+      required_asins: escalationDecision.required_asins,
+      required_credits: escalationDecision.required_credits,
+      available_credits: creditContext.available_credits,
+    });
+    
+    // Execute escalation if needed and credits available
+    let escalationResults: {
+      success: boolean;
+      productData: Map<string, any>;
+      creditsUsed: number;
+      cached: boolean[];
+    } | null = null;
+    
+    let escalationMessage = "";
+    
+    if (escalationDecision.requires_escalation && escalationDecision.required_asins.length > 0) {
+      if (escalationDecision.required_credits > 0 && creditContext.available_credits >= escalationDecision.required_credits) {
+        // Credits available - execute escalation
+        try {
+          const rainforestApiKey = process.env.RAINFOREST_API_KEY;
+          escalationResults = await executeEscalation(
+            escalationDecision,
+            user.id,
+            body.analysisRunId,
+            supabase,
+            rainforestApiKey
+          );
+          
+          escalationMessage = buildEscalationMessage(escalationDecision);
+          
+          console.log("ESCALATION_EXECUTED", {
+            asins: escalationDecision.required_asins,
+            credits_used: escalationResults.creditsUsed,
+            cached: escalationResults.cached,
+          });
+        } catch (escalationError) {
+          console.error("ESCALATION_ERROR", escalationError);
+          escalationMessage = `Failed to look up product details: ${escalationError instanceof Error ? escalationError.message : String(escalationError)}`;
+        }
+      } else {
+        // Insufficient credits - show message
+        escalationMessage = buildInsufficientCreditsMessage(escalationDecision, creditContext);
+      }
+    }
+    
     // 8a. Extract ai_context from analyze contract (if available)
     // The analyze contract stores ai_context in the response
     const aiContext = (analysisResponse.ai_context as Record<string, unknown>) || null;
@@ -1815,8 +1931,35 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 12. Append escalation context if escalation was executed
+    // ────────────────────────────────────────────────────────────────────────
+    // If escalation was executed, inject product data into context
+    // This makes escalated data available to the AI for answering
+    if (escalationResults && escalationResults.success) {
+      const escalationContext: Record<string, unknown> = {
+        escalation_executed: true,
+        escalated_asins: escalationDecision.required_asins,
+        credits_used: escalationResults.creditsUsed,
+        cached: escalationResults.cached,
+      };
+      
+      // Add product data for each ASIN
+      for (const asin of escalationDecision.required_asins) {
+        if (escalationResults.productData.has(asin)) {
+          escalationContext[`product_${asin}`] = escalationResults.productData.get(asin);
+        }
+      }
+      
+      // Inject escalation context into system prompt
+      systemPrompt += `\n\n=== ESCALATION CONTEXT ===\n${JSON.stringify(escalationContext, null, 2)}\n\nUse this escalated product data to answer the user's question.`;
+    }
+    
     // 12. Append the new user message
-    messages.push({ role: "user", content: body.message });
+    // If escalation message exists, prepend it to show user what's happening
+    const userMessage = escalationMessage 
+      ? `${escalationMessage}\n\n${body.message}`
+      : body.message;
+    messages.push({ role: "user", content: userMessage });
 
     // 13. Classify question (for context, not blocking)
     // ────────────────────────────────────────────────────────────────────────
