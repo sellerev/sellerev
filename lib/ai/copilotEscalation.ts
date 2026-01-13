@@ -403,14 +403,14 @@ export function buildEscalationMessage(decision: EscalationDecision): string {
   }
   
   const asinList = decision.required_asins.length === 1
-    ? decision.required_asins[0]
-    : `${decision.required_asins[0]} and ${decision.required_asins[1]}`;
+    ? `ASIN ${decision.required_asins[0]}`
+    : `ASINs ${decision.required_asins[0]} and ${decision.required_asins[1]}`;
   
   const creditText = decision.required_credits === 1
-    ? "1 credit"
-    : `${decision.required_credits} credits`;
+    ? "1 Seller Credit"
+    : `${decision.required_credits} Seller Credits`;
   
-  return `Looking up product details for ${asinList}... (${creditText})`;
+  return `🔍 Looking up live listing data for ${asinList}... This will use ${creditText}.`;
 }
 
 /**

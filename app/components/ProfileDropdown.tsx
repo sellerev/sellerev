@@ -3,22 +3,31 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { User, LogOut, Settings, Shield, Bell, CreditCard, FileText } from "lucide-react";
+import { User, LogOut, Settings, Shield, Bell, CreditCard, FileText, Coins } from "lucide-react";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
+
+interface CreditBalance {
+  credits_remaining: number;
+  credits_used: number;
+  last_updated_at: string | null;
+}
 
 export default function ProfileDropdown() {
   const [isOpen, setIsOpen] = useState(false);
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [creditBalance, setCreditBalance] = useState<CreditBalance | null>(null);
+  const [creditsLoading, setCreditsLoading] = useState(true);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [dropdownPosition, setDropdownPosition] = useState<{ top: number; right: number } | null>(null);
   const router = useRouter();
   const pathname = usePathname();
 
-  // Load user data
+  // Load user data and credits
   useEffect(() => {
     loadUser();
+    loadCredits();
 
     // Listen for auth changes
     const {
@@ -26,8 +35,10 @@ export default function ProfileDropdown() {
     } = supabaseBrowser.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         setUser(session.user);
+        loadCredits(); // Reload credits when user changes
       } else {
         setUser(null);
+        setCreditBalance(null);
       }
     });
 
@@ -35,6 +46,71 @@ export default function ProfileDropdown() {
       subscription.unsubscribe();
     };
   }, []);
+
+  async function loadCredits() {
+    try {
+      const {
+        data: { user: currentUser },
+      } = await supabaseBrowser.auth.getUser();
+      
+      if (!currentUser) {
+        setCreditBalance(null);
+        setCreditsLoading(false);
+        return;
+      }
+      
+      // Fetch credits directly from database
+      const { data: userCredits, error } = await supabaseBrowser
+        .from("user_credits")
+        .select("free_credits, purchased_credits, subscription_credits, used_credits, updated_at")
+        .eq("user_id", currentUser.id)
+        .single();
+      
+      if (error && error.code === 'PGRST116') {
+        // User credits don't exist - create with 10 free credits
+        const { error: insertError } = await supabaseBrowser
+          .from("user_credits")
+          .insert({
+            user_id: currentUser.id,
+            free_credits: 10,
+            purchased_credits: 0,
+            subscription_credits: 0,
+            used_credits: 0,
+          });
+        
+        if (!insertError) {
+          setCreditBalance({
+            credits_remaining: 10,
+            credits_used: 0,
+            last_updated_at: new Date().toISOString(),
+          });
+        } else {
+          setCreditBalance(null);
+        }
+      } else if (error || !userCredits) {
+        console.error("Error loading credits:", error);
+        setCreditBalance(null);
+      } else {
+        const credits_remaining = Math.max(0,
+          (userCredits.free_credits || 0) +
+          (userCredits.purchased_credits || 0) +
+          (userCredits.subscription_credits || 0) -
+          (userCredits.used_credits || 0)
+        );
+        
+        setCreditBalance({
+          credits_remaining,
+          credits_used: userCredits.used_credits || 0,
+          last_updated_at: userCredits.updated_at || null,
+        });
+      }
+    } catch (error) {
+      console.error("Error loading credits:", error);
+      setCreditBalance(null);
+    } finally {
+      setCreditsLoading(false);
+    }
+  }
 
   // Calculate dropdown position when opening
   useEffect(() => {
@@ -201,6 +277,52 @@ export default function ProfileDropdown() {
           <div className="px-4 py-3 border-b border-gray-200">
             <div className="font-semibold text-gray-900 text-sm">{getDisplayName()}</div>
             <div className="text-xs text-gray-500 mt-0.5 truncate">{user.email}</div>
+          </div>
+
+          {/* Seller Credits Section */}
+          <div className="px-4 py-3 border-b border-gray-200">
+            <button
+              onClick={() => {
+                // Stub: Future billing modal
+                setIsOpen(false);
+              }}
+              className="w-full text-left"
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Coins className="w-4 h-4 text-gray-400" />
+                  <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    Seller Credits
+                  </span>
+                </div>
+                {!creditsLoading && creditBalance && (
+                  <span className="text-sm font-semibold text-gray-900">
+                    {creditBalance.credits_remaining} left
+                  </span>
+                )}
+              </div>
+              {!creditsLoading && creditBalance && (
+                <div className="mt-2">
+                  {/* Progress bar */}
+                  <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#3B82F6] transition-all duration-300"
+                      style={{
+                        width: `${Math.min(100, (creditBalance.credits_remaining / (creditBalance.credits_remaining + creditBalance.credits_used)) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  {creditBalance.credits_used > 0 && (
+                    <div className="text-xs text-gray-500 mt-1">
+                      {creditBalance.credits_used} used
+                    </div>
+                  )}
+                </div>
+              )}
+              {creditsLoading && (
+                <div className="h-1.5 bg-gray-200 rounded-full animate-pulse mt-2" />
+              )}
+            </button>
           </div>
 
           {/* Account Section */}

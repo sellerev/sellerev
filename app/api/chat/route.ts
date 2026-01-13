@@ -2321,6 +2321,25 @@ export async function POST(req: NextRequest) {
               .replace(/\n\n\n+/g, "\n\n") // Clean up extra newlines
               .trim();
           }
+          
+          // 15a. Add inline citations if escalation was executed
+          // ────────────────────────────────────────────────────────────────
+          // Append source ASIN citations to the end of the message
+          if (finalMessage && escalationResults && escalationResults.success && escalationDecision.required_asins.length > 0) {
+            const sourceAsins = escalationDecision.required_asins;
+            let citationText = "";
+            
+            if (sourceAsins.length === 1) {
+              citationText = `\n\n(Based on ASIN ${sourceAsins[0]})`;
+            } else if (sourceAsins.length === 2) {
+              citationText = `\n\n(Based on ASINs ${sourceAsins[0]}, ${sourceAsins[1]})`;
+            }
+            
+            // Only append if citation doesn't already exist in the message
+            if (citationText && !finalMessage.includes(citationText.trim())) {
+              finalMessage = finalMessage + citationText;
+            }
+          }
 
           // Check for pending memories that need confirmation
           // Only show one at a time, after the response
@@ -2354,18 +2373,32 @@ export async function POST(req: NextRequest) {
             // Don't await - let it run in background
             (async () => {
               try {
+                // Extract source ASINs from escalation results
+                const sourceAsins = escalationResults && escalationResults.success
+                  ? escalationDecision.required_asins
+                  : null;
+                
+                // Calculate credits used
+                const creditsUsed = escalationResults && escalationResults.success
+                  ? escalationResults.creditsUsed
+                  : 0;
+                
                 const result = await supabase.from("analysis_messages").insert([
                   {
                     analysis_run_id: body.analysisRunId,
                     user_id: user.id,
                     role: "user",
                     content: body.message,
+                    source_asins: null,
+                    credits_used: 0,
                   },
                   {
                     analysis_run_id: body.analysisRunId,
                     user_id: user.id,
                     role: "assistant",
                     content: finalMessage,
+                    source_asins: sourceAsins,
+                    credits_used: creditsUsed,
                   },
                 ]);
                 
