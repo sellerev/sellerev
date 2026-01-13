@@ -1773,14 +1773,20 @@ export async function POST(req: NextRequest) {
       creditContext
     );
     
-    // Log escalation decision
+    // Log escalation decision (structured logging)
     console.log("ESCALATION_DECISION", {
+      user_id: user.id,
+      analysis_run_id: body.analysisRunId,
       question: body.message,
       requires_escalation: escalationDecision.requires_escalation,
       can_answer_from_page1: escalationDecision.can_answer_from_page1,
       required_asins: escalationDecision.required_asins,
       required_credits: escalationDecision.required_credits,
       available_credits: creditContext.available_credits,
+      session_credits_used: creditContext.session_credits_used,
+      daily_credits_used: creditContext.daily_credits_used,
+      escalation_reason: escalationDecision.escalation_reason,
+      timestamp: new Date().toISOString(),
     });
     
     // Execute escalation if needed and credits available
@@ -1794,7 +1800,28 @@ export async function POST(req: NextRequest) {
     let escalationMessage = "";
     
     if (escalationDecision.requires_escalation && escalationDecision.required_asins.length > 0) {
-      if (escalationDecision.required_credits > 0 && creditContext.available_credits >= escalationDecision.required_credits) {
+      // Check if escalation is blocked (insufficient credits, limits exceeded)
+      const hasEnoughCredits = creditContext.available_credits >= escalationDecision.required_credits;
+      const sessionLimitOk = (creditContext.session_credits_used + escalationDecision.required_credits) <= (creditContext.max_session_credits ?? 10);
+      const dailyLimitOk = (creditContext.daily_credits_used + escalationDecision.required_credits) <= (creditContext.max_daily_credits ?? 50);
+      
+      if (!hasEnoughCredits || !sessionLimitOk || !dailyLimitOk) {
+        // Escalation blocked - log and show message
+        console.log("ESCALATION_BLOCKED", {
+          user_id: user.id,
+          analysis_run_id: body.analysisRunId,
+          required_credits: escalationDecision.required_credits,
+          available_credits: creditContext.available_credits,
+          session_credits_used: creditContext.session_credits_used,
+          daily_credits_used: creditContext.daily_credits_used,
+          session_limit_ok: sessionLimitOk,
+          daily_limit_ok: dailyLimitOk,
+          reason: !hasEnoughCredits ? "insufficient_credits" : !sessionLimitOk ? "session_limit_exceeded" : "daily_limit_exceeded",
+          timestamp: new Date().toISOString(),
+        });
+        
+        escalationMessage = buildInsufficientCreditsMessage(escalationDecision, creditContext);
+      } else {
         // Credits available - execute escalation
         try {
           const rainforestApiKey = process.env.RAINFOREST_API_KEY;
@@ -1808,18 +1835,30 @@ export async function POST(req: NextRequest) {
           
           escalationMessage = buildEscalationMessage(escalationDecision);
           
+          // Structured logging for successful escalation
           console.log("ESCALATION_EXECUTED", {
+            user_id: user.id,
+            analysis_run_id: body.analysisRunId,
             asins: escalationDecision.required_asins,
             credits_used: escalationResults.creditsUsed,
             cached: escalationResults.cached,
+            cached_count: escalationResults.cached.filter(c => c).length,
+            api_calls: escalationResults.cached.filter(c => !c).length,
+            timestamp: new Date().toISOString(),
           });
         } catch (escalationError) {
-          console.error("ESCALATION_ERROR", escalationError);
+          // Structured logging for escalation errors
+          console.error("ESCALATION_ERROR", {
+            user_id: user.id,
+            analysis_run_id: body.analysisRunId,
+            asins: escalationDecision.required_asins,
+            error: escalationError instanceof Error ? escalationError.message : String(escalationError),
+            stack: escalationError instanceof Error ? escalationError.stack : undefined,
+            timestamp: new Date().toISOString(),
+          });
+          
           escalationMessage = `Failed to look up product details: ${escalationError instanceof Error ? escalationError.message : String(escalationError)}`;
         }
-      } else {
-        // Insufficient credits - show message
-        escalationMessage = buildInsufficientCreditsMessage(escalationDecision, creditContext);
       }
     }
     
