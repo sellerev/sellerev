@@ -254,6 +254,7 @@ export default function ChatSidebar({
     memoryDescription: string;
     subtext?: string;
   } | null>(null);
+  const [escalationState, setEscalationState] = useState<{ question: string; asin: string | null } | null>(null);
   
   // Smart scrolling state
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -449,7 +450,7 @@ export default function ChatSidebar({
             try {
               const json = JSON.parse(line.slice(6));
               
-              // Handle metadata (e.g., cost override updates, memory confirmation)
+              // Handle metadata (e.g., cost override updates, memory confirmation, escalation)
               if (json.metadata) {
                 if (json.metadata.type === "cost_override_applied" || json.metadata.type === "margin_snapshot_refined") {
                   const { margin_snapshot } = json.metadata;
@@ -459,11 +460,21 @@ export default function ChatSidebar({
                 } else if (json.metadata.type === "memory_confirmation") {
                   // Show memory confirmation prompt
                   setPendingMemoryConfirmation(json.metadata);
+                } else if (json.metadata.type === "escalation_started") {
+                  // Show escalation loading state
+                  setEscalationState({
+                    question: json.metadata.question || "",
+                    asin: json.metadata.asin || null,
+                  });
                 }
               }
               
               // Handle content chunks
               if (json.content) {
+                // Clear escalation state when content starts streaming
+                if (escalationState) {
+                  setEscalationState(null);
+                }
                 accumulatedContent += json.content;
                 setStreamingContent(accumulatedContent);
               }
@@ -495,6 +506,7 @@ export default function ChatSidebar({
     } finally {
       setIsLoading(false);
       setStreamingContent("");
+      setEscalationState(null); // Clear escalation state when done
       // Focus input after send
       inputRef.current?.focus();
     }
@@ -720,8 +732,19 @@ export default function ChatSidebar({
               </div>
             )}
 
-            {/* Loading indicator (before streaming starts) */}
-            {isLoading && !streamingContent && (
+            {/* Escalation loading state (when escalation is happening) */}
+            {escalationState && !streamingContent && (
+              <div className="w-full flex justify-start">
+                <div className="max-w-[85%] bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5">
+                  <div className="text-xs text-gray-500 italic">
+                    Searching for {escalationState.question}…
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Loading indicator (before streaming starts, no escalation) */}
+            {isLoading && !streamingContent && !escalationState && (
               <div className="w-full flex justify-start">
                 <div className="max-w-[85%] bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
                   <div className="text-[11px] font-medium mb-2 text-gray-500">

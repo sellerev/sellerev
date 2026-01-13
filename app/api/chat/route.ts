@@ -2123,7 +2123,19 @@ export async function POST(req: NextRequest) {
 
     const stream = new ReadableStream({
       async start(controller) {
-        // If margin snapshot was refined, send updated snapshot metadata first
+        // If escalation happened, send escalation metadata first
+        // This allows the frontend to show a loading state
+        if (escalationMessage && escalationResults && escalationResults.success) {
+          const escalationMetadata = {
+            type: "escalation_started",
+            question: body.message, // Natural language version of the question
+            asin: selectedAsin || escalationDecision.required_asins[0] || null,
+          };
+          
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata: escalationMetadata })}\n\n`));
+        }
+        
+        // If margin snapshot was refined, send updated snapshot metadata
         // This allows the frontend to update the UI with refined margin data
         if (shouldSaveSnapshot && marginSnapshot) {
           const refinedValues: string[] = [];
