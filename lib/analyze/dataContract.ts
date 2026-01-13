@@ -321,6 +321,25 @@ function calculateTop5AvgReviews(products: Array<{ review_count: number }>): num
   return Math.round(sum / reviews.length);
 }
 
+/**
+ * Normalizes brand to bucket (Phase 1: Brand aggregation only)
+ * Rules:
+ * - "Amazon" → "Amazon"
+ * - Non-empty brand string → that brand
+ * - Otherwise → "Unknown"
+ */
+function normalizeBrandBucket(brand: string | null | undefined): string {
+  if (!brand || typeof brand !== 'string' || brand.trim().length === 0) {
+    return 'Unknown';
+  }
+  const trimmed = brand.trim();
+  // Normalize "Amazon" variations
+  if (trimmed.toLowerCase() === 'amazon') {
+    return 'Amazon';
+  }
+  return trimmed;
+}
+
 // ============================================================================
 // KEYWORD ANALYZE MAPPER
 // ============================================================================
@@ -631,71 +650,70 @@ export async function buildKeywordAnalyzeResponse(
       : null;
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // TOP 5 BRANDS REVENUE CONTROL CALCULATION
+    // PHASE 1: BRAND STATS COMPUTATION (Page-1 aggregate only)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Calculate % of total page-1 revenue controlled by top 5 brands
-    // Uses existing canonical product revenue allocations (no API calls)
+    // Compute brand buckets and aggregate stats
+    // Rules: Amazon, brand string, or Unknown - all contribute to counts
     
-    // Step 1: Aggregate revenue by brand (ignore null brands)
+    // Step 1: Compute brand buckets and aggregate revenue
     const brandRevenueMap = new Map<string, number>();
+    const brandBuckets = new Set<string>();
+    
     for (const product of canonicalProducts) {
-      if (product.brand && typeof product.brand === 'string' && product.brand.trim().length > 0) {
-        const brand = product.brand.trim();
-        const revenue = product.estimated_monthly_revenue || 0;
-        const currentRevenue = brandRevenueMap.get(brand) || 0;
-        brandRevenueMap.set(brand, currentRevenue + revenue);
-      }
+      const brandBucket = normalizeBrandBucket(product.brand);
+      brandBuckets.add(brandBucket);
+      
+      const revenue = product.estimated_monthly_revenue || 0;
+      const currentRevenue = brandRevenueMap.get(brandBucket) || 0;
+      brandRevenueMap.set(brandBucket, currentRevenue + revenue);
     }
     
-    // Step 2: Rank brands by revenue and take top 5
+    // Step 2: Compute page1_brand_count (includes Unknown)
+    const page1_brand_count = brandBuckets.size;
+    
+    // Step 3: Compute top 5 brand share
+    const totalRevenue = canonicalProducts.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
     const brandRevenueEntries = Array.from(brandRevenueMap.entries())
       .map(([brand, revenue]) => ({ brand, revenue }))
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 5);
+      .sort((a, b) => b.revenue - a.revenue);
     
-    // Step 3: Compute control percentage
-    // Use total revenue from ALL page-1 products (not just products with revenue > 0)
-    const totalRevenue = canonicalProducts.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
-    const top5Revenue = brandRevenueEntries.reduce((sum, entry) => sum + entry.revenue, 0);
-    const controlPct = totalRevenue > 0 
+    const top5Revenue = brandRevenueEntries
+      .slice(0, 5)
+      .reduce((sum, entry) => sum + entry.revenue, 0);
+    
+    const top_5_brand_share_pct = totalRevenue > 0
       ? Math.round((top5Revenue / totalRevenue) * 100 * 10) / 10 // Round to 1 decimal place
-      : null;
+      : 0;
     
-    // Step 4: Calculate revenue share % for each top brand
-    const top5Brands = brandRevenueEntries.map(entry => ({
-      brand: entry.brand,
-      revenue: entry.revenue,
-      revenue_share_pct: totalRevenue > 0
-        ? Math.round((entry.revenue / totalRevenue) * 100 * 10) / 10 // Round to 1 decimal place
-        : 0,
-    }));
-    
-    // Step 5: Attach to market snapshot
+    // Step 4: Attach brand_stats to snapshot
     if (snapshot) {
       (snapshot as any).monthly_units = totalMonthlyUnits;
       (snapshot as any).monthly_revenue = totalMonthlyRevenue;
       if (averageBSR !== null) {
         snapshot.avg_bsr = averageBSR;
       }
-      // Add top 5 brands revenue control
-      snapshot.top_5_brand_revenue_share_pct = controlPct;
-      snapshot.top_5_brands = top5Brands.length > 0 ? top5Brands : null;
+      // Add brand_stats (Phase 1)
+      (snapshot as any).brand_stats = {
+        page1_brand_count,
+        top_5_brand_share_pct,
+      };
     }
     
-    // Step 6: Logging
-    console.log("📊 TOP_5_BRAND_REVENUE_CONTROL", {
-      total_brands: brandRevenueMap.size,
-      top_5_brand_revenue_share_pct: controlPct,
-      top_5_brands: top5Brands,
+    // Step 5: Logging
+    console.log("📊 BRAND_STATS_COMPUTED", {
+      page1_brand_count,
+      top_5_brand_share_pct,
       total_revenue: totalRevenue,
       top_5_revenue: top5Revenue,
+      brand_buckets: Array.from(brandBuckets),
     });
     
     console.log("📈 MARKET SNAPSHOT AGGREGATED", {
       total_monthly_units: totalMonthlyUnits,
       total_monthly_revenue: totalMonthlyRevenue,
       average_bsr: averageBSR,
-      top_5_brand_revenue_share_pct: controlPct,
+      page1_brand_count,
+      top_5_brand_share_pct: top_5_brand_share_pct,
     });
   }
   
