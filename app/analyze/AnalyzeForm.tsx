@@ -462,6 +462,12 @@ export default function AnalyzeForm({
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(
     normalizeAnalysis(initialAnalysis)
   );
+  
+  // Store the actual analysisRunId (UUID) from API response for chat
+  // This is separate from analysis.analysis_run_id which may be snapshot_id for Tier-1
+  const [analysisRunIdForChat, setAnalysisRunIdForChat] = useState<string | null>(
+    initialAnalysis?.analysis_run_id || null
+  );
   // Track if current analysis is estimated (Tier-1) vs snapshot (Tier-2)
   const [isEstimated, setIsEstimated] = useState(false);
   const [snapshotType, setSnapshotType] = useState<"estimated" | "snapshot">("snapshot");
@@ -615,6 +621,7 @@ export default function AnalyzeForm({
     setLoading(true);
     setError(null);
     setAnalysis(null);
+    setAnalysisRunIdForChat(null); // Clear analysisRunId for chat
     setChatMessages([]); // Clear previous chat
     setIsEstimated(false); // Reset estimated flag
     setSnapshotType("snapshot"); // Reset snapshot type
@@ -703,9 +710,12 @@ export default function AnalyzeForm({
       if (data.snapshot && data.snapshot.snapshot_id) {
         const snapshot = data.snapshot;
         const snapshotId = snapshot.snapshot_id;
+        // Use analysisRunId if available (for chat), otherwise fall back to snapshot_id
+        const analysisRunId = data.analysisRunId || snapshotId;
         
         console.log("TIER1_SNAPSHOT_RECEIVED", {
           snapshot_id: snapshotId,
+          analysisRunId: analysisRunId,
           product_count: snapshot.products?.length || 0,
           show_refining_badge: data.ui_hints?.show_refining_badge || false,
         });
@@ -747,10 +757,10 @@ export default function AnalyzeForm({
           listings: pageOneListings,
         };
 
-        // Create AnalysisResponse with snapshot_id as analysis_run_id (for backward compatibility)
-        // Note: We use snapshot_id as the identifier, but store it as analysis_run_id in the interface
+        // Create AnalysisResponse with analysisRunId (UUID) for chat compatibility
+        // Use analysisRunId if available (for chat API), otherwise use snapshot_id as fallback
         const analysisData: AnalysisResponse = {
-          analysis_run_id: snapshotId, // Use snapshot_id as identifier
+          analysis_run_id: analysisRunId, // Use analysisRunId (UUID) for chat, snapshot_id as fallback
           created_at: snapshot.created_at || new Date().toISOString(),
           input_type: "keyword",
           input_value: inputValue.trim(),
@@ -791,8 +801,12 @@ export default function AnalyzeForm({
 
         console.log("TIER1_ANALYSIS_CREATED", {
           snapshot_id: snapshotId,
+          analysisRunId: analysisRunId,
           product_count: pageOneListings.length,
         });
+
+        // Store the actual analysisRunId (UUID) for chat
+        setAnalysisRunIdForChat(analysisRunId);
 
         // Store estimated flag and snapshot type
         setIsEstimated(false); // Tier-1 is real data, not estimated
@@ -897,6 +911,11 @@ export default function AnalyzeForm({
         estimated: data.estimated || false,
         dataSource: data.dataSource || 'snapshot',
       });
+
+      // Store the actual analysisRunId (UUID) for chat
+      if (data.analysisRunId) {
+        setAnalysisRunIdForChat(data.analysisRunId);
+      }
 
       // Store estimated flag and snapshot type for UI badges
       setIsEstimated(data.estimated === true || data.dataSource === 'estimated');
@@ -1930,7 +1949,7 @@ export default function AnalyzeForm({
             </div>
           )}
           <ChatSidebar
-            analysisRunId={analysis?.analysis_run_id || null}
+            analysisRunId={analysisRunIdForChat}
             snapshotId={analysis?.analysis_run_id || null}
             initialMessages={chatMessages}
             onMessagesChange={setChatMessages}
