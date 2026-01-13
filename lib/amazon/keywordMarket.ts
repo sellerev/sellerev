@@ -68,6 +68,13 @@ export interface KeywordMarketSnapshot {
   search_volume_source?: string; // "model_v1" | "model_v2"
   revenue_estimate_source?: string; // "model_v1" | "model_v2"
   model_version?: string; // "v2.0.20250117"
+  // Top 5 Brands Revenue Control
+  top_5_brand_revenue_share_pct?: number | null; // % of total page-1 revenue controlled by top 5 brands
+  top_5_brands?: Array<{
+    brand: string;
+    revenue: number;
+    revenue_share_pct: number;
+  }> | null; // Top 5 brands with revenue breakdown
   // Competitive Pressure Index (CPI) - seller-context aware, 0-100
   // Computed once per analysis, cached, immutable
   cpi?: {
