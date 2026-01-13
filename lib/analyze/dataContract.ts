@@ -84,7 +84,7 @@ export interface KeywordAnalyzeResponse {
     estimated_monthly_revenue: number;
     revenue_share_pct: number;
     fulfillment: Fulfillment;
-    brand: string | null;
+    // brand removed (Phase 4: brand not in public product types)
     seller_country: SellerCountry;
     // Algorithm boost tracking (Sellerev-only insight for AI/Spellbook)
     page_one_appearances: number; // appearance_count
@@ -111,7 +111,7 @@ export interface KeywordAnalyzeResponse {
     estimated_monthly_revenue: number;
     revenue_share_pct: number;
     fulfillment: Fulfillment;
-    brand: string | null;
+    // brand removed (Phase 4: brand not in public product types)
     seller_country: SellerCountry;
     // Algorithm boost tracking (Sellerev-only insight for AI/Spellbook)
     page_one_appearances: number; // appearance_count
@@ -270,12 +270,16 @@ function calculateAvgBSR(products: Array<{ bsr: number | null }>): number | null
 }
 
 /**
- * Calculates top 3 brand share percentage
+ * Calculates top 3 brand share percentage (Phase 4: uses CanonicalProduct for brand data)
  */
-function calculateTop3BrandShare(products: Array<{ brand: string | null }>): number {
+function calculateTop3BrandShare(canonicalProducts: CanonicalProduct[] | undefined): number {
+  if (!canonicalProducts || canonicalProducts.length === 0) {
+    return 0;
+  }
+  
   const brandCounts: Record<string, number> = {};
   
-  products.forEach(p => {
+  canonicalProducts.forEach(p => {
     if (p.brand) {
       brandCounts[p.brand] = (brandCounts[p.brand] || 0) + 1;
     }
@@ -283,7 +287,7 @@ function calculateTop3BrandShare(products: Array<{ brand: string | null }>): num
   
   const sorted = Object.values(brandCounts).sort((a, b) => b - a);
   const top3 = sorted.slice(0, 3).reduce((a, b) => a + b, 0);
-  const total = products.length;
+  const total = canonicalProducts.length;
   
   return total > 0 ? Math.round((top3 / total) * 100) : 0;
 }
@@ -502,126 +506,19 @@ export async function buildKeywordAnalyzeResponse(
       };
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // BRAND AGGREGATION (WHEN AVAILABLE)
+  // BRAND AGGREGATION (PHASE 4: Removed - using brand_stats from canonical products instead)
   // ═══════════════════════════════════════════════════════════════════════════
-  // Compute brand dominance summary when brand data exists
-  // Group Page-1 ASINs by brand, compute ASIN count and review concentration per brand
-  let brandDominanceSummary: {
-    total_brands: number;
-    asin_count_per_brand: Record<string, number>;
-    review_concentration_per_brand: Record<string, number>;
-    top_brand: string | null;
-    top_brand_asin_share_pct: number;
-    confidence: "complete" | "partial";
-  } | null = null;
-
-  // Check if any products have brand data (from products array or cache lookup)
-  const productsWithBrands = products.filter((p) => p.brand && p.brand.trim().length > 0);
-  const hasBrandData = productsWithBrands.length > 0;
-
-  if (hasBrandData && supabase) {
-    // Try to enrich brand data from cache if products have ASINs but missing brands
-    const productsNeedingBrand = products.filter(
-      (p) => p.asin && /^[A-Z0-9]{10}$/.test(p.asin) && (!p.brand || !p.brand.trim())
-    );
-
-    if (productsNeedingBrand.length > 0) {
-      // Fetch brand data from asin_bsr_cache for products missing brands
-      try {
-        const asinsNeedingBrand = productsNeedingBrand.map((p) => p.asin);
-        const { data: brandCacheData, error: brandCacheError } = await supabase
-          .from("asin_bsr_cache")
-          .select("asin, brand")
-          .in("asin", asinsNeedingBrand)
-          .not("brand", "is", null);
-
-        if (!brandCacheError && brandCacheData) {
-          // Update products with brand data from cache
-          const brandMap = new Map<string, string>();
-          brandCacheData.forEach((entry: any) => {
-            if (entry.brand && entry.brand.trim().length > 0) {
-              brandMap.set(entry.asin, entry.brand.trim());
-            }
-          });
-
-          products.forEach((p) => {
-            if (!p.brand && p.asin && brandMap.has(p.asin)) {
-              (p as any).brand = brandMap.get(p.asin)!;
-            }
-          });
-        }
-      } catch (error) {
-        console.warn("[BrandAggregation] Error fetching brand data from cache:", error);
-      }
-    }
-
-    // Re-check products with brands after cache lookup
-    const finalProductsWithBrands = products.filter(
-      (p) => p.brand && p.brand.trim().length > 0
-    );
-
-    if (finalProductsWithBrands.length > 0) {
-      // Group by brand
-      const brandGroups = new Map<string, typeof products>();
-      finalProductsWithBrands.forEach((p) => {
-        const brand = p.brand!.trim();
-        if (!brandGroups.has(brand)) {
-          brandGroups.set(brand, []);
-        }
-        brandGroups.get(brand)!.push(p);
-      });
-
-      // Compute aggregates per brand
-      const asinCountPerBrand: Record<string, number> = {};
-      const reviewConcentrationPerBrand: Record<string, number> = {};
-
-      brandGroups.forEach((brandProducts, brandName) => {
-        asinCountPerBrand[brandName] = brandProducts.length;
-        const totalReviews = brandProducts.reduce(
-          (sum, p) => sum + (p.review_count || 0),
-          0
-        );
-        reviewConcentrationPerBrand[brandName] = totalReviews;
-      });
-
-      // Find top brand by ASIN count
-      const topBrandEntry = Array.from(brandGroups.entries()).sort(
-        (a, b) => b[1].length - a[1].length
-      )[0];
-
-      const topBrand = topBrandEntry ? topBrandEntry[0] : null;
-      const topBrandAsinSharePct = topBrand
-        ? (asinCountPerBrand[topBrand] / products.length) * 100
-        : 0;
-
-      brandDominanceSummary = {
-        total_brands: brandGroups.size,
-        asin_count_per_brand: asinCountPerBrand,
-        review_concentration_per_brand: reviewConcentrationPerBrand,
-        top_brand: topBrand,
-        top_brand_asin_share_pct: Math.round(topBrandAsinSharePct * 100) / 100,
-        confidence:
-          finalProductsWithBrands.length === products.length ? "complete" : "partial",
-      };
-
-      console.log("[BrandAggregation] Brand dominance computed", {
-        total_brands: brandGroups.size,
-        top_brand: topBrand,
-        top_brand_asin_share_pct: topBrandAsinSharePct.toFixed(1) + "%",
-        products_with_brand: finalProductsWithBrands.length,
-        total_products: products.length,
-        confidence: brandDominanceSummary.confidence,
-      });
-    }
-  }
+  // Brand aggregation is now handled via brand_stats computed from canonicalProducts (Phase 1)
+  // Public products array no longer contains brand fields (Phase 2-4)
 
   // Build market structure from products (canonical or fallback)
+  // Phase 4: Use canonicalProducts for brand calculations (public products array no longer has brand)
   const marketStructure = {
     brand_dominance_pct: snapshot.dominance_score || 0,
-    top_3_brand_share_pct: calculateTop3BrandShare(products),
+    top_3_brand_share_pct: calculateTop3BrandShare(canonicalProducts),
     top_5_brand_revenue_share_pct: snapshot.top_5_brand_revenue_share_pct ?? null, // Top 5 Brands Control (%)
     top_5_brands: snapshot.top_5_brands ?? null, // Top 5 brands breakdown
-    brand_dominance_summary: brandDominanceSummary, // Add brand aggregation when available
+    // brand_dominance_summary removed (Phase 4: using brand_stats instead)
     price_band: {
       min: priceMin,
       max: priceMax,
@@ -951,13 +848,15 @@ export async function buildKeywordAnalyzeResponse(
   // Never throws or returns null — defaults to NONE with explanation
   let brandMoat: KeywordAnalyzeResponse["brand_moat"];
 
-  if (products && products.length > 0) {
+  // Phase 4: Use canonicalProducts for brand moat analysis (they still have brand fields)
+  if (canonicalProducts && canonicalProducts.length > 0) {
     try {
       const { analyzeBrandMoat } = await import("@/lib/market/brandMoatAnalysis");
       
-      // Map products to PageOneListing format for moat analysis
+      // Map canonicalProducts to PageOneListing format for moat analysis
       // Uses ONLY canonical estimated_monthly_revenue - never recomputes
-      const pageOneListings = products.map((p) => ({
+      // Phase 4: Use canonicalProducts.brand (internal type still has brand field)
+      const pageOneListings = canonicalProducts.map((p) => ({
         brand: p.brand || null,
         estimated_monthly_revenue: p.estimated_monthly_revenue || 0,
         review_count: p.review_count || 0,

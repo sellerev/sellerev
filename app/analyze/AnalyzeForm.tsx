@@ -91,7 +91,7 @@ interface AnalysisResponse {
     estimated_monthly_revenue: number;
     revenue_share_pct: number;
     fulfillment: "FBA" | "FBM" | "AMZ";
-    brand: string | null;
+    // brand removed (Phase 4: brand not in public product types)
     seller_country?: "US" | "CN" | "Other" | "Unknown"; // Optional - may be missing in stored data
     [key: string]: unknown; // Allow additional fields
   }>;
@@ -120,7 +120,7 @@ interface AnalysisResponse {
     estimated_monthly_revenue: number;
     revenue_share_pct: number;
     fulfillment: "FBA" | "FBM" | "AMZ";
-    brand: string | null;
+    // brand removed (Phase 4: brand not in public product types)
     seller_country?: "US" | "CN" | "Other" | "Unknown"; // Optional - may be missing in stored data
     [key: string]: unknown; // Allow additional fields
   }>;
@@ -186,7 +186,7 @@ interface AnalysisResponse {
       fulfillment?: "FBA" | "FBM" | "Amazon" | null;
       is_sponsored: boolean;
       position: number;
-      brand: string | null;
+      // brand removed (Phase 4: brand not in public product types)
       image_url?: string | null;
       est_monthly_revenue?: number | null;
       est_monthly_units?: number | null;
