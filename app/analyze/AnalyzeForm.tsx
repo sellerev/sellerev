@@ -196,6 +196,13 @@ interface AnalysisResponse {
     est_total_monthly_revenue_max?: number | null;
     est_total_monthly_units_min?: number | null;
     est_total_monthly_units_max?: number | null;
+    // Top 5 Brands Revenue Control
+    top_5_brand_revenue_share_pct?: number | null; // % of total page-1 revenue controlled by top 5 brands
+    top_5_brands?: Array<{
+      brand: string;
+      revenue: number;
+      revenue_share_pct: number;
+    }> | null; // Top 5 brands with revenue breakdown
     // Search volume estimation (modeled, not exact)
     search_demand?: {
       search_volume_range: string; // e.g., "10k–20k"
@@ -1183,6 +1190,30 @@ export default function AnalyzeForm({
                                 : "Estimating…"}
                             </div>
                           </div>
+                          
+                          {/* 8. Top 5 Brands Control */}
+                          {snapshot?.top_5_brand_revenue_share_pct != null && (
+                            <div className="relative group">
+                              <div className="text-xs text-gray-500 mb-1">Top 5 Brands Control</div>
+                              <div className="text-lg font-semibold text-gray-900">
+                                {snapshot.top_5_brand_revenue_share_pct.toFixed(1)}%
+                              </div>
+                              {/* Tooltip with brand breakdown */}
+                              {snapshot.top_5_brands && snapshot.top_5_brands.length > 0 && (
+                                <div className="absolute left-0 top-full mt-2 w-64 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                                  <div className="font-semibold mb-2">Top Brands:</div>
+                                  <ul className="space-y-1">
+                                    {snapshot.top_5_brands.map((brand, idx) => (
+                                      <li key={idx} className="flex justify-between">
+                                        <span className="truncate mr-2">{brand.brand}</span>
+                                        <span className="font-medium flex-shrink-0">{brand.revenue_share_pct.toFixed(1)}%</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
