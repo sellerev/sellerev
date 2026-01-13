@@ -690,18 +690,45 @@ function extractBrandFromTitle(title: string | null): string | null {
 }
 
 /**
+ * Extracts brand from product data (Rainforest API product response)
+ * Returns brand from brand_name or by_line.name, or null if not available
+ */
+function extractBrandFromProduct(product: any): string | null {
+  if (!product) return null;
+  
+  // Priority 1: brand_name
+  if (product.brand_name && typeof product.brand_name === 'string' && product.brand_name.trim().length > 0) {
+    return product.brand_name.trim();
+  }
+  
+  // Priority 2: by_line.name
+  if (product.by_line?.name && typeof product.by_line.name === 'string' && product.by_line.name.trim().length > 0) {
+    return product.by_line.name.trim();
+  }
+  
+  // Priority 3: brand (direct field)
+  if (product.brand && typeof product.brand === 'string' && product.brand.trim().length > 0) {
+    return product.brand.trim();
+  }
+  
+  return null;
+}
+
+/**
  * Resolves brand with strict priority order and confidence level
  * 
  * Priority:
  * 1. brand_name (explicit Rainforest field) → "high"
  * 2. by_line_name (e.g., "Brand: X") → "high"
- * 3. seller_name ONLY if it matches brand-like pattern → "medium"
- * 4. Deterministic fallback extraction from title → "low"
- * 5. "Unknown" → "low"
+ * 3. cached_brand (from asin_bsr_cache) → "high" (cached brands are authoritative)
+ * 4. seller_name ONLY if it matches brand-like pattern → "medium"
+ * 5. Deterministic fallback extraction from title → "low"
+ * 6. "Unknown" → "low"
  */
 function resolveBrandWithConfidence(
   item: any,
-  title: string | null
+  title: string | null,
+  cachedBrand?: string | null
 ): { brand: string; confidence: "high" | "medium" | "low" } {
   // Priority 1: brand_name (explicit Rainforest field)
   if (item.brand_name && typeof item.brand_name === 'string' && item.brand_name.trim().length > 0) {
@@ -713,7 +740,12 @@ function resolveBrandWithConfidence(
     return { brand: item.by_line.name.trim(), confidence: "high" };
   }
 
-  // Priority 3: seller_name ONLY if it matches brand-like pattern
+  // Priority 3: cached_brand (from asin_bsr_cache) - authoritative source
+  if (cachedBrand && typeof cachedBrand === 'string' && cachedBrand.trim().length > 0) {
+    return { brand: cachedBrand.trim(), confidence: "high" };
+  }
+
+  // Priority 4: seller_name ONLY if it matches brand-like pattern
   // Brand-like pattern: starts with capital, 2-4 words, no generic words
   if (item.seller?.name && typeof item.seller.name === 'string') {
     const sellerName = item.seller.name.trim();
@@ -729,7 +761,7 @@ function resolveBrandWithConfidence(
     }
   }
 
-  // Priority 4: Deterministic fallback extraction from title
+  // Priority 5: Deterministic fallback extraction from title
   if (title) {
     const extracted = extractBrandFromTitle(title);
     if (extracted && extracted.length > 0) {
@@ -737,7 +769,7 @@ function resolveBrandWithConfidence(
     }
   }
 
-  // Priority 5: "Unknown"
+  // Priority 6: "Unknown"
   return { brand: "Unknown", confidence: "low" };
 }
 
@@ -1439,9 +1471,17 @@ export async function fetchKeywordMarketSnapshot(
       asin_count: page1Asins.length,
     });
 
-    // STEP C: Bulk cache lookup
+    // STEP C: Bulk cache lookup (includes BSR and brand data)
     const { bulkLookupBsrCache, bulkUpsertBsrCache } = await import("./asinBsrCache");
     const cacheMap = supabase ? await bulkLookupBsrCache(supabase, page1Asins) : new Map();
+    
+    // Create brand cache map for quick lookups
+    const brandCacheMap = new Map<string, string>();
+    for (const [asin, cacheEntry] of cacheMap.entries()) {
+      if (cacheEntry.brand && typeof cacheEntry.brand === 'string' && cacheEntry.brand.trim().length > 0) {
+        brandCacheMap.set(asin, cacheEntry.brand.trim());
+      }
+    }
     
     const cachedAsins = Array.from(cacheMap.keys());
     const missingAsins = page1Asins.filter(asin => !cacheMap.has(asin));
@@ -1550,6 +1590,7 @@ export async function fetchKeywordMarketSnapshot(
             main_category: string | null;
             main_category_bsr: number | null;
             price: number | null;
+            brand?: string | null;
           }> = [];
           
           const excludedAsins: string[] = [];
@@ -1570,6 +1611,7 @@ export async function fetchKeywordMarketSnapshot(
             // STEP 3: Use multi-source BSR extraction (more robust)
             const bsrData = extractMultiSourceBSR(product);
             const price = parsePrice(product);
+            const brand = extractBrandFromProduct(product); // Extract brand from product data
 
             // PRODUCTION HARDENING: Validate BSR (null, 0, or < 1 are invalid)
             if (!bsrData || !bsrData.rank || bsrData.rank < 1) {
@@ -1581,12 +1623,13 @@ export async function fetchKeywordMarketSnapshot(
                 message: "BSR is null, 0, or < 1 - excluding from calculations",
               });
               
-              // Still cache the entry even if BSR is missing (for price/other data)
+              // Still cache the entry even if BSR is missing (for price/brand/other data)
               freshEntries.push({
                 asin,
                 main_category: null,
                 main_category_bsr: null,
                 price: price,
+                brand: brand,
               });
               continue;
             }
@@ -1603,6 +1646,7 @@ export async function fetchKeywordMarketSnapshot(
               main_category: bsrData.category,
               main_category_bsr: bsrData.rank,
               price: price,
+              brand: brand,
             });
           }
           
@@ -1782,8 +1826,9 @@ export async function fetchKeywordMarketSnapshot(
       // ═══════════════════════════════════════════════════════════════════════════
       // BRAND RESOLUTION: Strict priority order with confidence
       // ═══════════════════════════════════════════════════════════════════════════
-      // Priority: 1) brand_name, 2) by_line_name, 3) seller_name (if brand-like), 4) title extraction, 5) "Unknown"
-      const brandResolution = resolveBrandWithConfidence(item, title);
+      // Priority: 1) brand_name, 2) by_line_name, 3) cached_brand, 4) seller_name (if brand-like), 5) title extraction, 6) "Unknown"
+      const cachedBrand = asin ? brandCacheMap.get(asin) : null;
+      const brandResolution = resolveBrandWithConfidence(item, title, cachedBrand);
       const brand = brandResolution.brand;
       // Store brand confidence for later use (will be added to ParsedListing if needed)
       (item as any)._brand_confidence = brandResolution.confidence;

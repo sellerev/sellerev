@@ -10,6 +10,7 @@ export interface BsrCacheEntry {
   main_category: string | null;
   main_category_bsr: number | null;
   price: number | null;
+  brand: string | null;
   last_fetched_at: string;
   source: string;
 }
@@ -64,6 +65,7 @@ export async function bulkLookupBsrCache(
           main_category: row.main_category || null,
           main_category_bsr: row.main_category_bsr || null,
           price: row.price ? parseFloat(row.price) : null,
+          brand: row.brand || null,
           last_fetched_at: row.last_fetched_at,
           source: row.source || "rainforest",
         });
@@ -93,6 +95,7 @@ export async function bulkUpsertBsrCache(
     main_category: string | null;
     main_category_bsr: number | null;
     price: number | null;
+    brand?: string | null;
   }>
 ): Promise<void> {
   if (!supabase || !entries || entries.length === 0) {
@@ -106,6 +109,7 @@ export async function bulkUpsertBsrCache(
       main_category: entry.main_category,
       main_category_bsr: entry.main_category_bsr,
       price: entry.price,
+      brand: entry.brand ?? null,
       last_fetched_at: now,
       source: "rainforest",
     }));
