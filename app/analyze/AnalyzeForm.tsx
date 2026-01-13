@@ -492,7 +492,21 @@ export default function AnalyzeForm({
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(initialMessages);
   
   // Selected listing state (for AI context)
-  const [selectedListing, setSelectedListing] = useState<any | null>(null);
+  // Multi-ASIN selection state (replaces single selectedListing)
+  const [selectedAsins, setSelectedAsins] = useState<string[]>([]);
+  
+  // Helper: Get selected listing objects from selectedAsins
+  const getSelectedListings = () => {
+    if (!analysis?.page_one_listings || selectedAsins.length === 0) return [];
+    return analysis.page_one_listings.filter((listing: any) => 
+      listing.asin && selectedAsins.includes(listing.asin)
+    );
+  };
+  
+  // Helper: Get single selected listing (for backward compatibility with ChatSidebar)
+  const selectedListing = selectedAsins.length === 1 
+    ? (analysis?.page_one_listings || []).find((listing: any) => listing.asin === selectedAsins[0]) || null
+    : null;
   
   // Sort state for Page 1 Results (default to rank to preserve Amazon order)
   const [sortBy, setSortBy] = useState<"rank" | "price-asc" | "price-desc" | "revenue-desc" | "units-desc" | "reviews-desc" | "rating-desc">("rank");
@@ -1827,7 +1841,7 @@ export default function AnalyzeForm({
                     {/* Product Cards Grid - auto-fill with minmax */}
                     <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
                       {filteredListings.map((listing: any, idx: number) => {
-                          const isSelected = selectedListing?.asin === listing.asin;
+                          const isSelected = listing.asin && selectedAsins.includes(listing.asin);
                           // Extract image URL with fallback - preserve from stable source
                           const imageUrl = listing.image_url ?? listing.image ?? null;
                           // Rank = Page-1 position (use page_position if available, else use array index + 1 for display)
@@ -1897,7 +1911,16 @@ export default function AnalyzeForm({
                               imageUrl={imageUrl}
                               asin={asin}
                               isSelected={isSelected}
-                              onSelect={() => setSelectedListing(isSelected ? null : listing)}
+                              onSelect={() => {
+                                if (!listing.asin) return;
+                                if (isSelected) {
+                                  // Deselect: remove from array
+                                  setSelectedAsins(prev => prev.filter(asin => asin !== listing.asin));
+                                } else {
+                                  // Select: add to array
+                                  setSelectedAsins(prev => [...prev, listing.asin]);
+                                }
+                              }}
                             />
                           );
                         })}
@@ -1959,6 +1982,7 @@ export default function AnalyzeForm({
               ...selectedListing,
               // Include enriched data if available for this ASIN
             } : null}
+            selectedAsins={selectedAsins}
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={handleToggleCollapse}
           />

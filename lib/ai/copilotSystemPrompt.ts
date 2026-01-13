@@ -103,24 +103,36 @@ export function buildCopilotSystemPrompt(
   const verdict = decision?.verdict || "UNKNOWN";
   const executiveSummary = decision?.executive_summary || "";
 
-  // Extract selected ASIN from ai_context if available
+  // Extract selected ASINs from context (multi-select support)
+  // Check for selected_listing (backward compatibility) or selected_asins in context
   const selectedListing = (ai_context.selected_listing as { asin?: string } | undefined) || null;
   const selectedAsin = selectedListing?.asin || null;
   
-  // Build selected ASIN lock instructions
-  const selectedAsinLock = selectedAsin
-    ? `\n\n=== SELECTED ASIN HARD LOCK (CRITICAL) ===
-You are HARD-LOCKED to the currently selected ASIN: ${selectedAsin}
+  // Try to get selected ASINs from context (may be set by buildContextMessage)
+  // For now, we'll infer from selected_listing or use empty array
+  const selectedAsins: string[] = selectedAsin ? [selectedAsin] : [];
+  
+  // Build selected ASINs lock instructions
+  const selectedAsinLock = selectedAsins.length > 0
+    ? `\n\n=== SELECTED ASINS HARD LOCK (CRITICAL) ===
+You are HARD-LOCKED to the currently selected product${selectedAsins.length === 1 ? '' : 's'}: ${selectedAsins.join(', ')}
 
 MANDATORY RULES:
-1. You may ONLY reference, cite, or escalate for ASIN ${selectedAsin}
+1. You may ONLY reference, cite, or escalate for ASIN${selectedAsins.length === 1 ? '' : 's'}: ${selectedAsins.join(', ')}
 2. NEVER infer or reference other ASINs unless the user explicitly requests a comparison
-3. All citations must use ASIN ${selectedAsin} only
+3. All citations must use only these selected ASINs
 4. If the question is ambiguous or mentions other ASINs, you MUST ask a clarification question instead of guessing
-5. If the user asks about a different product, you MUST say: "I can only reference the currently selected ASIN (${selectedAsin}). Please select the product you want to discuss, or clarify your question."
+5. If ${selectedAsins.length > 2 ? 'more than 2 products are selected and escalation is needed, you must ask the user to narrow to 1-2 products' : 'escalation is needed, you can escalate for up to 2 selected products'}
+6. If the user asks about a different product, you MUST say: "I can only reference the currently selected product${selectedAsins.length === 1 ? '' : 's'} (${selectedAsins.join(', ')}). Please select the product${selectedAsins.length === 1 ? '' : 's'} you want to discuss, or clarify your question."
 
 This lock is NON-NEGOTIABLE. You cannot reference any other ASINs.`
-    : "";
+    : (selectedAsins.length === 0 
+      ? `\n\n=== NO PRODUCTS SELECTED ===
+No products are currently selected. You may only answer using market-level / Page-1 aggregate data.
+- Do NOT reference specific products
+- Do NOT escalate for product-specific questions
+- If the user asks about a specific product, respond: "Select a product from Page-1 to analyze it."`
+      : "");
   
   return `You are a seller decision engine grounded ONLY in visible Page-1 data.
 

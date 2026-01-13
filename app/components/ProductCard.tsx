@@ -83,10 +83,10 @@ export function ProductCard({
         transition-all duration-200 ease-in-out
         flex flex-col
         min-h-[480px]
-        focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:ring-offset-2
+        focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2
         ${isSelected 
-          ? 'border-2 border-[#3B82F6] bg-[#EFF6FF] shadow-md' 
-          : 'border border-[#E5E7EB] shadow-sm hover:shadow-lg hover:border-[#3B82F6] hover:scale-[1.01] hover:-translate-y-0.5'
+          ? 'border-2 border-gray-400 bg-gray-50 shadow-md' 
+          : 'border border-gray-200 shadow-sm hover:shadow-lg hover:border-gray-300 hover:scale-[1.01] hover:-translate-y-0.5'
         }
       `}
     >
@@ -110,9 +110,9 @@ export function ProductCard({
         </a>
       )}
 
-      {/* Selected Checkmark Badge */}
+      {/* Selected Checkmark Badge - Subtle neutral styling */}
       {isSelected && (
-        <div className="absolute top-4 left-4 w-6 h-6 bg-[#10B981] text-white 
+        <div className="absolute top-4 left-4 w-6 h-6 bg-gray-700 text-white 
                         rounded-full flex items-center justify-center z-10 shadow-md">
           <Check className="w-4 h-4" />
         </div>

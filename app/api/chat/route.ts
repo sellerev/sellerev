@@ -58,7 +58,8 @@ import {
 interface ChatRequestBody {
   analysisRunId: string;
   message: string;
-  selectedListing?: any | null; // Optional selected listing for AI context
+  selectedListing?: any | null; // Optional selected listing for AI context (DEPRECATED: use selectedAsins)
+  selectedAsins?: string[]; // Selected ASINs array (for multi-select)
   responseMode?: "concise" | "expanded"; // Response mode (default: concise)
 }
 
@@ -67,6 +68,17 @@ function validateRequestBody(body: unknown): body is ChatRequestBody {
     return false;
   }
   const b = body as Record<string, unknown>;
+  
+  // Validate selectedAsins if present (must be array of strings)
+  if ('selectedAsins' in b && !Array.isArray(b.selectedAsins)) {
+    return false;
+  }
+  if ('selectedAsins' in b && Array.isArray(b.selectedAsins)) {
+    if (!b.selectedAsins.every((item: unknown) => typeof item === 'string')) {
+      return false;
+    }
+  }
+  
   return (
     typeof b.analysisRunId === "string" &&
     b.analysisRunId.trim().length > 0 &&
@@ -235,7 +247,8 @@ function buildContextMessage(
   },
   inputType: string,
   inputValue: string,
-  selectedListing?: any | null
+  selectedListing?: any | null,
+  selectedAsins?: string[] // Multi-ASIN support
 ): string {
   const contextParts: string[] = [];
 
@@ -556,50 +569,82 @@ CRITICAL AI RULES:
     }
   }
 
-  // Section 7: Selected Listing/Competitor Context (if provided)
-  if (selectedListing && typeof selectedListing === 'object' && selectedListing !== null) {
+  // Section 7: Selected Listings Context (multi-ASIN support)
+  // Build context for all selected ASINs
+  const effectiveSelectedAsins = selectedAsins && selectedAsins.length > 0
+    ? selectedAsins
+    : (selectedListing?.asin ? [selectedListing.asin] : []);
+  
+  if (effectiveSelectedAsins.length > 0) {
     try {
-      const price = typeof selectedListing.price === 'number' && !isNaN(selectedListing.price) && selectedListing.price !== null && selectedListing.price !== undefined
-        ? `$${selectedListing.price.toFixed(2)}`
-        : 'Not available';
-      const rating = typeof selectedListing.rating === 'number' && !isNaN(selectedListing.rating) && selectedListing.rating !== null && selectedListing.rating !== undefined
-        ? selectedListing.rating.toFixed(1)
-        : 'Not available';
-      const reviews = typeof selectedListing.reviews === 'number' && !isNaN(selectedListing.reviews)
-        ? selectedListing.reviews.toLocaleString()
-        : 'Not available';
-      const bsr = typeof selectedListing.bsr === 'number' && !isNaN(selectedListing.bsr)
-        ? `#${selectedListing.bsr.toLocaleString()}`
-        : 'Not available';
+      // Get all selected listings from page_one_listings
+      const pageOneListings = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
+      const selectedListings = pageOneListings.filter((listing: any) => 
+        listing.asin && effectiveSelectedAsins.includes(listing.asin)
+      );
       
-      // v1: Canonical revenue only - no refinement
-      // HARD LOCK: Selected ASIN is the ONLY ASIN Copilot can reference
-      contextParts.push(`=== SELECTED LISTING (HARD LOCK - REQUIRED) ===
-The user has selected this listing from Page 1. This is the ONLY product you can reference, cite, or escalate for.
+      if (selectedListings.length > 0) {
+        const selectedCount = selectedListings.length;
+        const asinList = effectiveSelectedAsins.join(', ');
+        
+        contextParts.push(`=== SELECTED PRODUCTS (HARD LOCK - REQUIRED) ===
+The user has selected ${selectedCount === 1 ? 'this product' : `${selectedCount} products`} from Page 1. You may ONLY reference, cite, or escalate for these selected products.
 
 CRITICAL RULES:
-- You may ONLY reference, cite, or escalate for ASIN: ${selectedListing.asin || 'Not available'}
+- You may ONLY reference, cite, or escalate for ASINs: ${asinList}
 - NEVER infer or reference other ASINs unless the user explicitly requests a comparison
-- All citations must use this selected ASIN only
+- All citations must use only these selected ASINs
 - If the question is ambiguous or mentions other ASINs, you MUST ask a clarification question instead of guessing
+- If ${selectedCount > 2 ? 'more than 2 products are selected and escalation is needed, you must ask the user to narrow to 1-2 products' : 'escalation is needed, you can escalate for up to 2 selected products'}
 
-ASIN: ${selectedListing.asin || 'Not available'}
-Title: ${selectedListing.title || 'Not available'}
+SELECTED PRODUCTS:`);
+        
+        // Add details for each selected product
+        selectedListings.forEach((listing: any, idx: number) => {
+          const price = typeof listing.price === 'number' && !isNaN(listing.price) && listing.price !== null && listing.price !== undefined
+            ? `$${listing.price.toFixed(2)}`
+            : 'Not available';
+          const rating = typeof listing.rating === 'number' && !isNaN(listing.rating) && listing.rating !== null && listing.rating !== undefined
+            ? listing.rating.toFixed(1)
+            : 'Not available';
+          const reviews = typeof listing.review_count === 'number' && !isNaN(listing.review_count)
+            ? listing.review_count.toLocaleString()
+            : (typeof listing.reviews === 'number' && !isNaN(listing.reviews)
+              ? listing.reviews.toLocaleString()
+              : 'Not available');
+          const bsr = typeof listing.bsr === 'number' && !isNaN(listing.bsr)
+            ? `#${listing.bsr.toLocaleString()}`
+            : 'Not available';
+          
+          contextParts.push(`
+Product ${idx + 1}:
+ASIN: ${listing.asin || 'Not available'}
+Title: ${listing.title || 'Not available'}
 Price: ${price}
 Rating: ${rating}
 Reviews: ${reviews}
 BSR: ${bsr}
-Organic Rank: ${selectedListing.organic_rank !== null && selectedListing.organic_rank !== undefined ? `#${selectedListing.organic_rank}` : 'Not available'}
-Fulfillment: ${selectedListing.fulfillment || 'Not available'}
-Brand: ${selectedListing.brand || 'Not available'}
-Sponsored: ${selectedListing.is_sponsored ? 'Yes' : 'No'}
-Estimated Monthly Revenue: ${selectedListing.estimated_monthly_revenue ? `$${selectedListing.estimated_monthly_revenue.toLocaleString()}` : 'Not available'}
-Estimated Monthly Units: ${selectedListing.estimated_monthly_units ? selectedListing.estimated_monthly_units.toLocaleString() : 'Not available'}
-
-When the user asks about a specific product, you MUST only reference this selected listing (ASIN: ${selectedListing.asin || 'Not available'}). If they mention other ASINs or ask ambiguous questions, ask for clarification.`);
+Organic Rank: ${listing.organic_rank !== null && listing.organic_rank !== undefined ? `#${listing.organic_rank}` : 'Not available'}
+Fulfillment: ${listing.fulfillment || 'Not available'}
+Brand: ${listing.brand || 'Not available'}
+Sponsored: ${listing.is_sponsored ? 'Yes' : 'No'}
+Estimated Monthly Revenue: ${listing.estimated_monthly_revenue ? `$${listing.estimated_monthly_revenue.toLocaleString()}` : 'Not available'}
+Estimated Monthly Units: ${listing.estimated_monthly_units ? listing.estimated_monthly_units.toLocaleString() : 'Not available'}`);
+        });
+        
+        contextParts.push(`
+When the user asks about specific products, you MUST only reference these selected products (ASINs: ${asinList}). If they mention other ASINs or ask ambiguous questions, ask for clarification.`);
+      }
     } catch (error) {
-      console.error("Error formatting selected listing context:", error);
+      console.error("Error formatting selected listings context:", error);
     }
+  } else {
+    // No products selected - add context that only market-level data is available
+    contextParts.push(`=== NO PRODUCTS SELECTED ===
+No products are currently selected. You may only answer using market-level / Page-1 aggregate data.
+- Do NOT reference specific products
+- Do NOT escalate for product-specific questions
+- If the user asks about a specific product, respond: "Select a product from Page-1 to analyze it."`);
   }
   
 
@@ -1748,7 +1793,8 @@ export async function POST(req: NextRequest) {
         sellerProfile,
         analysisRun.input_type,
         analysisRun.input_value,
-        body.selectedListing || null
+        body.selectedListing || null, // Backward compatibility
+        selectedAsins // Multi-ASIN support
       );
 
       // 9. Build Market Snapshot Summary (from cached response.market_snapshot only)
@@ -1822,12 +1868,13 @@ export async function POST(req: NextRequest) {
     // Extract selected ASIN (hard lock)
     const selectedAsin = body.selectedListing?.asin || null;
     
-    // Make escalation decision (with selected ASIN lock)
+    // Make escalation decision (with selected ASINs lock)
     const escalationDecision = decideEscalation(
       body.message,
       page1Context,
       creditContext,
-      selectedAsin
+      selectedAsin, // Backward compatibility
+      selectedAsins // Multi-ASIN support
     );
     
     // Log escalation decision (structured logging)
@@ -1890,7 +1937,7 @@ export async function POST(req: NextRequest) {
             rainforestApiKey
           );
           
-          escalationMessage = buildEscalationMessage(escalationDecision, selectedAsin);
+          escalationMessage = buildEscalationMessage(escalationDecision, selectedAsin, selectedAsins);
           
           // Structured logging for successful escalation
           console.log("ESCALATION_EXECUTED", {
@@ -2134,11 +2181,12 @@ Use this escalated product data to answer the user's question. If data is missin
     // Capture pendingMemoriesForConfirmation for use in stream closure
     const pendingMemoriesToShow = pendingMemoriesForConfirmation;
     
-    // Capture escalation results and selected ASIN for citation building (used in stream closure)
+    // Capture escalation results and selected ASINs for citation building (used in stream closure)
     const escalationResultsForCitations = escalationResults;
-    const selectedAsinForCitations = selectedAsin;
+    const selectedAsinForCitations = selectedAsin; // Backward compatibility
+    const selectedAsinsForCitations = selectedAsins; // Multi-ASIN support
     const escalationDecisionForCitations = escalationDecision;
-    const selectedListingForCitations = body.selectedListing;
+    const selectedListingForCitations = body.selectedListing; // Backward compatibility
     
     // Variable to capture citations built in stream closure (for database storage)
     let citationsForDb: Array<{ type: "asin"; asin: string; source: "page1_estimate" | "rainforest_product" }> = [];
@@ -2369,20 +2417,8 @@ Use this escalated product data to answer the user's question. If data is missin
           
           // 15a. Add inline citations if escalation was executed
           // ────────────────────────────────────────────────────────────────
-          // Append source ASIN citations to the end of the message
-          // HARD LOCK: Only cite the selected ASIN
-          if (finalMessage && escalationResults && escalationResults.success) {
-            const asinToCite = selectedAsin || escalationDecision.required_asins[0];
-            
-            if (asinToCite) {
-              const citationText = `\n\n(Based on ASIN ${asinToCite})`;
-              
-              // Only append if citation doesn't already exist in the message
-              if (!finalMessage.includes(citationText.trim())) {
-                finalMessage = finalMessage + citationText;
-              }
-            }
-          }
+          // Citations are now handled via metadata (citations array)
+          // This section is kept for backward compatibility but citations are added via chips
 
           // Check for pending memories that need confirmation
           // Only show one at a time, after the response
@@ -2404,45 +2440,57 @@ Use this escalated product data to answer the user's question. If data is missin
           }
           
           // Build citations based on data used
-          // STRICT: Only cite the selected ASIN
+          // STRICT: Only cite selected ASINs
           const citations: Array<{ type: "asin"; asin: string; source: "page1_estimate" | "rainforest_product" }> = [];
           
-          // Safety check: Ensure citations only include selected ASIN
-          if (selectedAsinForCitations) {
-            // If escalation occurred, add citation with rainforest_product source
+          // Get effective selected ASINs (multi-select support)
+          const effectiveSelectedAsinsForCitations = selectedAsinsForCitations && selectedAsinsForCitations.length > 0
+            ? selectedAsinsForCitations
+            : (selectedAsinForCitations ? [selectedAsinForCitations] : []);
+          
+          // Safety check: Ensure citations only include selected ASINs
+          if (effectiveSelectedAsinsForCitations.length > 0) {
+            // If escalation occurred, add citations with rainforest_product source
             if (escalationResultsForCitations && escalationResultsForCitations.success) {
-              // STRICT: Verify that escalation used the selected ASIN
-              const escalatedAsin = escalationDecisionForCitations.required_asins[0];
-              if (escalatedAsin === selectedAsinForCitations) {
-                citations.push({
-                  type: "asin",
-                  asin: selectedAsinForCitations,
-                  source: "rainforest_product",
-                });
-              } else {
-                // Log error if citation ASIN doesn't match selected ASIN
-                console.error("[CITATION_ASIN_MISMATCH]", {
-                  selectedAsin: selectedAsinForCitations,
-                  escalatedAsin,
-                  required_asins: escalationDecisionForCitations.required_asins,
-                  note: "Citation ASIN does not match selected ASIN - citation blocked",
-                });
+              // STRICT: Only cite ASINs that were escalated AND are in selected ASINs
+              for (const escalatedAsin of escalationDecisionForCitations.required_asins) {
+                if (effectiveSelectedAsinsForCitations.includes(escalatedAsin)) {
+                  citations.push({
+                    type: "asin",
+                    asin: escalatedAsin,
+                    source: "rainforest_product",
+                  });
+                } else {
+                  // Log error if citation ASIN is not in selected ASINs
+                  console.error("[CITATION_ASIN_MISMATCH]", {
+                    selectedAsins: effectiveSelectedAsinsForCitations,
+                    escalatedAsin,
+                    required_asins: escalationDecisionForCitations.required_asins,
+                    note: "Citation ASIN is not in selected ASINs - citation blocked",
+                  });
+                }
               }
-            } else if (selectedListingForCitations) {
-              // If Page-1 product data was used (selected listing exists), add citation with page1_estimate source
+            } else {
+              // If Page-1 product data was used, add citations with page1_estimate source
               // Check if the response likely used product-specific data
               const hasProductDataInContext = 
-                finalMessage?.toLowerCase().includes(selectedAsinForCitations.toLowerCase()) ||
-                finalMessage?.toLowerCase().includes((selectedListingForCitations.title || "").toLowerCase().substring(0, 20)) ||
+                effectiveSelectedAsinsForCitations.some(asin => 
+                  finalMessage?.toLowerCase().includes(asin.toLowerCase())
+                ) ||
                 finalMessage?.toLowerCase().includes("this product") ||
-                finalMessage?.toLowerCase().includes("this listing");
+                finalMessage?.toLowerCase().includes("these products") ||
+                finalMessage?.toLowerCase().includes("selected product") ||
+                finalMessage?.toLowerCase().includes("selected products");
               
               if (hasProductDataInContext) {
-                citations.push({
-                  type: "asin",
-                  asin: selectedAsinForCitations,
-                  source: "page1_estimate",
-                });
+                // Add citation for each selected ASIN that was likely referenced
+                for (const asin of effectiveSelectedAsinsForCitations) {
+                  citations.push({
+                    type: "asin",
+                    asin,
+                    source: "page1_estimate",
+                  });
+                }
               }
             }
           }

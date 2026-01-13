@@ -73,8 +73,10 @@ interface ChatSidebarProps {
   onMarginSnapshotUpdate?: (snapshot: MarginSnapshot) => void;
   /** Analysis mode: 'KEYWORD' for market discovery */
   analysisMode?: 'KEYWORD' | null;
-  /** Selected listing (for AI context) */
+  /** Selected listing (for AI context) - DEPRECATED: use selectedAsins */
   selectedListing?: any | null;
+  /** Selected ASINs array (for multi-select) */
+  selectedAsins?: string[];
   /** Whether the sidebar is collapsed */
   isCollapsed?: boolean;
   /** Callback to toggle collapse state */
@@ -276,6 +278,7 @@ export default function ChatSidebar({
   onMarginSnapshotUpdate,
   analysisMode = null,
   selectedListing = null,
+  selectedAsins = [],
   isCollapsed = false,
   onToggleCollapse,
 }: ChatSidebarProps) {
@@ -460,7 +463,8 @@ export default function ChatSidebar({
         body: JSON.stringify({
           analysisRunId,
           message: messageToSend,
-          selectedListing: selectedListing || null,
+          selectedListing: selectedListing || null, // Backward compatibility
+          selectedAsins: selectedAsins || [], // Multi-ASIN selection
         }),
       });
 
