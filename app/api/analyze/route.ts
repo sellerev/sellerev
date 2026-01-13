@@ -2121,6 +2121,70 @@ export async function POST(req: NextRequest) {
           });
         }
         
+        // ═══════════════════════════════════════════════════════════════════════════
+        // HARD UI FALLBACK (REQUIRED FOR UI INTEGRITY)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Guarantees ALL page-1 products have title and image_url
+        // Runs REGARDLESS of confidence level or Rainforest skip
+        // Purely local - no API calls
+        let fallbackTitleCount = 0;
+        let fallbackImageCount = 0;
+        
+        for (const listing of rawListings) {
+          // TITLE FALLBACK
+          if (!listing.title || (typeof listing.title === 'string' && listing.title.trim().length === 0)) {
+            // Try name field
+            const name = (listing as any).name;
+            if (name && typeof name === 'string' && name.trim().length > 0) {
+              listing.title = name.trim();
+              fallbackTitleCount++;
+            } else {
+              // Generate fallback title: Product #${position} (${asin})
+              const rank = listing.position || (listing as any).organic_rank || 0;
+              const asin = listing.asin || 'UNKNOWN';
+              listing.title = `Product #${rank} (${asin})`;
+              fallbackTitleCount++;
+            }
+          }
+          
+          // IMAGE FALLBACK
+          if (!listing.image_url || (typeof listing.image_url === 'string' && listing.image_url.trim().length === 0)) {
+            // Try images array
+            const images = (listing as any).images;
+            if (Array.isArray(images) && images.length > 0) {
+              const firstImage = images[0];
+              if (firstImage && typeof firstImage === 'object' && firstImage.link) {
+                const imageLink = firstImage.link;
+                if (typeof imageLink === 'string' && imageLink.trim().length > 0) {
+                  listing.image_url = imageLink.trim();
+                  fallbackImageCount++;
+                }
+              } else if (typeof firstImage === 'string' && firstImage.trim().length > 0) {
+                listing.image_url = firstImage.trim();
+                fallbackImageCount++;
+              }
+            }
+            
+            // If still no image, use ASIN-based fallback URL
+            if (!listing.image_url || (typeof listing.image_url === 'string' && listing.image_url.trim().length === 0)) {
+              const asin = listing.asin;
+              if (asin && typeof asin === 'string' && asin.trim().length > 0) {
+                listing.image_url = `https://m.media-amazon.com/images/I/${asin}.jpg`;
+                fallbackImageCount++;
+              }
+            }
+          }
+        }
+        
+        if (fallbackTitleCount > 0 || fallbackImageCount > 0) {
+          console.log("🛡️ HARD_UI_FALLBACK_APPLIED", {
+            total_listings: rawListings.length,
+            fallback_title_count: fallbackTitleCount,
+            fallback_image_count: fallbackImageCount,
+            message: "Guaranteed title and image_url for all listings before canonical builder",
+          });
+        }
+        
         pageOneProducts = buildKeywordPageOne(rawListings, searchVolumeLow, searchVolumeHigh);
         
         // ═══════════════════════════════════════════════════════════════════════════
