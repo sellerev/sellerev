@@ -2047,7 +2047,20 @@ export async function POST(req: NextRequest) {
       }
       
       // Inject escalation context into system prompt
-      systemPrompt += `\n\n=== ESCALATION CONTEXT ===\n${JSON.stringify(escalationContext, null, 2)}\n\nUse this escalated product data to answer the user's question.`;
+      // STRICT RULE: All product data comes from the single API response per ASIN
+      // If data is missing, Copilot must state that Amazon does not expose it
+      systemPrompt += `\n\n=== ESCALATION CONTEXT ===
+${JSON.stringify(escalationContext, null, 2)}
+
+CRITICAL RULES FOR ESCALATED DATA:
+1. All product data comes from a SINGLE Rainforest API call per ASIN (type=product)
+2. If a field is missing from the response, it means Amazon does not expose it for that ASIN
+3. You MUST state explicitly when data is missing: "Amazon does not expose [field] for ASIN [asin]"
+4. Do NOT infer or guess missing data - only use what is present in the response
+5. Do NOT suggest making additional API calls - this is the only data available
+6. If the response is incomplete, acknowledge the limitation clearly
+
+Use this escalated product data to answer the user's question. If data is missing, state that Amazon does not expose it.`;
     }
     
     // 12. Append the new user message

@@ -188,12 +188,24 @@ export async function checkCacheForAsins(
 
 /**
  * Make Rainforest API call for product details
+ * 
+ * STRICT RULE: Exactly 1 call per ASIN, no retries, no chained lookups
+ * This function makes a single, one-time API call. If it fails, it throws.
+ * No retry logic, no fallback calls, no secondary enrichment.
  */
 export async function fetchProductDetails(
   asin: string,
   rainforestApiKey: string
 ): Promise<any> {
+  // STRICT: Single API call, no retries
   const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${asin}`;
+  
+  console.log("[RAINFOREST_PRODUCT_CALL]", {
+    asin,
+    timestamp: new Date().toISOString(),
+    call_type: "type=product",
+    note: "Single call, no retries",
+  });
   
   const response = await fetch(apiUrl, {
     method: "GET",
@@ -201,14 +213,32 @@ export async function fetchProductDetails(
   });
   
   if (!response.ok) {
+    // STRICT: No retry - throw immediately
+    console.error("[RAINFOREST_PRODUCT_CALL_FAILED]", {
+      asin,
+      status: response.status,
+      note: "No retry - single call only",
+    });
     throw new Error(`Rainforest API error: ${response.status}`);
   }
   
   const data = await response.json();
   
   if (data.error) {
+    // STRICT: No retry - throw immediately
+    console.error("[RAINFOREST_PRODUCT_CALL_ERROR]", {
+      asin,
+      error: data.error,
+      note: "No retry - single call only",
+    });
     throw new Error(`Rainforest API error: ${data.error}`);
   }
+  
+  console.log("[RAINFOREST_PRODUCT_CALL_SUCCESS]", {
+    asin,
+    timestamp: new Date().toISOString(),
+    note: "Single call completed, no additional calls",
+  });
   
   return data;
 }
@@ -411,20 +441,51 @@ export async function executeEscalation(
   const cached: boolean[] = [];
   let creditsUsed = 0;
   
+  // STRICT: Deduplicate ASINs to prevent multiple calls for the same ASIN
+  const uniqueAsins = Array.from(new Set(decision.required_asins));
+  if (uniqueAsins.length !== decision.required_asins.length) {
+    console.warn("[ESCALATION_DEDUP]", {
+      original_count: decision.required_asins.length,
+      unique_count: uniqueAsins.length,
+      note: "Duplicate ASINs removed - will only call once per ASIN",
+    });
+  }
+  
   // Check cache first
-  const cachedData = await checkCacheForAsins(decision.required_asins, supabase);
+  const cachedData = await checkCacheForAsins(uniqueAsins, supabase);
   
   // Track which ASINs were cached vs fetched
   const asinsToDeduct: string[] = [];
   
-  // Fetch missing data
-  for (let i = 0; i < decision.required_asins.length; i++) {
-    const asin = decision.required_asins[i];
+  // STRICT: Track ASINs that have been fetched to prevent duplicate calls
+  const fetchedAsins = new Set<string>();
+  
+  // STRICT RULE: Exactly 1 call per ASIN, no retries, no chained lookups
+  // Fetch missing data (one-time only, no retries)
+  for (let i = 0; i < uniqueAsins.length; i++) {
+    const asin = uniqueAsins[i];
+    
+    // STRICT: Guard against duplicate calls (should not happen after dedup, but extra safety)
+    if (fetchedAsins.has(asin)) {
+      console.warn("[ESCALATION_DUPLICATE_PREVENTED]", {
+        asin,
+        note: "ASIN already fetched in this escalation - skipping to prevent duplicate call",
+      });
+      continue;
+    }
     
     if (cachedData.has(asin)) {
-      // Use cached data (no credit cost)
+      // Use cached data (no credit cost, no API call)
+      // STRICT: Mark as processed to prevent any duplicate handling
+      fetchedAsins.add(asin);
+      
       productData.set(asin, cachedData.get(asin));
       cached[i] = true;
+      
+      console.log("[ESCALATION_CACHE_HIT]", {
+        asin,
+        note: "Using cached data, no API call",
+      });
       
       // Log cached usage (0 credits) - best effort, don't block on error
       try {
@@ -442,20 +503,39 @@ export async function executeEscalation(
         console.error(`[CACHE_USAGE_LOG_ERROR] Failed to log cached usage for ${asin}:`, logError);
       }
     } else {
-      // Fetch from API (1 credit)
-      try {
-        const data = await fetchProductDetails(asin, rainforestApiKey);
-        productData.set(asin, data);
-        cached[i] = false;
-        creditsUsed += 1;
-        asinsToDeduct.push(asin);
-        
-        // Cache for future use
-        await cacheProductDetails(asin, data, supabase);
-      } catch (error) {
-        console.error(`[ESCALATION_ERROR] Failed to fetch ${asin}:`, error);
-        throw error;
-      }
+        // STRICT: Single API call per ASIN, no retries, no chained lookups
+        // This is the ONLY place where fetchProductDetails() is called for escalation
+        try {
+          // Mark as fetched BEFORE the call to prevent any race conditions
+          fetchedAsins.add(asin);
+          
+          // ONE-TIME CALL: No retries, no fallbacks, no secondary enrichment
+          const data = await fetchProductDetails(asin, rainforestApiKey);
+          
+          // STRICT: Use the response as-is, no additional lookups
+          // This is the complete, final data for this ASIN - no chained calls
+          productData.set(asin, data);
+          cached[i] = false;
+          creditsUsed += 1;
+          asinsToDeduct.push(asin);
+          
+          console.log("[ESCALATION_API_CALL_COMPLETE]", {
+            asin,
+            credits_used: 1,
+            call_count: 1,
+            note: "Single call completed, no additional calls will be made for this ASIN",
+          });
+          
+          // Cache for future use (prevents future API calls for this ASIN)
+          await cacheProductDetails(asin, data, supabase);
+        } catch (error) {
+          // STRICT: No retry - throw immediately, fail the escalation
+          // Remove from fetched set so it's clear this ASIN failed
+          fetchedAsins.delete(asin);
+          console.error(`[ESCALATION_ERROR] Failed to fetch ${asin}:`, error);
+          console.error(`[ESCALATION_ERROR] No retry - single call only per ASIN`);
+          throw error;
+        }
     }
   }
   
