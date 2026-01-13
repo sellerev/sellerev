@@ -2065,6 +2065,58 @@ export async function POST(req: NextRequest) {
         const { resolveBrandFrequency } = await import("@/lib/amazon/resolveBrandFrequency");
         rawListings = resolveBrandFrequency(rawListings);
         
+        // ═══════════════════════════════════════════════════════════════════════════
+        // IMAGE NORMALIZATION (BEFORE canonical builder)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Metadata enrichment may set image as { link: string } object
+        // Canonical builder + UI expect image_url: string
+        // Normalize images to ensure image_url is always a string if image data exists
+        let imageNormalizedCount = 0;
+        for (const listing of rawListings) {
+          // Check if image_url is already an object (from enrichment)
+          if (listing.image_url && typeof listing.image_url === 'object' && listing.image_url !== null) {
+            // Extract link from image_url object
+            const imageLink = (listing.image_url as any).link;
+            if (typeof imageLink === 'string' && imageLink.trim().length > 0) {
+              listing.image_url = imageLink.trim();
+              imageNormalizedCount++;
+            } else {
+              // Invalid object, clear it
+              listing.image_url = null;
+            }
+          }
+          // If image_url is null/missing but image object exists with link property
+          else if (!listing.image_url && listing.image) {
+            if (typeof listing.image === 'object' && listing.image !== null && 'link' in listing.image) {
+              // Extract link from image object
+              const imageLink = (listing.image as any).link;
+              if (typeof imageLink === 'string' && imageLink.trim().length > 0) {
+                listing.image_url = imageLink.trim();
+                imageNormalizedCount++;
+              }
+            } else if (typeof listing.image === 'string' && listing.image.trim().length > 0) {
+              // image is already a string, use it directly
+              listing.image_url = listing.image.trim();
+              imageNormalizedCount++;
+            }
+          }
+          // Guard: Ensure image_url is always a string if image.link exists
+          else if (listing.image && typeof listing.image === 'object' && listing.image !== null && 'link' in listing.image) {
+            const imageLink = (listing.image as any).link;
+            if (typeof imageLink === 'string' && imageLink.trim().length > 0) {
+              listing.image_url = imageLink.trim();
+              imageNormalizedCount++;
+            }
+          }
+        }
+        
+        if (imageNormalizedCount > 0) {
+          console.log("🖼️ IMAGE_NORMALIZATION_APPLIED", {
+            normalized_count: imageNormalizedCount,
+            total_listings: rawListings.length,
+          });
+        }
+        
         pageOneProducts = buildKeywordPageOne(rawListings, searchVolumeLow, searchVolumeHigh);
         
         // ═══════════════════════════════════════════════════════════════════════════
