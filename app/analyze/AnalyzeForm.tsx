@@ -465,6 +465,9 @@ export default function AnalyzeForm({
   // Track if current analysis is estimated (Tier-1) vs snapshot (Tier-2)
   const [isEstimated, setIsEstimated] = useState(false);
   const [snapshotType, setSnapshotType] = useState<"estimated" | "snapshot">("snapshot");
+  // Track Tier-2 refinement status (from ui_hints)
+  const [showRefiningBadge, setShowRefiningBadge] = useState(false);
+  const [nextUpdateExpectedSec, setNextUpdateExpectedSec] = useState<number | null>(null);
 
 
   // Handler for margin snapshot updates from chat (Part G structure)
@@ -568,15 +571,17 @@ export default function AnalyzeForm({
       if (analysis !== null) {
         setAnalysis(null);
         setInputValue("");
-        setIsEstimated(false);
-        setSnapshotType("snapshot");
-        setChatMessages([]);
-        setSortBy("rank");
-        // Reset filters when resetting to blank state
-        setSelectedBrands(new Set());
-        setSelectedFulfillment(new Set());
-        setSponsoredFilter(null);
-        setBrandDropdownOpen(false);
+      setIsEstimated(false);
+      setSnapshotType("snapshot");
+      setShowRefiningBadge(false);
+      setNextUpdateExpectedSec(null);
+      setChatMessages([]);
+      setSortBy("rank");
+      // Reset filters when resetting to blank state
+      setSelectedBrands(new Set());
+      setSelectedFulfillment(new Set());
+      setSponsoredFilter(null);
+      setBrandDropdownOpen(false);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -613,6 +618,8 @@ export default function AnalyzeForm({
     setChatMessages([]); // Clear previous chat
     setIsEstimated(false); // Reset estimated flag
     setSnapshotType("snapshot"); // Reset snapshot type
+    setShowRefiningBadge(false); // Reset refinement badge
+    setNextUpdateExpectedSec(null); // Reset update timer
     setSortBy("rank"); // Reset sort to default (Amazon rank)
     // Reset filters when new analysis starts
     setSelectedBrands(new Set());
@@ -638,7 +645,10 @@ export default function AnalyzeForm({
         ok: res.ok, 
         success: data.success, 
         has_analysisRunId: !!data.analysisRunId,
+        has_snapshot: !!data.snapshot,
+        has_snapshot_id: !!data.snapshot?.snapshot_id,
         has_decision: !!data.decision,
+        tier: data.tier,
         error: data.error 
       });
 
@@ -686,6 +696,123 @@ export default function AnalyzeForm({
         return;
       }
 
+      // ═══════════════════════════════════════════════════════════════════════════
+      // TIER-1 SNAPSHOT RESPONSE HANDLING (NEW)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Check for Tier-1 snapshot response (new contract)
+      if (data.snapshot && data.snapshot.snapshot_id) {
+        const snapshot = data.snapshot;
+        const snapshotId = snapshot.snapshot_id;
+        
+        console.log("TIER1_SNAPSHOT_RECEIVED", {
+          snapshot_id: snapshotId,
+          product_count: snapshot.products?.length || 0,
+          show_refining_badge: data.ui_hints?.show_refining_badge || false,
+        });
+
+        // Store Tier-2 refinement hints
+        setShowRefiningBadge(data.ui_hints?.show_refining_badge || false);
+        setNextUpdateExpectedSec(data.ui_hints?.next_update_expected_sec || null);
+
+        // Transform Tier-1 snapshot to AnalysisResponse format
+        // Convert Tier1Product[] to page_one_listings format
+        const pageOneListings = (snapshot.products || []).map((p: any) => ({
+          rank: p.organic_rank,
+          asin: p.asin,
+          title: p.title,
+          image_url: p.image_url,
+          price: p.price || 0,
+          rating: p.rating,
+          review_count: p.review_count,
+          bsr: null, // Tier-1 doesn't include BSR
+          estimated_monthly_units: p.estimated_monthly_units || 0,
+          estimated_monthly_revenue: p.estimated_monthly_revenue || 0,
+          revenue_share_pct: snapshot.aggregates?.total_page1_revenue 
+            ? (p.estimated_monthly_revenue || 0) / snapshot.aggregates.total_page1_revenue * 100
+            : 0,
+          fulfillment: p.fulfillment || "Unknown",
+          brand: p.brand,
+          seller_country: "Unknown" as const,
+        }));
+
+        // Build market_snapshot from Tier-1 aggregates
+        const marketSnapshot = {
+          keyword: snapshot.keyword,
+          avg_price: snapshot.aggregates?.avg_price || null,
+          avg_reviews: snapshot.aggregates?.avg_reviews || null,
+          avg_rating: snapshot.aggregates?.avg_rating || null,
+          total_page1_listings: snapshot.products?.length || 0,
+          sponsored_count: snapshot.products?.filter((p: any) => p.is_sponsored).length || 0,
+          dominance_score: 0, // Tier-2 will compute this
+          listings: pageOneListings,
+        };
+
+        // Create AnalysisResponse with snapshot_id as analysis_run_id (for backward compatibility)
+        // Note: We use snapshot_id as the identifier, but store it as analysis_run_id in the interface
+        const analysisData: AnalysisResponse = {
+          analysis_run_id: snapshotId, // Use snapshot_id as identifier
+          created_at: snapshot.created_at || new Date().toISOString(),
+          input_type: "keyword",
+          input_value: inputValue.trim(),
+          // Tier-1 doesn't have AI decision yet - create placeholder
+          decision: {
+            verdict: "CAUTION" as const,
+            confidence: 0.5,
+          },
+          executive_summary: "Market analysis in progress. Refining accuracy...",
+          reasoning: {
+            primary_factors: ["Initial market snapshot available"],
+            seller_context_impact: "Analysis refining in background",
+          },
+          risks: {
+            competition: { level: "Medium" as const, explanation: "Analysis refining" },
+            pricing: { level: "Medium" as const, explanation: "Analysis refining" },
+            differentiation: { level: "Medium" as const, explanation: "Analysis refining" },
+            operations: { level: "Medium" as const, explanation: "Analysis refining" },
+          },
+          recommended_actions: {
+            must_do: [],
+            should_do: [],
+            avoid: [],
+          },
+          assumptions_and_limits: ["Initial snapshot - refinement in progress"],
+          market_snapshot: marketSnapshot,
+          page_one_listings: pageOneListings,
+          products: pageOneListings,
+          aggregates_derived_from_page_one: {
+            avg_price: snapshot.aggregates?.avg_price || 0,
+            avg_rating: snapshot.aggregates?.avg_rating || 0,
+            avg_bsr: null,
+            total_monthly_units_est: snapshot.aggregates?.total_page1_units || 0,
+            total_monthly_revenue_est: snapshot.aggregates?.total_page1_revenue || 0,
+            page1_product_count: snapshot.products?.length || 0,
+          },
+        };
+
+        console.log("TIER1_ANALYSIS_CREATED", {
+          snapshot_id: snapshotId,
+          product_count: pageOneListings.length,
+        });
+
+        // Store estimated flag and snapshot type
+        setIsEstimated(false); // Tier-1 is real data, not estimated
+        setSnapshotType("snapshot");
+
+        // Normalize and set analysis
+        setAnalysis(normalizeAnalysis(analysisData));
+        setError(null);
+
+        // Update URL with snapshot_id for persistence
+        // Use snapshot_id instead of run_id
+        router.replace(`/analyze?snapshot=${snapshotId}`, { scroll: false });
+
+        setLoading(false);
+        return; // Early return - Tier-1 is complete
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // LEGACY RESPONSE HANDLING (OLD CONTRACT)
+      // ═══════════════════════════════════════════════════════════════════════════
       // Handle partial data (status: "partial") - still render, just show notice
       // Store status for UI to display appropriate messaging
       const isPartialData = data.status === "partial" || data.data_quality?.fallback_used;
@@ -697,9 +824,10 @@ export default function AnalyzeForm({
         // Don't set error - just log. UI will show "best available data" message
       }
 
+      // Legacy: Check for analysisRunId (old contract)
       if (!data.analysisRunId) {
         console.error("ANALYZE_MISSING_RUN_ID", { data });
-        setError("Analysis completed but no run ID returned");
+        setError("Analysis failed to produce a snapshot or run ID");
         setLoading(false);
         return;
       }
@@ -778,7 +906,7 @@ export default function AnalyzeForm({
       setAnalysis(normalizeAnalysis(analysisData));
       setError(null);
 
-      // Update URL with the new analysis run ID for persistence
+      // Update URL with the new analysis run ID for persistence (legacy contract)
       // Use replace() to avoid adding to history stack
       if (data.analysisRunId) {
         router.replace(`/analyze?run=${data.analysisRunId}`, { scroll: false });
@@ -1108,6 +1236,17 @@ export default function AnalyzeForm({
                     
                     return (
                       <div className="bg-white border rounded-lg p-6">
+                        {/* Tier-2 Refinement Badge (non-blocking) */}
+                        {showRefiningBadge && (
+                          <div className="mb-4 flex items-center gap-2">
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200 animate-pulse">
+                              Refining
+                            </span>
+                            <span className="text-xs text-gray-600">
+                              Refining market accuracy in background{nextUpdateExpectedSec ? ` (${nextUpdateExpectedSec}s)` : ""}...
+                            </span>
+                          </div>
+                        )}
                         {/* Data Source Badge */}
                         {snapshotType === "estimated" ? (
                           <div className="mb-4 flex items-center gap-2">
@@ -1833,6 +1972,7 @@ export default function AnalyzeForm({
           )}
           <ChatSidebar
             analysisRunId={analysis?.analysis_run_id || null}
+            snapshotId={analysis?.analysis_run_id || null}
             initialMessages={chatMessages}
             onMessagesChange={setChatMessages}
             marketSnapshot={analysis?.market_snapshot || null}

@@ -54,6 +54,8 @@ interface MarginSnapshot {
 interface ChatSidebarProps {
   /** The analysis run ID to anchor chat to. If null, chat is disabled. */
   analysisRunId: string | null;
+  /** The snapshot ID (Tier-1/Tier-2 identifier). Used as primary identifier if analysisRunId is null. */
+  snapshotId?: string | null;
   /** Initial messages loaded from history */
   initialMessages?: ChatMessage[];
   /** Callback when messages change (for parent state sync) */
@@ -224,6 +226,7 @@ function sanitizeVerdictLanguage(content: string): string {
 
 export default function ChatSidebar({
   analysisRunId,
+  snapshotId = null,
   initialMessages = [],
   onMessagesChange,
   marketSnapshot = null,
@@ -233,6 +236,9 @@ export default function ChatSidebar({
   isCollapsed = false,
   onToggleCollapse,
 }: ChatSidebarProps) {
+  // Use snapshotId as primary identifier if analysisRunId is not available (Tier-1/Tier-2 model)
+  // For chat API, we still need analysisRunId, but UI unlocking uses snapshotId
+  const effectiveId = analysisRunId || snapshotId;
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
   // ─────────────────────────────────────────────────────────────────────────
@@ -272,10 +278,10 @@ export default function ChatSidebar({
     onMessagesChange?.(messages);
   }, [messages, onMessagesChange]);
 
-  // Reset messages when analysis changes
+  // Reset messages when analysis changes (use effectiveId to detect changes)
   useEffect(() => {
     setMessages(initialMessages);
-  }, [analysisRunId, initialMessages]);
+  }, [effectiveId, initialMessages]);
 
   // Show contextual suggestions when a listing is selected (if no messages yet)
   // This happens silently - chat context updates, then suggestions appear
@@ -386,7 +392,8 @@ export default function ChatSidebar({
   const sendMessage = useCallback(async (messageOverride?: string) => {
     const messageToSend = messageOverride || input.trim();
     
-    // Guard: Must have analysis_run_id and message
+    // Guard: Must have analysis_run_id (for chat API) and message
+    // Note: Chat API still requires analysisRunId, but UI unlocks with snapshotId
     if (!analysisRunId || !messageToSend) return;
 
     // Add user message immediately
@@ -494,7 +501,8 @@ export default function ChatSidebar({
   }, [analysisRunId, input, onMarginSnapshotUpdate]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey && !isLoading && input.trim() && analysisRunId) {
+    // Use effectiveId for UI enabling, but chat API still needs analysisRunId
+    if (e.key === "Enter" && !e.shiftKey && !isLoading && input.trim() && effectiveId) {
       e.preventDefault();
       sendMessage();
     }
@@ -516,7 +524,9 @@ export default function ChatSidebar({
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
 
-  const isDisabled = !analysisRunId;
+  // UI unlocks with snapshotId (Tier-1/Tier-2), but chat API still needs analysisRunId
+  // For now, unlock UI if either exists (chat will work only if analysisRunId exists)
+  const isDisabled = !effectiveId;
 
   return (
     <div className="h-full bg-white flex flex-col overflow-hidden border-l border-[#E5E7EB]" style={{ minHeight: 0 }}>
