@@ -2088,23 +2088,25 @@ export async function POST(req: NextRequest) {
             }
           }
           // If image_url is null/missing but image object exists with link property
-          else if (!listing.image_url && listing.image) {
-            if (typeof listing.image === 'object' && listing.image !== null && 'link' in listing.image) {
+          // Note: image property may exist on raw data but not in ParsedListing type
+          else if (!listing.image_url && (listing as any).image) {
+            const imageData = (listing as any).image;
+            if (typeof imageData === 'object' && imageData !== null && 'link' in imageData) {
               // Extract link from image object
-              const imageLink = (listing.image as any).link;
+              const imageLink = imageData.link;
               if (typeof imageLink === 'string' && imageLink.trim().length > 0) {
                 listing.image_url = imageLink.trim();
                 imageNormalizedCount++;
               }
-            } else if (typeof listing.image === 'string' && listing.image.trim().length > 0) {
+            } else if (typeof imageData === 'string' && imageData.trim().length > 0) {
               // image is already a string, use it directly
-              listing.image_url = listing.image.trim();
+              listing.image_url = imageData.trim();
               imageNormalizedCount++;
             }
           }
           // Guard: Ensure image_url is always a string if image.link exists
-          else if (listing.image && typeof listing.image === 'object' && listing.image !== null && 'link' in listing.image) {
-            const imageLink = (listing.image as any).link;
+          else if ((listing as any).image && typeof (listing as any).image === 'object' && (listing as any).image !== null && 'link' in (listing as any).image) {
+            const imageLink = ((listing as any).image as any).link;
             if (typeof imageLink === 'string' && imageLink.trim().length > 0) {
               listing.image_url = imageLink.trim();
               imageNormalizedCount++;

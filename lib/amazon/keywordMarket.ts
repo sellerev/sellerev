@@ -599,10 +599,36 @@ function parseFulfillment(item: any): "FBA" | "FBM" | "Amazon" | null {
   if (item.is_amazon) {
     return "Amazon";
   }
-  if (item.is_prime) {
-    // Prime usually means FBA, but not always
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIME-BASED FBA INFERENCE (for cached listings without fulfillment_channel)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Check is_prime flag
+  if (item.is_prime === true || item.isPrime === true) {
     return "FBA";
   }
+  // Check delivery field for "Prime" text
+  if (item.delivery) {
+    const deliveryStr = typeof item.delivery === 'string' 
+      ? item.delivery 
+      : (item.delivery?.text || item.delivery?.message || String(item.delivery));
+    if (typeof deliveryStr === 'string' && deliveryStr.toLowerCase().includes('prime')) {
+      return "FBA";
+    }
+  }
+  // Check badges array for "Prime" badge
+  if (item.badges && Array.isArray(item.badges)) {
+    const hasPrimeBadge = item.badges.some((badge: any) => {
+      const badgeText = typeof badge === 'string' 
+        ? badge 
+        : (badge?.text || badge?.label || String(badge));
+      return typeof badgeText === 'string' && badgeText.toLowerCase().includes('prime');
+    });
+    if (hasPrimeBadge) {
+      return "FBA";
+    }
+  }
+  
   return null;
 }
 

@@ -138,6 +138,47 @@ export function normalizeListing(raw: any): ParsedListing {
   const raw_title = raw.raw_title ?? null;
   const raw_image_url = raw.raw_image_url ?? null;
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FULFILLMENT NORMALIZATION: Infer FBA from Prime eligibility indicators
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Cached listings may lack fulfillment_channel but have Prime indicators
+  // Check for Prime eligibility to infer FBA
+  let fulfillment: "FBA" | "FBM" | "Amazon" | null = raw.fulfillment ?? raw.Fulfillment ?? null;
+  
+  // If fulfillment is not already set, check for Prime indicators
+  if (!fulfillment) {
+    // Check is_prime flag
+    if (raw.is_prime === true || raw.isPrime === true) {
+      fulfillment = "FBA";
+    }
+    // Check delivery field for "Prime" text
+    else if (raw.delivery) {
+      const deliveryStr = typeof raw.delivery === 'string' 
+        ? raw.delivery 
+        : (raw.delivery?.text || raw.delivery?.message || String(raw.delivery));
+      if (typeof deliveryStr === 'string' && deliveryStr.toLowerCase().includes('prime')) {
+        fulfillment = "FBA";
+      }
+    }
+    // Check badges array for "Prime" badge
+    else if (raw.badges && Array.isArray(raw.badges)) {
+      const hasPrimeBadge = raw.badges.some((badge: any) => {
+        const badgeText = typeof badge === 'string' 
+          ? badge 
+          : (badge?.text || badge?.label || String(badge));
+        return typeof badgeText === 'string' && badgeText.toLowerCase().includes('prime');
+      });
+      if (hasPrimeBadge) {
+        fulfillment = "FBA";
+      }
+    }
+  }
+  
+  // Fallback to existing fulfillment if still null
+  if (!fulfillment) {
+    fulfillment = null;
+  }
+  
   return {
     asin: raw.asin ?? raw.ASIN ?? "",
     title,
@@ -148,7 +189,7 @@ export function normalizeListing(raw: any): ParsedListing {
     bsr, // DEPRECATED: use main_category_bsr
     main_category_bsr, // Main category BSR (top-level category only)
     main_category, // Main category name
-    fulfillment: raw.fulfillment ?? raw.Fulfillment ?? null,
+    fulfillment,
     sponsored: !!raw.is_sponsored || !!raw.IsSponsored || false,
     organic_rank: raw.organic_rank ?? raw.position ?? raw.Position ?? null,
     brand, // Extracted from title if not explicitly provided
