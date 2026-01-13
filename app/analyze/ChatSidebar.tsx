@@ -25,10 +25,17 @@ import HistoryPanel from "./components/HistoryPanel";
 // TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface Citation {
+  type: "asin";
+  asin: string;
+  source: "page1_estimate" | "rainforest_product";
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
+  citations?: Citation[];
 }
 
 interface MarketSnapshot {
@@ -155,9 +162,45 @@ const SOURCE_CHIPS = [
 ] as const;
 
 /**
- * SourceChips - Renders trust indicator chips beneath assistant messages
- * Shows 2-3 chips per message, always includes "This analysis"
+ * ASIN Citation Chip Component
+ * 
+ * Renders inline ASIN citations as small pill-style chips.
+ * - Subtle neutral styling (matches system messages)
+ * - No hover tooltip yet
+ * - Visual distinction for verified (rainforest_product) vs estimated (page1_estimate)
  */
+function AsinCitationChip({ citation }: { citation: Citation }) {
+  const isVerified = citation.source === "rainforest_product";
+  
+  return (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
+        isVerified
+          ? "bg-gray-50 border border-gray-300 text-gray-700"
+          : "bg-gray-50 border border-gray-200 text-gray-600"
+      }`}
+      title={isVerified ? "Verified via product API" : "Estimated from Page-1 data"}
+    >
+      {isVerified && (
+        <svg
+          className="w-2.5 h-2.5 mr-1 text-gray-500"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+      )}
+      ASIN {citation.asin}
+    </span>
+  );
+}
+
 function SourceChips() {
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -255,6 +298,7 @@ export default function ChatSidebar({
     subtext?: string;
   } | null>(null);
   const [escalationState, setEscalationState] = useState<{ question: string; asin: string | null } | null>(null);
+  const [currentCitations, setCurrentCitations] = useState<Citation[]>([]);
   
   // Smart scrolling state
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -450,7 +494,7 @@ export default function ChatSidebar({
             try {
               const json = JSON.parse(line.slice(6));
               
-              // Handle metadata (e.g., cost override updates, memory confirmation, escalation)
+              // Handle metadata (e.g., cost override updates, memory confirmation, escalation, citations)
               if (json.metadata) {
                 if (json.metadata.type === "cost_override_applied" || json.metadata.type === "margin_snapshot_refined") {
                   const { margin_snapshot } = json.metadata;
@@ -466,6 +510,9 @@ export default function ChatSidebar({
                     question: json.metadata.question || "",
                     asin: json.metadata.asin || null,
                   });
+                } else if (json.metadata.type === "citations") {
+                  // Store citations for the current message
+                  setCurrentCitations(json.metadata.citations || []);
                 }
               }
               
@@ -485,13 +532,16 @@ export default function ChatSidebar({
         }
       }
 
-      // Add complete assistant message
+      // Add complete assistant message with citations
       if (accumulatedContent.trim()) {
         const assistantMessage: ChatMessage = {
           role: "assistant",
           content: accumulatedContent,
+          citations: currentCitations.length > 0 ? currentCitations : undefined,
         };
         setMessages((prev) => [...prev, assistantMessage]);
+        // Clear citations for next message
+        setCurrentCitations([]);
       }
     } catch (error) {
       // Add error message
@@ -696,6 +746,15 @@ export default function ChatSidebar({
                       {messageContent}
                     </div>
                     
+                    {/* ASIN Citation Chips - inline at end of message */}
+                    {msg.role === "assistant" && msg.citations && msg.citations.length > 0 && (
+                      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                        {msg.citations.map((citation, citationIdx) => (
+                          <AsinCitationChip key={citationIdx} citation={citation} />
+                        ))}
+                      </div>
+                    )}
+                    
                     {/* Trust indicator chips - assistant messages only */}
                     {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
                       <div className="mt-2 pt-2 border-t border-gray-200">
@@ -721,6 +780,15 @@ export default function ChatSidebar({
                     {sanitizeVerdictLanguage(streamingContent)}
                     <span className="inline-block w-0.5 h-4 bg-gray-900 ml-0.5 align-middle cursor-blink" />
                   </div>
+                  
+                  {/* ASIN Citation Chips - show while streaming if available */}
+                  {currentCitations.length > 0 && (
+                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                      {currentCitations.map((citation, citationIdx) => (
+                        <AsinCitationChip key={citationIdx} citation={citation} />
+                      ))}
+                    </div>
+                  )}
                   
                   {/* Show chips while streaming (faded) */}
                   {streamingContent && (

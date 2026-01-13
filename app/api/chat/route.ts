@@ -2133,6 +2133,21 @@ Use this escalated product data to answer the user's question. If data is missin
     
     // Capture pendingMemoriesForConfirmation for use in stream closure
     const pendingMemoriesToShow = pendingMemoriesForConfirmation;
+    
+    // Capture escalation results and selected ASIN for citation building (used in stream closure)
+    const escalationResultsForCitations = escalationResults;
+    const selectedAsinForCitations = selectedAsin;
+    const escalationDecisionForCitations = escalationDecision;
+    const selectedListingForCitations = body.selectedListing;
+    
+    // Capture escalation results and selected ASIN for citation building
+    const escalationResultsForCitations = escalationResults;
+    const selectedAsinForCitations = selectedAsin;
+    const escalationDecisionForCitations = escalationDecision;
+    const selectedListingForCitations = body.selectedListing;
+    
+    // Variable to capture citations built in stream closure (for database storage)
+    let citationsForDb: Array<{ type: "asin"; asin: string; source: "page1_estimate" | "rainforest_product" }> = [];
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -2394,6 +2409,57 @@ Use this escalated product data to answer the user's question. If data is missin
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata: confirmationPrompt })}\n\n`));
           }
           
+          // Build citations based on data used
+          // STRICT: Only cite the selected ASIN
+          const citations: Array<{ type: "asin"; asin: string; source: "page1_estimate" | "rainforest_product" }> = [];
+          
+          // Safety check: Ensure citations only include selected ASIN
+          if (selectedAsinForCitations) {
+            // If escalation occurred, add citation with rainforest_product source
+            if (escalationResultsForCitations && escalationResultsForCitations.success) {
+              // STRICT: Verify that escalation used the selected ASIN
+              const escalatedAsin = escalationDecisionForCitations.required_asins[0];
+              if (escalatedAsin === selectedAsinForCitations) {
+                citations.push({
+                  type: "asin",
+                  asin: selectedAsinForCitations,
+                  source: "rainforest_product",
+                });
+              } else {
+                // Log error if citation ASIN doesn't match selected ASIN
+                console.error("[CITATION_ASIN_MISMATCH]", {
+                  selectedAsin: selectedAsinForCitations,
+                  escalatedAsin,
+                  required_asins: escalationDecisionForCitations.required_asins,
+                  note: "Citation ASIN does not match selected ASIN - citation blocked",
+                });
+              }
+            } else if (selectedListingForCitations) {
+              // If Page-1 product data was used (selected listing exists), add citation with page1_estimate source
+              // Check if the response likely used product-specific data
+              const hasProductDataInContext = 
+                finalMessage?.toLowerCase().includes(selectedAsinForCitations.toLowerCase()) ||
+                finalMessage?.toLowerCase().includes((selectedListingForCitations.title || "").toLowerCase().substring(0, 20)) ||
+                finalMessage?.toLowerCase().includes("this product") ||
+                finalMessage?.toLowerCase().includes("this listing");
+              
+              if (hasProductDataInContext) {
+                citations.push({
+                  type: "asin",
+                  asin: selectedAsinForCitations,
+                  source: "page1_estimate",
+                });
+              }
+            }
+          }
+          
+          // Send citations as metadata before closing stream
+          if (citations.length > 0) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata: { type: "citations", citations } })}\n\n`));
+            // Capture citations for database storage
+            citationsForDb = citations;
+          }
+          
           // Signal end of stream FIRST (don't block on database save)
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
@@ -2417,6 +2483,8 @@ Use this escalated product data to answer the user's question. If data is missin
                 const creditsUsed = escalationResults && escalationResults.success
                   ? escalationResults.creditsUsed
                   : 0;
+                
+                // Citations already captured in stream closure (citationsForDb)
                 
                 const result = await supabase.from("analysis_messages").insert([
                   {
