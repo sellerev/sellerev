@@ -203,9 +203,41 @@ function requiresSellerInfo(question: string): boolean {
 
 /**
  * Check if question can be answered with Page-1 data
+ * 
+ * CRITICAL: Revenue and units questions MUST be answered with Page-1 estimates.
+ * Never escalate for revenue/units - always use estimated_monthly_revenue and estimated_monthly_units.
  */
 function canAnswerWithPage1Data(question: string, page1Context: Page1Context): boolean {
   const normalized = question.toLowerCase();
+  
+  // CRITICAL: Revenue/units questions - ALWAYS answerable with Page-1 estimates (checked FIRST)
+  // These questions MUST NEVER escalate - estimates are the valid answer
+  if (
+    normalized.includes('revenue') ||
+    normalized.includes('units') ||
+    normalized.includes('sales') ||
+    normalized.includes('earnings') ||
+    normalized.includes('monthly revenue') ||
+    normalized.includes('monthly units') ||
+    normalized.includes('monthly sales') ||
+    normalized.includes('how much revenue') ||
+    normalized.includes('how many units') ||
+    normalized.includes('how much does') ||
+    normalized.includes('how much money') ||
+    normalized.includes('revenue estimate') ||
+    normalized.includes('units estimate') ||
+    normalized.includes('sales estimate') ||
+    normalized.includes('exact revenue') ||
+    normalized.includes('exact sales') ||
+    normalized.includes('actual revenue') ||
+    normalized.includes('actual sales') ||
+    normalized.includes('real revenue') ||
+    normalized.includes('real sales')
+  ) {
+    // ALWAYS answerable with estimated_monthly_revenue or estimated_monthly_units
+    // Never escalate - estimates are the valid answer
+    return true;
+  }
   
   // Market structure questions - always answerable from Page-1
   if (
@@ -232,17 +264,6 @@ function canAnswerWithPage1Data(question: string, page1Context: Page1Context): b
     normalized.includes('which is better')
   ) {
     // Can compare using price, reviews, rank, revenue estimates
-    return true;
-  }
-  
-  // Revenue/units questions - answerable with estimates
-  if (
-    normalized.includes('revenue') ||
-    normalized.includes('units') ||
-    normalized.includes('sales') ||
-    normalized.includes('earnings')
-  ) {
-    // Can answer with estimated_monthly_revenue or estimated_monthly_units
     return true;
   }
   
@@ -316,6 +337,33 @@ export function decideEscalation(
     
     // If escalation is needed, only allow the selected ASIN
     // Continue to Step 2 to check if escalation is actually needed
+  }
+  
+  // Step 1.75: CRITICAL - Explicitly block escalation for revenue/units questions
+  // Revenue and units questions MUST use Page-1 estimates, never escalate
+  const normalizedQuestion = question.toLowerCase();
+  const isRevenueUnitsQuestion = 
+    normalizedQuestion.includes('revenue') ||
+    normalizedQuestion.includes('units') ||
+    normalizedQuestion.includes('sales') ||
+    normalizedQuestion.includes('earnings') ||
+    normalizedQuestion.includes('monthly revenue') ||
+    normalizedQuestion.includes('monthly units') ||
+    normalizedQuestion.includes('monthly sales') ||
+    normalizedQuestion.includes('how much revenue') ||
+    normalizedQuestion.includes('how many units') ||
+    normalizedQuestion.includes('how much does') ||
+    normalizedQuestion.includes('how much money');
+  
+  if (isRevenueUnitsQuestion) {
+    // NEVER escalate for revenue/units - always use Page-1 estimates
+    return {
+      can_answer_from_page1: true,
+      requires_escalation: false,
+      required_asins: [],
+      required_credits: 0,
+      escalation_reason: "Revenue and units questions must be answered using Page-1 snapshot estimates (estimated_monthly_revenue, estimated_monthly_units). Escalation is not allowed for these questions.",
+    };
   }
   
   // Step 2: Check if question requires escalation
