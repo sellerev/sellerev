@@ -2140,12 +2140,6 @@ Use this escalated product data to answer the user's question. If data is missin
     const escalationDecisionForCitations = escalationDecision;
     const selectedListingForCitations = body.selectedListing;
     
-    // Capture escalation results and selected ASIN for citation building
-    const escalationResultsForCitations = escalationResults;
-    const selectedAsinForCitations = selectedAsin;
-    const escalationDecisionForCitations = escalationDecision;
-    const selectedListingForCitations = body.selectedListing;
-    
     // Variable to capture citations built in stream closure (for database storage)
     let citationsForDb: Array<{ type: "asin"; asin: string; source: "page1_estimate" | "rainforest_product" }> = [];
 
