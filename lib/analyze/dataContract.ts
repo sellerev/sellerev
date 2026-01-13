@@ -197,6 +197,12 @@ export interface KeywordAnalyzeResponse {
     margin_snapshot: KeywordAnalyzeResponse["margin_snapshot"];
     signals: KeywordAnalyzeResponse["signals"];
     brand_moat: KeywordAnalyzeResponse["brand_moat"];
+    // Snapshot metrics (explicitly exposed for AI reference)
+    snapshot: {
+      top_5_brand_revenue_share_pct: number | null;
+      total_monthly_revenue: number;
+      total_monthly_units: number;
+    };
     // Calibration metadata (for AI explanations only, not UI math)
     calibration: {
       applied: boolean;
@@ -1019,6 +1025,12 @@ export async function buildKeywordAnalyzeResponse(
     margin_snapshot: marginSnapshotContract,
     signals,
     brand_moat: brandMoat, // Add brand moat to AI context
+    // Snapshot metrics (explicitly exposed for AI reference)
+    snapshot: {
+      top_5_brand_revenue_share_pct: snapshot.top_5_brand_revenue_share_pct ?? null,
+      total_monthly_revenue: summary.total_monthly_revenue_est,
+      total_monthly_units: summary.total_monthly_units_est,
+    },
     // Calibration metadata (for AI explanations only, not UI math)
     calibration: calibrationMetadata || {
       applied: false,
