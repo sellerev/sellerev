@@ -573,8 +573,15 @@ CRITICAL AI RULES:
         : 'Not available';
       
       // v1: Canonical revenue only - no refinement
-      contextParts.push(`=== SELECTED LISTING (USER CONTEXT) ===
-The user has selected this listing from Page 1. Reference it when answering questions.
+      // HARD LOCK: Selected ASIN is the ONLY ASIN Copilot can reference
+      contextParts.push(`=== SELECTED LISTING (HARD LOCK - REQUIRED) ===
+The user has selected this listing from Page 1. This is the ONLY product you can reference, cite, or escalate for.
+
+CRITICAL RULES:
+- You may ONLY reference, cite, or escalate for ASIN: ${selectedListing.asin || 'Not available'}
+- NEVER infer or reference other ASINs unless the user explicitly requests a comparison
+- All citations must use this selected ASIN only
+- If the question is ambiguous or mentions other ASINs, you MUST ask a clarification question instead of guessing
 
 ASIN: ${selectedListing.asin || 'Not available'}
 Title: ${selectedListing.title || 'Not available'}
@@ -589,7 +596,7 @@ Sponsored: ${selectedListing.is_sponsored ? 'Yes' : 'No'}
 Estimated Monthly Revenue: ${selectedListing.estimated_monthly_revenue ? `$${selectedListing.estimated_monthly_revenue.toLocaleString()}` : 'Not available'}
 Estimated Monthly Units: ${selectedListing.estimated_monthly_units ? selectedListing.estimated_monthly_units.toLocaleString() : 'Not available'}
 
-When the user asks about a specific product or compares products, reference this selected listing's data.`);
+When the user asks about a specific product, you MUST only reference this selected listing (ASIN: ${selectedListing.asin || 'Not available'}). If they mention other ASINs or ask ambiguous questions, ask for clarification.`);
     } catch (error) {
       console.error("Error formatting selected listing context:", error);
     }
@@ -1812,11 +1819,15 @@ export async function POST(req: NextRequest) {
     // Check credit balance
     const creditContext = await checkCreditBalance(user.id, supabase, body.analysisRunId);
     
-    // Make escalation decision
+    // Extract selected ASIN (hard lock)
+    const selectedAsin = body.selectedListing?.asin || null;
+    
+    // Make escalation decision (with selected ASIN lock)
     const escalationDecision = decideEscalation(
       body.message,
       page1Context,
-      creditContext
+      creditContext,
+      selectedAsin
     );
     
     // Log escalation decision (structured logging)
@@ -1879,7 +1890,7 @@ export async function POST(req: NextRequest) {
             rainforestApiKey
           );
           
-          escalationMessage = buildEscalationMessage(escalationDecision);
+          escalationMessage = buildEscalationMessage(escalationDecision, selectedAsin);
           
           // Structured logging for successful escalation
           console.log("ESCALATION_EXECUTED", {
@@ -2325,19 +2336,17 @@ export async function POST(req: NextRequest) {
           // 15a. Add inline citations if escalation was executed
           // ────────────────────────────────────────────────────────────────
           // Append source ASIN citations to the end of the message
-          if (finalMessage && escalationResults && escalationResults.success && escalationDecision.required_asins.length > 0) {
-            const sourceAsins = escalationDecision.required_asins;
-            let citationText = "";
+          // HARD LOCK: Only cite the selected ASIN
+          if (finalMessage && escalationResults && escalationResults.success) {
+            const asinToCite = selectedAsin || escalationDecision.required_asins[0];
             
-            if (sourceAsins.length === 1) {
-              citationText = `\n\n(Based on ASIN ${sourceAsins[0]})`;
-            } else if (sourceAsins.length === 2) {
-              citationText = `\n\n(Based on ASINs ${sourceAsins[0]}, ${sourceAsins[1]})`;
-            }
-            
-            // Only append if citation doesn't already exist in the message
-            if (citationText && !finalMessage.includes(citationText.trim())) {
-              finalMessage = finalMessage + citationText;
+            if (asinToCite) {
+              const citationText = `\n\n(Based on ASIN ${asinToCite})`;
+              
+              // Only append if citation doesn't already exist in the message
+              if (!finalMessage.includes(citationText.trim())) {
+                finalMessage = finalMessage + citationText;
+              }
             }
           }
 
@@ -2374,8 +2383,9 @@ export async function POST(req: NextRequest) {
             (async () => {
               try {
                 // Extract source ASINs from escalation results
-                const sourceAsins = escalationResults && escalationResults.success
-                  ? escalationDecision.required_asins
+                // HARD LOCK: Only track the selected ASIN
+                const sourceAsins = escalationResults && escalationResults.success && selectedAsin
+                  ? [selectedAsin] // Only selected ASIN
                   : null;
                 
                 // Calculate credits used

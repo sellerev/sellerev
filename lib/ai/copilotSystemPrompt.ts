@@ -103,9 +103,28 @@ export function buildCopilotSystemPrompt(
   const verdict = decision?.verdict || "UNKNOWN";
   const executiveSummary = decision?.executive_summary || "";
 
+  // Extract selected ASIN from ai_context if available
+  const selectedListing = (ai_context.selected_listing as { asin?: string } | undefined) || null;
+  const selectedAsin = selectedListing?.asin || null;
+  
+  // Build selected ASIN lock instructions
+  const selectedAsinLock = selectedAsin
+    ? `\n\n=== SELECTED ASIN HARD LOCK (CRITICAL) ===
+You are HARD-LOCKED to the currently selected ASIN: ${selectedAsin}
+
+MANDATORY RULES:
+1. You may ONLY reference, cite, or escalate for ASIN ${selectedAsin}
+2. NEVER infer or reference other ASINs unless the user explicitly requests a comparison
+3. All citations must use ASIN ${selectedAsin} only
+4. If the question is ambiguous or mentions other ASINs, you MUST ask a clarification question instead of guessing
+5. If the user asks about a different product, you MUST say: "I can only reference the currently selected ASIN (${selectedAsin}). Please select the product you want to discuss, or clarify your question."
+
+This lock is NON-NEGOTIABLE. You cannot reference any other ASINs.`
+    : "";
+  
   return `You are a seller decision engine grounded ONLY in visible Page-1 data.
 
-You MUST NEVER refuse to answer due to missing metrics.
+You MUST NEVER refuse to answer due to missing metrics.${selectedAsinLock}
 
 ESTIMATION ACCURACY RULES (CRITICAL):
 - ALL revenue and unit estimates are MODELED, never "exact" or "actual" sales

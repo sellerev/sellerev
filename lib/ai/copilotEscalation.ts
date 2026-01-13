@@ -279,7 +279,8 @@ function canAnswerWithPage1Data(question: string, page1Context: Page1Context): b
 export function decideEscalation(
   question: string,
   page1Context: Page1Context,
-  creditContext: CreditContext
+  creditContext: CreditContext,
+  selectedAsin?: string | null
 ): EscalationDecision {
   // Step 1: Check if question can be answered with Page-1 data
   const canAnswerPage1 = canAnswerWithPage1Data(question, page1Context);
@@ -292,6 +293,29 @@ export function decideEscalation(
       required_credits: 0,
       escalation_reason: "Question can be answered using Page-1 data (market structure, estimates, rankings, or comparisons).",
     };
+  }
+  
+  // Step 1.5: HARD LOCK - If selected ASIN exists, enforce it
+  if (selectedAsin) {
+    const extractedAsins = extractAsinsFromQuestion(question, page1Context);
+    
+    // Check if question mentions any ASINs that don't match selected ASIN
+    if (extractedAsins.length > 0) {
+      const nonMatchingAsins = extractedAsins.filter(asin => asin !== selectedAsin);
+      if (nonMatchingAsins.length > 0) {
+        // Question references ASINs other than selected - block escalation
+        return {
+          can_answer_from_page1: false,
+          requires_escalation: false,
+          required_asins: [],
+          required_credits: 0,
+          escalation_reason: `I can only reference the currently selected ASIN (${selectedAsin}). Your question mentions other ASINs (${nonMatchingAsins.join(', ')}). Please clarify which product you're asking about, or select the product you want to discuss.`,
+        };
+      }
+    }
+    
+    // If escalation is needed, only allow the selected ASIN
+    // Continue to Step 2 to check if escalation is actually needed
   }
   
   // Step 2: Check if question requires escalation
@@ -311,21 +335,29 @@ export function decideEscalation(
     };
   }
   
-  // Step 3: Extract ASINs from question
-  const asins = extractAsinsFromQuestion(question, page1Context);
+  // Step 3: Extract ASINs from question (or use selected ASIN if locked)
+  let asins: string[];
   
-  if (asins.length === 0) {
-    // Question requires escalation but no ASINs identified
-    return {
-      can_answer_from_page1: false,
-      requires_escalation: true,
-      required_asins: [],
-      required_credits: 0,
-      escalation_reason: "Question requires product details, but no specific product (ASIN) was identified. Please specify which product you're asking about.",
-    };
+  if (selectedAsin) {
+    // HARD LOCK: Only use selected ASIN
+    asins = [selectedAsin];
+  } else {
+    // No selected ASIN - extract from question
+    asins = extractAsinsFromQuestion(question, page1Context);
+    
+    if (asins.length === 0) {
+      // Question requires escalation but no ASINs identified
+      return {
+        can_answer_from_page1: false,
+        requires_escalation: true,
+        required_asins: [],
+        required_credits: 0,
+        escalation_reason: "Question requires product details, but no specific product (ASIN) was identified. Please specify which product you're asking about, or select a product from Page-1.",
+      };
+    }
   }
   
-  // Step 4: Enforce max 2 ASINs
+  // Step 4: Enforce max 2 ASINs (but with selected ASIN lock, this will be 1)
   const requiredAsins = asins.slice(0, 2);
   const requiredCredits = requiredAsins.length;
   
@@ -393,7 +425,7 @@ export function decideEscalation(
 /**
  * Build escalation notification message for user
  */
-export function buildEscalationMessage(decision: EscalationDecision): string {
+export function buildEscalationMessage(decision: EscalationDecision, selectedAsin?: string | null): string {
   if (!decision.requires_escalation) {
     return "";
   }
@@ -402,15 +434,14 @@ export function buildEscalationMessage(decision: EscalationDecision): string {
     return decision.escalation_reason;
   }
   
-  const asinList = decision.required_asins.length === 1
-    ? `ASIN ${decision.required_asins[0]}`
-    : `ASINs ${decision.required_asins[0]} and ${decision.required_asins[1]}`;
+  // HARD LOCK: Only reference selected ASIN (if provided)
+  const asinToReference = selectedAsin || decision.required_asins[0];
   
   const creditText = decision.required_credits === 1
     ? "1 Seller Credit"
     : `${decision.required_credits} Seller Credits`;
   
-  return `🔍 Looking up live listing data for ${asinList}... This will use ${creditText}.`;
+  return `🔍 Looking up live listing data for ASIN ${asinToReference}... This will use ${creditText}.`;
 }
 
 /**
