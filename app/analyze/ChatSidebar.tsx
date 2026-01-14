@@ -79,8 +79,6 @@ interface ChatSidebarProps {
   selectedAsins?: string[];
   /** Setter for selected ASINs (used by input chips) */
   onSelectedAsinsChange?: (asins: string[]) => void;
-  /** Setter for selected ASINs (used by input chips) */
-  onSelectedAsinsChange?: (asins: string[]) => void;
   /** Whether the sidebar is collapsed */
   isCollapsed?: boolean;
   /** Callback to toggle collapse state */
