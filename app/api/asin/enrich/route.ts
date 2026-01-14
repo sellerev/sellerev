@@ -696,7 +696,7 @@ export async function POST(req: NextRequest) {
         data_timestamp: nowIso(),
         data: undefined,
       };
-      return NextResponse.json(payload, { headers: res.headers });
+      return payload;
     }
 
     // Ensure we have a consistent range for downstream storage
@@ -713,7 +713,7 @@ export async function POST(req: NextRequest) {
         data_timestamp: nowIso(),
         data: undefined,
       };
-      return NextResponse.json(payload, { headers: res.headers });
+      return payload;
     }
 
     // 6b. Upsert into global caches (learning foundation)
