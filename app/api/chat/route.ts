@@ -61,6 +61,9 @@ interface ChatRequestBody {
   selectedListing?: any | null; // Optional selected listing for AI context (DEPRECATED: use selectedAsins)
   selectedAsins?: string[]; // Selected ASINs array (for multi-select)
   responseMode?: "concise" | "expanded"; // Response mode (default: concise)
+  // UI-gated escalation confirmation (prevents silent credit usage)
+  escalationConfirmed?: boolean;
+  escalationAsins?: string[];
 }
 
 function validateRequestBody(body: unknown): body is ChatRequestBody {
@@ -78,6 +81,12 @@ function validateRequestBody(body: unknown): body is ChatRequestBody {
       return false;
     }
   }
+
+  // Validate escalationAsins if present (must be array of strings)
+  if ('escalationAsins' in b && b.escalationAsins !== undefined) {
+    if (!Array.isArray(b.escalationAsins)) return false;
+    if (!b.escalationAsins.every((item: unknown) => typeof item === "string")) return false;
+  }
   
   return (
     typeof b.analysisRunId === "string" &&
@@ -85,6 +94,20 @@ function validateRequestBody(body: unknown): body is ChatRequestBody {
     typeof b.message === "string" &&
     b.message.trim().length > 0
   );
+}
+
+function extractAsinsFromText(text: string): string[] {
+  if (!text) return [];
+  const matches = text.toUpperCase().match(/\b([A-Z0-9]{10})\b/g) || [];
+  // Prefer typical Amazon ASIN format starting with "B0", but keep others as fallback
+  const uniq = Array.from(new Set(matches));
+  const b0 = uniq.filter((a) => a.startsWith("B0"));
+  return (b0.length > 0 ? b0 : uniq).slice(0, 5);
+}
+
+function intersects(a: string[], b: string[]): string[] {
+  const setB = new Set(b);
+  return a.filter((x) => setB.has(x));
 }
 
 /**
@@ -1811,7 +1834,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // EXTRACT SELECTED ASINS (SINGLE SOURCE OF TRUTH)
+    // EXTRACT SELECTED ASINS / EXPLICIT ASINS (SINGLE SOURCE OF TRUTH)
     // ═══════════════════════════════════════════════════════════════════════════
     // CRITICAL: selectedAsins is the single source of truth
     // Only use selectedListing as fallback if selectedAsins is empty/undefined
@@ -1822,9 +1845,23 @@ export async function POST(req: NextRequest) {
         ? [body.selectedListing.asin] // Backward compatibility fallback
         : []); // Empty array = no selection
     
+    // Guardrail input: explicit ASINs in user question (allows escalation only when explicitly referenced)
+    const explicitAsins = extractAsinsFromText(body.message);
+    const isExplicitCompare =
+      /\b(vs|versus|compare|comparison)\b/i.test(body.message) || explicitAsins.length >= 2;
+    const maxEscalationAsins = isExplicitCompare ? 2 : 1;
+    const confirmedAsins = Array.isArray(body.escalationAsins)
+      ? body.escalationAsins.filter((a) => a && typeof a === "string")
+      : [];
+    const eligibleAsinsForEscalation =
+      body.escalationConfirmed === true && confirmedAsins.length > 0
+        ? confirmedAsins
+        : (selectedAsins.length > 0 ? selectedAsins : explicitAsins);
+
     // For backward compatibility and single-ASIN logic, also extract first ASIN
     // CRITICAL: If selectedAsins.length === 0, selectedAsin must be null
     const selectedAsin = selectedAsins.length > 0 ? selectedAsins[0] : null;
+    const effectiveSelectedAsinForEscalation = eligibleAsinsForEscalation.length > 0 ? eligibleAsinsForEscalation[0] : null;
     
     // 8. Build grounded context message
     // ─────────────────────────────────────────────────────────────────────
@@ -1924,9 +1961,50 @@ export async function POST(req: NextRequest) {
       body.message,
       page1Context,
       creditContext,
-      selectedAsin, // Backward compatibility
-      selectedAsins // Multi-ASIN support
+      effectiveSelectedAsinForEscalation, // Backward compatibility (single ASIN)
+      eligibleAsinsForEscalation // Multi-ASIN support (selected OR explicit)
     );
+
+    // ────────────────────────────────────────────────────────────────────────
+    // ESCALATION GUARDRAILS (STRICT)
+    // - Never escalate unless an ASIN is selected OR explicitly referenced
+    // - Max 1 ASIN by default, max 2 only for explicit compare
+    // - Never consume credits without explicit confirmation (handled below)
+    // ────────────────────────────────────────────────────────────────────────
+    if (escalationDecision.requires_escalation) {
+      if (eligibleAsinsForEscalation.length === 0) {
+        // Hard block: no selection and no explicit ASIN in the question
+        escalationDecision.requires_escalation = false;
+        escalationDecision.required_asins = [];
+        escalationDecision.required_credits = 0;
+      } else if (eligibleAsinsForEscalation.length > maxEscalationAsins) {
+        // Hard block: too many ASINs unless explicit compare (max 2)
+        const hint = isExplicitCompare
+          ? "To compare, select or paste exactly 2 ASINs."
+          : "Select exactly 1 ASIN (or paste an ASIN) to look up live product details.";
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: hint })}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        return new NextResponse(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            ...Object.fromEntries(res.headers.entries()),
+          },
+        });
+      } else {
+        // Enforce ASIN cap and intersection with eligible ASINs
+        const intersected = intersects(escalationDecision.required_asins, eligibleAsinsForEscalation);
+        const requiredAsins = (intersected.length > 0 ? intersected : eligibleAsinsForEscalation).slice(0, maxEscalationAsins);
+        escalationDecision.required_asins = requiredAsins;
+        escalationDecision.required_credits = requiredAsins.length;
+      }
+    }
     
     // STEP 5: GUARANTEED LOGGING - Log escalation decision BEFORE LLM runs
     console.log("[ESCALATION_GATE]", {
@@ -1991,9 +2069,34 @@ export async function POST(req: NextRequest) {
         
         escalationMessage = buildInsufficientCreditsMessage(escalationDecision, creditContext);
       } else {
+        // UI must explicitly confirm before any credits are consumed
+        if (body.escalationConfirmed !== true) {
+          const confirmationMetadata = {
+            type: "escalation_confirmation_required",
+            message: `This will use ${escalationDecision.required_credits} Seller Credit${escalationDecision.required_credits === 1 ? "" : "s"} to load live product data. Continue?`,
+            asins: escalationDecision.required_asins,
+            credits: escalationDecision.required_credits,
+          };
+          const stream = new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata: confirmationMetadata })}\n\n`));
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            },
+          });
+          return new NextResponse(stream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache, no-transform",
+              Connection: "keep-alive",
+              ...Object.fromEntries(res.headers.entries()),
+            },
+          });
+        }
+
         // Credits available - BUILD MESSAGE FIRST (before executing escalation)
         // This ensures the message is ready to send immediately
-        escalationMessage = buildEscalationMessage(escalationDecision, selectedAsin, selectedAsins);
+        escalationMessage = buildEscalationMessage(escalationDecision, effectiveSelectedAsinForEscalation, eligibleAsinsForEscalation);
         shouldShowEscalationMessage = true; // Mark that we should show this message
         
         // Now execute escalation
@@ -2006,6 +2109,22 @@ export async function POST(req: NextRequest) {
             supabase,
             rainforestApiKey
           );
+
+          // Guardrail: never spend credits without surfacing usable result.
+          // If Rainforest returned an empty payload, we still proceed but force the model to state the failure explicitly.
+          // (Credits may already be deducted; do not hide that.)
+          try {
+            const unusable = escalationDecision.required_asins.filter((asin) => {
+              const d = escalationResults?.productData?.get(asin);
+              return !d || (typeof d === "object" && d !== null && Object.keys(d).length === 0);
+            });
+            if (unusable.length === escalationDecision.required_asins.length) {
+              escalationMessage = `Live lookup completed, but returned no usable product details for ${unusable.join(", ")}. I’ll answer using what’s available in the analysis, and call out what’s missing.`;
+              shouldShowEscalationMessage = true;
+            }
+          } catch {
+            // Non-blocking
+          }
           
           // Structured logging for successful escalation
           console.log("ESCALATION_EXECUTED", {

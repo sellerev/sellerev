@@ -272,6 +272,12 @@ export default function ChatSidebar({
   // Context line shown ABOVE assistant response (not a chat message)
   const [responseContextLine, setResponseContextLine] = useState<string | null>(null);
   const hadEscalationThisResponseRef = useRef(false);
+  const [pendingEscalationConfirmation, setPendingEscalationConfirmation] = useState<{
+    message: string;
+    asins: string[];
+    credits: number;
+    originalQuestion: string;
+  } | null>(null);
   const [pendingMemoryConfirmation, setPendingMemoryConfirmation] = useState<{
     pendingMemoryId: string;
     message: string;
@@ -419,34 +425,47 @@ export default function ChatSidebar({
   // HANDLERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  const sendMessage = useCallback(async (messageOverride?: string) => {
-    const messageToSend = messageOverride || input.trim();
+  const sendMessage = useCallback(async (
+    arg?: string | {
+      message?: string;
+      escalationConfirmed?: boolean;
+      escalationAsins?: string[];
+      skipAddUserMessage?: boolean;
+    }
+  ) => {
+    const opts = typeof arg === "string" ? { message: arg } : (arg || {});
+    const messageToSend = opts.message || input.trim();
     
     // Guard: Must have analysis_run_id (for chat API) and message
     // Note: Chat API still requires analysisRunId, but UI unlocks with snapshotId
     if (!analysisRunId || !messageToSend) return;
 
-    // Add user message immediately
-    const userMessage: ChatMessage = {
-      role: "user",
-      content: messageToSend,
-    };
-    
-    // New user message = clear prior context line (it should only persist until the next user send)
-    // Then initialize for this response from real selection state.
-    hadEscalationThisResponseRef.current = false;
-    if (selectedAsins && selectedAsins.length > 0) {
-      if (selectedAsins.length === 1) {
-        setResponseContextLine(`Answering using selected ASIN: ${selectedAsins[0]}`);
+    if (!opts.skipAddUserMessage) {
+      // Add user message immediately
+      const userMessage: ChatMessage = {
+        role: "user",
+        content: messageToSend,
+      };
+      
+      // New user message = clear prior context line (it should only persist until the next user send)
+      // Then initialize for this response from real selection state.
+      hadEscalationThisResponseRef.current = false;
+      if (selectedAsins && selectedAsins.length > 0) {
+        if (selectedAsins.length === 1) {
+          setResponseContextLine(`Answering using selected ASIN: ${selectedAsins[0]}`);
+        } else {
+          setResponseContextLine(`Answering using ${selectedAsins.length} selected ASINs`);
+        }
       } else {
-        setResponseContextLine(`Answering using ${selectedAsins.length} selected ASINs`);
+        setResponseContextLine("Answering using Page-1 market data");
       }
-    } else {
-      setResponseContextLine("Answering using Page-1 market data");
+
+      setMessages((prev) => [...prev, userMessage]);
+      setInput("");
     }
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
+    // Any new round-trip clears prior pending escalation confirmation (if present)
+    setPendingEscalationConfirmation(null);
     setIsLoading(true);
     setStreamingContent("");
     setCopilotStatus("thinking"); // Show "Thinking" immediately after user submits
@@ -461,6 +480,8 @@ export default function ChatSidebar({
           message: messageToSend,
           selectedListing: selectedListing || null, // Backward compatibility
           selectedAsins: selectedAsins || [], // Multi-ASIN selection
+          escalationConfirmed: opts.escalationConfirmed === true,
+          escalationAsins: Array.isArray(opts.escalationAsins) ? opts.escalationAsins : undefined,
         }),
       });
 
@@ -536,6 +557,24 @@ export default function ChatSidebar({
                   } else {
                     setResponseContextLine("Looking up product details…");
                   }
+                } else if (json.metadata.type === "escalation_confirmation_required") {
+                  // Backend is requesting explicit confirmation before any credits are consumed.
+                  // Do NOT add a chat bubble; show a lightweight inline prompt.
+                  setPendingEscalationConfirmation({
+                    message: json.metadata.message || "This will use credits to load live product data. Continue?",
+                    asins: Array.isArray(json.metadata.asins) ? json.metadata.asins : [],
+                    credits: typeof json.metadata.credits === "number" ? json.metadata.credits : 1,
+                    originalQuestion: messageToSend,
+                  });
+                  // Context line: reflect that escalation is the data path for this response (confirmation required)
+                  if (selectedAsins && selectedAsins.length > 0) {
+                    setResponseContextLine("Looking up product details for selected ASIN(s)…");
+                  } else {
+                    setResponseContextLine("Looking up product details…");
+                  }
+                  // Stop loading indicator (no assistant response will stream until confirmed)
+                  setCopilotStatus("idle");
+                  setIsLoading(false);
                 } else if (json.metadata.type === "citations") {
                   // Store citations for the current message
                   const cits = (json.metadata.citations || []) as Citation[];
@@ -1032,6 +1071,57 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* INPUT AREA                                                          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* Escalation confirmation prompt (no credits consumed until confirmed) */}
+      {pendingEscalationConfirmation && (
+        <div className="mx-6 mb-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+          <p className="text-sm text-gray-900 mb-2 font-medium">
+            {pendingEscalationConfirmation.message}
+          </p>
+          <div className="text-xs text-gray-600 mb-3">
+            {pendingEscalationConfirmation.asins.length > 0 ? (
+              <span>
+                ASIN{pendingEscalationConfirmation.asins.length === 1 ? "" : "s"}:{" "}
+                <span className="font-mono">
+                  {pendingEscalationConfirmation.asins.join(", ")}
+                </span>
+              </span>
+            ) : (
+              <span>Selected ASIN(s) required.</span>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPendingEscalationConfirmation(null);
+                // Keep input usable; no API call and no credit use.
+              }}
+              className="px-3 py-1.5 bg-white rounded-xl text-sm font-medium hover:bg-gray-50 text-gray-700 border border-gray-300"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                // Immediately clear prompt so it doesn't linger during the fetch
+                const payload = pendingEscalationConfirmation;
+                setPendingEscalationConfirmation(null);
+                if (!payload) return;
+                // Now proceed with the SAME user question, but without adding another user bubble.
+                sendMessage({
+                  message: payload.originalQuestion,
+                  escalationConfirmed: true,
+                  escalationAsins: payload.asins,
+                  skipAddUserMessage: true,
+                });
+              }}
+              className="px-3 py-1.5 bg-[#3B82F6] text-white rounded-xl text-sm font-medium hover:bg-[#2563EB]"
+            >
+              Confirm
+            </button>
+          </div>
+        </div>
+      )}
       <div className="px-6 py-4 shrink-0 bg-white border-t border-[#E5E7EB]">
         <div className="flex flex-wrap gap-2 items-end bg-white border border-gray-300 rounded-xl px-3 py-2 shadow-sm hover:border-gray-400 focus-within:ring-2 focus-within:ring-[#3B82F6] focus-within:border-transparent transition-all">
           {/* Selected ASIN chips (chat context) */}
