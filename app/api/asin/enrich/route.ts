@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import crypto from "crypto";
+import { consumeCredits } from "@/lib/credits/sellerCredits";
 
 /**
  * ASIN Enrichment API Endpoint
@@ -39,6 +40,9 @@ interface EnrichResponse {
   error?: string;
   status?: EnrichmentStatus;
   stale?: boolean;
+  credits_charged?: 0 | 1;
+  served_from_cache?: boolean;
+  cache_age_seconds?: number | null;
   signals_used?: Array<"bought_last_month" | "bsr" | "price" | "reviews" | "rating">;
   data_timestamp?: string | null;
   data?: {
@@ -175,6 +179,13 @@ function setMemory(cacheKey: string, payload: any) {
   memoryCache.set(cacheKey, { expiresAt: Date.now() + MEMORY_TTL_MS, payload });
 }
 
+function secondsSince(ts: string | null | undefined): number | null {
+  if (!ts) return null;
+  const t = new Date(ts).getTime();
+  if (!isFinite(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 1000));
+}
+
 export async function POST(req: NextRequest) {
   let res = new NextResponse();
   const supabase = createApiClient(req, res);
@@ -219,12 +230,19 @@ export async function POST(req: NextRequest) {
     // 0) In-memory cache (fastest)
     const mem = getMemory(cacheKey);
     if (mem) {
+      // Ensure required cache metadata exists (older payloads)
+      if (mem && typeof mem === "object") {
+        mem.served_from_cache = true;
+        mem.credits_charged = 0;
+        mem.cache_age_seconds = secondsSince(mem.data_timestamp ?? null);
+      }
       return NextResponse.json(mem, { headers: res.headers });
     }
 
-    // Helper: Background refresh (best-effort, never awaited)
+    // Helper: Background refresh (best-effort, never awaited; never charges user credits)
     const refreshInBackground = (reason: string) => {
-      void (async () => {
+      if (inflight.has(cacheKey)) return;
+      const promise = (async () => {
         try {
           const rainforestApiKey = process.env.RAINFOREST_API_KEY;
           if (!rainforestApiKey) return;
@@ -422,8 +440,11 @@ export async function POST(req: NextRequest) {
             reason,
             error: e instanceof Error ? e.message : String(e),
           });
+        } finally {
+          inflight.delete(cacheKey);
         }
       })();
+      inflight.set(cacheKey, promise);
     };
 
     // 3. Check per-user cache (return immediately even if stale)
@@ -446,12 +467,14 @@ export async function POST(req: NextRequest) {
       const signalsUsed: EnrichResponse["signals_used"] =
         dataSource === "bsr_curve" ? ["bsr", "price"] : ["bought_last_month", "price"];
 
-      return NextResponse.json(
-        (() => {
+      return NextResponse.json((() => {
           const payload: EnrichResponse = {
           success: true,
           status: "ready",
           stale,
+          credits_charged: 0,
+          served_from_cache: true,
+          cache_age_seconds: secondsSince(dataTimestamp),
           signals_used: signalsUsed,
           data_timestamp: dataTimestamp,
           data: {
@@ -468,9 +491,7 @@ export async function POST(req: NextRequest) {
           };
           setMemory(cacheKey, payload);
           return payload;
-        })(),
-        { headers: res.headers }
-      );
+        })(), { headers: res.headers });
     }
 
     // 3b. Check GLOBAL cache (per-ASIN, per-marketplace, 24h TTL via expires_at)
@@ -523,6 +544,9 @@ export async function POST(req: NextRequest) {
             success: true,
             status: "ready",
             stale,
+            credits_charged: 0,
+            served_from_cache: true,
+            cache_age_seconds: secondsSince(row.fetched_at || null),
             signals_used: signalsUsed,
             data_timestamp: row.fetched_at || null,
             data: {
@@ -545,63 +569,47 @@ export async function POST(req: NextRequest) {
       console.warn("[ASINEnrich] Global cache lookup skipped:", e instanceof Error ? e.message : String(e));
     }
 
-    // 4. Fetch from Rainforest API
-    const rainforestApiKey = process.env.RAINFOREST_API_KEY;
-    if (!rainforestApiKey) {
-      return NextResponse.json(
-        { success: false, error: "Rainforest API key not configured" },
-        { status: 500, headers: res.headers }
+    // 4. Live provider fetch (Rainforest) with in-flight dedupe and <5s perceived performance.
+    // Only charge credits when THIS request triggers a new provider call.
+    const existingInflight = inflight.get(cacheKey);
+    if (!existingInflight) {
+      // Charge 1 credit because we're about to initiate a paid provider call
+      const charged = await consumeCredits(
+        user.id,
+        1,
+        "asin_enrich_provider_call",
+        { asins: [cleanAsin], analysis_run_id: analysisRunId, provider: "rainforest_product" },
+        supabase
       );
-    }
+      if (!charged) {
+        return NextResponse.json(
+          { success: false, error: "Insufficient credits" },
+          { status: 402, headers: res.headers }
+        );
+      }
 
-    console.log(`[ASINEnrich] Fetching Rainforest data for ${cleanAsin}`);
-
-    // HARD PERF CAP: keep first-time enrichment under ~5s.
-    // If provider is slow, return quickly with a "pending" response and refresh in background.
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4500);
-
-    let rainforestResponse: Response;
-    try {
-      rainforestResponse = await fetch(
-        `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${cleanAsin}`,
-        {
-          method: "GET",
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
+      const promise = (async (): Promise<EnrichResponse> => {
+        const rainforestApiKey = process.env.RAINFOREST_API_KEY;
+        if (!rainforestApiKey) {
+          return { success: false, error: "Rainforest API key not configured" };
         }
-      );
-    } catch (e) {
-      clearTimeout(timeout);
-      refreshInBackground("provider_slow_or_error_no_cache");
-      return NextResponse.json(
-        { success: true, status: "pending", stale: false, data_timestamp: null },
-        { headers: res.headers }
-      );
-    } finally {
-      clearTimeout(timeout);
-    }
 
-    if (!rainforestResponse.ok) {
-      console.error(`[ASINEnrich] Rainforest API error: ${rainforestResponse.status}`);
-      refreshInBackground("provider_http_error_no_cache");
-      return NextResponse.json(
-        { success: true, status: "pending", stale: false, data_timestamp: null },
-        { headers: res.headers }
-      );
-    }
+        console.log(`[ASINEnrich] Live fetch start for ${cleanAsin}`);
 
-    const raw = await rainforestResponse.json();
+        const rainforestResponse = await fetch(
+          `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${cleanAsin}`,
+          { method: "GET", headers: { Accept: "application/json" } }
+        );
 
-    if (raw.error || !raw.product) {
-      console.error(`[ASINEnrich] Invalid Rainforest response for ${cleanAsin}`);
-      return NextResponse.json(
-        { success: false, error: "Invalid data from Rainforest API" },
-        { status: 500, headers: res.headers }
-      );
-    }
+        if (!rainforestResponse.ok) {
+          return { success: true, status: "pending", credits_charged: 1, served_from_cache: false, cache_age_seconds: null, data_timestamp: null };
+        }
 
-    const product = raw.product;
+        const raw = await rainforestResponse.json();
+        const product = raw?.product;
+        if (!product) {
+          return { success: true, status: "pending", credits_charged: 1, served_from_cache: false, cache_age_seconds: null, data_timestamp: null };
+        }
 
     // 5. Extract and parse data
     const unitsRangeFromBought = parseBoughtLastMonth(product);
@@ -678,17 +686,15 @@ export async function POST(req: NextRequest) {
       confidence = "medium";
     } else {
       // No guessing: return insufficient, but still refresh caches in background for next click
-      refreshInBackground("insufficient_signals_provider_response");
-      return NextResponse.json(
-        {
-          success: true,
-          status: "insufficient_data",
-          stale: false,
-          signals_used: signalsUsed,
-          data_timestamp: nowIso(),
-        },
-        { headers: res.headers }
-      );
+      return {
+        success: true,
+        status: "insufficient_data",
+        credits_charged: 1,
+        served_from_cache: false,
+        cache_age_seconds: null,
+        signals_used: signalsUsed,
+        data_timestamp: nowIso(),
+      };
     }
 
     // Ensure we have a consistent range for downstream storage
@@ -769,6 +775,9 @@ export async function POST(req: NextRequest) {
       success: true,
       status: "ready",
       stale: false,
+      credits_charged: 1,
+      served_from_cache: false,
+      cache_age_seconds: 0,
       signals_used: signalsUsed,
       data_timestamp: nowIso(),
       data: {
@@ -784,7 +793,48 @@ export async function POST(req: NextRequest) {
       },
     };
 
-    return NextResponse.json(response, { headers: res.headers });
+        setMemory(cacheKey, response);
+        return response;
+      })().finally(() => {
+        inflight.delete(cacheKey);
+      });
+
+      inflight.set(cacheKey, promise);
+    }
+
+    const inflightPromise = inflight.get(cacheKey)!;
+
+    // Wait up to ~4.8s to return a ready response; otherwise return pending immediately.
+    try {
+      const result = await Promise.race([
+        inflightPromise,
+        new Promise<EnrichResponse>((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                success: true,
+                status: "pending",
+                credits_charged: existingInflight ? 0 : 1,
+                served_from_cache: false,
+                cache_age_seconds: null,
+                data_timestamp: null,
+              }),
+            4800
+          )
+        ),
+      ]);
+
+      // If we got a ready response from inflight, but this request didn't initiate the call, don't charge again.
+      if (existingInflight && result.credits_charged === 1) {
+        result.credits_charged = 0;
+      }
+      return NextResponse.json(result, { headers: res.headers });
+    } catch (e) {
+      return NextResponse.json(
+        { success: true, status: "pending", credits_charged: 0, served_from_cache: false, cache_age_seconds: null, data_timestamp: null },
+        { headers: res.headers }
+      );
+    }
   } catch (error) {
     console.error("[ASINEnrich] Error:", error);
     return NextResponse.json(

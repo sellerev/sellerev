@@ -487,6 +487,9 @@ export default function AnalyzeForm({
     signals_used?: string[];
     data_timestamp?: string | null;
     stale?: boolean;
+    served_from_cache?: boolean;
+    cache_age_seconds?: number | null;
+    credits_charged?: 0 | 1;
   };
   const [asinRefinements, setAsinRefinements] = useState<Record<string, AsinRefinementOverlay>>({});
   const [asinRefineStatus, setAsinRefineStatus] = useState<Record<string, "idle" | "loading" | "refined" | "error">>({});
@@ -536,6 +539,9 @@ export default function AnalyzeForm({
         signals_used: json?.signals_used,
         data_timestamp: json?.data_timestamp ?? null,
         stale: !!json?.stale,
+        served_from_cache: !!json?.served_from_cache,
+        cache_age_seconds: typeof json?.cache_age_seconds === "number" ? json.cache_age_seconds : null,
+        credits_charged: json?.credits_charged === 1 ? 1 : 0,
       };
 
       setAsinRefinements((prev) => ({ ...prev, [asin]: overlay }));
@@ -2002,6 +2008,7 @@ export default function AnalyzeForm({
                                   : undefined
                               }
                               refineStatus={asin ? (asinRefineStatus[asin] ?? "idle") : "idle"}
+                              refineMeta={asin ? asinRefinements[asin] : undefined}
                               fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
                               isSponsored={isSponsored}
                               imageUrl={imageUrl}

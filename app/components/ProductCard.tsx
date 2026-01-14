@@ -18,6 +18,11 @@ interface ProductCardProps {
    */
   onRefineEstimates?: () => void;
   refineStatus?: "idle" | "loading" | "refined" | "error";
+  refineMeta?: {
+    served_from_cache?: boolean;
+    cache_age_seconds?: number | null;
+    credits_charged?: number | null;
+  };
   fulfillment: "FBA" | "FBM" | "AMZ";
   isSponsored: boolean;
   imageUrl?: string | null;
@@ -37,6 +42,7 @@ export function ProductCard({
   monthlyUnits,
   onRefineEstimates,
   refineStatus = "idle",
+  refineMeta,
   fulfillment,
   isSponsored,
   imageUrl,
@@ -78,6 +84,9 @@ export function ProductCard({
     e.stopPropagation();
     onRefineEstimates?.();
   };
+
+  const isLoading = refineStatus === "loading";
+  const isRefined = refineStatus === "refined";
 
   return (
     <div
@@ -213,14 +222,22 @@ export function ProductCard({
       {/* Revenue Section - Prominent */}
       <div className="bg-[#F9FAFB] -mx-4 -mb-4 px-4 py-3 mt-3 rounded-b-xl border-t border-[#E5E7EB]">
         {/* DEFAULT STATE (no placeholders): show only "Load Sales Data" block until enrichment is ready */}
-        {asin && onRefineEstimates && refineStatus !== "refined" && (
+        {asin && onRefineEstimates && !isRefined && (
           <div className="flex items-center justify-between">
-            <div className="text-[11px] text-[#6B7280] pr-3">
-              {refineStatus === "loading"
-                ? "Loading sales data…"
-                : refineStatus === "error"
-                ? "Load failed. Try again."
-                : "Load 30-day sales signal for higher accuracy."}
+            <div className="text-[11px] text-[#6B7280] pr-3 flex items-center gap-2">
+              {isLoading && (
+                <span
+                  className="inline-block w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-gray-600 animate-spin"
+                  aria-hidden="true"
+                />
+              )}
+              <span>
+                {isLoading
+                  ? "Loading Sales Data…"
+                  : refineStatus === "error"
+                  ? "Load failed. Try again."
+                  : "Load 30-day sales signal for higher accuracy."}
+              </span>
             </div>
             <button
               type="button"
@@ -244,12 +261,18 @@ export function ProductCard({
             <div className="flex items-center justify-between mb-2">
               <div className="text-[11px] font-medium text-[#374151]">
                 Refined (live product data)
+                <span className="ml-2 text-[11px] font-normal text-[#6B7280]">
+                  {refineMeta?.served_from_cache ? "Loaded from cache" : "Live fetch"}
+                  {typeof refineMeta?.cache_age_seconds === "number" && refineMeta.cache_age_seconds > 30
+                    ? ` • ${Math.round(refineMeta.cache_age_seconds / 60)}m old`
+                    : ""}
+                </span>
               </div>
               {asin && onRefineEstimates && (
                 <button
                   type="button"
                   onClick={handleRefineClick}
-                  disabled={refineStatus === "loading"}
+                  disabled={isLoading}
                   className="text-[11px] font-medium underline text-gray-700 hover:text-gray-900"
                   title="Reload sales data for this ASIN"
                 >
