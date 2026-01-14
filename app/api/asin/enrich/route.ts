@@ -24,9 +24,16 @@ interface RefinedUnitsRange {
   max: number;
 }
 
+type EnrichmentStatus = "ready" | "pending" | "insufficient_data";
+type UnitsSource = "bought_last_month" | "bsr_curve";
+
 interface EnrichResponse {
   success: boolean;
   error?: string;
+  status?: EnrichmentStatus;
+  stale?: boolean;
+  signals_used?: Array<"bought_last_month" | "bsr" | "price" | "reviews" | "rating">;
+  data_timestamp?: string | null;
   data?: {
     refined_units_range: RefinedUnitsRange;
     refined_estimated_revenue: number;
@@ -34,7 +41,7 @@ interface EnrichResponse {
     current_bsr: number | null;
     review_count: number | null;
     fulfillment_type: string | null;
-    data_source: "rainforest_refinement";
+    data_source: "rainforest_bought_last_month" | "bsr_curve";
     confidence: "high" | "medium" | "low";
     expires_at?: string | null;
   };
@@ -131,6 +138,35 @@ function determineConfidence(
   return "low";
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function isExpired(expiresAt: string | null | undefined): boolean {
+  if (!expiresAt) return true;
+  return new Date(expiresAt) < new Date();
+}
+
+function isOlderThanHours(ts: string | null | undefined, hours: number): boolean {
+  if (!ts) return true;
+  const cutoff = new Date();
+  cutoff.setHours(cutoff.getHours() - hours);
+  return new Date(ts) < cutoff;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ms);
+  // NOTE: Caller must pass controller.signal into fetch; this wrapper is used for non-fetch promises too.
+  // Here we just race; fetch abort is handled separately.
+  return Promise.race([
+    promise.finally(() => clearTimeout(timeout)),
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), ms)
+    ),
+  ]);
+}
+
 export async function POST(req: NextRequest) {
   let res = new NextResponse();
   const supabase = createApiClient(req, res);
@@ -169,60 +205,204 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Check cache (per-user, per-ASIN, per-analysis-run, 24-hour expiry)
-    const { data: cached, error: cacheError } = await supabase
+    // Helper: Background refresh (best-effort, never awaited)
+    const refreshInBackground = (reason: string) => {
+      void (async () => {
+        try {
+          const rainforestApiKey = process.env.RAINFOREST_API_KEY;
+          if (!rainforestApiKey) return;
+
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 20000); // background max 20s
+          const rainforestResponse = await fetch(
+            `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${cleanAsin}`,
+            { method: "GET", headers: { Accept: "application/json" }, signal: controller.signal }
+          );
+          clearTimeout(timeout);
+
+          if (!rainforestResponse.ok) return;
+          const raw = await rainforestResponse.json();
+          const product = raw?.product;
+          if (!product) return;
+
+          const unitsRangeFromBought = parseBoughtLastMonth(product);
+
+          // Price
+          let price = currentPrice || null;
+          if (!price) {
+            if (product.price?.value) price = parseFloat(product.price.value);
+            else if (product.price?.raw) price = parseFloat(product.price.raw);
+          }
+
+          // BSR + category
+          let bsr: number | null = null;
+          let mainCategory: string | null = null;
+          if (product.bestsellers_rank && Array.isArray(product.bestsellers_rank) && product.bestsellers_rank.length > 0) {
+            const firstRank = product.bestsellers_rank[0];
+            if (firstRank.rank !== undefined && firstRank.rank !== null) {
+              const parsed = parseInt(firstRank.rank.toString().replace(/,/g, ""), 10);
+              bsr = isNaN(parsed) || parsed <= 0 ? null : parsed;
+            }
+            mainCategory = typeof firstRank.category === "string" && firstRank.category.trim().length > 0
+              ? firstRank.category.trim()
+              : null;
+          }
+
+          // Reviews
+          let reviewCount: number | null = null;
+          if (product.reviews_total !== undefined && product.reviews_total !== null) {
+            const parsed = parseInt(product.reviews_total.toString().replace(/,/g, ""), 10);
+            reviewCount = isNaN(parsed) || parsed < 0 ? null : parsed;
+          }
+
+          // Fulfillment
+          let fulfillmentType: string | null = null;
+          if (product.fulfillment?.is_prime === true || product.fulfillment?.type === "prime") fulfillmentType = "FBA";
+          else if (product.fulfillment?.type === "amazon") fulfillmentType = "Amazon";
+          else fulfillmentType = "FBM";
+
+          // Compute best-available units source
+          let unitsSource: UnitsSource | null = null;
+          let unitsRange: RefinedUnitsRange | null = null;
+          let refinedRevenue = 0;
+          let confidence: "high" | "medium" | "low" = "low";
+
+          const signalsUsed: EnrichResponse["signals_used"] = [];
+          if (price && price > 0) signalsUsed.push("price");
+          if (reviewCount !== null) signalsUsed.push("reviews");
+          if (bsr !== null) signalsUsed.push("bsr");
+
+          if (unitsRangeFromBought && price && price > 0) {
+            unitsSource = "bought_last_month";
+            unitsRange = unitsRangeFromBought;
+            const avgUnits = (unitsRange.min + unitsRange.max) / 2;
+            refinedRevenue = avgUnits * price;
+            confidence = "high";
+            signalsUsed.unshift("bought_last_month");
+          } else if (bsr && price && price > 0) {
+            const { estimateMonthlySalesFromBSR } = await import("@/lib/revenue/bsr-calculator");
+            const units = estimateMonthlySalesFromBSR(bsr, mainCategory || "default");
+            unitsSource = "bsr_curve";
+            unitsRange = { min: units, max: units };
+            refinedRevenue = units * price;
+            confidence = "medium";
+          } else {
+            return; // insufficient; don't cache junk
+          }
+
+          // Upsert global caches
+          await supabase.from("asin_bsr_cache").upsert({
+            asin: cleanAsin,
+            main_category: mainCategory,
+            main_category_bsr: bsr,
+            price: price,
+            brand: typeof product.brand === "string" ? product.brand : null,
+            last_fetched_at: nowIso(),
+            source: "rainforest",
+          }, { onConflict: "asin" });
+
+          await supabase.from("asin_sales_signal_cache").upsert({
+            asin: cleanAsin,
+            marketplace: "US",
+            refined_units_range: unitsRange,
+            refined_estimated_revenue: refinedRevenue,
+            current_price: price,
+            current_bsr: bsr,
+            review_count: reviewCount,
+            fulfillment_type: fulfillmentType,
+            data_source: unitsSource === "bought_last_month" ? "rainforest_bought_last_month" : "bsr_curve",
+            confidence,
+            last_fetched_at: nowIso(),
+          }, { onConflict: "asin,marketplace" });
+
+          // Upsert per-user per-analysis cache (24h) for immediate UX
+          const expiresAt = new Date();
+          expiresAt.setHours(expiresAt.getHours() + 24);
+          await supabase.from("asin_refinement_cache").upsert({
+            user_id: user.id,
+            asin: cleanAsin,
+            analysis_run_id: analysisRunId,
+            refined_units_range: unitsRange,
+            refined_estimated_revenue: refinedRevenue,
+            current_price: price,
+            current_bsr: bsr,
+            review_count: reviewCount,
+            fulfillment_type: fulfillmentType,
+            data_source: unitsSource === "bought_last_month" ? "rainforest_bought_last_month" : "bsr_curve",
+            confidence,
+            expires_at: expiresAt.toISOString(),
+          }, { onConflict: "user_id,asin,analysis_run_id" });
+
+          console.log(`[ASINEnrich] Background refresh complete for ${cleanAsin}`, { reason });
+        } catch (e) {
+          // Silent fail
+          console.warn(`[ASINEnrich] Background refresh failed for ${cleanAsin}`, {
+            reason,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      })();
+    };
+
+    // 3. Check per-user cache (return immediately even if stale)
+    const { data: cachedRows, error: cacheError } = await supabase
       .from("asin_refinement_cache")
       .select("*")
       .eq("user_id", user.id)
       .eq("asin", cleanAsin)
       .eq("analysis_run_id", analysisRunId)
-      .gt("expires_at", new Date().toISOString())
-      .single();
+      .order("created_at", { ascending: false })
+      .limit(1);
 
+    const cached = Array.isArray(cachedRows) && cachedRows.length > 0 ? cachedRows[0] : null;
     if (cached && !cacheError) {
-      // Check if cache is expired
-      const isExpired = cached.expires_at && new Date(cached.expires_at) < new Date();
-      
-      if (isExpired) {
-        console.log(`[ASINEnrich] Cache expired for ${cleanAsin} (user: ${user.id}), fetching fresh data`);
-        // Continue to fetch fresh data below
-      } else {
-        console.log(`[ASINEnrich] Cache hit for ${cleanAsin} (user: ${user.id})`);
-        return NextResponse.json(
-          {
-            success: true,
-            data: {
-              refined_units_range: cached.refined_units_range as RefinedUnitsRange,
-              refined_estimated_revenue: parseFloat(cached.refined_estimated_revenue.toString()),
-              current_price: cached.current_price ? parseFloat(cached.current_price.toString()) : currentPrice || 0,
-              current_bsr: cached.current_bsr,
-              review_count: cached.review_count,
-              fulfillment_type: cached.fulfillment_type,
-              data_source: cached.data_source as "rainforest_refinement",
-              confidence: cached.confidence as "high" | "medium" | "low",
-              expires_at: cached.expires_at,
-            },
+      const stale = isExpired(cached.expires_at);
+      if (stale) refreshInBackground("user_cache_stale");
+
+      const dataTimestamp = cached.created_at || null;
+      const dataSource = (cached.data_source as any) === "bsr_curve" ? "bsr_curve" : "rainforest_bought_last_month";
+      const signalsUsed: EnrichResponse["signals_used"] =
+        dataSource === "bsr_curve" ? ["bsr", "price"] : ["bought_last_month", "price"];
+
+      return NextResponse.json(
+        {
+          success: true,
+          status: "ready",
+          stale,
+          signals_used: signalsUsed,
+          data_timestamp: dataTimestamp,
+          data: {
+            refined_units_range: cached.refined_units_range as RefinedUnitsRange,
+            refined_estimated_revenue: parseFloat(cached.refined_estimated_revenue.toString()),
+            current_price: cached.current_price ? parseFloat(cached.current_price.toString()) : currentPrice || 0,
+            current_bsr: cached.current_bsr,
+            review_count: cached.review_count,
+            fulfillment_type: cached.fulfillment_type,
+            data_source: dataSource,
+            confidence: cached.confidence as "high" | "medium" | "low",
+            expires_at: cached.expires_at,
           },
-          { headers: res.headers }
-        );
-      }
+        },
+        { headers: res.headers }
+      );
     }
 
     // 3b. Check GLOBAL cache (per-ASIN, per-marketplace, 48-hour TTL)
     // This is the "learning foundation" cache: shared across users and analyses.
     try {
-      const ttlCutoff = new Date();
-      ttlCutoff.setHours(ttlCutoff.getHours() - 48);
-
       const { data: globalCached, error: globalErr } = await supabase
         .from("asin_sales_signal_cache")
         .select("*")
         .eq("asin", cleanAsin)
         .eq("marketplace", "US")
-        .gte("last_fetched_at", ttlCutoff.toISOString())
-        .single();
+        .order("last_fetched_at", { ascending: false })
+        .limit(1);
 
-      if (globalCached && !globalErr) {
+      const row = Array.isArray(globalCached) && globalCached.length > 0 ? globalCached[0] : null;
+      if (row && !globalErr) {
+        const stale = isOlderThanHours(row.last_fetched_at, 48);
+        if (stale) refreshInBackground("global_cache_stale");
+
         console.log(`[ASINEnrich] Global cache hit for ${cleanAsin}`);
 
         // Also populate per-user per-analysis cache for UX consistency (24h)
@@ -233,31 +413,39 @@ export async function POST(req: NextRequest) {
           user_id: user.id,
           asin: cleanAsin,
           analysis_run_id: analysisRunId,
-          refined_units_range: globalCached.refined_units_range,
-          refined_estimated_revenue: globalCached.refined_estimated_revenue,
-          current_price: globalCached.current_price ?? currentPrice ?? 0,
-          current_bsr: globalCached.current_bsr,
-          review_count: globalCached.review_count,
-          fulfillment_type: globalCached.fulfillment_type,
-          data_source: "rainforest_refinement",
-          confidence: globalCached.confidence,
+          refined_units_range: row.refined_units_range,
+          refined_estimated_revenue: row.refined_estimated_revenue,
+          current_price: row.current_price ?? currentPrice ?? 0,
+          current_bsr: row.current_bsr,
+          review_count: row.review_count,
+          fulfillment_type: row.fulfillment_type,
+          data_source: row.data_source || "rainforest_bought_last_month",
+          confidence: row.confidence,
           expires_at: expiresAt.toISOString(),
         }, {
           onConflict: "user_id,asin,analysis_run_id",
         });
 
+        const dataSource = (row.data_source as any) === "bsr_curve" ? "bsr_curve" : "rainforest_bought_last_month";
+        const signalsUsed: EnrichResponse["signals_used"] =
+          dataSource === "bsr_curve" ? ["bsr", "price"] : ["bought_last_month", "price"];
+
         return NextResponse.json(
           {
             success: true,
+            status: "ready",
+            stale,
+            signals_used: signalsUsed,
+            data_timestamp: row.last_fetched_at || null,
             data: {
-              refined_units_range: globalCached.refined_units_range as RefinedUnitsRange,
-              refined_estimated_revenue: parseFloat(globalCached.refined_estimated_revenue.toString()),
-              current_price: globalCached.current_price ? parseFloat(globalCached.current_price.toString()) : currentPrice || 0,
-              current_bsr: globalCached.current_bsr,
-              review_count: globalCached.review_count,
-              fulfillment_type: globalCached.fulfillment_type,
-              data_source: "rainforest_refinement",
-              confidence: globalCached.confidence as "high" | "medium" | "low",
+              refined_units_range: row.refined_units_range as RefinedUnitsRange,
+              refined_estimated_revenue: parseFloat(row.refined_estimated_revenue.toString()),
+              current_price: row.current_price ? parseFloat(row.current_price.toString()) : currentPrice || 0,
+              current_bsr: row.current_bsr,
+              review_count: row.review_count,
+              fulfillment_type: row.fulfillment_type,
+              data_source: dataSource,
+              confidence: row.confidence as "high" | "medium" | "low",
               expires_at: expiresAt.toISOString(),
             },
           },
@@ -280,21 +468,38 @@ export async function POST(req: NextRequest) {
 
     console.log(`[ASINEnrich] Fetching Rainforest data for ${cleanAsin}`);
 
-    const rainforestResponse = await fetch(
-      `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${cleanAsin}`,
-      {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-      }
-    );
+    // HARD PERF CAP: keep first-time enrichment under ~5s.
+    // If provider is slow, return quickly with a "pending" response and refresh in background.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+
+    let rainforestResponse: Response;
+    try {
+      rainforestResponse = await fetch(
+        `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=product&amazon_domain=amazon.com&asin=${cleanAsin}`,
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        }
+      );
+    } catch (e) {
+      clearTimeout(timeout);
+      refreshInBackground("provider_slow_or_error_no_cache");
+      return NextResponse.json(
+        { success: true, status: "pending", stale: false, data_timestamp: null },
+        { headers: res.headers }
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!rainforestResponse.ok) {
       console.error(`[ASINEnrich] Rainforest API error: ${rainforestResponse.status}`);
+      refreshInBackground("provider_http_error_no_cache");
       return NextResponse.json(
-        { success: false, error: "Failed to fetch ASIN data from Rainforest API" },
-        { status: 500, headers: res.headers }
+        { success: true, status: "pending", stale: false, data_timestamp: null },
+        { headers: res.headers }
       );
     }
 
@@ -311,7 +516,7 @@ export async function POST(req: NextRequest) {
     const product = raw.product;
 
     // 5. Extract and parse data
-    const unitsRange = parseBoughtLastMonth(product);
+    const unitsRangeFromBought = parseBoughtLastMonth(product);
     
     // Use current price from listing if provided, otherwise try to parse from product
     let price = currentPrice || null;
@@ -354,15 +559,58 @@ export async function POST(req: NextRequest) {
       fulfillmentType = "FBM";
     }
 
-    // 6. Calculate refined revenue (use average of units range if available)
+    // 6. Compute "best available signal" (Helium-10-like)
+    // Priority:
+    // 1) bought_last_month (highest confidence)
+    // 2) BSR curve (fallback)
+    // 3) insufficient (no guessing)
+    const signalsUsed: NonNullable<EnrichResponse["signals_used"]> = [];
+    if (price && price > 0) signalsUsed.push("price");
+    if (reviewCount !== null) signalsUsed.push("reviews");
+    if (bsr !== null) signalsUsed.push("bsr");
+
+    let unitsSource: UnitsSource | null = null;
+    let unitsRange: RefinedUnitsRange | null = null;
     let refinedRevenue = 0;
-    if (unitsRange && price) {
+    let confidence: "high" | "medium" | "low" = "low";
+
+    if (unitsRangeFromBought && price && price > 0) {
+      unitsSource = "bought_last_month";
+      unitsRange = unitsRangeFromBought;
       const avgUnits = (unitsRange.min + unitsRange.max) / 2;
       refinedRevenue = avgUnits * price;
+      confidence = "high";
+      signalsUsed.unshift("bought_last_month");
+    } else if (bsr && price && price > 0) {
+      const { estimateMonthlySalesFromBSR } = await import("@/lib/revenue/bsr-calculator");
+      const units = estimateMonthlySalesFromBSR(bsr, mainCategory || "default");
+      unitsSource = "bsr_curve";
+      unitsRange = { min: units, max: units };
+      refinedRevenue = units * price;
+      confidence = "medium";
+    } else {
+      // No guessing: return insufficient, but still refresh caches in background for next click
+      refreshInBackground("insufficient_signals_provider_response");
+      return NextResponse.json(
+        {
+          success: true,
+          status: "insufficient_data",
+          stale: false,
+          signals_used: signalsUsed,
+          data_timestamp: nowIso(),
+        },
+        { headers: res.headers }
+      );
     }
 
-    // Determine confidence
-    const confidence = determineConfidence(unitsRange, price, bsr);
+    // Ensure we have a consistent range for downstream storage
+    const effectiveUnitsRange = unitsRange;
+    if (!effectiveUnitsRange) {
+      return NextResponse.json(
+        { success: true, status: "insufficient_data", stale: false, data_timestamp: nowIso() },
+        { headers: res.headers }
+      );
+    }
 
     // 6b. Upsert into global caches (learning foundation)
     // - asin_bsr_cache (existing): BSR + category + price (+ brand if available)
@@ -380,18 +628,18 @@ export async function POST(req: NextRequest) {
       }, { onConflict: "asin" });
 
       // asin_sales_signal_cache (only if we have unitsRange + price to avoid junk rows)
-      if (unitsRange && price) {
+      if (effectiveUnitsRange && price) {
         await supabase.from("asin_sales_signal_cache").upsert({
           asin: cleanAsin,
           marketplace: "US",
-          refined_units_range: unitsRange,
+          refined_units_range: effectiveUnitsRange,
           refined_estimated_revenue: refinedRevenue,
           current_price: price,
           current_bsr: bsr,
           review_count: reviewCount,
           fulfillment_type: fulfillmentType,
-          data_source: "rainforest_refinement",
-          confidence,
+          data_source: unitsSource === "bought_last_month" ? "rainforest_bought_last_month" : "bsr_curve",
+          confidence: confidence,
           last_fetched_at: new Date().toISOString(),
         }, { onConflict: "asin,marketplace" });
       }
@@ -400,7 +648,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 7. Cache the result (24-hour expiry)
-    if (unitsRange && price) {
+    if (effectiveUnitsRange && price) {
       const expiresAt = new Date();
       expiresAt.setHours(expiresAt.getHours() + 24);
 
@@ -408,14 +656,14 @@ export async function POST(req: NextRequest) {
         user_id: user.id,
         asin: cleanAsin,
         analysis_run_id: analysisRunId,
-        refined_units_range: unitsRange,
+        refined_units_range: effectiveUnitsRange,
         refined_estimated_revenue: refinedRevenue,
         current_price: price,
         current_bsr: bsr,
         review_count: reviewCount,
         fulfillment_type: fulfillmentType,
-        data_source: "rainforest_refinement",
-        confidence,
+        data_source: unitsSource === "bought_last_month" ? "rainforest_bought_last_month" : "bsr_curve",
+        confidence: confidence,
         expires_at: expiresAt.toISOString(),
       }, {
         onConflict: "user_id,asin,analysis_run_id",
@@ -425,21 +673,25 @@ export async function POST(req: NextRequest) {
     }
 
     // 8. Return response
-    const expiresAt = unitsRange && price 
+    const expiresAt = effectiveUnitsRange && price 
       ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() // 24 hours from now
       : null;
     
     const response: EnrichResponse = {
       success: true,
+      status: "ready",
+      stale: false,
+      signals_used: signalsUsed,
+      data_timestamp: nowIso(),
       data: {
-        refined_units_range: unitsRange || { min: 0, max: 0 },
+        refined_units_range: effectiveUnitsRange,
         refined_estimated_revenue: refinedRevenue,
         current_price: price || 0,
         current_bsr: bsr,
         review_count: reviewCount,
         fulfillment_type: fulfillmentType,
-        data_source: "rainforest_refinement",
-        confidence,
+        data_source: unitsSource === "bought_last_month" ? "rainforest_bought_last_month" : "bsr_curve",
+        confidence: confidence,
         expires_at: expiresAt,
       },
     };

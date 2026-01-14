@@ -483,6 +483,10 @@ export default function AnalyzeForm({
     current_bsr: number | null;
     confidence: "high" | "medium" | "low";
     expires_at?: string | null;
+    data_source?: "rainforest_bought_last_month" | "bsr_curve";
+    signals_used?: string[];
+    data_timestamp?: string | null;
+    stale?: boolean;
   };
   const [asinRefinements, setAsinRefinements] = useState<Record<string, AsinRefinementOverlay>>({});
   const [asinRefineStatus, setAsinRefineStatus] = useState<Record<string, "idle" | "loading" | "refined" | "error">>({});
@@ -508,12 +512,33 @@ export default function AnalyzeForm({
         throw new Error(json?.error || `Refine failed (${res.status})`);
       }
 
-      const data = json.data as AsinRefinementOverlay | undefined;
-      if (!data) {
-        throw new Error("Refine failed (missing data)");
+      const status = (json.status as "ready" | "pending" | "insufficient_data" | undefined) || "ready";
+      if (status !== "ready") {
+        // If provider is slow, backend may return pending and refresh in background.
+        // Do a single quick retry to improve perceived performance.
+        if (status === "pending") {
+          setTimeout(() => {
+            // Best effort retry; no await
+            refineAsinEstimates(asin, currentPrice);
+          }, 1500);
+          return;
+        }
+        throw new Error(json?.error || "Insufficient data");
       }
 
-      setAsinRefinements((prev) => ({ ...prev, [asin]: data }));
+      const data = json.data as AsinRefinementOverlay | undefined;
+      if (!data) throw new Error("Refine failed (missing data)");
+
+      // Attach response metadata for future UI/analytics use
+      const overlay: AsinRefinementOverlay = {
+        ...data,
+        data_source: json?.data?.data_source,
+        signals_used: json?.signals_used,
+        data_timestamp: json?.data_timestamp ?? null,
+        stale: !!json?.stale,
+      };
+
+      setAsinRefinements((prev) => ({ ...prev, [asin]: overlay }));
       setAsinRefineStatus((prev) => ({ ...prev, [asin]: "refined" }));
     } catch (e) {
       console.error("ASIN_REFINE_FAILED", { asin, error: e instanceof Error ? e.message : String(e) });
