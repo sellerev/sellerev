@@ -208,6 +208,67 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 3b. Check GLOBAL cache (per-ASIN, per-marketplace, 48-hour TTL)
+    // This is the "learning foundation" cache: shared across users and analyses.
+    try {
+      const ttlCutoff = new Date();
+      ttlCutoff.setHours(ttlCutoff.getHours() - 48);
+
+      const { data: globalCached, error: globalErr } = await supabase
+        .from("asin_sales_signal_cache")
+        .select("*")
+        .eq("asin", cleanAsin)
+        .eq("marketplace", "US")
+        .gte("last_fetched_at", ttlCutoff.toISOString())
+        .single();
+
+      if (globalCached && !globalErr) {
+        console.log(`[ASINEnrich] Global cache hit for ${cleanAsin}`);
+
+        // Also populate per-user per-analysis cache for UX consistency (24h)
+        const expiresAt = new Date();
+        expiresAt.setHours(expiresAt.getHours() + 24);
+
+        await supabase.from("asin_refinement_cache").upsert({
+          user_id: user.id,
+          asin: cleanAsin,
+          analysis_run_id: analysisRunId,
+          refined_units_range: globalCached.refined_units_range,
+          refined_estimated_revenue: globalCached.refined_estimated_revenue,
+          current_price: globalCached.current_price ?? currentPrice ?? 0,
+          current_bsr: globalCached.current_bsr,
+          review_count: globalCached.review_count,
+          fulfillment_type: globalCached.fulfillment_type,
+          data_source: "rainforest_refinement",
+          confidence: globalCached.confidence,
+          expires_at: expiresAt.toISOString(),
+        }, {
+          onConflict: "user_id,asin,analysis_run_id",
+        });
+
+        return NextResponse.json(
+          {
+            success: true,
+            data: {
+              refined_units_range: globalCached.refined_units_range as RefinedUnitsRange,
+              refined_estimated_revenue: parseFloat(globalCached.refined_estimated_revenue.toString()),
+              current_price: globalCached.current_price ? parseFloat(globalCached.current_price.toString()) : currentPrice || 0,
+              current_bsr: globalCached.current_bsr,
+              review_count: globalCached.review_count,
+              fulfillment_type: globalCached.fulfillment_type,
+              data_source: "rainforest_refinement",
+              confidence: globalCached.confidence as "high" | "medium" | "low",
+              expires_at: expiresAt.toISOString(),
+            },
+          },
+          { headers: res.headers }
+        );
+      }
+    } catch (e) {
+      // Table might not exist yet in some environments; fail open.
+      console.warn("[ASINEnrich] Global cache lookup skipped:", e instanceof Error ? e.message : String(e));
+    }
+
     // 4. Fetch from Rainforest API
     const rainforestApiKey = process.env.RAINFOREST_API_KEY;
     if (!rainforestApiKey) {
@@ -264,12 +325,16 @@ export async function POST(req: NextRequest) {
 
     // Parse BSR
     let bsr: number | null = null;
+    let mainCategory: string | null = null;
     if (product.bestsellers_rank && Array.isArray(product.bestsellers_rank) && product.bestsellers_rank.length > 0) {
       const firstRank = product.bestsellers_rank[0];
       if (firstRank.rank !== undefined && firstRank.rank !== null) {
         const parsed = parseInt(firstRank.rank.toString().replace(/,/g, ""), 10);
         bsr = isNaN(parsed) || parsed <= 0 ? null : parsed;
       }
+      mainCategory = typeof firstRank.category === "string" && firstRank.category.trim().length > 0
+        ? firstRank.category.trim()
+        : null;
     }
 
     // Parse review count
@@ -298,6 +363,41 @@ export async function POST(req: NextRequest) {
 
     // Determine confidence
     const confidence = determineConfidence(unitsRange, price, bsr);
+
+    // 6b. Upsert into global caches (learning foundation)
+    // - asin_bsr_cache (existing): BSR + category + price (+ brand if available)
+    // - asin_sales_signal_cache (new): bought_last_month-derived units range + revenue + BSR + reviews + price
+    try {
+      // asin_bsr_cache
+      await supabase.from("asin_bsr_cache").upsert({
+        asin: cleanAsin,
+        main_category: mainCategory,
+        main_category_bsr: bsr,
+        price: price,
+        brand: typeof product.brand === "string" ? product.brand : null,
+        last_fetched_at: new Date().toISOString(),
+        source: "rainforest",
+      }, { onConflict: "asin" });
+
+      // asin_sales_signal_cache (only if we have unitsRange + price to avoid junk rows)
+      if (unitsRange && price) {
+        await supabase.from("asin_sales_signal_cache").upsert({
+          asin: cleanAsin,
+          marketplace: "US",
+          refined_units_range: unitsRange,
+          refined_estimated_revenue: refinedRevenue,
+          current_price: price,
+          current_bsr: bsr,
+          review_count: reviewCount,
+          fulfillment_type: fulfillmentType,
+          data_source: "rainforest_refinement",
+          confidence,
+          last_fetched_at: new Date().toISOString(),
+        }, { onConflict: "asin,marketplace" });
+      }
+    } catch (e) {
+      console.warn("[ASINEnrich] Global cache upsert skipped:", e instanceof Error ? e.message : String(e));
+    }
 
     // 7. Cache the result (24-hour expiry)
     if (unitsRange && price) {

@@ -212,16 +212,14 @@ export function ProductCard({
 
       {/* Revenue Section - Prominent */}
       <div className="bg-[#F9FAFB] -mx-4 -mb-4 px-4 py-3 mt-3 rounded-b-xl border-t border-[#E5E7EB]">
-        {/* Refinement Control (optional) */}
-        {asin && onRefineEstimates && (
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-[11px] text-[#6B7280]">
-              {refineStatus === "refined"
-                ? "Refined (live product data)"
-                : refineStatus === "loading"
+        {/* DEFAULT STATE (no placeholders): show only "Load Sales Data" block until enrichment is ready */}
+        {asin && onRefineEstimates && refineStatus !== "refined" && (
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] text-[#6B7280] pr-3">
+              {refineStatus === "loading"
                 ? "Loading sales data…"
                 : refineStatus === "error"
-                ? "Load failed"
+                ? "Load failed. Try again."
                 : "Load 30-day sales signal for higher accuracy."}
             </div>
             <button
@@ -235,42 +233,54 @@ export function ProductCard({
               }`}
               title="Load sales data for this ASIN to refine this card's estimates"
             >
-              {refineStatus === "refined"
-                ? "Reload Sales Data"
-                : refineStatus === "loading"
-                ? "Loading…"
-                : "Load Sales Data"}
+              {refineStatus === "loading" ? "Loading…" : "Load Sales Data"}
             </button>
           </div>
         )}
 
-        {/* Est. Monthly Revenue - EXPLICIT rendering */}
-        <div className="mb-2">
-          <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Revenue</div>
-          {monthlyRevenue === null || monthlyRevenue === undefined ? (
-            <div className="text-sm text-[#9CA3AF]">—</div>
-          ) : monthlyRevenue === 0 ? (
-            <div className="text-sm text-[#9CA3AF]">$0.00</div>
-          ) : (
-            <div className="text-xl font-bold text-[#111827]">
-              ${(monthlyRevenue / 1000).toFixed(1)}K<span className="text-sm font-normal text-[#6B7280]"> / mo</span>
+        {/* READY STATE: render numbers only after enrichment */}
+        {refineStatus === "refined" && (
+          <>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-medium text-[#374151]">
+                Refined (live product data)
+              </div>
+              {asin && onRefineEstimates && (
+                <button
+                  type="button"
+                  onClick={handleRefineClick}
+                  disabled={refineStatus === "loading"}
+                  className="text-[11px] font-medium underline text-gray-700 hover:text-gray-900"
+                  title="Reload sales data for this ASIN"
+                >
+                  Reload Sales Data
+                </button>
+              )}
             </div>
-          )}
-        </div>
-        
-        {/* Est. Monthly Units - EXPLICIT rendering */}
-        <div>
-          <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Units</div>
-          {monthlyUnits === null || monthlyUnits === undefined ? (
-            <div className="text-sm text-[#9CA3AF]">—</div>
-          ) : monthlyUnits === 0 ? (
-            <div className="text-sm text-[#9CA3AF]">0 units</div>
-          ) : (
-            <div className="text-sm font-medium text-[#111827]">
-              {monthlyUnits.toLocaleString()} units
+
+            <div className="mb-2">
+              <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Revenue</div>
+              <div className="text-xl font-bold text-[#111827]">
+                {monthlyRevenue && monthlyRevenue > 0
+                  ? (
+                      <>
+                        ${(monthlyRevenue / 1000).toFixed(1)}K
+                        <span className="text-sm font-normal text-[#6B7280]"> / mo</span>
+                      </>
+                    )
+                  : "—"}
+              </div>
             </div>
-          )}
-        </div>
+
+            <div>
+              <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Units</div>
+              <div className="text-sm font-medium text-[#111827]">
+                {monthlyUnits && monthlyUnits > 0 ? `${monthlyUnits.toLocaleString()} units` : "—"}
+              </div>
+            </div>
+          </>
+        )}
+
         {/* Badges Row */}
         <div className="flex gap-2 mt-3">
           {fulfillment && (
