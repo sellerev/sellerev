@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Copy, Check, ChevronRight, History } from "lucide-react";
 import HistoryPanel from "./components/HistoryPanel";
+import { supabaseBrowser } from "@/lib/supabase/client";
 
 /**
  * ChatSidebar - Context-Locked Refinement Tool
@@ -30,6 +31,27 @@ export interface Citation {
   asin: string;
   source: "page1_estimate" | "rainforest_product";
 }
+
+type SellerStage = "new" | "existing" | "scaling" | null;
+
+type FeesFlowState =
+  | { status: "idle" }
+  | {
+      status: "awaiting_inputs";
+      asin: string;
+      prefilledPrice: number | null;
+      cogs: number | null;
+      shipIn: number | null;
+      price: number | null;
+    }
+  | {
+      status: "awaiting_confirmation";
+      asin: string;
+      prefilledPrice: number | null;
+      cogs: number;
+      shipIn: number;
+      price: number;
+    };
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -299,6 +321,12 @@ export default function ChatSidebar({
   // History panel state
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Seller stage (from onboarding) for tailoring explanations
+  const [sellerStage, setSellerStage] = useState<SellerStage>(null);
+
+  // Local guided flow: FBA fees + profitability (exactly 1 selected ASIN)
+  const [feesFlow, setFeesFlow] = useState<FeesFlowState>({ status: "idle" });
   
   // Refs for auto-scroll
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -326,6 +354,41 @@ export default function ChatSidebar({
     // update via getSuggestedQuestions() which checks selectedListing
     // No need to force a re-render - the component will naturally show updated suggestions
   }, [selectedListing]);
+
+  // Load seller stage for contextual explanations (new/existing/scaling)
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadStage = async () => {
+      try {
+        const {
+          data: { user },
+        } = await supabaseBrowser.auth.getUser();
+        if (!user || cancelled) return;
+
+        const { data, error } = await supabaseBrowser
+          .from("seller_profiles")
+          .select("stage")
+          .eq("id", user.id)
+          .single();
+
+        if (cancelled) return;
+        if (error) return;
+
+        const stage = (data?.stage as SellerStage) || null;
+        if (stage === "new" || stage === "existing" || stage === "scaling") {
+          setSellerStage(stage);
+        }
+      } catch {
+        // Non-blocking
+      }
+    };
+
+    loadStage();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Check if user is near bottom (within 50px threshold)
   const checkIfNearBottom = useCallback(() => {
@@ -425,6 +488,366 @@ export default function ChatSidebar({
   // HANDLERS
   // ─────────────────────────────────────────────────────────────────────────
 
+  const appendAssistantMessage = useCallback((content: string) => {
+    setMessages((prev) => [...prev, { role: "assistant", content }]);
+  }, []);
+
+  const formatMoney = (n: number) => `$${n.toFixed(2)}`;
+
+  const isFeesIntent = (text: string) => {
+    const t = text.toLowerCase();
+    return (
+      t.includes("what’s the profit") ||
+      t.includes("what's the profit") ||
+      t.includes("calculate fba fees") ||
+      t.includes("calculate fba fee") ||
+      t.includes("calculate fees") ||
+      t.includes("run fees") ||
+      t.includes("fee lookup") ||
+      t.includes("is this profitable") ||
+      t.includes("profitability") ||
+      t.includes("profit") ||
+      t.includes("margin") ||
+      t.includes("fees / margin") ||
+      t.includes("fees and margin") ||
+      t.includes("what are the fees") ||
+      t.includes("fba fees") ||
+      t.includes("fba fee")
+    );
+  };
+
+  const isAffirmative = (text: string) =>
+    /^\s*(yes|y|yep|yeah|confirm|run|run it|go ahead|do it)\b/i.test(text);
+
+  const isNegative = (text: string) => /^\s*(no|n|not now|cancel)\b/i.test(text);
+
+  const parseFeesInputs = (text: string) => {
+    const t = text.trim();
+    const keepPrice =
+      /\bkeep(ing)?\s+price\b/i.test(t) ||
+      /\buse\s+(the\s+)?(listing|current)\s+price\b/i.test(t);
+
+    const pickNumber = (re: RegExp) => {
+      const m = t.match(re);
+      if (!m) return undefined;
+      const raw = m[m.length - 1];
+      const n = Number.parseFloat(raw);
+      return Number.isFinite(n) ? n : undefined;
+    };
+
+    const cogs = pickNumber(/\b(cogs|cost of goods|product cost)\b\s*[:=]?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i);
+    const shipIn = pickNumber(
+      /\b(ship|shipping|inbound|freight|prep)\b(?:\s+to\s+amazon)?\s*[:=]?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i
+    );
+    const price = pickNumber(/\b(price|selling price|sell price)\b\s*[:=]?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i);
+
+    return { keepPrice, cogs, shipIn, price };
+  };
+
+  const getPrefilledPrice = useCallback((): number | null => {
+    const raw = (selectedListing as any)?.price;
+    return typeof raw === "number" && raw > 0 ? raw : null;
+  }, [selectedListing]);
+
+  const getMarginBand = (marginPct: number): "thin" | "okay" | "strong" => {
+    if (marginPct < 15) return "thin";
+    if (marginPct < 25) return "okay";
+    return "strong";
+  };
+
+  const renderMissingInputsLabel = (missing: Array<"cogs" | "shipIn">) => {
+    const parts = missing.map((m) => (m === "cogs" ? "COGS" : "Shipping to Amazon"));
+    if (parts.length === 1) return parts[0];
+    return `${parts[0]} and ${parts[1]}`;
+  };
+
+  const handleFeesFlowTurn = useCallback(
+    async (messageToSend: string): Promise<boolean> => {
+      const prefilledPrice = getPrefilledPrice();
+
+      // Start flow only on fees/profit intent
+      if (feesFlow.status === "idle") {
+        if (!isFeesIntent(messageToSend)) return false;
+
+        // 1) Guardrail: enforce exactly 1 ASIN selected
+        if (!selectedAsins || selectedAsins.length === 0) {
+          appendAssistantMessage(
+            `I can calculate **exact FBA fees** for a product using Amazon’s **Seller API**—but I need you to **select exactly 1 ASIN** first.\n\nRight now you have **0 selected**, so I can’t run the fee lookup yet.\n\nPlease select **one** product card and then tell me “run fees”.`
+          );
+          return true;
+        }
+
+        if (selectedAsins.length > 1) {
+          appendAssistantMessage(
+            `I can calculate **exact FBA fees** using Amazon’s **Seller API**, but the fee lookup supports **exactly 1 ASIN at a time**.\n\nYou currently have **${selectedAsins.length} ASINs selected**, so I’m going to pause here to avoid mixing products.\n\nPlease **deselect down to 1 ASIN**, then tell me “run fees”.`
+          );
+          return true;
+        }
+
+        const asin = selectedAsins[0];
+
+        // 2) Pre-execution explanation
+        appendAssistantMessage(
+          `Yes—I can calculate **exact FBA fees** for the selected ASIN using Amazon’s **Seller API**.\n\nBefore I run it, I need **3 inputs** so the profitability math is accurate.`
+        );
+
+        // 3) Inline input request
+        const prefilled = prefilledPrice !== null ? prefilledPrice.toFixed(2) : "___";
+        appendAssistantMessage(
+          `Please confirm these inputs (per unit):\n1) **COGS** (your product cost): **$___** *(required)*\n2) **Shipping to Amazon** (inbound freight / prep): **$___** *(required)*\n3) **Selling price**: **$ ${prefilled}** *(editable)*\n\nReply in one line like: \`COGS 4.25, Ship 0.60, Price 19.99\`\nOr tell me which one you want to set first.`
+        );
+
+        setFeesFlow({
+          status: "awaiting_inputs",
+          asin,
+          prefilledPrice,
+          cogs: null,
+          shipIn: null,
+          price: prefilledPrice,
+        });
+        return true;
+      }
+
+      // If selection changes mid-flow, enforce again
+      if (!selectedAsins || selectedAsins.length !== 1 || selectedAsins[0] !== feesFlow.asin) {
+        if (!selectedAsins || selectedAsins.length === 0) {
+          appendAssistantMessage(
+            `I can calculate **exact FBA fees** for a product using Amazon’s **Seller API**—but I need you to **select exactly 1 ASIN** first.\n\nRight now you have **0 selected**, so I can’t run the fee lookup yet.\n\nPlease select **one** product card and then tell me “run fees”.`
+          );
+          setFeesFlow({ status: "idle" });
+          return true;
+        }
+
+        if (selectedAsins.length > 1) {
+          appendAssistantMessage(
+            `I can calculate **exact FBA fees** using Amazon’s **Seller API**, but the fee lookup supports **exactly 1 ASIN at a time**.\n\nYou currently have **${selectedAsins.length} ASINs selected**, so I’m going to pause here to avoid mixing products.\n\nPlease **deselect down to 1 ASIN**, then tell me “run fees”.`
+          );
+          setFeesFlow({ status: "idle" });
+          return true;
+        }
+      }
+
+      // 3C) Price guidance question
+      if (/\bwhat price\b/i.test(messageToSend) || /\bwhich price\b/i.test(messageToSend)) {
+        const p = prefilledPrice !== null ? prefilledPrice.toFixed(2) : "___";
+        appendAssistantMessage(
+          `You can use the current listing price (**$ ${p}**) or a target price you’re considering.\n\nTell me the price you want to model, and I’ll calculate fees + profit at that number.`
+        );
+        return true;
+      }
+
+      // 3) Awaiting inputs: parse and validate
+      if (feesFlow.status === "awaiting_inputs") {
+        const parsed = parseFeesInputs(messageToSend);
+
+        const nextCogs =
+          typeof parsed.cogs === "number" && parsed.cogs > 0 ? parsed.cogs : feesFlow.cogs;
+        const nextShipIn =
+          typeof parsed.shipIn === "number" && parsed.shipIn > 0 ? parsed.shipIn : feesFlow.shipIn;
+
+        let nextPrice: number | null = feesFlow.price;
+        if (typeof parsed.price === "number" && parsed.price > 0) {
+          nextPrice = parsed.price;
+        } else if (parsed.keepPrice) {
+          nextPrice = feesFlow.prefilledPrice;
+        }
+
+        const missing: Array<"cogs" | "shipIn"> = [];
+        if (nextCogs === null) missing.push("cogs");
+        if (nextShipIn === null) missing.push("shipIn");
+
+        // 3B) Explicit "keep prefilled price" branch when required inputs are still missing
+        if (
+          parsed.keepPrice &&
+          feesFlow.prefilledPrice !== null &&
+          missing.length > 0 &&
+          (parsed.cogs === undefined && parsed.shipIn === undefined && parsed.price === undefined)
+        ) {
+          appendAssistantMessage(
+            `Great—keeping **Selling price = $ ${feesFlow.prefilledPrice.toFixed(2)}**.\n\nWhat are your **COGS per unit** and **Shipping to Amazon per unit**?`
+          );
+          setFeesFlow({ ...feesFlow, cogs: nextCogs, shipIn: nextShipIn, price: nextPrice });
+          return true;
+        }
+
+        if (missing.length > 0) {
+          const p =
+            (nextPrice ?? feesFlow.prefilledPrice ?? prefilledPrice)?.toFixed(2) ?? "___";
+          appendAssistantMessage(
+            `I’m missing **${renderMissingInputsLabel(missing)}**, which I need to compute profit and margin.\n\nPlease provide **COGS** and **Shipping to Amazon per unit** (price can stay at **$ ${p}** if you want).`
+          );
+          setFeesFlow({ ...feesFlow, cogs: nextCogs, shipIn: nextShipIn, price: nextPrice });
+          return true;
+        }
+
+        if (nextPrice === null) {
+          appendAssistantMessage(
+            `Got it. I still need a **Selling price** to model.\n\nYou can reply like: \`Price 19.99\` (or tell me to use the listing price).`
+          );
+          setFeesFlow({ ...feesFlow, cogs: nextCogs, shipIn: nextShipIn, price: null });
+          return true;
+        }
+
+        // 4) Confirmation gate
+        appendAssistantMessage(
+          `Perfect. I’m ready to run the **exact FBA fee calculation** for this ASIN using Amazon’s **Seller API** with:\n- COGS: **${formatMoney(nextCogs)}**\n- Shipping to Amazon: **${formatMoney(nextShipIn)}**\n- Selling price: **${formatMoney(nextPrice)}**\n\n**Do you want me to run it now?** Reply **Yes** to proceed or **No** to change inputs.`
+        );
+
+        setFeesFlow({
+          status: "awaiting_confirmation",
+          asin: feesFlow.asin,
+          prefilledPrice: feesFlow.prefilledPrice,
+          cogs: nextCogs,
+          shipIn: nextShipIn,
+          price: nextPrice,
+        });
+        return true;
+      }
+
+      // 4) Awaiting confirmation: yes/no
+      if (feesFlow.status === "awaiting_confirmation") {
+        if (isNegative(messageToSend)) {
+          appendAssistantMessage(
+            `No problem—tell me what to change (COGS, Shipping to Amazon, or Selling price), and I’ll restate the inputs for confirmation again.`
+          );
+          setFeesFlow({
+            status: "awaiting_inputs",
+            asin: feesFlow.asin,
+            prefilledPrice: feesFlow.prefilledPrice,
+            cogs: feesFlow.cogs,
+            shipIn: feesFlow.shipIn,
+            price: feesFlow.price,
+          });
+          return true;
+        }
+
+        if (!isAffirmative(messageToSend)) {
+          // Allow edits in-line, otherwise keep waiting explicitly
+          const parsed = parseFeesInputs(messageToSend);
+          const adjustedCogs =
+            typeof parsed.cogs === "number" && parsed.cogs > 0 ? parsed.cogs : feesFlow.cogs;
+          const adjustedShipIn =
+            typeof parsed.shipIn === "number" && parsed.shipIn > 0 ? parsed.shipIn : feesFlow.shipIn;
+          let adjustedPrice =
+            typeof parsed.price === "number" && parsed.price > 0 ? parsed.price : feesFlow.price;
+          if (parsed.keepPrice) adjustedPrice = feesFlow.prefilledPrice ?? adjustedPrice;
+
+          const changed =
+            adjustedCogs !== feesFlow.cogs ||
+            adjustedShipIn !== feesFlow.shipIn ||
+            adjustedPrice !== feesFlow.price;
+
+          if (changed) {
+            setFeesFlow({
+              status: "awaiting_confirmation",
+              asin: feesFlow.asin,
+              prefilledPrice: feesFlow.prefilledPrice,
+              cogs: adjustedCogs,
+              shipIn: adjustedShipIn,
+              price: adjustedPrice,
+            });
+            appendAssistantMessage(
+              `Got it. I’m ready to run with:\n- COGS: **${formatMoney(adjustedCogs)}**\n- Shipping to Amazon: **${formatMoney(adjustedShipIn)}**\n- Selling price: **${formatMoney(adjustedPrice)}**\n\nReply **Yes** to proceed or **No** to change inputs.`
+            );
+            return true;
+          }
+
+          appendAssistantMessage(
+            `Just to confirm: reply **Yes** to run the exact fee lookup now, or **No** to change inputs.`
+          );
+          return true;
+        }
+
+        // 5) Executing status message
+        appendAssistantMessage(
+          `Running the **exact FBA fee lookup** now and calculating profit + margin from your inputs. One moment.`
+        );
+        setCopilotStatus("fetching");
+
+        try {
+          const response = await fetch("/api/fba-fees", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ asin: feesFlow.asin, price: feesFlow.price }),
+          });
+
+          const data = await response.json().catch(() => null);
+          const source = typeof data?.source === "string" ? data.source : null;
+          const fulfillmentFee =
+            typeof data?.fulfillment_fee === "number" ? data.fulfillment_fee : null;
+          const referralFee = typeof data?.referral_fee === "number" ? data.referral_fee : null;
+
+          // Enforce "exact fees" behavior: if SP-API didn't return a quote, don't compute fake profitability.
+          if (source !== "sp_api" || (fulfillmentFee === null && referralFee === null)) {
+            appendAssistantMessage(
+              `I wasn’t able to retrieve an **exact fee quote** for this ASIN right now.\n\nPlease try again in a moment (or confirm the selling price you want to model and I’ll rerun it).`
+            );
+            return true;
+          }
+
+          const feesTotal = (fulfillmentFee || 0) + (referralFee || 0);
+          const landedUnitCost = feesFlow.cogs + feesFlow.shipIn;
+          const profit = feesFlow.price - feesTotal - landedUnitCost;
+          const marginPct = feesFlow.price > 0 ? (profit / feesFlow.price) * 100 : 0;
+
+          // 6A) Numeric results
+          appendAssistantMessage(
+            `Here are the results at **${formatMoney(feesFlow.price)}** selling price:\n- **Estimated FBA fees (total): ${formatMoney(feesTotal)}**\n- **Landed unit cost (COGS + inbound): ${formatMoney(landedUnitCost)}**\n- **Net profit per unit: ${formatMoney(profit)}**\n- **Net margin: ${marginPct.toFixed(1)}%**\n\nIf you sell **10 units/day**, that’s about **${formatMoney(profit * 10)} / day** profit at this price (before PPC).`
+          );
+
+          // 6B) Context (market + seller stage)
+          const pressure = marketSnapshot
+            ? calculateMarketPressure(
+                marketSnapshot.avg_reviews ?? null,
+                marketSnapshot.sponsored_count ?? 0,
+                marketSnapshot.dominance_score ?? 0
+              )
+            : "Moderate";
+
+          const band = getMarginBand(marginPct);
+          const stageLabel: SellerStage = sellerStage ?? "existing";
+
+          appendAssistantMessage(
+            `What this means in *this* market:\n- Your **${marginPct.toFixed(1)}% net margin** is **${band}** for a Page‑1 competitive niche. In tighter markets, small fee or price swings can erase profit quickly.\n- Based on the current Page‑1 landscape (many similar offers + price pressure), you’ll want a buffer for **PPC** and **returns**. If you’re planning to advertise aggressively, treat this margin as the *starting point*, not the finish line.\n\nTailored to your experience level (**${stageLabel}**) and competitiveness (**${pressure}** pressure):\n- If you’re **new**, I’d look for **healthier margin headroom** before committing inventory—because launch costs and early mistakes are expensive.\n- If you’re an **existing seller**, this can work if you already have reliable sourcing and you can control inbound costs and listing conversion.\n- If you’re **scaling a brand**, the key question is whether you can defend price (brand moat) or win with conversion; otherwise margins compress as competitors react.`
+          );
+
+          // 7) Next-step prompt
+          appendAssistantMessage(
+            `Want to stress-test this? I can rerun the math with:\n- a different **selling price** (e.g., ${formatMoney(Math.max(0.01, feesFlow.price - 1))} / ${formatMoney(feesFlow.price + 1)})\n- different **COGS** (if supplier quotes change)\n- or your expected **PPC per unit** (to see true launch profitability).\nWhich one do you want to model next?`
+          );
+
+          // Keep flow ready for quick re-runs
+          setFeesFlow({
+            status: "awaiting_inputs",
+            asin: feesFlow.asin,
+            prefilledPrice: feesFlow.prefilledPrice,
+            cogs: feesFlow.cogs,
+            shipIn: feesFlow.shipIn,
+            price: feesFlow.price,
+          });
+        } catch {
+          appendAssistantMessage(
+            `I couldn’t complete the fee lookup right now. Please try again in a moment—or confirm the selling price you want to model and I’ll rerun it.`
+          );
+        } finally {
+          setCopilotStatus("idle");
+        }
+
+        return true;
+      }
+
+      return false;
+    },
+    [
+      appendAssistantMessage,
+      feesFlow,
+      getPrefilledPrice,
+      marketSnapshot,
+      selectedAsins,
+      sellerStage,
+    ]
+  );
+
   const sendMessage = useCallback(async (
     arg?: string | {
       message?: string;
@@ -462,6 +885,16 @@ export default function ChatSidebar({
 
       setMessages((prev) => [...prev, userMessage]);
       setInput("");
+    }
+
+    // Local intercept: profitability / FBA fees flow (no /api/chat call)
+    // Runs after user message is added so the transcript reads naturally.
+    const handledByFeesFlow = await handleFeesFlowTurn(messageToSend);
+    if (handledByFeesFlow) {
+      setIsLoading(false);
+      setStreamingContent("");
+      inputRef.current?.focus();
+      return;
     }
 
     // Any new round-trip clears prior pending escalation confirmation (if present)
@@ -656,7 +1089,7 @@ export default function ChatSidebar({
       // Focus input after send
       inputRef.current?.focus();
     }
-  }, [analysisRunId, input, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange, escalationState, escalationMessage]);
+  }, [analysisRunId, handleFeesFlowTurn, input, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange, escalationState, escalationMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Use effectiveId for UI enabling, but chat API still needs analysisRunId
