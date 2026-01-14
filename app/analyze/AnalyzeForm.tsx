@@ -475,6 +475,55 @@ export default function AnalyzeForm({
   const [showRefiningBadge, setShowRefiningBadge] = useState(false);
   const [nextUpdateExpectedSec, setNextUpdateExpectedSec] = useState<number | null>(null);
 
+  // MVP: Hide per-product estimates by default, reveal on user intent
+  const [showProductEstimates, setShowProductEstimates] = useState(false);
+
+  // Per-ASIN lazy refinement cache (client-side overlay; server caches in asin_refinement_cache)
+  type AsinRefinementOverlay = {
+    refined_units_range: { min: number; max: number };
+    refined_estimated_revenue: number;
+    current_price: number;
+    current_bsr: number | null;
+    confidence: "high" | "medium" | "low";
+    expires_at?: string | null;
+  };
+  const [asinRefinements, setAsinRefinements] = useState<Record<string, AsinRefinementOverlay>>({});
+  const [asinRefineStatus, setAsinRefineStatus] = useState<Record<string, "idle" | "loading" | "refined" | "error">>({});
+
+  const refineAsinEstimates = useCallback(async (asin: string, currentPrice: number) => {
+    if (!asin || !analysisRunIdForChat) return;
+    if (asinRefineStatus[asin] === "loading") return;
+
+    setAsinRefineStatus((prev) => ({ ...prev, [asin]: "loading" }));
+    try {
+      const res = await fetch("/api/asin/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asin,
+          analysisRunId: analysisRunIdForChat,
+          currentPrice,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || `Refine failed (${res.status})`);
+      }
+
+      const data = json.data as AsinRefinementOverlay | undefined;
+      if (!data) {
+        throw new Error("Refine failed (missing data)");
+      }
+
+      setAsinRefinements((prev) => ({ ...prev, [asin]: data }));
+      setAsinRefineStatus((prev) => ({ ...prev, [asin]: "refined" }));
+    } catch (e) {
+      console.error("ASIN_REFINE_FAILED", { asin, error: e instanceof Error ? e.message : String(e) });
+      setAsinRefineStatus((prev) => ({ ...prev, [asin]: "error" }));
+    }
+  }, [analysisRunIdForChat, asinRefineStatus]);
+
 
   // Handler for margin snapshot updates from chat (Part G structure)
   const handleMarginSnapshotUpdate = (updatedSnapshot: AnalysisResponse['margin_snapshot']) => {
@@ -513,6 +562,23 @@ export default function AnalyzeForm({
         return listingAsin === selectedAsins[0];
       }) || null
     : null;
+
+  // If user turns on estimates AND has exactly one ASIN selected,
+  // auto-refine that specific ASIN (single product intent) rather than fetching all.
+  useEffect(() => {
+    if (!showProductEstimates) return;
+    if (!analysisRunIdForChat) return;
+    if (selectedAsins.length !== 1) return;
+    const asin = selectedAsins[0];
+    if (!asin) return;
+    if (asinRefineStatus[asin] === "loading" || asinRefineStatus[asin] === "refined") return;
+
+    const listing = (analysis?.page_one_listings || []).find((l: any) => (l?.asin || null) === asin);
+    const currentPrice = listing?.price ?? 0;
+    if (!currentPrice || currentPrice <= 0) return;
+
+    refineAsinEstimates(asin, currentPrice);
+  }, [showProductEstimates, selectedAsins, analysisRunIdForChat, asinRefineStatus, analysis?.page_one_listings, refineAsinEstimates]);
   
   // Sort state for Page 1 Results (default to rank to preserve Amazon order)
   const [sortBy, setSortBy] = useState<"rank" | "price-asc" | "price-desc" | "revenue-desc" | "units-desc" | "reviews-desc" | "rating-desc">("rank");
@@ -1688,6 +1754,18 @@ export default function AnalyzeForm({
                     <div className="flex items-center justify-between mb-4">
                       <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
                       <div className="flex items-center gap-3">
+                        {/* Estimates Toggle (MVP: off by default) */}
+                        {pageOneListings.length > 0 && (
+                          <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={showProductEstimates}
+                              onChange={(e) => setShowProductEstimates(e.target.checked)}
+                              className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                            />
+                            <span className="font-medium">Show estimates</span>
+                          </label>
+                        )}
                         {/* Filters Section */}
                         {pageOneListings.length > 0 && (
                           <div className="flex items-center gap-3 flex-wrap">
@@ -1834,7 +1912,7 @@ export default function AnalyzeForm({
                       </div>
                     </div>
                     <div className="mb-3 text-xs text-gray-500 italic">
-                      Revenue and sales are estimated from live search position. Category rank is available in ASIN analysis.
+                      Estimates are hidden by default. Turn on “Show estimates” to view modeled units/revenue, and use “Refine” on a product to pull live ASIN data for higher accuracy.
                     </div>
                     {/* Selection Count Indicator */}
                     {selectedAsins.length > 0 && (
@@ -1901,13 +1979,28 @@ export default function AnalyzeForm({
                           // Do NOT use legacy fields (revenue, units, est_monthly_revenue, est_monthly_units)
                           // Explicit check: preserve value if it exists (including 0), set null if undefined/null
                           const monthlyRevenueRaw = (listing as any).estimated_monthly_revenue;
-                          const monthlyRevenue = monthlyRevenueRaw !== undefined && monthlyRevenueRaw !== null
+                          const baseMonthlyRevenue = monthlyRevenueRaw !== undefined && monthlyRevenueRaw !== null
                             ? monthlyRevenueRaw
                             : null;
                           
                           const monthlyUnitsRaw = (listing as any).estimated_monthly_units;
-                          const monthlyUnits = monthlyUnitsRaw !== undefined && monthlyUnitsRaw !== null
+                          const baseMonthlyUnits = monthlyUnitsRaw !== undefined && monthlyUnitsRaw !== null
                             ? monthlyUnitsRaw
+                            : null;
+
+                          // Overlay refined estimates (lazy, per-ASIN) if available
+                          const refinement = asin ? asinRefinements[asin] : undefined;
+                          const refinedAvgUnits = refinement?.refined_units_range
+                            ? Math.round((refinement.refined_units_range.min + refinement.refined_units_range.max) / 2)
+                            : null;
+                          const refinedRevenue = refinement?.refined_estimated_revenue ?? null;
+
+                          // Control visibility: hide by default until user opts in
+                          const monthlyRevenue = showProductEstimates
+                            ? (refinedRevenue !== null ? refinedRevenue : baseMonthlyRevenue)
+                            : null;
+                          const monthlyUnits = showProductEstimates
+                            ? (refinedAvgUnits !== null ? refinedAvgUnits : baseMonthlyUnits)
                             : null;
                           
                           // Sponsored: check both fields
@@ -1924,6 +2017,16 @@ export default function AnalyzeForm({
                               reviews={reviews}
                               monthlyRevenue={monthlyRevenue}
                               monthlyUnits={monthlyUnits}
+                              onRefineEstimates={
+                                asin && price > 0
+                                  ? () => {
+                                      // Clicking "Load Sales Data" should also reveal estimates for a better UX
+                                      setShowProductEstimates(true);
+                                      refineAsinEstimates(asin, price);
+                                    }
+                                  : undefined
+                              }
+                              refineStatus={asin ? (asinRefineStatus[asin] ?? "idle") : "idle"}
                               fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
                               isSponsored={isSponsored}
                               imageUrl={imageUrl}

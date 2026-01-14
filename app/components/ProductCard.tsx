@@ -12,6 +12,12 @@ interface ProductCardProps {
   reviews: number;
   monthlyRevenue: number | null;
   monthlyUnits: number | null;
+  /**
+   * Optional: Lazy refinement control (e.g. fetch BSR/product data on demand).
+   * If provided, the card can render a small "Refine" action that does NOT affect market totals.
+   */
+  onRefineEstimates?: () => void;
+  refineStatus?: "idle" | "loading" | "refined" | "error";
   fulfillment: "FBA" | "FBM" | "AMZ";
   isSponsored: boolean;
   imageUrl?: string | null;
@@ -29,6 +35,8 @@ export function ProductCard({
   reviews,
   monthlyRevenue,
   monthlyUnits,
+  onRefineEstimates,
+  refineStatus = "idle",
   fulfillment,
   isSponsored,
   imageUrl,
@@ -64,6 +72,11 @@ export function ProductCard({
 
   const handleAmazonLink = (e: React.MouseEvent) => {
     e.stopPropagation();
+  };
+
+  const handleRefineClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onRefineEstimates?.();
   };
 
   return (
@@ -199,6 +212,38 @@ export function ProductCard({
 
       {/* Revenue Section - Prominent */}
       <div className="bg-[#F9FAFB] -mx-4 -mb-4 px-4 py-3 mt-3 rounded-b-xl border-t border-[#E5E7EB]">
+        {/* Refinement Control (optional) */}
+        {asin && onRefineEstimates && (
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[11px] text-[#6B7280]">
+              {refineStatus === "refined"
+                ? "Refined (live product data)"
+                : refineStatus === "loading"
+                ? "Loading sales data…"
+                : refineStatus === "error"
+                ? "Load failed"
+                : "Load 30-day sales signal for higher accuracy."}
+            </div>
+            <button
+              type="button"
+              onClick={handleRefineClick}
+              disabled={refineStatus === "loading"}
+              className={`text-[11px] font-medium underline ${
+                refineStatus === "loading"
+                  ? "text-gray-400 cursor-not-allowed"
+                  : "text-gray-700 hover:text-gray-900"
+              }`}
+              title="Load sales data for this ASIN to refine this card's estimates"
+            >
+              {refineStatus === "refined"
+                ? "Reload Sales Data"
+                : refineStatus === "loading"
+                ? "Loading…"
+                : "Load Sales Data"}
+            </button>
+          </div>
+        )}
+
         {/* Est. Monthly Revenue - EXPLICIT rendering */}
         <div className="mb-2">
           <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Revenue</div>
