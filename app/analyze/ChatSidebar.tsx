@@ -45,6 +45,12 @@ type FeesQuote = {
 type FeesFlowState =
   | { status: "idle" }
   | {
+      status: "quote_error";
+      asin: string;
+      price: number;
+      message: string;
+    }
+  | {
       status: "quote_ready";
       asin: string;
       prefilledPrice: number | null;
@@ -653,10 +659,15 @@ export default function ChatSidebar({
         setCopilotStatus("idle");
 
         if (!quote) {
-          appendAssistantMessage(
-            `I wasn’t able to retrieve an **exact fee quote** for this ASIN right now. Please try again in a moment.`
-          );
-          setFeesFlow({ status: "idle" });
+          const msg =
+            `I wasn’t able to retrieve an **exact fee quote** for this ASIN right now.\n\nThis is usually temporary (rate limit / transient Seller API issue) or a configuration issue. You can retry now, or try a different item price.`;
+          appendAssistantMessage(msg);
+          setFeesFlow({
+            status: "quote_error",
+            asin,
+            price: prefilledPrice,
+            message: msg,
+          });
           return;
         }
 
@@ -741,7 +752,7 @@ export default function ChatSidebar({
           setFeesFlow({
             status: "awaiting_profit_inputs",
             asin: feesFlow.asin,
-            prefilledPrice: feesFlow.prefilledPrice,
+            prefilledPrice: feesFlow.status === "quote_ready" ? feesFlow.prefilledPrice : null,
             quote,
             cogs: null,
             shipIn: null,
@@ -1491,6 +1502,50 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* INPUT AREA                                                          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* Inline retry panel when Seller API fee quote is temporarily unavailable */}
+      {feesFlow.status === "quote_error" && (
+        <div className="mx-6 mb-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+          <p className="text-sm text-gray-900 font-medium">Fee quote unavailable</p>
+          <p className="text-xs text-gray-600 mt-1">
+            ASIN <span className="font-mono">{feesFlow.asin}</span>
+          </p>
+          <div className="mt-3">
+            <label className="block text-xs font-medium text-gray-700 mb-1">Item price</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.01"
+              value={feesFlow.price}
+              onChange={(e) => {
+                const v = Number.parseFloat(e.target.value);
+                if (!Number.isFinite(v) || v <= 0) return;
+                setFeesFlow({ ...feesFlow, price: v });
+              }}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+            />
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setFeesFlow({ status: "idle" })}
+              className="px-3 py-2 bg-white rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 border border-gray-300"
+            >
+              Dismiss
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                // Retry with the currently entered price
+                void handleFeesFlowTurn(`Price ${feesFlow.price}`);
+              }}
+              className="flex-1 px-3 py-2 bg-[#3B82F6] text-white rounded-lg text-sm font-medium hover:bg-[#2563EB]"
+            >
+              Retry quote
+            </button>
+          </div>
+        </div>
+      )}
       {/* Inline profitability form (post-fee-quote; Amazon-style workflow) */}
       {feesFlow.status === "awaiting_profit_inputs" && (
         <div className="mx-6 mb-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">

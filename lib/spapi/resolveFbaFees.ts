@@ -40,14 +40,31 @@ export async function resolveFbaFees(
       .gte("fetched_at", cutoffTime.toISOString())
       .single();
 
-    // Step 2: If found and fresh, return cached
+    // Step 2: If found and fresh, return cached ONLY if it contains a usable quote.
+    // IMPORTANT: do not treat cached nulls as a hit (this can "poison" fees for 30 days).
     if (!cacheError && cachedData) {
-      return {
-        fulfillment_fee: cachedData.fulfillment_fee !== null ? parseFloat(cachedData.fulfillment_fee.toString()) : null,
-        referral_fee: cachedData.referral_fee !== null ? parseFloat(cachedData.referral_fee.toString()) : null,
-        total_fba_fees: cachedData.total_fba_fees !== null ? parseFloat(cachedData.total_fba_fees.toString()) : null,
-        currency: (cachedData.currency as "USD") || "USD",
-      };
+      const cachedFulfillment =
+        cachedData.fulfillment_fee !== null
+          ? parseFloat(cachedData.fulfillment_fee.toString())
+          : null;
+      const cachedReferral =
+        cachedData.referral_fee !== null
+          ? parseFloat(cachedData.referral_fee.toString())
+          : null;
+      const cachedTotal =
+        cachedData.total_fba_fees !== null
+          ? parseFloat(cachedData.total_fba_fees.toString())
+          : null;
+
+      if (cachedFulfillment !== null && cachedReferral !== null) {
+        return {
+          fulfillment_fee: cachedFulfillment,
+          referral_fee: cachedReferral,
+          total_fba_fees: cachedTotal,
+          currency: (cachedData.currency as "USD") || "USD",
+        };
+      }
+      // Otherwise: fall through and retry SP-API
     }
 
     // Step 3: Cache miss or stale - fetch from SP-API
@@ -56,29 +73,35 @@ export async function resolveFbaFees(
       price,
     });
 
-    // Step 4: Store in cache (best effort, don't block)
-    try {
-      await supabase
-        .from("fba_fee_cache")
-        .upsert(
-          {
-            asin: normalizedAsin,
-            fulfillment_fee: feesResult.fulfillment_fee,
-            referral_fee: feesResult.referral_fee,
-            total_fba_fees: feesResult.total_fba_fees,
-            currency: feesResult.currency,
-            fetched_at: new Date().toISOString(),
-          },
-          {
-            onConflict: "asin",
-          }
-        );
-    } catch (cacheWriteError) {
-      // Log but don't throw - caching failure shouldn't block analysis
-      console.error("Failed to cache FBA fees:", cacheWriteError);
+    // Step 4: Store in cache ONLY if we have a usable quote (best effort, don't block).
+    // Avoid writing nulls to cache; that prevents recovery for CACHE_TTL_DAYS.
+    if (feesResult.fulfillment_fee !== null && feesResult.referral_fee !== null) {
+      try {
+        await supabase
+          .from("fba_fee_cache")
+          .upsert(
+            {
+              asin: normalizedAsin,
+              fulfillment_fee: feesResult.fulfillment_fee,
+              referral_fee: feesResult.referral_fee,
+              total_fba_fees: feesResult.total_fba_fees,
+              currency: feesResult.currency,
+              fetched_at: new Date().toISOString(),
+            },
+            {
+              onConflict: "asin",
+            }
+          );
+      } catch (cacheWriteError) {
+        // Log but don't throw - caching failure shouldn't block analysis
+        console.error("Failed to cache FBA fees:", cacheWriteError);
+      }
     }
 
-    // Step 5: Return fetched values
+    // Step 5: Return fetched values ONLY if usable
+    if (feesResult.fulfillment_fee === null || feesResult.referral_fee === null) {
+      return null;
+    }
     return feesResult;
   } catch (error) {
     // Never block analysis - return null gracefully

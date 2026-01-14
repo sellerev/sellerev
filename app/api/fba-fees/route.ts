@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
 
     if (!feesResult) {
       return NextResponse.json(
-        { fee: null, source: "estimated" },
+        { fee: null, source: "estimated", reason: "sp_api_quote_unavailable" },
         { status: 200 }
       );
     }
@@ -37,6 +37,14 @@ export async function POST(request: NextRequest) {
     // Return fulfillment fee only (referral fee is handled separately in calculator)
     // FBA fee = fulfillment fee (referral is a separate Amazon fee, not part of FBA)
     const fulfillmentFee = feesResult.fulfillment_fee || null;
+
+    // If any required component is missing, treat as unavailable (do not pretend this is an exact quote)
+    if (feesResult.fulfillment_fee === null || feesResult.referral_fee === null) {
+      return NextResponse.json(
+        { fee: null, source: "estimated", reason: "sp_api_quote_unavailable" },
+        { status: 200 }
+      );
+    }
 
     return NextResponse.json({
       fee: fulfillmentFee,
@@ -47,7 +55,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("FBA fees API error:", error);
     return NextResponse.json(
-      { fee: null, source: "estimated", error: "Failed to fetch fees" },
+      { fee: null, source: "estimated", reason: "sp_api_error", error: "Failed to fetch fees" },
       { status: 200 } // Don't fail - return null so calculator can use estimate
     );
   }
