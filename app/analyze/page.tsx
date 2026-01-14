@@ -104,6 +104,8 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
           total_page1_listings: snapshot.total_page1_listings as number,
           sponsored_count: snapshot.sponsored_count as number,
           dominance_score: snapshot.dominance_score as number,
+          total_page1_brands: (snapshot as any).total_page1_brands ?? null,
+          brand_stats: (snapshot as any).brand_stats ?? null,
           representative_asin: snapshot.representative_asin as string | null | undefined,
           fba_fees: snapshot.fba_fees ? (snapshot.fba_fees as {
             total_fee: number | null;

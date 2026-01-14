@@ -123,6 +123,12 @@ export interface AnalysisResponse {
     total_page1_listings: number;
     sponsored_count: number;
     dominance_score: number; // 0-100
+    // Brand stats: must reflect Page-1 listings reality
+    total_page1_brands?: number | null; // legacy/compat
+    brand_stats?: {
+      page1_brand_count: number;
+      top_5_brand_share_pct: number;
+    } | null;
     representative_asin?: string | null;
     fba_fees?: {
       total_fee: number | null;

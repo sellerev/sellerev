@@ -9,6 +9,51 @@ import { ParsedListing } from "@/lib/amazon/keywordMarket";
 import { Tier1MarketSnapshot, Tier1Product } from "@/types/tierContracts";
 import { buildTier1Products, calculateTier1Aggregates } from "@/lib/estimators/tier1Estimation";
 
+function normalizeBrandBucket(brand: string | null | undefined): string {
+  const raw = (brand || "").trim();
+  if (!raw) return "Unknown";
+  const normalized = raw.toLowerCase();
+  if (normalized === "unknown" || normalized === "generic" || normalized === "unbranded") {
+    return "Unknown";
+  }
+  return normalized;
+}
+
+function isHiddenBrandBucket(bucket: string): boolean {
+  return bucket === "Unknown" || bucket === "unknown" || bucket === "generic" || bucket === "unbranded";
+}
+
+function computeBrandStats(products: Tier1Product[]): { page1_brand_count: number; top_5_brand_share_pct: number } {
+  // Count unique brand buckets INCLUDING Unknown/Generic (counts toward diversity)
+  const buckets = new Set<string>();
+  const revenueByBucket = new Map<string, number>();
+
+  for (const p of products) {
+    const bucket = normalizeBrandBucket(p.brand);
+    buckets.add(bucket);
+    const rev = typeof p.estimated_monthly_revenue === "number" ? p.estimated_monthly_revenue : 0;
+    revenueByBucket.set(bucket, (revenueByBucket.get(bucket) || 0) + rev);
+  }
+
+  const totalRevenue = Array.from(revenueByBucket.values()).reduce((sum, r) => sum + r, 0);
+
+  // Top-5 share: exclude "Unknown/Generic" buckets from numerator but keep them in denominator
+  const top5Revenue = Array.from(revenueByBucket.entries())
+    .filter(([bucket]) => !isHiddenBrandBucket(bucket))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .reduce((sum, [, rev]) => sum + rev, 0);
+
+  const top_5_brand_share_pct = totalRevenue > 0
+    ? Math.round((top5Revenue / totalRevenue) * 1000) / 10 // 1 decimal
+    : 0;
+
+  return {
+    page1_brand_count: buckets.size,
+    top_5_brand_share_pct,
+  };
+}
+
 /**
  * Build Tier-1 snapshot from canonicalized listings
  * 
@@ -79,6 +124,9 @@ export function buildTier1Snapshot(
   // STEP 4: Calculate aggregates
   // ═══════════════════════════════════════════════════════════════════════════
   const aggregates = calculateTier1Aggregates(products);
+
+  // Brand stats computed from canonical Page-1 products (NOT UI cards)
+  const brand_stats = computeBrandStats(products);
   
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 5: Generate snapshot ID
@@ -94,6 +142,7 @@ export function buildTier1Snapshot(
     phase,
     products, // HARD CAP: 49 products max
     aggregates,
+    brand_stats,
     created_at: new Date().toISOString(),
   };
 }

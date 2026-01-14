@@ -54,6 +54,11 @@ export interface Tier1MarketSnapshot {
     avg_reviews: number | null;
     avg_rating: number | null;
   };
+  // Brand stats computed from canonical Page-1 listings (includes Unknown/Generic in count + denominator)
+  brand_stats?: {
+    page1_brand_count: number;
+    top_5_brand_share_pct: number; // revenue-weighted (denominator includes Unknown)
+  };
   created_at: string;
 }
 

@@ -1310,9 +1310,12 @@ export default function AnalyzeForm({
                       }
                     }
                     
-                    // Brand count from snapshot (search results only - no API calls)
-                    // Use total_page1_brands from snapshot (includes "Unknown" brands for accurate counting)
-                    const page1BrandCount = (snapshot as any)?.total_page1_brands ?? null;
+                    // Brand count from snapshot (must reflect Page-1 listings reality)
+                    // Prefer brand_stats.page1_brand_count, fallback to legacy total_page1_brands.
+                    const page1BrandCount =
+                      (snapshot as any)?.brand_stats?.page1_brand_count ??
+                      (snapshot as any)?.total_page1_brands ??
+                      null;
                     const top5BrandSharePct = (snapshot as any)?.top_5_brand_revenue_share_pct ?? null;
                     
                     // Search Volume
