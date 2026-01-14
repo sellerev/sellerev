@@ -553,20 +553,23 @@ export function buildKeywordPageOne(
   // Applied AFTER keyword demand estimation, BEFORE product-level allocation
   // Increases total market size to match Helium-10 for categories like heating/pain relief
   // Does NOT touch per-ASIN allocation logic, decay, caps, or floors
-  const CATEGORY_DEMAND_MULTIPLIER = 10; // Temporary global multiplier for calibration
-  totalPage1Units = Math.round(totalPage1Units * CATEGORY_DEMAND_MULTIPLIER);
-  
-  // Recalculate revenue from scaled units × avg price (use existing avgPrice or fallback)
-  const avgPriceForRevenue = avgPrice ?? (prices.length > 0
-    ? prices.reduce((sum, p) => sum + p, 0) / prices.length
-    : 0);
-  totalPage1Revenue = Math.round(totalPage1Units * avgPriceForRevenue);
-  
-  console.log("✅ CATEGORY_MULTIPLIER_APPLIED", {
-    multiplier: CATEGORY_DEMAND_MULTIPLIER,
-    final_units: totalPage1Units,
-    final_revenue: totalPage1Revenue,
-  });
+  // NOTE: This used to be a temporary global multiplier (10x) and was forcing totals
+  // to immediately hit the durable cap (~30k units), making high-velocity markets look "stuck".
+  // Keep multiplier = 1 until we have category-specific calibration profiles.
+  const CATEGORY_DEMAND_MULTIPLIER = 1.0;
+  if (CATEGORY_DEMAND_MULTIPLIER !== 1.0) {
+    totalPage1Units = Math.round(totalPage1Units * CATEGORY_DEMAND_MULTIPLIER);
+    // Recalculate revenue from scaled units × avg price (use existing avgPrice or fallback)
+    const avgPriceForRevenue = avgPrice ?? (prices.length > 0
+      ? prices.reduce((sum, p) => sum + p, 0) / prices.length
+      : 0);
+    totalPage1Revenue = Math.round(totalPage1Units * avgPriceForRevenue);
+    console.log("✅ CATEGORY_MULTIPLIER_APPLIED", {
+      multiplier: CATEGORY_DEMAND_MULTIPLIER,
+      final_units: totalPage1Units,
+      final_revenue: totalPage1Revenue,
+    });
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MARKET SHAPE DETECTION
@@ -593,7 +596,7 @@ export function buildKeywordPageOne(
   const DURABLE_MAX_RANK1_UNITS = 6000; // Max rank-1 units for durable goods
   
   // Cap total Page-1 units if exceeds limit (before allocation)
-  if (totalPage1Units > DURABLE_MAX_TOTAL_UNITS) {
+  if (marketShape === "DURABLE" && totalPage1Units > DURABLE_MAX_TOTAL_UNITS) {
     const scaleDownFactor = DURABLE_MAX_TOTAL_UNITS / totalPage1Units;
     totalPage1Units = DURABLE_MAX_TOTAL_UNITS;
     totalPage1Revenue = Math.round(totalPage1Revenue * scaleDownFactor);

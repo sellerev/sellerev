@@ -546,8 +546,22 @@ export async function buildKeywordAnalyzeResponse(
     const totalMonthlyRevenue = productsWithRevenue.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
     
     const productsWithBSR = canonicalProducts.filter(p => p.bsr !== null && p.bsr > 0);
-    const averageBSR = productsWithBSR.length > 0
-      ? Math.round(productsWithBSR.reduce((sum, p) => sum + (p.bsr || 0), 0) / productsWithBSR.length)
+    // Helium-10 style representative BSR:
+    // - Use best 4 (lowest) + worst 2 (highest) when possible
+    // - Falls back to all available when fewer exist
+    const bsrsSorted = productsWithBSR
+      .map(p => p.bsr as number)
+      .filter((b): b is number => typeof b === "number" && isFinite(b) && b > 0)
+      .sort((a, b) => a - b);
+    const bsrMin = bsrsSorted.length > 0 ? bsrsSorted[0] : null;
+    const bsrMax = bsrsSorted.length > 0 ? bsrsSorted[bsrsSorted.length - 1] : null;
+    const topCount = Math.min(4, bsrsSorted.length);
+    const top = bsrsSorted.slice(0, topCount);
+    const bottomStart = Math.max(bsrsSorted.length - 2, top.length);
+    const bottom = bsrsSorted.slice(bottomStart);
+    const bsrSample = [...top, ...bottom];
+    const averageBSR = bsrSample.length > 0
+      ? Math.round(bsrSample.reduce((sum, b) => sum + b, 0) / bsrSample.length)
       : null;
     
     // ═══════════════════════════════════════════════════════════════════════════
@@ -593,6 +607,11 @@ export async function buildKeywordAnalyzeResponse(
       if (averageBSR !== null) {
         snapshot.avg_bsr = averageBSR;
       }
+      // Optional metadata for explainability (safe to store even if UI doesn't render yet)
+      (snapshot as any).bsr_min = bsrMin;
+      (snapshot as any).bsr_max = bsrMax;
+      (snapshot as any).bsr_sample_method = bsrSample.length === 0 ? "none" : (bsrSample.length === bsrsSorted.length ? "all_available" : "top4_bottom2");
+      (snapshot as any).bsr_sample_size = bsrSample.length;
       // Add brand_stats (Phase 1)
       (snapshot as any).brand_stats = {
         page1_brand_count,
@@ -699,9 +718,15 @@ export async function buildKeywordAnalyzeResponse(
   
   const pageOneBsrs = pageOneListings
     .map(p => p.bsr)
-    .filter((b): b is number => b !== null && b > 0);
-  const avg_bsr = pageOneBsrs.length > 0
-    ? pageOneBsrs.reduce((sum, b) => sum + b, 0) / pageOneBsrs.length
+    .filter((b): b is number => b !== null && b > 0)
+    .sort((a, b) => a - b);
+  const topCount = Math.min(4, pageOneBsrs.length);
+  const top = pageOneBsrs.slice(0, topCount);
+  const bottomStart = Math.max(pageOneBsrs.length - 2, top.length);
+  const bottom = pageOneBsrs.slice(bottomStart);
+  const bsrSample = [...top, ...bottom];
+  const avg_bsr = bsrSample.length > 0
+    ? bsrSample.reduce((sum, b) => sum + b, 0) / bsrSample.length
     : null;
   
   // ═══════════════════════════════════════════════════════════════════════════

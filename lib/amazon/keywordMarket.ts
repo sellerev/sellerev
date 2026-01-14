@@ -42,7 +42,11 @@ export interface KeywordMarketSnapshot {
   avg_price: number | null;
   avg_reviews: number; // Always a number (0 if no valid reviews)
   avg_rating: number | null;
-  avg_bsr: number | null; // Average Best Seller Rank
+  avg_bsr: number | null; // Representative Page-1 BSR (sampled, Helium-10 style)
+  bsr_min?: number | null; // Best (lowest) BSR observed on Page-1 (main category only)
+  bsr_max?: number | null; // Worst (highest) BSR observed on Page-1 (main category only)
+  bsr_sample_method?: "top4_bottom2" | "all_available" | "none";
+  bsr_sample_size?: number; // How many BSRs were used to compute avg_bsr
   total_page1_listings: number; // Only Page 1 listings
   sponsored_count: number;
   dominance_score: number; // 0-100, % of listings belonging to top brand
@@ -1910,10 +1914,32 @@ export async function fetchKeywordMarketSnapshot(
       l.main_category_bsr !== undefined && 
       l.main_category_bsr > 0
     );
+    // Helium-10 style BSR sampling:
+    // - Use best 4 (lowest BSR) + worst 2 (highest BSR) when possible
+    // - Falls back to "all available" when fewer BSRs exist
+    const bsrsSorted = listingsWithMainBSR
+      .map(l => l.main_category_bsr as number)
+      .filter((b): b is number => typeof b === "number" && isFinite(b) && b > 0)
+      .sort((a, b) => a - b);
+
+    const bsr_min = bsrsSorted.length > 0 ? bsrsSorted[0] : null;
+    const bsr_max = bsrsSorted.length > 0 ? bsrsSorted[bsrsSorted.length - 1] : null;
+
+    const topCount = Math.min(4, bsrsSorted.length);
+    const top = bsrsSorted.slice(0, topCount);
+    // Avoid overlap when there are fewer than (4 + 2) BSRs available
+    const bottomStart = Math.max(bsrsSorted.length - 2, top.length);
+    const bottom = bsrsSorted.slice(bottomStart);
+    const sample = [...top, ...bottom];
+
     const avg_bsr =
-      listingsWithMainBSR.length > 0
-        ? listingsWithMainBSR.reduce((sum, l) => sum + (l.main_category_bsr ?? 0), 0) / listingsWithMainBSR.length
+      sample.length > 0
+        ? sample.reduce((sum, b) => sum + b, 0) / sample.length
         : null;
+
+    const bsr_sample_method: KeywordMarketSnapshot["bsr_sample_method"] =
+      sample.length === 0 ? "none"
+      : (sample.length === bsrsSorted.length ? "all_available" : "top4_bottom2");
     
     // CRITICAL: Log BSR extraction summary for debugging
     const listingsWithoutBSR = listings.filter((l) => 
@@ -1929,6 +1955,10 @@ export async function fetchKeywordMarketSnapshot(
       listings_without_bsr: listingsWithoutBSR.length,
       bsr_extraction_rate: `${((listingsWithMainBSR.length / listings.length) * 100).toFixed(1)}%`,
       avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
+      bsr_min,
+      bsr_max,
+      bsr_sample_method,
+      bsr_sample_size: sample.length,
       sample_bsrs: listingsWithMainBSR.slice(0, 5).map(l => ({
         asin: l.asin,
         bsr: l.main_category_bsr,
@@ -2023,6 +2053,10 @@ export async function fetchKeywordMarketSnapshot(
       avg_reviews: avg_reviews, // Always a number now (never null)
       avg_rating: avg_rating !== null ? Math.round(avg_rating * 10) / 10 : null,
       avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
+      bsr_min,
+      bsr_max,
+      bsr_sample_method,
+      bsr_sample_size: sample.length,
       total_page1_listings,
       sponsored_count,
       dominance_score,
