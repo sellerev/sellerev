@@ -1327,6 +1327,27 @@ function detectCostOverrides(
 }
 
 /**
+ * Detects user intent to run an exact FBA fees + profitability lookup (SP-API Fees).
+ * This is handled WITHOUT calling the LLM or Rainforest, and is fulfilled via /api/fba-fees.
+ */
+function detectFbaProfitabilityIntent(message: string): boolean {
+  const t = message.toLowerCase();
+  return (
+    t.includes("fba fee") ||
+    t.includes("fba fees") ||
+    t.includes("fees") ||
+    t.includes("profit") ||
+    t.includes("profitability") ||
+    t.includes("margin") ||
+    t.includes("run fees") ||
+    t.includes("calculate fba") ||
+    t.includes("calculate fees") ||
+    t.includes("what are the fees") ||
+    t.includes("is this profitable")
+  );
+}
+
+/**
  * Builds Market Snapshot Summary from cached response.market_snapshot data.
  * NO recomputation - uses only cached values.
  */
@@ -1844,6 +1865,102 @@ export async function POST(req: NextRequest) {
       : (body.selectedListing?.asin && typeof body.selectedListing.asin === 'string'
         ? [body.selectedListing.asin] // Backward compatibility fallback
         : []); // Empty array = no selection
+
+    // Encoder for lightweight SSE responses (intents / guardrails) before OpenAI streaming
+    const encoder = new TextEncoder();
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // COPILOT INTENT: FBA PROFITABILITY LOOKUP (SP-API Fees, chat-only)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // This is handled without the LLM and without Rainforest escalation.
+    // The frontend will run /api/fba-fees only after collecting inputs + confirmation.
+    const isFbaProfitabilityIntent = detectFbaProfitabilityIntent(body.message);
+    if (isFbaProfitabilityIntent) {
+      console.log("[COPILOT_INTENT]", {
+        intent: "fba_profitability_lookup",
+        user_id: user.id,
+        analysis_run_id: body.analysisRunId,
+        selected_asins: selectedAsins,
+        selected_count: selectedAsins.length,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Hard rule: exactly 1 ASIN must be selected
+      if (selectedAsins.length === 0) {
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  content:
+                    "I can calculate **exact FBA fees** for a product using Amazon’s **Seller API**—but I need you to **select exactly 1 ASIN** first.\n\nRight now you have **0 selected**, so I can’t run the fee lookup yet.\n\nPlease select **one** product card and then tell me “run fees”.",
+                })}\n\n`
+              )
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        return new NextResponse(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            ...Object.fromEntries(res.headers.entries()),
+          },
+        });
+      }
+
+      if (selectedAsins.length > 1) {
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  content:
+                    `I can calculate **exact FBA fees** using Amazon’s **Seller API**, but the fee lookup supports **exactly 1 ASIN at a time**.\n\nYou currently have **${selectedAsins.length} ASINs selected**, so I’m going to pause here to avoid mixing products.\n\nPlease **deselect down to 1 ASIN**, then tell me “run fees”.`,
+                })}\n\n`
+              )
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        return new NextResponse(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            ...Object.fromEntries(res.headers.entries()),
+          },
+        });
+      }
+
+      // Valid: exactly 1 ASIN selected → emit intent metadata and stop.
+      const intentMetadata = {
+        type: "copilot_intent",
+        intent: "fba_profitability_lookup",
+        asins: selectedAsins,
+        asin: selectedAsins[0],
+      };
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ metadata: intentMetadata })}\n\n`)
+          );
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new NextResponse(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
+    }
     
     // Guardrail input: explicit ASINs in user question (allows escalation only when explicitly referenced)
     const explicitAsins = extractAsinsFromText(body.message);
@@ -2398,7 +2515,6 @@ CRITICAL RULES FOR ESCALATED DATA:
     // ────────────────────────────────────────────────────────────────────────
     // We collect the full response while streaming to save it to the database
     // ────────────────────────────────────────────────────────────────────────
-    const encoder = new TextEncoder();
     let fullAssistantMessage = "";
     
     // Capture pendingMemoriesForConfirmation for use in stream closure
