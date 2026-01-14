@@ -680,6 +680,11 @@ export default function ChatSidebar({
           return true;
         }
 
+        // TS narrowing guard (missing-check above guarantees these are present, but TS can't infer it)
+        if (nextCogs === null || nextShipIn === null) {
+          return true;
+        }
+
         if (nextPrice === null) {
           appendAssistantMessage(
             `Got it. I still need a **Selling price** to model.\n\nYou can reply like: \`Price 19.99\` (or tell me to use the listing price).`
@@ -688,19 +693,21 @@ export default function ChatSidebar({
           return true;
         }
 
+        const cogsToUse: number = nextCogs;
+        const shipInToUse: number = nextShipIn;
         const priceToUse: number = nextPrice;
 
         // 4) Confirmation gate
         appendAssistantMessage(
-          `Perfect. I’m ready to run the **exact FBA fee calculation** for this ASIN using Amazon’s **Seller API** with:\n- COGS: **${formatMoney(nextCogs)}**\n- Shipping to Amazon: **${formatMoney(nextShipIn)}**\n- Selling price: **${formatMoney(priceToUse)}**\n\n**Do you want me to run it now?** Reply **Yes** to proceed or **No** to change inputs.`
+          `Perfect. I’m ready to run the **exact FBA fee calculation** for this ASIN using Amazon’s **Seller API** with:\n- COGS: **${formatMoney(cogsToUse)}**\n- Shipping to Amazon: **${formatMoney(shipInToUse)}**\n- Selling price: **${formatMoney(priceToUse)}**\n\n**Do you want me to run it now?** Reply **Yes** to proceed or **No** to change inputs.`
         );
 
         setFeesFlow({
           status: "awaiting_confirmation",
           asin: feesFlow.asin,
           prefilledPrice: feesFlow.prefilledPrice,
-          cogs: nextCogs,
-          shipIn: nextShipIn,
+          cogs: cogsToUse,
+          shipIn: shipInToUse,
           price: priceToUse,
         });
         return true;
