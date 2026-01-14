@@ -515,19 +515,24 @@ export default function ChatSidebar({
       /\bkeep(ing)?\s+price\b/i.test(t) ||
       /\buse\s+(the\s+)?(listing|current)\s+price\b/i.test(t);
 
-    const pickNumber = (re: RegExp) => {
+    // Accept: "$8", "8$", "8", "8.50", with optional commas.
+    const pickMoney = (re: RegExp) => {
       const m = t.match(re);
       if (!m) return undefined;
-      const raw = m[m.length - 1];
+      const raw = (m[m.length - 1] || "").replace(/,/g, "");
       const n = Number.parseFloat(raw);
       return Number.isFinite(n) ? n : undefined;
     };
 
-    const cogs = pickNumber(/\b(cogs|cost of goods|product cost)\b\s*[:=]?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i);
-    const shipIn = pickNumber(
-      /\b(ship|shipping|inbound|freight|prep)\b(?:\s+to\s+amazon)?\s*[:=]?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i
+    const cogs = pickMoney(
+      /\b(cogs|cost of goods|product cost)\b\s*(?:is|are|:|=)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*\$)?/i
     );
-    const price = pickNumber(/\b(price|selling price|sell price)\b\s*[:=]?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)/i);
+    const shipIn = pickMoney(
+      /\b(ship|shipping|inbound|freight|prep)\b(?:\s+to\s+amazon)?\s*(?:is|are|:|=)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*\$)?/i
+    );
+    const price = pickMoney(
+      /\b(price|selling price|sell price)\b\s*(?:is|are|:|=)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*\$)?/i
+    );
 
     return { keepPrice, cogs, shipIn, price };
   };
