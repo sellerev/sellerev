@@ -165,15 +165,20 @@ export async function batchFetchBsrWithBackoff(
   }
 
   // Remove duplicates and apply hard cap
-  const uniqueAsins = Array.from(new Set(asins)).slice(0, 5); // 🚨 HARD CAP: Max 5 ASINs
+  const uniqueAsins = Array.from(new Set(asins)).slice(0, 4); // 🚨 HARD CAP: Max 4 ASINs (part of 7-call budget: 1 search + 4 BSR + 2 metadata)
   
   // 🚨 API SAFETY LIMIT: Check if we've exceeded max calls
   if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
-    console.warn("🚨 API_CALL_LIMIT_REACHED", {
+    const skippedCount = uniqueAsins.length;
+    const remainingBudget = apiCallCounter.max - apiCallCounter.count;
+    console.warn("🚨 ENRICHMENT_SKIPPED_DUE_TO_BUDGET", {
+      enrichment_type: "BSR",
       keyword,
       current_count: apiCallCounter.count,
       max_allowed: apiCallCounter.max,
-      message: "BSR fetch skipped - API call limit reached",
+      remaining_budget: remainingBudget,
+      asins_skipped: skippedCount,
+      message: "BSR enrichment skipped - API call budget exhausted",
     });
     return null;
   }
@@ -199,12 +204,17 @@ export async function batchFetchBsrWithBackoff(
       const batchPromises = asinBatch.map(async (asin) => {
         // 🚨 API SAFETY LIMIT: Check before each call
         if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
-          console.warn("🚨 API_CALL_LIMIT_REACHED", {
+          const remainingBudget = apiCallCounter.max - apiCallCounter.count;
+          const skippedAsins = asinBatch.filter(a => a !== asin).length + 1; // Count this ASIN + remaining in batch
+          console.warn("🚨 ENRICHMENT_SKIPPED_DUE_TO_BUDGET", {
+            enrichment_type: "BSR",
             asin,
             keyword,
             current_count: apiCallCounter.count,
             max_allowed: apiCallCounter.max,
-            message: "BSR fetch skipped for this ASIN - limit reached",
+            remaining_budget: remainingBudget,
+            asins_skipped: skippedAsins,
+            message: "BSR enrichment skipped for this ASIN - API call budget exhausted",
           });
           return null;
         }

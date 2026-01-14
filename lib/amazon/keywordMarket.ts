@@ -834,21 +834,21 @@ export async function enrichListingsMetadata(
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 🚨 COST OPTIMIZATION: METADATA ENRICHMENT HARD CAP (MAX 3 ASINs, TOP RANKED ONLY)
+  // 🚨 COST OPTIMIZATION: METADATA ENRICHMENT HARD CAP (MAX 2 ASINs, TOP RANKED ONLY)
   // ═══════════════════════════════════════════════════════════════════════════
   // CRITICAL: Never skip enrichment if brand_name is undefined
   // Rules:
-  // - Only top 3 ranked listings
+  // - Only top 2 ranked listings (part of 7-call budget: 1 search + 4 BSR + 2 metadata)
   // - Enrich if brand_name is undefined (even if we have title-extracted brand)
   // - A guessed brand string (from title) ≠ resolved brand (from brand_name/by_line_name)
-  // - Never enrich more than 3 ASINs per analysis
-  const MAX_METADATA_ENRICHMENT = 3;
+  // - Never enrich more than 2 ASINs per analysis
+  const MAX_METADATA_ENRICHMENT = 2;
   
   // Check which listings need enrichment
   // CRITICAL: Never skip enrichment if brand_name is undefined
   // A guessed brand string (from title) ≠ resolved brand (from brand_name/by_line_name)
   const listingsNeedingEnrichment = listings
-    .slice(0, MAX_METADATA_ENRICHMENT) // Only top 3
+    .slice(0, MAX_METADATA_ENRICHMENT) // Only top 2 (part of 7-call budget)
     .filter(l => {
       if (!l.asin) return false;
       
@@ -929,12 +929,17 @@ export async function enrichListingsMetadata(
       const batchPromises = asinBatch.map(async (asin) => {
         // 🚨 API SAFETY LIMIT: Check before each call
         if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
-          console.warn("🚨 API_CALL_LIMIT_REACHED", {
+          const remainingBudget = apiCallCounter.max - apiCallCounter.count;
+          const skippedAsins = asinBatch.filter(a => a !== asin).length + 1; // Count this ASIN + remaining in batch
+          console.warn("🚨 ENRICHMENT_SKIPPED_DUE_TO_BUDGET", {
+            enrichment_type: "metadata",
             asin,
             keyword: keyword || "unknown",
             current_count: apiCallCounter.count,
             max_allowed: apiCallCounter.max,
-            message: "Metadata enrichment skipped - limit reached",
+            remaining_budget: remainingBudget,
+            asins_skipped: skippedAsins,
+            message: "Metadata enrichment skipped - API call budget exhausted",
           });
           return null;
         }

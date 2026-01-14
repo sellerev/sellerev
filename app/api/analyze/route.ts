@@ -1350,8 +1350,9 @@ export async function POST(req: NextRequest) {
       timestamp: new Date().toISOString(),
     });
     
-    // 🚨 API SAFETY LIMIT: Create shared counter at route level (max 6 calls per analysis)
-    const apiCallCounter = { count: 0, max: 6 };
+    // 🚨 API SAFETY LIMIT: Create shared counter at route level (max 7 calls per analysis)
+    // Call budget: 1 search + 4 BSR + 2 metadata = 7 total
+    const apiCallCounter = { count: 0, max: 7 };
     
     try {
       // Rehydrate cache if available, otherwise fetch from Rainforest
@@ -3922,7 +3923,7 @@ Convert this plain text decision into the required JSON contract format. Extract
       total_api_calls: apiCallCounter.count,
       max_allowed: apiCallCounter.max,
       calls_remaining: apiCallCounter.max - apiCallCounter.count,
-      cost_reduction: apiCallCounter.count <= 6 ? "✅ Within limit" : "⚠️ Exceeded limit",
+      cost_reduction: apiCallCounter.count <= 7 ? "✅ Within limit" : "⚠️ Exceeded limit",
     });
 
     // Final log before returning response
