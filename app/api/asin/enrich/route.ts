@@ -700,10 +700,18 @@ export async function POST(req: NextRequest) {
     // Ensure we have a consistent range for downstream storage
     const effectiveUnitsRange = unitsRange;
     if (!effectiveUnitsRange) {
-      return NextResponse.json(
-        { success: true, status: "insufficient_data", stale: false, data_timestamp: nowIso() },
-        { headers: res.headers }
-      );
+      const payload: EnrichResponse = {
+        success: true,
+        status: "insufficient_data",
+        stale: false,
+        credits_charged: 1,
+        served_from_cache: false,
+        cache_age_seconds: null,
+        signals_used,
+        data_timestamp: nowIso(),
+        data: undefined,
+      };
+      return NextResponse.json(payload, { headers: res.headers });
     }
 
     // 6b. Upsert into global caches (learning foundation)
