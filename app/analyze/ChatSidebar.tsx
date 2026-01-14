@@ -304,6 +304,9 @@ export default function ChatSidebar({
   const [escalationMessage, setEscalationMessage] = useState<string | null>(null);
   const [currentCitations, setCurrentCitations] = useState<Citation[]>([]);
   
+  // Global Copilot activity status (Figma AI / Lovable AI style)
+  const [copilotStatus, setCopilotStatus] = useState<"idle" | "thinking" | "analyzing" | "fetching">("idle");
+  
   // Smart scrolling state
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
@@ -455,6 +458,7 @@ export default function ChatSidebar({
     setInput("");
     setIsLoading(true);
     setStreamingContent("");
+    setCopilotStatus("thinking"); // Show "Thinking" immediately after user submits
 
     try {
       // Call streaming API
@@ -516,12 +520,16 @@ export default function ChatSidebar({
                     question: json.metadata.message || "",
                     asin: json.metadata.asins?.[0] || null,
                   });
+                  // Update Copilot status to "fetching" when escalation message appears
+                  setCopilotStatus("fetching");
                 } else if (json.metadata.type === "escalation_started") {
                   // Backward compatibility - show escalation loading state
                   setEscalationState({
                     question: json.metadata.question || "",
                     asin: json.metadata.asin || null,
                   });
+                  // Update Copilot status to "analyzing" when escalation decision is being made
+                  setCopilotStatus("analyzing");
                 } else if (json.metadata.type === "citations") {
                   // Store citations for the current message
                   setCurrentCitations(json.metadata.citations || []);
@@ -530,11 +538,12 @@ export default function ChatSidebar({
               
               // Handle content chunks
               if (json.content) {
-                // Clear escalation state when content starts streaming
+                // Clear escalation state and Copilot status when content starts streaming
                 if (escalationState || escalationMessage) {
                   setEscalationState(null);
                   setEscalationMessage(null);
                 }
+                setCopilotStatus("idle"); // Clear status when response starts
                 accumulatedContent += json.content;
                 setStreamingContent(accumulatedContent);
               }
@@ -570,6 +579,7 @@ export default function ChatSidebar({
       setIsLoading(false);
       setStreamingContent("");
       setEscalationState(null); // Clear escalation state when done
+      setCopilotStatus("idle"); // Clear Copilot status when done
       // Focus input after send
       inputRef.current?.focus();
     }
@@ -700,6 +710,8 @@ export default function ChatSidebar({
             {messages.map((msg, idx) => {
               const messageContent = msg.role === "assistant" ? sanitizeVerdictLanguage(msg.content) : msg.content;
               const isCopied = copiedIndex === idx;
+              // Check if this is the last user message (for showing Copilot status indicator)
+              const isLastUserMessage = msg.role === "user" && idx === messages.length - 1;
               
               const handleCopy = async (e: React.MouseEvent | React.KeyboardEvent) => {
                 e.stopPropagation();
@@ -713,68 +725,81 @@ export default function ChatSidebar({
               };
 
               return (
-                <div
-                  key={idx}
-                  className={`group relative w-full flex ${
-                    msg.role === "user" ? "justify-start" : "justify-start"
-                  }`}
-                >
+                <div key={idx}>
                   <div
-                    className={`group relative max-w-[85%] px-4 py-3 rounded-lg border shadow-sm ${
-                      msg.role === "user"
-                        ? "bg-white border-gray-200 text-gray-900"
-                        : "bg-white border-gray-200 text-gray-900"
+                    className={`group relative w-full flex ${
+                      msg.role === "user" ? "justify-start" : "justify-start"
                     }`}
                   >
-                    {/* Hover-reveal actions - Cursor-style: hidden by default, fade in on hover/focus */}
-                    <div className="absolute right-2 top-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 has-[:focus]:opacity-100 transition-all duration-150 ease-out translate-y-[-2px] group-hover:translate-y-0 has-[:focus]:translate-y-0">
-                      <button
-                        onClick={handleCopy}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            handleCopy(e);
-                          }
-                        }}
-                        className="p-1.5 rounded-md transition-all focus:outline-none focus:ring-1 hover:bg-gray-100 focus:ring-gray-300 focus:bg-gray-100 text-gray-500 hover:text-gray-700"
-                        aria-label="Copy message"
-                        title="Copy message"
-                        tabIndex={0}
-                      >
-                        {isCopied ? (
-                          <Check className="w-3.5 h-3.5 text-gray-700" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
+                    <div
+                      className={`group relative max-w-[85%] px-4 py-3 rounded-lg border shadow-sm ${
+                        msg.role === "user"
+                          ? "bg-white border-gray-200 text-gray-900"
+                          : "bg-white border-gray-200 text-gray-900"
+                      }`}
+                    >
+                      {/* Hover-reveal actions - Cursor-style: hidden by default, fade in on hover/focus */}
+                      <div className="absolute right-2 top-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 has-[:focus]:opacity-100 transition-all duration-150 ease-out translate-y-[-2px] group-hover:translate-y-0 has-[:focus]:translate-y-0">
+                        <button
+                          onClick={handleCopy}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              handleCopy(e);
+                            }
+                          }}
+                          className="p-1.5 rounded-md transition-all focus:outline-none focus:ring-1 hover:bg-gray-100 focus:ring-gray-300 focus:bg-gray-100 text-gray-500 hover:text-gray-700"
+                          aria-label="Copy message"
+                          title="Copy message"
+                          tabIndex={0}
+                        >
+                          {isCopied ? (
+                            <Check className="w-3.5 h-3.5 text-gray-700" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
 
-                    {/* Message header with role label */}
-                    <div className="text-[11px] font-medium mb-2 text-gray-500">
-                      {msg.role === "user" ? "You" : "Sellerev"}
-                    </div>
-                    
-                    {/* Message content */}
-                    <div className="text-sm whitespace-pre-wrap leading-relaxed text-gray-900">
-                      {messageContent}
-                    </div>
-                    
-                    {/* ASIN Citation Chips - inline at end of message */}
-                    {msg.role === "assistant" && msg.citations && msg.citations.length > 0 && (
-                      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                        {msg.citations.map((citation, citationIdx) => (
-                          <AsinCitationChip key={citationIdx} citation={citation} />
-                        ))}
+                      {/* Message header with role label */}
+                      <div className="text-[11px] font-medium mb-2 text-gray-500">
+                        {msg.role === "user" ? "You" : "Sellerev"}
                       </div>
-                    )}
-                    
-                    {/* Trust indicator chips - assistant messages only */}
-                    {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
-                      <div className="mt-2 pt-2 border-t border-gray-200">
-                        <SourceChips />
+                      
+                      {/* Message content */}
+                      <div className="text-sm whitespace-pre-wrap leading-relaxed text-gray-900">
+                        {messageContent}
                       </div>
-                    )}
+                      
+                      {/* ASIN Citation Chips - inline at end of message */}
+                      {msg.role === "assistant" && msg.citations && msg.citations.length > 0 && (
+                        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                          {msg.citations.map((citation, citationIdx) => (
+                            <AsinCitationChip key={citationIdx} citation={citation} />
+                          ))}
+                        </div>
+                      )}
+                      
+                      {/* Trust indicator chips - assistant messages only */}
+                      {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
+                        <div className="mt-2 pt-2 border-t border-gray-200">
+                          <SourceChips />
+                        </div>
+                      )}
+                    </div>
                   </div>
+                  
+                  {/* Global Copilot Activity Indicator (Figma AI / Lovable AI style) */}
+                  {/* Renders UNDER the last user message, before assistant response */}
+                  {isLastUserMessage && copilotStatus !== "idle" && !streamingContent && (
+                    <div className="w-full flex justify-start mt-1.5 pl-1">
+                      <div className="text-xs text-gray-500">
+                        {copilotStatus === "thinking" && "Thinking"}
+                        {copilotStatus === "analyzing" && "Analyzing selection…"}
+                        {copilotStatus === "fetching" && "Looking up product details…"}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
