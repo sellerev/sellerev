@@ -688,10 +688,16 @@ export default function AnalyzeForm({
     // Sync analysis state when initialAnalysis prop changes (indicates URL navigation or refresh)
     if (initialAnalysis) {
       setAnalysis(normalizeAnalysis(initialAnalysis));
+      // CRITICAL: keep chat wired to the currently viewed analysis.
+      // Without this, navigating to a run from the in-chat History panel can leave ChatSidebar
+      // with analysisRunId=null (or a stale ID), causing sendMessage() to no-op.
+      setAnalysisRunIdForChat(initialAnalysis.analysis_run_id || null);
       setInputValue(initialAnalysis.input_value || "");
       setIsEstimated(false);
       setSnapshotType("snapshot");
       setChatMessages(initialMessages);
+      // Reset selection when switching runs to avoid applying prior selection to a different market
+      setSelectedAsins([]);
       // Reset sort to default (Amazon rank) when new analysis loads
       setSortBy("rank");
       // Reset filters when new analysis loads
@@ -704,12 +710,14 @@ export default function AnalyzeForm({
       // Only reset if we currently have an analysis loaded (avoid resetting on initial mount)
       if (analysis !== null) {
         setAnalysis(null);
+        setAnalysisRunIdForChat(null);
         setInputValue("");
       setIsEstimated(false);
       setSnapshotType("snapshot");
       setShowRefiningBadge(false);
       setNextUpdateExpectedSec(null);
       setChatMessages([]);
+      setSelectedAsins([]);
       setSortBy("rank");
       // Reset filters when resetting to blank state
       setSelectedBrands(new Set());
