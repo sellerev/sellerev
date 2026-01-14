@@ -442,7 +442,18 @@ export async function executeEscalation(
   let creditsUsed = 0;
   
   // STRICT: Deduplicate ASINs to prevent multiple calls for the same ASIN
+  // If exactly 1 ASIN is in required_asins, this will result in exactly 1 API call
   const uniqueAsins = Array.from(new Set(decision.required_asins));
+  
+  // STRICT ENFORCEMENT: Log if we're about to call for more ASINs than required
+  // This should never happen if escalation decision logic is correct
+  if (uniqueAsins.length > decision.required_asins.length) {
+    console.error("[ESCALATION_ASIN_MISMATCH]", {
+      required_asins: decision.required_asins,
+      unique_asins: uniqueAsins,
+      note: "Unique ASINs exceed required ASINs - this should never happen",
+    });
+  }
   if (uniqueAsins.length !== decision.required_asins.length) {
     console.warn("[ESCALATION_DEDUP]", {
       original_count: decision.required_asins.length,

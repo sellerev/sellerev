@@ -417,6 +417,8 @@ export function decideEscalation(
     : (selectedAsin ? [selectedAsin] : []);
   
   if (effectiveSelectedAsins.length > 0) {
+    // STRICT: If ASINs are selected, extract ASINs from question ONLY to validate
+    // Do NOT use extracted ASINs - only use selected ASINs
     const extractedAsins = extractAsinsFromQuestion(question, page1Context);
     
     // Check if question mentions any ASINs that don't match selected ASINs
@@ -424,6 +426,7 @@ export function decideEscalation(
       const nonMatchingAsins = extractedAsins.filter(asin => !effectiveSelectedAsins.includes(asin));
       if (nonMatchingAsins.length > 0) {
         // Question references ASINs other than selected - block escalation
+        // STRICT: If exactly 1 ASIN is selected, this enforces single-ASIN behavior
         const selectedText = effectiveSelectedAsins.length === 1
           ? `the currently selected ASIN (${effectiveSelectedAsins[0]})`
           : `the currently selected ASINs (${effectiveSelectedAsins.join(', ')})`;
@@ -437,7 +440,9 @@ export function decideEscalation(
       }
     }
     
-    // If escalation is needed, only allow selected ASINs (max 2 for escalation)
+    // STRICT: If escalation is needed, ONLY use selected ASINs (max 2 for escalation)
+    // If exactly 1 ASIN is selected, escalation will use ONLY that ASIN
+    // Do NOT auto-expand to other page-1 products
     // Continue to Step 2 to check if escalation is actually needed
   }
   
@@ -501,6 +506,8 @@ export function decideEscalation(
         escalation_reason: `You have ${effectiveSelectedAsins.length} products selected, but I can only look up details for up to 2 products at a time. Please select 1-2 products to analyze, or ask a comparison question that doesn't require deep product data.`,
       };
     }
+    // STRICT: If exactly ONE ASIN is selected, use ONLY that ASIN
+    // Do NOT extract other ASINs from question, do NOT auto-expand to other products
     asins = effectiveSelectedAsins;
   } else {
     // No selected ASINs - extract from question
@@ -519,6 +526,7 @@ export function decideEscalation(
   }
   
   // Step 4: Enforce max 2 ASINs for escalation
+  // STRICT: If exactly 1 ASIN is selected, requiredAsins will contain ONLY that ASIN
   const requiredAsins = asins.slice(0, 2);
   const requiredCredits = requiredAsins.length;
   

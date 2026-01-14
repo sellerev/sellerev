@@ -2527,7 +2527,7 @@ CRITICAL RULES FOR ESCALATED DATA:
           }
           
           // Build citations based on data used
-          // STRICT: Only cite selected ASINs
+          // STRICT: Only cite selected ASINs - if exactly 1 ASIN is selected, cite ONLY that ASIN
           const citations: Array<{ type: "asin"; asin: string; source: "page1_estimate" | "rainforest_product" }> = [];
           
           // Get effective selected ASINs (multi-select support)
@@ -2535,11 +2535,13 @@ CRITICAL RULES FOR ESCALATED DATA:
             ? selectedAsinsForCitations
             : (selectedAsinForCitations ? [selectedAsinForCitations] : []);
           
-          // Safety check: Ensure citations only include selected ASINs
+          // STRICT ENFORCEMENT: Citations may ONLY include selected ASINs
+          // If exactly 1 ASIN is selected, citations must contain ONLY that ASIN
           if (effectiveSelectedAsinsForCitations.length > 0) {
             // If escalation occurred, add citations with rainforest_product source
             if (escalationResultsForCitations && escalationResultsForCitations.success) {
               // STRICT: Only cite ASINs that were escalated AND are in selected ASINs
+              // Do NOT cite any ASINs outside of selected ASINs
               for (const escalatedAsin of escalationDecisionForCitations.required_asins) {
                 if (effectiveSelectedAsinsForCitations.includes(escalatedAsin)) {
                   citations.push({
@@ -2553,7 +2555,7 @@ CRITICAL RULES FOR ESCALATED DATA:
                     selectedAsins: effectiveSelectedAsinsForCitations,
                     escalatedAsin,
                     required_asins: escalationDecisionForCitations.required_asins,
-                    note: "Citation ASIN is not in selected ASINs - citation blocked",
+                    note: "Citation ASIN is not in selected ASINs - citation blocked. This should never happen if escalation logic is correct.",
                   });
                 }
               }
@@ -2570,7 +2572,8 @@ CRITICAL RULES FOR ESCALATED DATA:
                 finalMessage?.toLowerCase().includes("selected products");
               
               if (hasProductDataInContext) {
-                // Add citation for each selected ASIN that was likely referenced
+                // STRICT: Only cite selected ASINs, never auto-expand to other products
+                // If exactly 1 ASIN is selected, this will cite ONLY that ASIN
                 for (const asin of effectiveSelectedAsinsForCitations) {
                   citations.push({
                     type: "asin",
