@@ -22,12 +22,5 @@ export default async function DashboardPage() {
     redirect("/onboarding");
   }
 
-  return (
-    <div className="p-6">
-      <h1 className="text-2xl font-semibold">Sellerev Dashboard</h1>
-      <p className="text-gray-400">
-        Dashboard placeholder. Go to /analyze to test Feature 1.
-      </p>
-    </div>
-  );
+  redirect("/analyze");
 }

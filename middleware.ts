@@ -48,7 +48,7 @@ export async function middleware(req: NextRequest) {
 
     // Profile exists with sourcing_model → block auth + onboarding
     if (profile && profile.sourcing_model && (isAuth || isOnboarding)) {
-      return NextResponse.redirect(new URL("/dashboard", req.url));
+      return NextResponse.redirect(new URL("/analyze", req.url));
     }
   }
 

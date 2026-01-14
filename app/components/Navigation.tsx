@@ -14,7 +14,7 @@ export default function Navigation() {
           {/* Left-aligned: Brand + Navigation */}
           <div className="flex items-center gap-8">
             <Link
-              href="/dashboard"
+              href="/analyze"
               className="text-lg font-bold text-gray-900 hover:text-gray-700 transition-colors"
             >
               Sellerev
@@ -29,16 +29,6 @@ export default function Navigation() {
                 }`}
               >
                 Analyze
-              </Link>
-              <Link
-                href="/history"
-                className={`text-sm font-medium transition-colors ${
-                  pathname?.startsWith("/history")
-                    ? "text-[#111827] font-semibold border-b-2 border-[#111827] pb-1 -mb-1"
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
-                History
               </Link>
             </div>
           </div>

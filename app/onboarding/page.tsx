@@ -91,7 +91,7 @@ export default function OnboardingPage() {
         setError(upsertError.message);
         setLoading(false);
       } else {
-        router.push("/dashboard");
+        router.push("/analyze");
       }
     } catch (err) {
       setError(
