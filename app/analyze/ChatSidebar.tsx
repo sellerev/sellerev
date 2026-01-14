@@ -269,6 +269,9 @@ export default function ChatSidebar({
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  // Context line shown ABOVE assistant response (not a chat message)
+  const [responseContextLine, setResponseContextLine] = useState<string | null>(null);
+  const hadEscalationThisResponseRef = useRef(false);
   const [pendingMemoryConfirmation, setPendingMemoryConfirmation] = useState<{
     pendingMemoryId: string;
     message: string;
@@ -429,6 +432,19 @@ export default function ChatSidebar({
       content: messageToSend,
     };
     
+    // New user message = clear prior context line (it should only persist until the next user send)
+    // Then initialize for this response from real selection state.
+    hadEscalationThisResponseRef.current = false;
+    if (selectedAsins && selectedAsins.length > 0) {
+      if (selectedAsins.length === 1) {
+        setResponseContextLine(`Answering using selected ASIN: ${selectedAsins[0]}`);
+      } else {
+        setResponseContextLine(`Answering using ${selectedAsins.length} selected ASINs`);
+      }
+    } else {
+      setResponseContextLine("Answering using Page-1 market data");
+    }
+
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
@@ -498,6 +514,13 @@ export default function ChatSidebar({
                   });
                   // Update Copilot status to "fetching" when escalation message appears
                   setCopilotStatus("fetching");
+                  // Context line: escalation approved + in-flight
+                  hadEscalationThisResponseRef.current = true;
+                  if (selectedAsins && selectedAsins.length > 0) {
+                    setResponseContextLine("Looking up product details for selected ASIN(s)…");
+                  } else {
+                    setResponseContextLine("Looking up product details…");
+                  }
                 } else if (json.metadata.type === "escalation_started") {
                   // Backward compatibility - show escalation loading state
                   setEscalationState({
@@ -506,11 +529,31 @@ export default function ChatSidebar({
                   });
                   // Update Copilot status to "analyzing" when escalation decision is being made
                   setCopilotStatus("analyzing");
+                  // Context line: escalation in-flight
+                  hadEscalationThisResponseRef.current = true;
+                  if (selectedAsins && selectedAsins.length > 0) {
+                    setResponseContextLine("Looking up product details for selected ASIN(s)…");
+                  } else {
+                    setResponseContextLine("Looking up product details…");
+                  }
                 } else if (json.metadata.type === "citations") {
                   // Store citations for the current message
                   const cits = (json.metadata.citations || []) as Citation[];
                   citationsForFinal = cits;
                   setCurrentCitations(cits);
+                  // Context line: reflect actual data source used
+                  const usedLive = cits.some((c) => c.source === "rainforest_product");
+                  if (usedLive && selectedAsins && selectedAsins.length > 0) {
+                    setResponseContextLine("Answering using selected ASIN(s) + live product data");
+                  } else if (selectedAsins && selectedAsins.length > 0) {
+                    if (selectedAsins.length === 1) {
+                      setResponseContextLine(`Answering using selected ASIN: ${selectedAsins[0]}`);
+                    } else {
+                      setResponseContextLine(`Answering using ${selectedAsins.length} selected ASINs`);
+                    }
+                  } else {
+                    setResponseContextLine("Answering using Page-1 market data");
+                  }
                 }
               }
               
@@ -522,6 +565,19 @@ export default function ChatSidebar({
                   setEscalationMessage(null);
                 }
                 setCopilotStatus("idle"); // Clear status when response starts
+                // Once we start streaming, we're answering (escalation already completed server-side).
+                // Keep this grounded in selection state; citations may later upgrade this to "+ live product data".
+                if (hadEscalationThisResponseRef.current) {
+                  if (selectedAsins && selectedAsins.length > 0) {
+                    if (selectedAsins.length === 1) {
+                      setResponseContextLine(`Answering using selected ASIN: ${selectedAsins[0]}`);
+                    } else {
+                      setResponseContextLine(`Answering using ${selectedAsins.length} selected ASINs`);
+                    }
+                  } else {
+                    setResponseContextLine("Answering using Page-1 market data");
+                  }
+                }
                 accumulatedContent += json.content;
                 setStreamingContent(accumulatedContent);
               }
@@ -561,7 +617,7 @@ export default function ChatSidebar({
       // Focus input after send
       inputRef.current?.focus();
     }
-  }, [analysisRunId, input, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange]);
+  }, [analysisRunId, input, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange, escalationState, escalationMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Use effectiveId for UI enabling, but chat API still needs analysisRunId
@@ -690,6 +746,7 @@ export default function ChatSidebar({
               const isCopied = copiedIndex === idx;
               // Check if this is the last user message (for showing Copilot status indicator)
               const isLastUserMessage = msg.role === "user" && idx === messages.length - 1;
+              const isLastMessage = idx === messages.length - 1;
               
               const handleCopy = async (e: React.MouseEvent | React.KeyboardEvent) => {
                 e.stopPropagation();
@@ -709,6 +766,14 @@ export default function ChatSidebar({
                       msg.role === "user" ? "justify-start" : "justify-start"
                     }`}
                   >
+                    {/* Copilot context line ABOVE assistant response (not a bubble) */}
+                    {msg.role === "assistant" && isLastMessage && responseContextLine && (
+                      <div className="w-full flex justify-start mb-1 pl-1">
+                        <div className="text-[11px] text-gray-500">
+                          {responseContextLine}
+                        </div>
+                      </div>
+                    )}
                     <div
                       className={`group relative max-w-[85%] px-4 py-3 rounded-lg border shadow-sm ${
                         msg.role === "user"
@@ -780,7 +845,14 @@ export default function ChatSidebar({
             {/* Streaming message indicator */}
             {isLoading && streamingContent && (
               <div className="w-full flex justify-start">
-                <div className="group relative max-w-[85%] bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
+                <div className="max-w-[85%]">
+                  {/* Copilot context line ABOVE assistant response (not a bubble) */}
+                  {responseContextLine && (
+                    <div className="text-[11px] text-gray-500 mb-1 pl-1">
+                      {responseContextLine}
+                    </div>
+                  )}
+                  <div className="group relative bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
                   {/* Message header */}
                   <div className="text-[11px] font-medium mb-2 text-gray-500">
                     Sellerev
@@ -802,6 +874,7 @@ export default function ChatSidebar({
                   )}
                   
                   {/* Trust indicator chips removed (UX requirement) */}
+                  </div>
                 </div>
               </div>
             )}
@@ -829,20 +902,28 @@ export default function ChatSidebar({
             {/* Loading indicator (before streaming starts, no escalation) */}
             {isLoading && !streamingContent && !escalationState && (
               <div className="w-full flex justify-start">
-                <div className="max-w-[85%] bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
-                  <div className="text-[11px] font-medium mb-2 text-gray-500">
-                    Sellerev
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                    <span
-                      className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                      style={{ animationDelay: "0.1s" }}
-                    />
-                    <span
-                      className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                      style={{ animationDelay: "0.2s" }}
-                    />
+                <div className="max-w-[85%]">
+                  {/* Copilot context line ABOVE assistant response (not a bubble) */}
+                  {responseContextLine && (
+                    <div className="text-[11px] text-gray-500 mb-1 pl-1">
+                      {responseContextLine}
+                    </div>
+                  )}
+                  <div className="bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
+                    <div className="text-[11px] font-medium mb-2 text-gray-500">
+                      Sellerev
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+                      <span
+                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                        style={{ animationDelay: "0.1s" }}
+                      />
+                      <span
+                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                        style={{ animationDelay: "0.2s" }}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -973,10 +1054,6 @@ export default function ChatSidebar({
               ))}
             </div>
           )}
-          {/* Lightweight context hint (Cursor-style) */}
-          <div className="text-[11px] text-gray-500 px-1">
-            {selectedAsins.length > 0 ? "Using: selected products" : "Using: Page-1 snapshot"}
-          </div>
           <textarea
             ref={inputRef}
             className="flex-1 bg-transparent border-0 rounded-lg px-2 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none overflow-y-auto placeholder:text-gray-400"
