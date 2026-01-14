@@ -1332,19 +1332,31 @@ function detectCostOverrides(
  */
 function detectFbaProfitabilityIntent(message: string): boolean {
   const t = message.toLowerCase();
-  return (
-    t.includes("fba fee") ||
-    t.includes("fba fees") ||
-    t.includes("fees") ||
+  // Tightened to avoid accidental triggers on generic "fees" or "margin" questions
+  const hasFeesOrProfitSignal =
     t.includes("profit") ||
     t.includes("profitability") ||
+    t.includes("is this profitable") ||
     t.includes("margin") ||
+    t.includes("fee") ||
+    t.includes("fees");
+
+  const hasFbaOrAmazonFeesSignal =
+    t.includes("fba") ||
+    t.includes("fulfillment fee") ||
+    t.includes("referral fee") ||
+    t.includes("amazon fee") ||
+    t.includes("amazon fees") ||
+    t.includes("seller api");
+
+  const hasExplicitActionSignal =
     t.includes("run fees") ||
     t.includes("calculate fba") ||
     t.includes("calculate fees") ||
-    t.includes("what are the fees") ||
-    t.includes("is this profitable")
-  );
+    t.includes("fee lookup");
+
+  // Require either explicit action, or an FBA/Amazon-fees anchor
+  return hasFeesOrProfitSignal && (hasExplicitActionSignal || hasFbaOrAmazonFeesSignal);
 }
 
 /**
