@@ -604,19 +604,22 @@ export function buildEscalationMessage(decision: EscalationDecision, selectedAsi
     ? decision.required_asins
     : effectiveSelectedAsins.slice(0, 2);
   
-  const asinList = asinsToReference.length === 1
-    ? `ASIN ${asinsToReference[0]}`
-    : `ASINs ${asinsToReference.join(', ')}`;
-  
+  // EXACT FORMAT REQUIRED:
+  // For 1 ASIN: "Looking up product details for ASIN {ASIN}… (1 Seller Credit)"
+  // For 2 ASINs: "Looking up product details for ASIN {A} and {B}… (2 Seller Credits)"
   const creditText = decision.required_credits === 1
     ? "1 Seller Credit"
     : `${decision.required_credits} Seller Credits`;
   
-  const productText = asinsToReference.length === 1
-    ? "product"
-    : `${asinsToReference.length} selected products`;
-  
-  return `🔍 Looking up live listing data for ${productText} (${asinList})... This will use ${creditText}.`;
+  if (asinsToReference.length === 1) {
+    return `Looking up product details for ASIN ${asinsToReference[0]}… (${creditText})`;
+  } else if (asinsToReference.length === 2) {
+    return `Looking up product details for ASIN ${asinsToReference[0]} and ${asinsToReference[1]}… (${creditText})`;
+  } else {
+    // Fallback for edge cases
+    const asinList = asinsToReference.join(' and ');
+    return `Looking up product details for ASIN ${asinList}… (${creditText})`;
+  }
 }
 
 /**

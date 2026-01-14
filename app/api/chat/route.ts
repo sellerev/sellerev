@@ -1926,6 +1926,7 @@ export async function POST(req: NextRequest) {
     } | null = null;
     
     let escalationMessage = "";
+    let shouldShowEscalationMessage = false; // Track if we should show the pre-escalation message
     
     if (escalationDecision.requires_escalation && escalationDecision.required_asins.length > 0) {
       // Check if escalation is blocked (insufficient credits, limits exceeded)
@@ -1950,7 +1951,12 @@ export async function POST(req: NextRequest) {
         
         escalationMessage = buildInsufficientCreditsMessage(escalationDecision, creditContext);
       } else {
-        // Credits available - execute escalation
+        // Credits available - BUILD MESSAGE FIRST (before executing escalation)
+        // This ensures the message is ready to send immediately
+        escalationMessage = buildEscalationMessage(escalationDecision, selectedAsin, selectedAsins);
+        shouldShowEscalationMessage = true; // Mark that we should show this message
+        
+        // Now execute escalation
         try {
           const rainforestApiKey = process.env.RAINFOREST_API_KEY;
           escalationResults = await executeEscalation(
@@ -1960,8 +1966,6 @@ export async function POST(req: NextRequest) {
             supabase,
             rainforestApiKey
           );
-          
-          escalationMessage = buildEscalationMessage(escalationDecision, selectedAsin, selectedAsins);
           
           // Structured logging for successful escalation
           console.log("ESCALATION_EXECUTED", {
@@ -1986,6 +1990,7 @@ export async function POST(req: NextRequest) {
           });
           
           escalationMessage = `Failed to look up product details: ${escalationError instanceof Error ? escalationError.message : String(escalationError)}`;
+          shouldShowEscalationMessage = false; // Don't show the pre-escalation message if it failed
         }
       }
     }
@@ -2251,8 +2256,22 @@ CRITICAL RULES FOR ESCALATED DATA:
 
     const stream = new ReadableStream({
       async start(controller) {
-        // If escalation happened, send escalation metadata first
-        // This allows the frontend to show a loading state
+        // CRITICAL: Send escalation message IMMEDIATELY when escalation is required
+        // This must happen BEFORE the OpenAI API call so the user sees the message first
+        if (shouldShowEscalationMessage && escalationMessage) {
+          // Send the exact escalation message as metadata
+          // The frontend will display this message immediately
+          const escalationMetadata = {
+            type: "escalation_message",
+            message: escalationMessage, // The exact message from buildEscalationMessage()
+            asins: escalationDecision.required_asins,
+            credits: escalationDecision.required_credits,
+          };
+          
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata: escalationMetadata })}\n\n`));
+        }
+        
+        // Also send escalation_started for backward compatibility (if escalation happened)
         if (escalationMessage && escalationResults && escalationResults.success) {
           const escalationMetadata = {
             type: "escalation_started",

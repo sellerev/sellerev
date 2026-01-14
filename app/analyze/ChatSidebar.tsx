@@ -301,6 +301,7 @@ export default function ChatSidebar({
     subtext?: string;
   } | null>(null);
   const [escalationState, setEscalationState] = useState<{ question: string; asin: string | null } | null>(null);
+  const [escalationMessage, setEscalationMessage] = useState<string | null>(null);
   const [currentCitations, setCurrentCitations] = useState<Citation[]>([]);
   
   // Smart scrolling state
@@ -508,8 +509,15 @@ export default function ChatSidebar({
                 } else if (json.metadata.type === "memory_confirmation") {
                   // Show memory confirmation prompt
                   setPendingMemoryConfirmation(json.metadata);
+                } else if (json.metadata.type === "escalation_message") {
+                  // Show the exact escalation message from backend
+                  setEscalationMessage(json.metadata.message || null);
+                  setEscalationState({
+                    question: json.metadata.message || "",
+                    asin: json.metadata.asins?.[0] || null,
+                  });
                 } else if (json.metadata.type === "escalation_started") {
-                  // Show escalation loading state
+                  // Backward compatibility - show escalation loading state
                   setEscalationState({
                     question: json.metadata.question || "",
                     asin: json.metadata.asin || null,
@@ -523,8 +531,9 @@ export default function ChatSidebar({
               // Handle content chunks
               if (json.content) {
                 // Clear escalation state when content starts streaming
-                if (escalationState) {
+                if (escalationState || escalationMessage) {
                   setEscalationState(null);
+                  setEscalationMessage(null);
                 }
                 accumulatedContent += json.content;
                 setStreamingContent(accumulatedContent);
@@ -805,7 +814,16 @@ export default function ChatSidebar({
             )}
 
             {/* Escalation loading state (when escalation is happening) */}
-            {escalationState && !streamingContent && (
+            {escalationMessage && !streamingContent && (
+              <div className="w-full flex justify-start">
+                <div className="max-w-[85%] bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5">
+                  <div className="text-xs text-gray-500">
+                    {escalationMessage}
+                  </div>
+                </div>
+              </div>
+            )}
+            {escalationState && !escalationMessage && !streamingContent && (
               <div className="w-full flex justify-start">
                 <div className="max-w-[85%] bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5">
                   <div className="text-xs text-gray-500 italic">
