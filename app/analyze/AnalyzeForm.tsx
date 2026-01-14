@@ -496,16 +496,22 @@ export default function AnalyzeForm({
   const [selectedAsins, setSelectedAsins] = useState<string[]>([]);
   
   // Helper: Get selected listing objects from selectedAsins
+  // CRITICAL: Use exact ASIN matching - selectedAsins is the single source of truth
   const getSelectedListings = () => {
     if (!analysis?.page_one_listings || selectedAsins.length === 0) return [];
-    return analysis.page_one_listings.filter((listing: any) => 
-      listing.asin && selectedAsins.includes(listing.asin)
-    );
+    return analysis.page_one_listings.filter((listing: any) => {
+      const listingAsin = listing.asin || null;
+      return listingAsin && selectedAsins.includes(listingAsin);
+    });
   };
   
   // Helper: Get single selected listing (for backward compatibility with ChatSidebar)
+  // CRITICAL: Only return a listing if exactly 1 ASIN is selected
   const selectedListing = selectedAsins.length === 1 
-    ? (analysis?.page_one_listings || []).find((listing: any) => listing.asin === selectedAsins[0]) || null
+    ? (analysis?.page_one_listings || []).find((listing: any) => {
+        const listingAsin = listing.asin || normalizeListing(listing).asin || null;
+        return listingAsin === selectedAsins[0];
+      }) || null
     : null;
   
   // Sort state for Page 1 Results (default to rank to preserve Amazon order)
@@ -1828,20 +1834,33 @@ export default function AnalyzeForm({
                     <div className="mb-3 text-xs text-gray-500 italic">
                       Revenue and sales are estimated from live search position. Category rank is available in ASIN analysis.
                     </div>
-                    {selectedListing && (
-                      <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                        <div className="text-sm text-blue-900">
-                          <span className="font-medium">Selected:</span> {selectedListing.title || selectedListing.asin}
+                    {/* Selection Count Indicator */}
+                    {selectedAsins.length > 0 && (
+                      <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
+                        <div className="text-sm text-gray-900">
+                          <span className="font-medium">
+                            {selectedAsins.length === 1 
+                              ? "1 product selected" 
+                              : `${selectedAsins.length} products selected`}
+                          </span>
                         </div>
-                        <div className="text-xs text-blue-700 mt-1">
-                          Ask questions about this product in the chat
-                        </div>
+                        <button
+                          onClick={() => setSelectedAsins([])}
+                          className="text-xs text-gray-600 hover:text-gray-900 underline"
+                        >
+                          Clear selection
+                        </button>
                       </div>
                     )}
                     {/* Product Cards Grid - auto-fill with minmax */}
                     <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
                       {filteredListings.map((listing: any, idx: number) => {
-                          const isSelected = listing.asin && selectedAsins.includes(listing.asin);
+                          // Extract ASIN FIRST - this is the single source of truth for this listing
+                          const asin = listing.asin || normalizeListing(listing).asin || null;
+                          
+                          // CRITICAL: Use the extracted asin for selection check (must match what we store)
+                          const isSelected = asin !== null && selectedAsins.includes(asin);
+                          
                           // Extract image URL with fallback - preserve from stable source
                           const imageUrl = listing.image_url ?? listing.image ?? null;
                           // Rank = Page-1 position (use page_position if available, else use array index + 1 for display)
@@ -1865,7 +1884,7 @@ export default function AnalyzeForm({
                           if (idx < 5) {
                             console.log("🔵 FINAL PRODUCT CARD DATA", {
                               index: idx,
-                              asin: listing.asin,
+                              asin: asin,
                               listing_keys: Object.keys(listing),
                             });
                           }
@@ -1892,9 +1911,6 @@ export default function AnalyzeForm({
                           // Sponsored: check both fields
                           const isSponsored = listing.is_sponsored ?? listing.sponsored ?? false;
                           
-                          // Extract ASIN with fallback
-                          const asin = listing.asin || normalizeListing(listing).asin || null;
-                          
                           return (
                             <ProductCard
                               key={`${asin || idx}-${idx}`}
@@ -1912,13 +1928,14 @@ export default function AnalyzeForm({
                               asin={asin}
                               isSelected={isSelected}
                               onSelect={() => {
-                                if (!listing.asin) return;
+                                // CRITICAL: Use the extracted asin (not listing.asin) for consistency
+                                if (!asin) return;
                                 if (isSelected) {
-                                  // Deselect: remove from array
-                                  setSelectedAsins(prev => prev.filter(asin => asin !== listing.asin));
+                                  // Deselect: remove from array using the extracted asin
+                                  setSelectedAsins(prev => prev.filter(selectedAsin => selectedAsin !== asin));
                                 } else {
-                                  // Select: add to array
-                                  setSelectedAsins(prev => [...prev, listing.asin]);
+                                  // Select: add to array using the extracted asin
+                                  setSelectedAsins(prev => [...prev, asin]);
                                 }
                               }}
                             />
@@ -1982,7 +1999,7 @@ export default function AnalyzeForm({
               ...selectedListing,
               // Include enriched data if available for this ASIN
             } : null}
-            selectedAsins={selectedAsins}
+            selectedAsins={selectedAsins} // Single source of truth - ChatSidebar should use this
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={handleToggleCollapse}
           />

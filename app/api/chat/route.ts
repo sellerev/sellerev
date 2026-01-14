@@ -570,18 +570,24 @@ CRITICAL AI RULES:
   }
 
   // Section 7: Selected Listings Context (multi-ASIN support)
-  // Build context for all selected ASINs
-  const effectiveSelectedAsins = selectedAsins && selectedAsins.length > 0
-    ? selectedAsins
-    : (selectedListing?.asin ? [selectedListing.asin] : []);
+  // CRITICAL: selectedAsins is the single source of truth
+  // If selectedAsins.length === 0, NO products are selected
+  // Only use selectedListing as fallback if selectedAsins is empty/undefined
+  const effectiveSelectedAsins: string[] = Array.isArray(selectedAsins) && selectedAsins.length > 0
+    ? selectedAsins.filter(asin => asin && typeof asin === 'string') // Filter out invalid ASINs
+    : (selectedListing?.asin && typeof selectedListing.asin === 'string'
+      ? [selectedListing.asin] // Backward compatibility fallback
+      : []); // Empty array = no selection
   
   if (effectiveSelectedAsins.length > 0) {
     try {
       // Get all selected listings from page_one_listings
+      // CRITICAL: Match ASINs exactly - use normalized ASIN for comparison
       const pageOneListings = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
-      const selectedListings = pageOneListings.filter((listing: any) => 
-        listing.asin && effectiveSelectedAsins.includes(listing.asin)
-      );
+      const selectedListings = pageOneListings.filter((listing: any) => {
+        const listingAsin = listing.asin || null;
+        return listingAsin && effectiveSelectedAsins.includes(listingAsin);
+      });
       
       if (selectedListings.length > 0) {
         const selectedCount = selectedListings.length;
@@ -1775,15 +1781,19 @@ export async function POST(req: NextRequest) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // EXTRACT SELECTED ASINS (MUST BE DONE EARLY - USED IN MULTIPLE PLACES)
+    // EXTRACT SELECTED ASINS (SINGLE SOURCE OF TRUTH)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Extract selected ASINs (multi-select support)
-    // Priority: selectedAsins array > selectedListing (backward compatibility)
-    const selectedAsins = body.selectedAsins && body.selectedAsins.length > 0
-      ? body.selectedAsins
-      : (body.selectedListing?.asin ? [body.selectedListing.asin] : []);
+    // CRITICAL: selectedAsins is the single source of truth
+    // Only use selectedListing as fallback if selectedAsins is empty/undefined
+    // If selectedAsins.length === 0, NO ASIN is selected (Copilot must not reference any ASIN)
+    const selectedAsins: string[] = Array.isArray(body.selectedAsins) && body.selectedAsins.length > 0
+      ? body.selectedAsins.filter(asin => asin && typeof asin === 'string') // Filter out invalid ASINs
+      : (body.selectedListing?.asin && typeof body.selectedListing.asin === 'string'
+        ? [body.selectedListing.asin] // Backward compatibility fallback
+        : []); // Empty array = no selection
     
     // For backward compatibility and single-ASIN logic, also extract first ASIN
+    // CRITICAL: If selectedAsins.length === 0, selectedAsin must be null
     const selectedAsin = selectedAsins.length > 0 ? selectedAsins[0] : null;
     
     // 8. Build grounded context message
