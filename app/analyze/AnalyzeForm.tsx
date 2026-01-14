@@ -494,6 +494,22 @@ export default function AnalyzeForm({
   const [asinRefinements, setAsinRefinements] = useState<Record<string, AsinRefinementOverlay>>({});
   const [asinRefineStatus, setAsinRefineStatus] = useState<Record<string, "idle" | "loading" | "refined" | "error">>({});
 
+  // Credit confirmation modal (UI-only gate before any Rainforest-triggering call)
+  const [creditConfirm, setCreditConfirm] = useState<{
+    open: boolean;
+    asins: string[];
+    cost: number;
+    onConfirm: (() => void) | null;
+  }>({ open: false, asins: [], cost: 0, onConfirm: null });
+
+  const requestCreditConfirmation = useCallback((opts: {
+    asins: string[];
+    cost: number;
+    onConfirm: () => void;
+  }) => {
+    setCreditConfirm({ open: true, asins: opts.asins, cost: opts.cost, onConfirm: opts.onConfirm });
+  }, []);
+
   const refineAsinEstimates = useCallback(async (asin: string, currentPrice: number) => {
     if (!asin || !analysisRunIdForChat) return;
     if (asinRefineStatus[asin] === "loading") return;
@@ -551,6 +567,21 @@ export default function AnalyzeForm({
       setAsinRefineStatus((prev) => ({ ...prev, [asin]: "error" }));
     }
   }, [analysisRunIdForChat, asinRefineStatus]);
+
+  // UI-only gate: always confirm before triggering /api/asin/enrich (Rainforest-backed)
+  const requestLoadSalesData = useCallback((asin: string, currentPrice: number) => {
+    // Avoid double-confirm when already loading/refined
+    const status = asinRefineStatus[asin];
+    if (status === "loading") return;
+    if (status === "refined") {
+      // Reload still requires confirmation (explicit credit safety)
+    }
+    requestCreditConfirmation({
+      asins: [asin],
+      cost: 1,
+      onConfirm: () => refineAsinEstimates(asin, currentPrice),
+    });
+  }, [asinRefineStatus, requestCreditConfirmation, refineAsinEstimates]);
 
 
   // Handler for margin snapshot updates from chat (Part G structure)
@@ -1087,6 +1118,48 @@ export default function AnalyzeForm({
 
   return (
     <div className="h-full bg-[#F7F9FC] flex flex-col">
+      {/* Credit confirmation modal (UI-only gate before any Rainforest-triggering call) */}
+      {creditConfirm.open && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-xl bg-white border border-gray-200 shadow-xl p-5">
+            <div className="text-sm font-semibold text-gray-900 mb-2">
+              Confirm credit usage
+            </div>
+            <div className="text-sm text-gray-700 leading-relaxed">
+              This will use <span className="font-medium">{creditConfirm.cost}</span>{" "}
+              Seller Credit{creditConfirm.cost === 1 ? "" : "s"} to load live product data for{" "}
+              {creditConfirm.asins.length === 1 ? (
+                <span className="font-mono font-medium">{creditConfirm.asins[0]}</span>
+              ) : (
+                <>
+                  <span className="font-medium">{creditConfirm.asins.length}</span> ASINs
+                </>
+              )}
+              . Continue?
+            </div>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCreditConfirm({ open: false, asins: [], cost: 0, onConfirm: null })}
+                className="px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const fn = creditConfirm.onConfirm;
+                  setCreditConfirm({ open: false, asins: [], cost: 0, onConfirm: null });
+                  fn?.();
+                }}
+                className="px-3 py-2 text-sm font-medium text-white bg-[#3B82F6] rounded-lg hover:bg-[#2563EB]"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* MAIN CONTENT: TWO-COLUMN FLEXBOX LAYOUT                             */}
       {/* ─────────────────────────────────────────────────────────────────── */}
@@ -2007,7 +2080,7 @@ export default function AnalyzeForm({
                               monthlyUnits={monthlyUnits}
                               onRefineEstimates={
                                 asin && price > 0
-                                  ? () => refineAsinEstimates(asin, price)
+                                  ? () => requestLoadSalesData(asin, price)
                                   : undefined
                               }
                               refineStatus={asin ? (asinRefineStatus[asin] ?? "idle") : "idle"}
@@ -2017,15 +2090,35 @@ export default function AnalyzeForm({
                               imageUrl={imageUrl}
                               asin={asin}
                               isSelected={isSelected}
-                              onSelect={() => {
+                              onSelect={(e) => {
                                 // CRITICAL: Use the extracted asin (not listing.asin) for consistency
                                 if (!asin) return;
-                                if (isSelected) {
-                                  // Deselect: remove from array using the extracted asin
-                                  setSelectedAsins(prev => prev.filter(selectedAsin => selectedAsin !== asin));
+
+                                const isMulti =
+                                  ("metaKey" in e && e.metaKey) ||
+                                  ("ctrlKey" in e && e.ctrlKey) ||
+                                  ("shiftKey" in e && e.shiftKey);
+
+                                if (isMulti) {
+                                  // Multi-select toggle
+                                  if (isSelected) {
+                                    setSelectedAsins(prev => prev.filter(selectedAsin => selectedAsin !== asin));
+                                  } else {
+                                    setSelectedAsins(prev => [...prev, asin]);
+                                  }
+                                  return;
+                                }
+
+                                // Default click: single-select toggle
+                                if (isSelected && selectedAsins.length === 1) {
+                                  setSelectedAsins([]);
                                 } else {
-                                  // Select: add to array using the extracted asin
-                                  setSelectedAsins(prev => [...prev, asin]);
+                                  setSelectedAsins([asin]);
+                                }
+
+                                // Clear focus after mouse click to avoid stuck focus styles
+                                if ("currentTarget" in e) {
+                                  (e.currentTarget as HTMLElement).blur?.();
                                 }
                               }}
                             />
@@ -2090,6 +2183,7 @@ export default function AnalyzeForm({
               // Include enriched data if available for this ASIN
             } : null}
             selectedAsins={selectedAsins} // Single source of truth - ChatSidebar should use this
+            onSelectedAsinsChange={setSelectedAsins}
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={handleToggleCollapse}
           />

@@ -77,6 +77,10 @@ interface ChatSidebarProps {
   selectedListing?: any | null;
   /** Selected ASINs array (for multi-select) */
   selectedAsins?: string[];
+  /** Setter for selected ASINs (used by input chips) */
+  onSelectedAsinsChange?: (asins: string[]) => void;
+  /** Setter for selected ASINs (used by input chips) */
+  onSelectedAsinsChange?: (asins: string[]) => void;
   /** Whether the sidebar is collapsed */
   isCollapsed?: boolean;
   /** Callback to toggle collapse state */
@@ -157,11 +161,7 @@ function getSuggestedQuestions(
 // Source chips shown beneath assistant messages to reinforce grounding
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SOURCE_CHIPS = [
-  "This analysis",
-  "Amazon market data",
-  "Your seller profile",
-] as const;
+// removed (UX requirement): no footer chips under chat bubbles
 
 /**
  * ASIN Citation Chip Component
@@ -203,31 +203,7 @@ function AsinCitationChip({ citation }: { citation: Citation }) {
   );
 }
 
-function SourceChips() {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {SOURCE_CHIPS.map((chip) => (
-        <span
-          key={chip}
-          className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium text-gray-600 bg-gray-50 border border-gray-200 rounded"
-        >
-          <svg
-            className="w-2.5 h-2.5 mr-1 text-gray-500"
-            fill="currentColor"
-            viewBox="0 0 20 20"
-          >
-            <path
-              fillRule="evenodd"
-              d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-              clipRule="evenodd"
-            />
-          </svg>
-          {chip}
-        </span>
-      ))}
-    </div>
-  );
-}
+// SourceChips removed (UX requirement)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
@@ -279,6 +255,7 @@ export default function ChatSidebar({
   analysisMode = null,
   selectedListing = null,
   selectedAsins = [],
+  onSelectedAsinsChange,
   isCollapsed = false,
   onToggleCollapse,
 }: ChatSidebarProps) {
@@ -780,12 +757,7 @@ export default function ChatSidebar({
                         </div>
                       )}
                       
-                      {/* Trust indicator chips - assistant messages only */}
-                      {msg.role === "assistant" && !msg.content.startsWith("Error:") && (
-                        <div className="mt-2 pt-2 border-t border-gray-200">
-                          <SourceChips />
-                        </div>
-                      )}
+                      {/* Trust indicator chips removed (UX requirement) */}
                     </div>
                   </div>
                   
@@ -828,12 +800,7 @@ export default function ChatSidebar({
                     </div>
                   )}
                   
-                  {/* Show chips while streaming (faded) */}
-                  {streamingContent && (
-                    <div className="mt-2 pt-2 border-t border-gray-200 opacity-50">
-                      <SourceChips />
-                    </div>
-                  )}
+                  {/* Trust indicator chips removed (UX requirement) */}
                 </div>
               </div>
             )}
@@ -984,7 +951,27 @@ export default function ChatSidebar({
       {/* INPUT AREA                                                          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div className="px-6 py-4 shrink-0 bg-white border-t border-[#E5E7EB]">
-        <div className="flex gap-2 items-end bg-white border border-gray-300 rounded-xl px-3 py-2 shadow-sm hover:border-gray-400 focus-within:ring-2 focus-within:ring-[#3B82F6] focus-within:border-transparent transition-all">
+        <div className="flex flex-wrap gap-2 items-end bg-white border border-gray-300 rounded-xl px-3 py-2 shadow-sm hover:border-gray-400 focus-within:ring-2 focus-within:ring-[#3B82F6] focus-within:border-transparent transition-all">
+          {/* Selected ASIN chips (chat context) */}
+          {selectedAsins.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 items-center">
+              {selectedAsins.map((asin) => (
+                <button
+                  key={asin}
+                  type="button"
+                  onClick={() => {
+                    if (!onSelectedAsinsChange) return;
+                    onSelectedAsinsChange(selectedAsins.filter((a) => a !== asin));
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-gray-300 bg-white text-[11px] text-gray-800 hover:bg-gray-50"
+                  title="Remove from chat context"
+                >
+                  <span className="font-mono">ASIN {asin}</span>
+                  <span className="text-gray-500">×</span>
+                </button>
+              ))}
+            </div>
+          )}
           <textarea
             ref={inputRef}
             className="flex-1 bg-transparent border-0 rounded-lg px-2 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none overflow-y-auto placeholder:text-gray-400"
@@ -1042,13 +1029,6 @@ export default function ChatSidebar({
             )}
           </button>
         </div>
-        
-        {/* One-time trust disclaimer */}
-        {!isDisabled && (
-          <p className="text-[10px] text-gray-500 mt-2 text-center leading-relaxed px-2">
-            Responses are based on Amazon market data, your seller profile, and this analysis. No live scraping or predictions.
-          </p>
-        )}
       </div>
 
       {/* History Panel - Floating overlay */}

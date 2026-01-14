@@ -28,7 +28,7 @@ interface ProductCardProps {
   imageUrl?: string | null;
   asin?: string | null;
   isSelected?: boolean;
-  onSelect?: () => void;
+  onSelect?: (e: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement>) => void;
 }
 
 export function ProductCard({
@@ -90,11 +90,11 @@ export function ProductCard({
 
   return (
     <div
-      onClick={onSelect}
+      onClick={(e) => onSelect?.(e)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onSelect?.();
+          onSelect?.(e);
         }
       }}
       tabIndex={0}
@@ -105,10 +105,11 @@ export function ProductCard({
         transition-all duration-200 ease-in-out
         flex flex-col
         min-h-[480px]
-        focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2
+        focus:outline-none
+        ${!isSelected ? 'focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2' : 'focus-visible:ring-0'}
         ${isSelected 
           ? 'border-2 border-gray-400 bg-gray-50 shadow-md' 
-          : 'border border-gray-200 shadow-sm hover:shadow-lg hover:border-gray-300 hover:scale-[1.01] hover:-translate-y-0.5'
+          : 'border border-transparent shadow-sm hover:shadow-lg hover:border-gray-300 hover:scale-[1.01] hover:-translate-y-0.5'
         }
       `}
     >
