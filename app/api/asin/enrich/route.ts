@@ -707,7 +707,7 @@ export async function POST(req: NextRequest) {
         credits_charged: 1,
         served_from_cache: false,
         cache_age_seconds: null,
-        signals_used,
+        signals_used: signalsUsed,
         data_timestamp: nowIso(),
         data: undefined,
       };
