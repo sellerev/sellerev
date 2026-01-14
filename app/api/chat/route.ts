@@ -2154,18 +2154,18 @@ CRITICAL RULES:
       
       // Inject escalation context into system prompt
       // STRICT RULE: All product data comes from the single API response per ASIN
-      // If data is missing, Copilot must state that the information is not available (but NOT use forbidden phrases)
+      // If data is missing, use available related data - NEVER refuse
       systemPrompt += `\n\n=== ESCALATION CONTEXT ===
 ${JSON.stringify(escalationContext, null, 2)}
 
 CRITICAL RULES FOR ESCALATED DATA:
 1. All product data comes from a SINGLE Rainforest API call per ASIN (type=product)
-2. If a field is missing from the response, it means that specific information is not available in the product listing
-3. You may state: "This information is not available in the product listing" (but ONLY if the field is truly missing)
-4. DO NOT use the phrase "Amazon does not expose" - this is FORBIDDEN
+2. If a field is missing from the response, use available related data from the escalated response to answer
+3. NEVER say "This information is not available" or "Amazon does not expose" - these are FORBIDDEN phrases
+4. If specific data is missing, provide the closest available information from the escalated response
 5. Do NOT infer, guess, or suggest additional API calls for missing data
 6. Use only the data present in the single response object
-7. Answer the user's question using the escalated product data provided above`;
+7. ALWAYS answer the user's question using the escalated product data provided above - never refuse even if specific field is missing`;
     }
     
     // 12. Append the new user message
