@@ -1967,41 +1967,15 @@ export async function POST(req: NextRequest) {
       console.log("🔵 RAW_LISTINGS_LENGTH_BEFORE_CANONICAL", rawListings.length);
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // ASIN METADATA ENRICHMENT (DECOUPLED FROM SNAPSHOT FINALIZATION)
+      // ASIN METADATA ENRICHMENT (MOVED TO ASYNC/BACKGROUND)
       // ═══════════════════════════════════════════════════════════════════════════
-      // CRITICAL: Enrich metadata BEFORE building canonical products.
-      // This ensures metadata is populated regardless of:
-      // - Snapshot finalization state
-      // - Snapshot estimating state
-      // - Inferred state
-      // - Expected ASIN count
-      // - Mixed category detection
+      // Metadata enrichment is now done asynchronously after Page-1 returns
+      // This allows immediate return without waiting for metadata API calls
+      // Metadata will be populated in background and cached for future use
       // 
-      // Metadata enrichment runs as soon as ASINs are discovered, not gated behind
-      // snapshot finalization. This fixes issues like "food warming mat" where
-      // snapshot never finalizes but ASINs still need metadata.
-      if (rawListings.length > 0) {
-        // 🚨 API SAFETY LIMIT: Use shared counter (already tracks search + BSR calls)
-        const { enrichListingsMetadata } = await import("@/lib/amazon/keywordMarket");
-        rawListings = await enrichListingsMetadata(rawListings, body.input_value, undefined, apiCallCounter);
-        console.log("✅ METADATA_ENRICHMENT_COMPLETE_BEFORE_CANONICAL", {
-          keyword: body.input_value,
-          enriched_listings_count: rawListings.length,
-          sample_listing: rawListings[0] ? {
-            asin: rawListings[0].asin,
-            has_title: !!rawListings[0].title,
-            has_image: !!rawListings[0].image_url,
-            has_rating: rawListings[0].rating !== null,
-            has_reviews: rawListings[0].reviews !== null,
-            has_brand: !!rawListings[0].brand,
-            brand: rawListings[0].brand,
-          } : null,
-          brand_sample: rawListings.slice(0, 5).map((l: any) => ({
-            asin: l.asin,
-            brand: l.brand,
-          })),
-        });
-      }
+      // NOTE: Metadata enrichment is deferred to async/background processing
+      // to ensure Page-1 returns immediately after search + canonicalization
+      // Enrichment will be triggered after TIER1_EARLY_RETURN
       
       if (body.input_type === "keyword") {
         // Keyword analysis: Use permissive canonical builder
@@ -2398,13 +2372,146 @@ export async function POST(req: NextRequest) {
       // ═══════════════════════════════════════════════════════════════════════════
       // If Tier-1 snapshot was built, we can return it immediately
       // This bypasses heavy computations (calibration, full contract building, etc.)
-      // Tier-2 refinement runs asynchronously in background
+      // Tier-2 refinement, BSR enrichment, and metadata enrichment run asynchronously in background
       if (tier1Snapshot && body.input_type === "keyword") {
         console.log("🚀 TIER1_EARLY_RETURN", {
           snapshot_id: tier1Snapshot.snapshot.snapshot_id,
           product_count: tier1Snapshot.snapshot.products.length,
           timestamp: new Date().toISOString(),
         });
+        
+        // ═══════════════════════════════════════════════════════════════════════════
+        // CONFIRM PAGE-1 RETURNS BEFORE ENRICHMENT
+        // ═══════════════════════════════════════════════════════════════════════════
+        console.log("✅ PAGE1_RETURN_BEFORE_ENRICHMENT", {
+          value: true,
+          message: "Page-1 returns immediately after search + canonicalization, before BSR/metadata enrichment",
+          timestamp: new Date().toISOString(),
+        });
+        
+        // ═══════════════════════════════════════════════════════════════════════════
+        // ASYNC ENRICHMENT: BSR + METADATA (NON-BLOCKING)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Trigger BSR and metadata enrichment asynchronously AFTER Tier-1 response
+        // These run in background and do NOT block /api/analyze
+        if (rawListings.length > 0 && keywordMarketData) {
+          // Prepare enrichment context
+          const enrichmentContext = {
+            keyword: body.input_value,
+            marketplace: marketplace as 'US' | 'CA',
+            listings: rawListings,
+            keywordMarketData,
+            supabase,
+            apiCallCounter,
+            snapshotId: tier1Snapshot.snapshot.snapshot_id,
+          };
+          
+          // Fire-and-forget: Do NOT await - let enrichment run in background
+          (async () => {
+            try {
+              // BSR Enrichment (async)
+              const { batchFetchBsrWithBackoff, bulkUpsertBsrCache } = await import("@/lib/amazon/asinBsrCache");
+              const page1Asins = rawListings
+                .filter((l: any) => l.asin)
+                .map((l: any) => l.asin)
+                .slice(0, 4); // Max 4 ASINs for BSR (part of 7-call budget)
+              
+              // Check cache first
+              const { bulkLookupBsrCache } = await import("@/lib/amazon/asinBsrCache");
+              const cacheMap = supabase ? await bulkLookupBsrCache(supabase, page1Asins) : new Map();
+              const missingAsins = page1Asins.filter((asin: string) => !cacheMap.has(asin));
+              
+              if (missingAsins.length > 0) {
+                console.log("🟡 BSR_FETCH_START (ASYNC)", {
+                  keyword: body.input_value,
+                  asins: missingAsins.slice(0, 4),
+                  count: Math.min(missingAsins.length, 4),
+                  timestamp: new Date().toISOString(),
+                });
+                
+                const rainforestApiKey = process.env.RAINFOREST_API_KEY;
+                if (rainforestApiKey) {
+                  const batchData = await batchFetchBsrWithBackoff(
+                    rainforestApiKey,
+                    missingAsins.slice(0, 4), // Max 4 ASINs
+                    body.input_value,
+                    apiCallCounter
+                  );
+                  
+                  if (batchData) {
+                    // Process and cache BSR data (same logic as sync version)
+                    const { extractMainCategoryBSR } = await import("@/lib/amazon/keywordMarket");
+                    let products: any[] = [];
+                    
+                    if (Array.isArray(batchData)) {
+                      products = batchData;
+                    } else if (batchData.products && Array.isArray(batchData.products)) {
+                      products = batchData.products;
+                    } else if (batchData.product) {
+                      products = Array.isArray(batchData.product) ? batchData.product : [batchData.product];
+                    } else if (batchData.asin || batchData.title) {
+                      products = [batchData];
+                    }
+                    
+                    const freshEntries = products.map((product: any) => {
+                      const productObj = product?.product || product;
+                      const asin = productObj?.asin || product?.asin;
+                      if (!asin) return null;
+                      
+                      const bsrData = extractMainCategoryBSR(productObj || product);
+                      return {
+                        asin,
+                        main_category: bsrData?.category || null,
+                        main_category_bsr: bsrData?.rank || null,
+                        price: productObj?.price?.value || productObj?.price?.raw || productObj?.price || product?.price || null,
+                        brand: productObj?.brand || productObj?.by_line?.name || product?.brand || null,
+                      };
+                    }).filter((e: any): e is any => e !== null && e.asin);
+                    
+                    if (freshEntries.length > 0 && supabase) {
+                      await bulkUpsertBsrCache(supabase, freshEntries);
+                    }
+                    
+                    console.log("✅ BSR_ENRICHMENT_COMPLETE (ASYNC)", {
+                      keyword: body.input_value,
+                      enriched_count: freshEntries.length,
+                      timestamp: new Date().toISOString(),
+                    });
+                  }
+                }
+              }
+              
+              // Metadata Enrichment (async)
+              console.log("🔵 METADATA_ENRICHMENT_FETCH_START (ASYNC)", {
+                keyword: body.input_value,
+                listings_count: rawListings.length,
+                timestamp: new Date().toISOString(),
+              });
+              
+              const { enrichListingsMetadata } = await import("@/lib/amazon/keywordMarket");
+              const enrichedListings = await enrichListingsMetadata(
+                rawListings,
+                body.input_value,
+                undefined,
+                apiCallCounter
+              );
+              
+              console.log("✅ METADATA_ENRICHMENT_COMPLETE (ASYNC)", {
+                keyword: body.input_value,
+                enriched_listings_count: enrichedListings.length,
+                timestamp: new Date().toISOString(),
+              });
+              
+            } catch (enrichmentError) {
+              console.error("❌ ASYNC_ENRICHMENT_ERROR", {
+                keyword: body.input_value,
+                error: enrichmentError instanceof Error ? enrichmentError.message : String(enrichmentError),
+                timestamp: new Date().toISOString(),
+              });
+              // Fail silently - Page-1 data is still usable without enrichment
+            }
+          })();
+        }
         
         // Save analysis run immediately so chat can work (even with Tier-1 data)
         // Build minimal response object for analysis_runs table

@@ -46,6 +46,8 @@ export interface KeywordMarketSnapshot {
   total_page1_listings: number; // Only Page 1 listings
   sponsored_count: number;
   dominance_score: number; // 0-100, % of listings belonging to top brand
+  total_page1_brands?: number; // Total distinct brands on Page-1 (includes "Unknown")
+  top_brands_by_frequency?: Array<{ brand: string; count: number }>; // Top brands by listing count
   fulfillment_mix: {
     fba: number; // % of listings fulfilled by Amazon (FBA)
     fbm: number; // % of listings merchant fulfilled (FBM)
@@ -743,25 +745,27 @@ function normalizeBrand(brand: string): string {
 /**
  * Resolves brand from search results ONLY (low-cost, Helium-10 style)
  * 
- * ALLOWED SOURCES (ONLY):
+ * ALLOWED SOURCES (SEARCH RESULTS ONLY - NO API CALLS):
  * - item.brand (search result brand field)
+ * - item.brand_name (search result brand_name field)
+ * - item.seller (seller name as brand fallback)
  * - item.is_amazon_brand
  * - item.is_exclusive_to_amazon
  * - item.featured_from_our_brands
+ * - Fallback: inferred from title prefix (first 1-3 capitalized words)
  * 
  * NOT ALLOWED:
- * - Title extraction
- * - Manufacturer
- * - Product API by default
- * - Seller name inference
+ * - Product API calls (type=product)
+ * - High confidence requirement
+ * - Dropping "Unknown" brands for counting
  */
 function resolveBrandFromSearchResult(
   item: any
 ): { 
   brand_display: string | null;
   brand_entity: string | 'Amazon' | 'Unknown';
-  brand_confidence: 'high' | 'medium' | 'none';
-  brand_source: 'search' | 'amazon_flag' | 'unknown';
+  brand_confidence: 'high' | 'medium' | 'low' | 'none';
+  brand_source: 'search' | 'brand_name' | 'seller' | 'title' | 'amazon_flag' | 'unknown';
 } {
   // Priority 1: Amazon brand flags
   if (item.is_amazon_brand === true || 
@@ -786,7 +790,48 @@ function resolveBrandFromSearchResult(
     };
   }
   
-  // Priority 3: Unknown (no brand found)
+  // Priority 3: search_result.brand_name field
+  if (item.brand_name && typeof item.brand_name === 'string' && item.brand_name.trim().length > 0) {
+    const normalized = normalizeBrand(item.brand_name.trim());
+    return {
+      brand_display: item.brand_name.trim(), // Keep original for display
+      brand_entity: normalized,
+      brand_confidence: 'medium',
+      brand_source: 'brand_name'
+    };
+  }
+  
+  // Priority 4: seller name (as brand fallback)
+  if (item.seller && typeof item.seller === 'string' && item.seller.trim().length > 0) {
+    const sellerName = item.seller.trim();
+    // Skip if seller is clearly not a brand (e.g., "Amazon.com", "Fulfilled by Amazon")
+    if (!sellerName.toLowerCase().includes('amazon') && 
+        !sellerName.toLowerCase().includes('fulfilled')) {
+      const normalized = normalizeBrand(sellerName);
+      return {
+        brand_display: sellerName, // Keep original for display
+        brand_entity: normalized,
+        brand_confidence: 'low',
+        brand_source: 'seller'
+      };
+    }
+  }
+  
+  // Priority 5: Infer from title prefix (first 1-3 capitalized words)
+  if (item.title && typeof item.title === 'string' && item.title.trim().length > 0) {
+    const inferredBrand = extractBrandFromTitle(item.title);
+    if (inferredBrand) {
+      const normalized = normalizeBrand(inferredBrand);
+      return {
+        brand_display: inferredBrand, // Keep original for display
+        brand_entity: normalized,
+        brand_confidence: 'low',
+        brand_source: 'title'
+      };
+    }
+  }
+  
+  // Priority 6: Unknown (no brand found)
   return {
     brand_display: null,
     brand_entity: 'Unknown',
@@ -1510,16 +1555,15 @@ export async function fetchKeywordMarketSnapshot(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 🚨 COST OPTIMIZATION: BSR ENRICHMENT HARD CAP (MAX 5 ASINs)
+    // 🚨 BSR ENRICHMENT MOVED TO ASYNC/BACKGROUND (SKIP FOR IMMEDIATE RETURN)
     // ═══════════════════════════════════════════════════════════════════════════
-    // CRITICAL: Only fetch BSR for top 5 ASINs to reduce API costs by 80%+
-    // Rules:
-    // - Prefer top-ranked listings (positions 1-5)
-    // - Skip if already cached
-    // - Stop immediately on failure (no retry)
-    const MAX_BSR_ASINS = 5;
+    // BSR enrichment is now done asynchronously after Page-1 returns
+    // This allows immediate return without waiting for BSR API calls
+    // BSR data will be populated in background and cached for future use
+    const MAX_BSR_ASINS = 4; // Updated to match 7-call budget (max 4 BSR calls)
     
     // Get top-ranked ASINs that need BSR (prioritize by position)
+    // NOTE: This is prepared but NOT executed here - will be done async
     const asinsForBSR = searchResults
       .slice(0, MAX_BSR_ASINS * 2) // Check more to account for duplicates/cached
       .map((item: any) => item.asin)
@@ -1529,30 +1573,27 @@ export async function fetchKeywordMarketSnapshot(
         missingAsins.includes(asin) &&
         !cacheMap.has(asin) // Skip if already cached
       )
-      .slice(0, MAX_BSR_ASINS); // Hard cap at 5
+      .slice(0, MAX_BSR_ASINS); // Hard cap at 4
 
-    // Then, batch fetch missing ASINs if any (HARD CAP: max 5)
+    // SKIP BSR FETCH HERE - Will be done async after Page-1 returns
+    // This allows immediate return without waiting for BSR API calls
     if (asinsForBSR.length > 0) {
-      console.log("BSR_BATCH_FETCH_ASINS", {
+      console.log("BSR_ENRICHMENT_DEFERRED_TO_ASYNC", {
         keyword,
         missing_asins: asinsForBSR,
         asin_count: asinsForBSR.length,
         total_missing: missingAsins.length,
-        message: `Fetching top ${asinsForBSR.length} ASINs for BSR (HARD CAP: max 5)`,
+        message: `BSR enrichment will be done async after Page-1 returns (HARD CAP: max 4)`,
       });
+    }
 
-      try {
-        // Use batch fetch with exponential backoff and deduplication
-        // 🚨 API SAFETY LIMIT: Use shared counter (search already counted)
-        const { batchFetchBsrWithBackoff } = await import("./asinBsrCache");
-        const batchData = await batchFetchBsrWithBackoff(
-          rainforestApiKey,
-          asinsForBSR, // Only fetch top 5
-          keyword,
-          apiCallCounter // Pass shared counter
-        );
+    // SKIP BSR FETCH - Return immediately with cached BSR data only
+    // BSR enrichment will be triggered async after Page-1 returns
+    const batchData = null; // Skip synchronous BSR fetch
 
-        if (batchData) {
+    // The following block is skipped when batchData is null (async BSR enrichment)
+    // BSR enrichment will happen in background after Page-1 returns
+    if (false && batchData) { // Explicitly skip this block - BSR done async
           
           // Rainforest batch response: comma-separated ASINs may return:
           // - Array of product objects
@@ -2041,22 +2082,45 @@ export async function fetchKeywordMarketSnapshot(
       ? computeFulfillmentMix(listings)
       : { fba: 0, fbm: 0, amazon: 0 };
 
-    // Top brands (count occurrences by brand if available) - Page 1 only
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BRAND COUNTING (SEARCH RESULTS ONLY - NO API CALLS)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Count distinct brands including "Unknown" for accurate brand diversity metrics
+    // Uses normalized brand entities (lowercase, trimmed) for deduplication
     const brandCounts: Record<string, number> = {};
+    const brandEntityMap = new Map<string, string>(); // Map normalized entity -> display name
+    
     listings.forEach((l) => {
-      if (l.brand) {
-        brandCounts[l.brand] = (brandCounts[l.brand] || 0) + 1;
+      // Get brand entity (normalized) - includes "Unknown" for missing brands
+      const brandEntity = l.brand ? normalizeBrand(l.brand) : 'Unknown';
+      const brandDisplay = l.brand || 'Unknown';
+      
+      // Count by normalized entity (deduplicates variations)
+      brandCounts[brandEntity] = (brandCounts[brandEntity] || 0) + 1;
+      
+      // Store display name for first occurrence of each entity
+      if (!brandEntityMap.has(brandEntity)) {
+        brandEntityMap.set(brandEntity, brandDisplay);
       }
     });
 
+    // Build top brands list with display names
     const top_brands = Object.entries(brandCounts)
-      .map(([brand, count]) => ({ brand, count }))
+      .map(([brandEntity, count]) => ({ 
+        brand: brandEntityMap.get(brandEntity) || brandEntity, // Use display name if available
+        count 
+      }))
       .sort((a, b) => b.count - a.count);
 
+    // Total distinct brands (includes "Unknown" if present)
+    const total_page1_brands = Object.keys(brandCounts).length;
+
     // Page 1 dominance score: % of Page 1 listings belonging to top brand (0-100)
+    // Exclude "Unknown" from dominance calculation (only count known brands)
+    const topKnownBrand = top_brands.find(b => b.brand !== 'Unknown');
     const dominance_score =
-      top_brands.length > 0 && total_page1_listings > 0
-        ? Math.round((top_brands[0].count / total_page1_listings) * 100)
+      topKnownBrand && total_page1_listings > 0
+        ? Math.round((topKnownBrand.count / total_page1_listings) * 100)
         : 0;
 
     // Compute PPC indicators
@@ -2089,6 +2153,8 @@ export async function fetchKeywordMarketSnapshot(
       total_page1_listings,
       sponsored_count,
       dominance_score,
+      total_page1_brands, // Total distinct brands (includes "Unknown")
+      top_brands_by_frequency: top_brands.slice(0, 10), // Top 10 brands by frequency
       fulfillment_mix: fulfillmentMix, // Always an object now (never null when listings exist)
       ppc: ppcIndicators,
     };

@@ -1233,10 +1233,10 @@ export default function AnalyzeForm({
                       }
                     }
                     
-                    // Brand stats from snapshot (Phase 3: use brand_stats instead of computing from listings)
-                    const brandStats = (snapshot as any)?.brand_stats;
-                    const page1BrandCount = brandStats?.page1_brand_count ?? null;
-                    const top5BrandSharePct = brandStats?.top_5_brand_share_pct ?? null;
+                    // Brand count from snapshot (search results only - no API calls)
+                    // Use total_page1_brands from snapshot (includes "Unknown" brands for accurate counting)
+                    const page1BrandCount = (snapshot as any)?.total_page1_brands ?? null;
+                    const top5BrandSharePct = (snapshot as any)?.top_5_brand_revenue_share_pct ?? null;
                     
                     // Search Volume
                     let searchVolume: string = "Estimating…";
@@ -1303,7 +1303,9 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Page-1 Brands</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {page1BrandCount !== null ? page1BrandCount : "—"}
+                              {page1BrandCount !== null 
+                                ? `Page-1 contains ${page1BrandCount} ${page1BrandCount === 1 ? 'brand' : 'brands'}`
+                                : "—"}
                             </div>
                           </div>
                           
