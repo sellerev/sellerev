@@ -686,7 +686,7 @@ export async function POST(req: NextRequest) {
       confidence = "medium";
     } else {
       // No guessing: return insufficient, but still refresh caches in background for next click
-      return {
+      const payload: EnrichResponse = {
         success: true,
         status: "insufficient_data",
         credits_charged: 1,
@@ -694,7 +694,9 @@ export async function POST(req: NextRequest) {
         cache_age_seconds: null,
         signals_used: signalsUsed,
         data_timestamp: nowIso(),
+        data: undefined,
       };
+      return NextResponse.json(payload, { headers: res.headers });
     }
 
     // Ensure we have a consistent range for downstream storage
