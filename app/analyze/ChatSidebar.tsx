@@ -576,11 +576,19 @@ export default function ChatSidebar({
         });
         const data = await response.json().catch(() => null);
         const source = typeof data?.source === "string" ? data.source : null;
+        const reason = typeof data?.reason === "string" ? data.reason : null;
+        const missingEnv = Array.isArray(data?.missing_env) ? (data.missing_env as string[]) : [];
         const fulfillmentFee =
           typeof data?.fulfillment_fee === "number" ? data.fulfillment_fee : null;
         const referralFee = typeof data?.referral_fee === "number" ? data.referral_fee : null;
 
         if (source !== "sp_api" || fulfillmentFee === null || referralFee === null) {
+          if (reason === "sp_api_not_configured" && missingEnv.length > 0) {
+            console.warn("[FBA_FEES_QUOTE_NOT_CONFIGURED]", { missingEnv });
+            appendAssistantMessage(
+              `I can’t retrieve an exact fee quote because the Seller API credentials are not configured in this environment.\n\nMissing: \`${missingEnv.join("`, `")}\``
+            );
+          }
           return null;
         }
 
