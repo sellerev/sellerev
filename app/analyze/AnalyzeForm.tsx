@@ -2180,7 +2180,12 @@ export default function AnalyzeForm({
             analysisMode={analysisMode}
             selectedListing={selectedListing ? {
               ...selectedListing,
-              // Include enriched data if available for this ASIN
+              // Normalize fields expected by chat backend (legacy compatibility)
+              // Chat backend expects `reviews`, but our canonical listings use `review_count`.
+              reviews: (selectedListing as any).reviews ?? (selectedListing as any).review_count ?? null,
+              // Ensure page-1 estimate fields are present for immediate answers without escalation
+              estimated_monthly_units: (selectedListing as any).estimated_monthly_units ?? null,
+              estimated_monthly_revenue: (selectedListing as any).estimated_monthly_revenue ?? null,
             } : null}
             selectedAsins={selectedAsins} // Single source of truth - ChatSidebar should use this
             onSelectedAsinsChange={setSelectedAsins}

@@ -958,9 +958,8 @@ function validateResponseForHallucination(
     /\bcvr\b/i,
     /\bconversion rate\b/i,
     /\bsales velocity\b/i,
+    // NOTE: We allow "estimated monthly units/revenue" elsewhere; numeric tripwire guards hallucinations.
     /\bunits per day\b/i,
-    /\bunits per month\b/i,
-    /\bmonthly sales\b/i,
     /\bdaily sales\b/i,
   ];
   
@@ -1038,6 +1037,23 @@ function validateResponseForHallucination(
   return { isValid: true };
 }
 
+function addNumbersFromUnknown(value: unknown, out: Set<number>, depth = 0) {
+  if (depth > 4) return;
+  if (typeof value === "number" && !isNaN(value) && value > 0) {
+    out.add(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const v of value) addNumbersFromUnknown(v, out, depth + 1);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const v of Object.values(value as Record<string, unknown>)) {
+      addNumbersFromUnknown(v, out, depth + 1);
+    }
+  }
+}
+
 /**
  * Extracts allowed numbers from context data
  * 
@@ -1083,6 +1099,20 @@ function extractAllowedNumbers(
       if (typeof fbaFees.total_fee === 'number') allowed.add(fbaFees.total_fee);
       if (typeof fbaFees.fulfillment_fee === 'number') allowed.add(fbaFees.fulfillment_fee);
       if (typeof fbaFees.referral_fee === 'number') allowed.add(fbaFees.referral_fee);
+    }
+  }
+
+  // Extract from Page-1 products (allows grounded per-product answers without triggering tripwire)
+  const products = (analysisResponse.products as any[]) || (analysisResponse.page_one_listings as any[]) || [];
+  for (const p of products) {
+    if (p && typeof p === "object") {
+      if (typeof p.price === "number") allowed.add(p.price);
+      if (typeof p.rating === "number") allowed.add(p.rating);
+      if (typeof p.review_count === "number") allowed.add(p.review_count);
+      if (typeof p.reviews === "number") allowed.add(p.reviews); // legacy
+      if (typeof p.bsr === "number") allowed.add(p.bsr);
+      if (typeof p.estimated_monthly_units === "number") allowed.add(p.estimated_monthly_units);
+      if (typeof p.estimated_monthly_revenue === "number") allowed.add(p.estimated_monthly_revenue);
     }
   }
   
@@ -2180,7 +2210,8 @@ CRITICAL RULES FOR ESCALATED DATA:
 4. If specific data is missing, provide the closest available information from the escalated response
 5. Do NOT infer, guess, or suggest additional API calls for missing data
 6. Use only the data present in the single response object
-7. ALWAYS answer the user's question using the escalated product data provided above - never refuse even if specific field is missing`;
+7. ALWAYS answer the user's question using the escalated product data provided above - never refuse even if specific field is missing
+8. You MUST explicitly reference at least 2 concrete fields from the escalated product payload(s) (e.g., price, rating, reviews_total, bsr, bought_last_month) when answering. If the payload lacks usable fields, say so explicitly and state what was missing.`;
     }
     
     // 12. Append the new user message
@@ -2441,6 +2472,15 @@ CRITICAL RULES FOR ESCALATED DATA:
               marketSnapshot,
               sellerProfile
             );
+
+            // If escalation ran, allow numbers from escalated product payloads (prevents false hallucination tripwires)
+            if (escalationResults && escalationResults.success) {
+              for (const asin of escalationDecision.required_asins) {
+                if (escalationResults.productData.has(asin)) {
+                  addNumbersFromUnknown(escalationResults.productData.get(asin), allowedNumbers);
+                }
+              }
+            }
             
             // Extract allowed metrics (currently none - we don't support ACOS, TACOS, etc.)
             const allowedMetrics = new Set<string>();

@@ -461,6 +461,7 @@ export default function ChatSidebar({
 
       const decoder = new TextDecoder();
       let accumulatedContent = "";
+      let citationsForFinal: Citation[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -507,7 +508,9 @@ export default function ChatSidebar({
                   setCopilotStatus("analyzing");
                 } else if (json.metadata.type === "citations") {
                   // Store citations for the current message
-                  setCurrentCitations(json.metadata.citations || []);
+                  const cits = (json.metadata.citations || []) as Citation[];
+                  citationsForFinal = cits;
+                  setCurrentCitations(cits);
                 }
               }
               
@@ -534,7 +537,7 @@ export default function ChatSidebar({
         const assistantMessage: ChatMessage = {
           role: "assistant",
           content: accumulatedContent,
-          citations: currentCitations.length > 0 ? currentCitations : undefined,
+          citations: citationsForFinal.length > 0 ? citationsForFinal : undefined,
         };
         setMessages((prev) => [...prev, assistantMessage]);
         // Clear citations for next message
@@ -558,7 +561,7 @@ export default function ChatSidebar({
       // Focus input after send
       inputRef.current?.focus();
     }
-  }, [analysisRunId, input, onMarginSnapshotUpdate]);
+  }, [analysisRunId, input, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Use effectiveId for UI enabling, but chat API still needs analysisRunId
@@ -970,6 +973,10 @@ export default function ChatSidebar({
               ))}
             </div>
           )}
+          {/* Lightweight context hint (Cursor-style) */}
+          <div className="text-[11px] text-gray-500 px-1">
+            {selectedAsins.length > 0 ? "Using: selected products" : "Using: Page-1 snapshot"}
+          </div>
           <textarea
             ref={inputRef}
             className="flex-1 bg-transparent border-0 rounded-lg px-2 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none overflow-y-auto placeholder:text-gray-400"
