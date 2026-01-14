@@ -688,9 +688,11 @@ export default function ChatSidebar({
           return true;
         }
 
+        const priceToUse: number = nextPrice;
+
         // 4) Confirmation gate
         appendAssistantMessage(
-          `Perfect. I’m ready to run the **exact FBA fee calculation** for this ASIN using Amazon’s **Seller API** with:\n- COGS: **${formatMoney(nextCogs)}**\n- Shipping to Amazon: **${formatMoney(nextShipIn)}**\n- Selling price: **${formatMoney(nextPrice)}**\n\n**Do you want me to run it now?** Reply **Yes** to proceed or **No** to change inputs.`
+          `Perfect. I’m ready to run the **exact FBA fee calculation** for this ASIN using Amazon’s **Seller API** with:\n- COGS: **${formatMoney(nextCogs)}**\n- Shipping to Amazon: **${formatMoney(nextShipIn)}**\n- Selling price: **${formatMoney(priceToUse)}**\n\n**Do you want me to run it now?** Reply **Yes** to proceed or **No** to change inputs.`
         );
 
         setFeesFlow({
@@ -699,7 +701,7 @@ export default function ChatSidebar({
           prefilledPrice: feesFlow.prefilledPrice,
           cogs: nextCogs,
           shipIn: nextShipIn,
-          price: nextPrice,
+          price: priceToUse,
         });
         return true;
       }
