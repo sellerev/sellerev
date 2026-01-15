@@ -2387,6 +2387,30 @@ export async function POST(req: NextRequest) {
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // 🛡️ DECISION FALLBACK GUARD
+    // ═══════════════════════════════════════════════════════════════════════════
+    // If market data exists but async decision brain has not returned yet,
+    // inject a safe INSIGHT_ONLY decision so the UI never errors.
+    if (
+      contractResponse &&
+      contractResponse.has_products === true &&
+      (!contractResponse.decision || Object.keys(contractResponse.decision).length === 0)
+    ) {
+      contractResponse.decision = {
+        status: 'INSIGHT_ONLY',
+        decision_available: false,
+        reason: 'Decision intentionally deferred or not required for this analysis',
+        confidence_level: contractResponse.confidence_level ?? 'unknown',
+        ui_message: 'Market data is ready. Strategic decision is intentionally omitted for this analysis.',
+      };
+      console.info('🟡 DECISION_FALLBACK_INJECTED', {
+        keyword: body.input_value,
+        analysis_run_id: insertedRun?.id,
+        reason: 'Async decision not yet returned',
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // STEP 5: Trigger async AI processing (fire-and-forget)
     // ═══════════════════════════════════════════════════════════════════════════
     if (insertedRun?.id) {
@@ -2431,8 +2455,8 @@ export async function POST(req: NextRequest) {
         products: canonicalProducts,
         aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
         ...(contractResponse ? contractResponse : {}),
-        // AI decision will be null initially, frontend should poll or use websocket
-        decision: null,
+        // Decision is set by fallback guard above if async AI hasn't returned yet
+        // If contractResponse has decision, it's already spread above; otherwise it will be null
         message: "Listings loaded. AI insights processing...",
       },
       { 
