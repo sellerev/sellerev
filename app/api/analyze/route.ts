@@ -2442,32 +2442,36 @@ export async function POST(req: NextRequest) {
         headers: res.headers,
       }
     );
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // OLD AI PROCESSING CODE BELOW - MOVED TO asyncAiProcessing.ts
-    // ═══════════════════════════════════════════════════════════════════════════
-    // This code is kept for reference but should not execute
-    // AI processing now happens asynchronously via processAiAsync()
+  } catch (err) {
+    // TASK 2: Classify error - processing_error vs other errors
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const isProcessingError = errorMessage.includes("Processing error") && errorMessage.includes("extracted");
     
-    /* DISABLED - MOVED TO ASYNC
-    console.log("AI_TWO_PASS_START");
-
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-    if (!openaiApiKey) {
-      return NextResponse.json(
-        { success: false, error: "OpenAI API key not configured" },
-        { status: 500, headers: res.headers }
-      );
-    }
-
-    // ============================================================================
-    // PASS 1: Decision Brain - Plain text verdict and reasoning
-    // ============================================================================
+    console.error("ANALYZE_ERROR", {
+      error: err,
+      message: errorMessage,
+      stack: err instanceof Error ? err.stack : undefined,
+      name: err instanceof Error ? err.name : undefined,
+      error_type: isProcessingError ? "processing_error" : "internal_error",
+    });
     
-    // Build PASS 1 system prompt with ai_context
-    let decisionBrainPrompt = DECISION_BRAIN_PROMPT;
-    if (contractResponse && contractResponse.ai_context) {
-      const aiContextSection = `
+    // TASK 2: Return proper error classification
+    return NextResponse.json(
+      {
+        success: false,
+        status: "error",
+        error: "Internal analyze error",
+        details: errorMessage,
+        data_quality: {
+          rainforest: isProcessingError ? "processing_error" : "error",
+          reason: isProcessingError ? "processing_error" : "internal_error",
+          fallback_used: false,
+        },
+      },
+      { status: 500, headers: res.headers }
+    );
+  }
+}
 
 MARKET DATA CONTEXT (READ-ONLY):
 
