@@ -234,7 +234,15 @@ export async function processKeyword(
     }
 
     // STEP 2: SP-API Batch Enrichment (parallel, non-blocking)
-    // Check cache for existing metadata (7-day TTL)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: SP-API Catalog MUST be called for ALL page-1 ASINs
+    // ═══════════════════════════════════════════════════════════════════════════
+    // - NO filtering based on missing_title, missing_image, missing_brand, missing_rating, missing_reviews
+    // - NO conditional gates (listings_needing_enrichment.length === 0)
+    // - SP-API runs even if cache is fresh or Rainforest has all fields
+    // - SP-API is authoritative: brand, brand_name, product_type, sales_rank, item_classification
+    
+    // Check cache for existing metadata (7-day TTL) - for fallback only, NOT to skip SP-API
     const metadataCache = new Map<string, {
       title: string | null;
       brand: string | null;
@@ -275,19 +283,22 @@ export async function processKeyword(
       }
     }
 
-    // STEP 2: SP-API Batch Enrichment (parallel calls: Catalog Items + Pricing)
-    // CRITICAL: Force SP-API enrichment for ALL page-1 ASINs (not just those needing enrichment)
-    // SP-API is authoritative, so we always enrich regardless of cache or Rainforest hints
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FORCE SP-API CATALOG FOR ALL PAGE-1 ASINs (MANDATORY)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NO conditional gates - SP-API runs for ALL ASINs regardless of:
+    // - Cache state (fresh or stale)
+    // - Rainforest completeness (title/image/rating/reviews present)
+    // - Missing metadata flags
     const asinsForSpApi = page1Asins;
 
     const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER'; // Default to US
     
-    // Log that SP-API enrichment is being forced for ALL ASINs
-    console.log('SP_API_CATALOG_ENRICHMENT_FORCED', {
+    // REQUIRED LOG: SP_API_CATALOG_FORCED_START
+    console.log('SP_API_CATALOG_FORCED_START', {
       keyword,
       total_asins: asinsForSpApi.length,
       marketplace_id: marketplaceId,
-      reason: 'SP-API is authoritative source for brand, title, image, category, and BSR',
       timestamp: new Date().toISOString(),
     });
     
@@ -320,83 +331,107 @@ export async function processKeyword(
       buy_box_price: number | null;
     }>();
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FORCE BATCHED SP-API CATALOG CALLS (MANDATORY)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // - Batch size: 20 ASINs max per call
+    // - If <20 ASINs → 1 call
+    // - If 48 ASINs → 3 calls (20, 20, 8)
+    // - Marketplace: ATVPDKIKX0DER
+    // - NO conditional gates - always executes
+    
     // Execute Catalog Items and Pricing API calls in parallel
-    const catalogPromise = asinsForSpApi.length > 0
-      ? (async () => {
-          try {
-            const catalogStart = Date.now();
-            const enrichmentResult = await batchEnrichCatalogItems(
-              asinsForSpApi,
-              marketplaceId,
-              2000 // 2 second timeout per batch
-            );
-            const catalogDuration = Date.now() - catalogStart;
+    // CRITICAL: This promise MUST execute for ALL ASINs, no conditional gates
+    const catalogPromise = (async () => {
+      try {
+        const catalogStart = Date.now();
+        
+        // Calculate batches for logging
+        const totalBatches = Math.ceil(asinsForSpApi.length / 20);
+        const batchSizes: number[] = [];
+        for (let i = 0; i < asinsForSpApi.length; i += 20) {
+          const batchSize = Math.min(20, asinsForSpApi.length - i);
+          batchSizes.push(batchSize);
+          
+          // REQUIRED LOG: SP_API_CATALOG_BATCH (per batch)
+          const batchAsins = asinsForSpApi.slice(i, i + 20);
+          console.log('SP_API_CATALOG_BATCH', {
+            keyword,
+            batch_index: Math.floor(i / 20),
+            total_batches: totalBatches,
+            asins: batchAsins,
+            asin_count: batchSize,
+            timestamp: new Date().toISOString(),
+          });
+        }
+        
+        const enrichmentResult = await batchEnrichCatalogItems(
+          asinsForSpApi,
+          marketplaceId,
+          2000 // 2 second timeout per batch
+        );
+        const catalogDuration = Date.now() - catalogStart;
 
-            // Calculate batch sizes for logging
-            const totalBatches = Math.ceil(asinsForSpApi.length / 20);
-            const batchSizes: number[] = [];
-            for (let i = 0; i < asinsForSpApi.length; i += 20) {
-              batchSizes.push(Math.min(20, asinsForSpApi.length - i));
-            }
+        // Convert enrichment result to map (SP-API is authoritative)
+        for (const [asin, metadata] of enrichmentResult.enriched.entries()) {
+          spApiCatalogEnrichment.set(asin, {
+            title: metadata.title,
+            brand: metadata.brand,
+            image_url: metadata.image_url,
+            category: metadata.category,
+            bsr: metadata.bsr,
+            source: 'sp_api',
+          });
+        }
 
-            // Convert enrichment result to map (SP-API is authoritative)
-            for (const [asin, metadata] of enrichmentResult.enriched.entries()) {
-              spApiCatalogEnrichment.set(asin, {
-                title: metadata.title,
-                brand: metadata.brand,
-                image_url: metadata.image_url,
-                category: metadata.category,
-                bsr: metadata.bsr,
-                source: 'sp_api',
-              });
-            }
+        // Calculate successful vs failed batches
+        const enrichedCount = enrichmentResult.enriched.size;
+        const failedCount = enrichmentResult.failed.length;
+        const successRate = asinsForSpApi.length > 0 ? enrichedCount / asinsForSpApi.length : 0;
+        const successfulBatches = successRate === 1 
+          ? totalBatches 
+          : successRate === 0 
+            ? 0 
+            : Math.max(1, Math.round(totalBatches * successRate));
+        const failedBatches = totalBatches - successfulBatches;
 
-            // Calculate successful vs failed API calls (batch-level)
-            // A batch is successful if all its ASINs were enriched, failed if all failed, partial if mixed
-            // For simplicity: successful_calls = batches where at least one ASIN succeeded
-            // failed_calls = batches where all ASINs failed
-            // Estimate: if all ASINs enriched, all batches succeeded; if all failed, all batches failed
-            // Otherwise, estimate based on success rate
-            const enrichedCount = enrichmentResult.enriched.size;
-            const failedCount = enrichmentResult.failed.length;
-            const successRate = enrichedCount / asinsForSpApi.length;
-            const successfulCalls = successRate === 1 
-              ? totalBatches 
-              : successRate === 0 
-                ? 0 
-                : Math.max(1, Math.round(totalBatches * successRate));
-            const failedCalls = totalBatches - successfulCalls;
+        // REQUIRED LOG: SP_API_CATALOG_COMPLETE
+        console.log('SP_API_CATALOG_COMPLETE', {
+          keyword,
+          total_asins: asinsForSpApi.length,
+          total_batches: totalBatches,
+          successful_batches: successfulBatches,
+          failed_batches: failedBatches,
+          enriched_count: enrichedCount,
+          failed_count: failedCount,
+          duration_ms: catalogDuration,
+          timestamp: new Date().toISOString(),
+        });
 
-            // Emit verification log with all required fields
-            console.log('SP_API_CATALOG_BATCH_COMPLETE', {
-              keyword,
-              total_asins: asinsForSpApi.length,
-              total_batches: totalBatches,
-              batch_sizes: batchSizes,
-              successful_calls: successfulCalls,
-              failed_calls: failedCalls,
-              enriched_count: enrichedCount,
-              failed_count: failedCount,
-              duration_ms: catalogDuration,
-              timestamp: new Date().toISOString(),
-            });
+        // VERIFICATION: Ensure SP-API was actually called
+        if (totalBatches === 0) {
+          console.error('SP_API_CATALOG_NOT_CALLED — THIS IS A BUG', {
+            keyword,
+            total_asins: asinsForSpApi.length,
+            reason: 'No batches created despite having ASINs',
+          });
+        }
 
-            if (enrichmentResult.failed.length > 0) {
-              console.warn('SP_API_CATALOG_CALL_PARTIAL_FAILURE', {
-                keyword,
-                failed_count: enrichmentResult.failed.length,
-                total_count: asinsForSpApi.length,
-              });
-            }
-          } catch (error) {
-            console.error('SP_API_CATALOG_CALL_ERROR', {
-              keyword,
-              error: error instanceof Error ? error.message : String(error),
-            });
-            // Continue without Catalog Items data - will use Rainforest hints as fallback
-          }
-        })()
-      : Promise.resolve();
+        if (enrichmentResult.failed.length > 0) {
+          console.warn('SP_API_CATALOG_CALL_PARTIAL_FAILURE', {
+            keyword,
+            failed_count: enrichmentResult.failed.length,
+            total_count: asinsForSpApi.length,
+          });
+        }
+      } catch (error) {
+        console.error('SP_API_CATALOG_CALL_ERROR', {
+          keyword,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // Continue without Catalog Items data - will use Rainforest hints as fallback
+      }
+    })();
 
     const pricingPromise = asinsForSpApi.length > 0
       ? (async () => {
@@ -572,17 +607,24 @@ export async function processKeyword(
         titleSource = 'model_inferred';
       }
 
-      // Brand: SP-API → Cache → Canonical (model inferred) - NEVER from Rainforest
+      // ═══════════════════════════════════════════════════════════════════════════
+      // AUTHORITATIVE MERGE: Brand (SP-API overwrites, title parsing disabled if SP-API exists)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SP-API Catalog overwrites: brand, brand_name
+      // Title-based brand parsing MUST NOT run if SP-API brand exists
       let finalBrand: string | null = null;
       let brandSource: 'sp_api_catalog' | 'model_inferred' | null = null;
       if (catalogEnriched?.brand) {
+        // SP-API brand is authoritative - use it and skip title parsing
         finalBrand = catalogEnriched.brand;
         brandSource = 'sp_api_catalog';
       } else if (cached?.brand) {
+        // Cached brand from previous SP-API call - still authoritative
         finalBrand = cached.brand;
-        brandSource = 'sp_api_catalog'; // Cached from previous SP-API call
+        brandSource = 'sp_api_catalog';
       } else if (canonical.brand) {
-        // Brand from canonical builder (likely inferred from title)
+        // Only use title-based brand parsing if SP-API brand is missing
+        // This is a fallback, not authoritative
         finalBrand = canonical.brand;
         brandSource = 'model_inferred';
       }
@@ -608,7 +650,10 @@ export async function processKeyword(
         imageSource = null; // No source if from canonical but kill-switch is ON
       }
 
-      // Category: SP-API only (no Rainforest fallback, no kill-switch needed)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // AUTHORITATIVE MERGE: Category (SP-API overwrites)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SP-API Catalog overwrites: product_type (category)
       let finalCategory: string | null = null;
       let categorySource: 'sp_api_catalog' | null = null;
       if (catalogEnriched?.category) {
@@ -619,7 +664,10 @@ export async function processKeyword(
         categorySource = 'sp_api_catalog'; // Cached from previous SP-API call
       }
 
-      // BSR: SP-API only (no Rainforest fallback, no kill-switch needed)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // AUTHORITATIVE MERGE: BSR / Sales Rank (SP-API overwrites)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SP-API Catalog overwrites: sales_rank (BSR)
       let finalBsr: number | null = null;
       let bsrSource: 'sp_api_catalog' | null = null;
       if (catalogEnriched?.bsr) {
