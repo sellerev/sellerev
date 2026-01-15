@@ -545,119 +545,8 @@ const REQUIRED_DECISION_KEYS = [
 const MAX_ANALYSES_PER_PERIOD = 5;
 const USAGE_PERIOD_DAYS = 30;
 
-/**
- * STEP 4: Generate representative product cards from market snapshot stats
- * 
- * This is a guaranteed fallback to ensure products array is never empty.
- * 
- * Features:
- * - Generates 4-6 synthetic products based on snapshot averages
- * - Uses realistic price variance (±12%)
- * - Includes proper logging for debugging
- * - Never throws errors - always returns valid products
- * 
- * Logging:
- * - SYNTHETIC_PRODUCTS_GENERATION_START: When generation begins
- * - SYNTHETIC_PRODUCTS_GENERATION_COMPLETE: When generation finishes
- */
-/**
- * Generate representative product cards from market snapshot stats
- * 
- * Returns listings that match the canonical ParsedListing interface exactly.
- * These are fallback listings used when real listings are missing.
- * 
- * Canonical contract rules:
- * - title, brand, rating, reviews, image_url must be null (not strings/numbers)
- * - main_category and main_category_bsr must always exist (null allowed)
- * - revenue_confidence must be "medium" (never "low")
- * - Shape must be identical to real listings so UI never breaks
- */
-function generateRepresentativeProducts(
-  snapshot: {
-    avg_price: number | null;
-    est_total_monthly_units_min?: number | null;
-    est_total_monthly_units_max?: number | null;
-    total_page1_listings: number;
-    avg_reviews?: number | null;
-    avg_rating?: number | null;
-  },
-  keyword: string
-): ParsedListing[] {
-  // STEP 4: Enhanced logging for synthetic product generation
-  console.log("🔵 SYNTHETIC_PRODUCTS_GENERATION_START", {
-    keyword,
-    snapshot_price: snapshot.avg_price,
-    snapshot_units_min: snapshot.est_total_monthly_units_min,
-    snapshot_units_max: snapshot.est_total_monthly_units_max,
-    total_page1_listings: snapshot.total_page1_listings,
-    timestamp: new Date().toISOString(),
-  });
-  
-  // Generate 4-6 products based on snapshot.product_count
-  const productCount = snapshot.total_page1_listings || 5;
-  const placeholderCount = Math.min(6, Math.max(4, productCount));
-  
-  const avgPrice = snapshot.avg_price ?? 25;
-  const totalUnits = snapshot.est_total_monthly_units_min ?? snapshot.est_total_monthly_units_max ?? (productCount * 150);
-  const productCountForCalc = productCount > 0 ? productCount : placeholderCount;
-  const avgMonthlyUnits = Math.round(totalUnits / productCountForCalc);
-  const avgMonthlyRevenue = avgPrice * avgMonthlyUnits;
-  
-  // Calculate median reviews (use avg_reviews if available, otherwise 0)
-  const medianReviews = snapshot.avg_reviews ?? 0;
-  
-  // Generate price variance (±10-15%)
-  const priceVariance = avgPrice * 0.12; // 12% variance
-  
-  const syntheticProducts = Array.from({ length: placeholderCount }, (_, idx) => {
-    // Vary price around average (±10-15%)
-    const priceOffset = (Math.random() - 0.5) * 2 * priceVariance;
-    const price = Math.max(1, Math.round((avgPrice + priceOffset) * 100) / 100);
-    
-    // Vary units slightly (±20%)
-    const unitsVariance = avgMonthlyUnits * 0.2;
-    const unitsOffset = (Math.random() - 0.5) * 2 * unitsVariance;
-    const units = Math.max(1, Math.round(avgMonthlyUnits + unitsOffset));
-    const revenue = price * units;
-    
-    return {
-      asin: `ESTIMATED-${idx + 1}`, // Non-null string (required for ParsedListing)
-      title: null, // Must be null, not string (canonical contract)
-      price,
-      rating: null, // Must be null, not number (canonical contract)
-      reviews: null, // Must be null, not number (canonical contract)
-      is_sponsored: false,
-      position: idx + 1,
-      brand: null, // Must be null, not string (canonical contract)
-      image_url: null, // Must be null, not string (canonical contract)
-      bsr: null,
-      main_category_bsr: null, // Required field, must exist (canonical contract)
-      main_category: null, // Required field, must exist (canonical contract)
-      fulfillment: null, // "FBA" | "FBM" | "Amazon" | null
-      est_monthly_revenue: Math.round(revenue * 100) / 100,
-      est_monthly_units: units,
-      revenue_confidence: "medium" as const, // Must be "medium", never "low" (canonical contract)
-    } as ParsedListing;
-  });
-  
-  // STEP 4: Enhanced logging for synthetic product generation completion
-  console.log("🔵 SYNTHETIC_PRODUCTS_GENERATION_COMPLETE", {
-    keyword,
-    generated_count: syntheticProducts.length,
-    avg_price: avgPrice,
-    avg_monthly_units: avgMonthlyUnits,
-    avg_monthly_revenue: avgMonthlyRevenue,
-    sample_product: syntheticProducts[0] ? {
-      asin: syntheticProducts[0].asin,
-      price: syntheticProducts[0].price,
-      est_monthly_units: syntheticProducts[0].est_monthly_units,
-      est_monthly_revenue: syntheticProducts[0].est_monthly_revenue,
-    } : null,
-    timestamp: new Date().toISOString(),
-  });
-  
-  return syntheticProducts;
-}
+// Synthetic Page-1 product generation removed (correctness first).
+// If Page-1 listings cannot be loaded reliably, /api/analyze returns a hard error.
 
 interface AnalyzeRequestBody {
   input_type: "keyword";
@@ -1563,7 +1452,7 @@ export async function POST(req: NextRequest) {
       }
 
       // Convert snapshot to KeywordMarketData format
-      // GUARANTEED PRODUCT FALLBACK: Ensure listings are never empty
+      // Hard requirement: if keyword_products is empty, return a hard error (no synthetic listings).
       let listings: ParsedListing[] = products.map((p) => ({
         asin: p.asin || '',
         title: null,
@@ -1583,8 +1472,6 @@ export async function POST(req: NextRequest) {
         revenue_confidence: 'medium' as const,
       } as ParsedListing));
       
-      // FALLBACK LAYER 2: If no cached listings, generate representative products
-      // BUT: Do NOT generate if dataSource === "market" (should never reach here)
       if (listings.length === 0) {
         if (dataSource === "market") {
           console.error("🔴 FATAL: dataSource === 'market' but snapshot branch generated estimated products", {
@@ -1602,16 +1489,15 @@ export async function POST(req: NextRequest) {
             { status: 500, headers: res.headers }
           );
         }
-        
-        console.log("GUARANTEED_FALLBACK: No cached listings, generating representative products from snapshot");
-        listings = generateRepresentativeProducts({
-          avg_price: avgPrice > 0 ? avgPrice : snapshot.average_price,
-          est_total_monthly_units_min: unitsMin,
-          est_total_monthly_units_max: unitsMax,
-          total_page1_listings: snapshot.product_count,
-          avg_reviews: 0,
-          avg_rating: null,
-        }, snapshot.keyword);
+
+        return NextResponse.json(
+          {
+            success: false,
+            code: "PAGE1_LISTINGS_UNAVAILABLE",
+            error: "Unable to load reliable Page-1 listings for this keyword.",
+          },
+          { status: 422, headers: res.headers }
+        );
       }
       
       keywordMarketData = {
@@ -1634,88 +1520,18 @@ export async function POST(req: NextRequest) {
         listings,
       };
     } else {
-      // Step 2: No snapshot exists - create Tier-1 instantly (NO API calls, $0 cost)
+      // Step 2: No snapshot exists (and no market fetch was used).
+      // Hard requirement: do NOT fabricate Page-1 listings. Queue work and return a hard error.
       const normalizedKeyword = body.input_value.toLowerCase().trim();
-      console.log("SNAPSHOT_MISS - Creating Tier-1 instantly", { keyword: normalizedKeyword });
-
-      // Import Tier-1 builder
-      const { buildTier1Snapshot, tier1ToDbFormat } = await import("@/lib/snapshots/tier1Estimate");
-
-      // Build Tier-1 snapshot using deterministic heuristic
-      const tier1Snapshot = buildTier1Snapshot(normalizedKeyword);
-
-      // Compute min/max values using deterministic logic
-      // est_units_per_listing = 150, total_units = page1_count * 150
-      // units_min = total_units * 0.7, units_max = total_units * 1.3
-      // revenue_min = units_min * avg_price, revenue_max = units_max * avg_price
-      const estUnitsPerListing = 150;
-      const page1Count = tier1Snapshot.product_count;
-      const totalUnits = page1Count * estUnitsPerListing;
-      const unitsMin = Math.round(totalUnits * 0.7);
-      const unitsMax = Math.round(totalUnits * 1.3);
-      const revenueMin = Math.round((unitsMin * tier1Snapshot.average_price) * 100) / 100;
-      const revenueMax = Math.round((unitsMax * tier1Snapshot.average_price) * 100) / 100;
-
-      // Insert Tier-1 snapshot into database with min/max fields
-      const dbSnapshot = tier1ToDbFormat(tier1Snapshot, marketplace);
-      const { error: insertError } = await supabase
-        .from("keyword_snapshots")
-        .upsert(dbSnapshot, {
-          onConflict: 'keyword,marketplace'
-        });
-
-      if (insertError) {
-        console.error("❌ Failed to insert Tier-1 snapshot:", insertError);
-        // Continue anyway - we'll use the in-memory snapshot
-      } else {
-        console.log("✅ Tier-1 snapshot inserted:", {
-          keyword: normalizedKeyword,
-          units_min: unitsMin,
-          units_max: unitsMax,
-          revenue_min: revenueMin,
-          revenue_max: revenueMax,
-        });
-      }
-
-      // Queue keyword for Tier-2 enrichment (background, non-blocking)
       await queueKeyword(supabase, normalizedKeyword, 5, user.id, marketplace);
-      console.log("✅ Keyword queued for Tier-2 enrichment");
-
-      // Convert Tier-1 snapshot to KeywordMarketData format with computed min/max
-      // GUARANTEED PRODUCT FALLBACK: Generate representative products for Tier-1
-      const tier1Listings = generateRepresentativeProducts({
-        avg_price: tier1Snapshot.average_price,
-        est_total_monthly_units_min: unitsMin,
-        est_total_monthly_units_max: unitsMax,
-        total_page1_listings: tier1Snapshot.product_count,
-        avg_reviews: 0,
-        avg_rating: null,
-      }, tier1Snapshot.keyword);
-      
-      console.log("GUARANTEED_FALLBACK: Tier-1 snapshot - generated representative products", {
-        count: tier1Listings.length,
-        keyword: tier1Snapshot.keyword,
-      });
-      
-      keywordMarketData = {
-        snapshot: {
-          keyword: tier1Snapshot.keyword,
-          avg_price: tier1Snapshot.average_price,
-          avg_reviews: 0,
-          avg_rating: null,
-          avg_bsr: tier1Snapshot.average_bsr,
-          total_page1_listings: tier1Snapshot.product_count,
-          sponsored_count: 0,
-          dominance_score: 0,
-          fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 },
-          est_total_monthly_revenue_min: revenueMin,
-          est_total_monthly_revenue_max: revenueMax,
-          est_total_monthly_units_min: unitsMin,
-          est_total_monthly_units_max: unitsMax,
-          search_demand: null,
+      return NextResponse.json(
+        {
+          success: false,
+          code: "PAGE1_LISTINGS_UNAVAILABLE",
+          error: "Unable to load reliable Page-1 listings for this keyword.",
         },
-        listings: tier1Listings, // GUARANTEED: Never empty
-      };
+        { status: 422, headers: res.headers }
+      );
       }
     }
 
@@ -1746,7 +1562,6 @@ export async function POST(req: NextRequest) {
     }
     
     // CRITICAL: keywordMarketData must never be null at this point
-    // BUT: Do NOT generate estimated products if dataSource === "market"
     if (!keywordMarketData) {
       if (dataSource === "market") {
         console.error("🔴 FATAL: dataSource === 'market' but keywordMarketData is null", {
@@ -1764,62 +1579,18 @@ export async function POST(req: NextRequest) {
           { status: 500, headers: res.headers }
         );
       }
-      
-      // Only allow fallback for snapshot/estimated dataSource
-      console.error("❌ FATAL: keywordMarketData is null - this should never happen");
-      // Emergency fallback - create Tier-1 on the fly (ONLY for snapshot/estimated)
-      const { buildTier1Snapshot } = await import("@/lib/snapshots/tier1Estimate");
-      const normalizedKeyword = body.input_value.toLowerCase().trim();
-      const emergencyTier1 = buildTier1Snapshot(normalizedKeyword);
-      
-      // Compute min/max values using deterministic logic
-      const estUnitsPerListing = 150;
-      const page1Count = emergencyTier1.product_count;
-      const totalUnits = page1Count * estUnitsPerListing;
-      const unitsMin = Math.round(totalUnits * 0.7);
-      const unitsMax = Math.round(totalUnits * 1.3);
-      const revenueMin = Math.round((unitsMin * emergencyTier1.average_price) * 100) / 100;
-      const revenueMax = Math.round((unitsMax * emergencyTier1.average_price) * 100) / 100;
-      
-      // GUARANTEED PRODUCT FALLBACK: Generate representative products for emergency fallback
-      const emergencyListings = generateRepresentativeProducts({
-        avg_price: emergencyTier1.average_price,
-        est_total_monthly_units_min: unitsMin,
-        est_total_monthly_units_max: unitsMax,
-        total_page1_listings: emergencyTier1.product_count,
-        avg_reviews: 0,
-        avg_rating: null,
-      }, emergencyTier1.keyword);
-      
-      console.log("GUARANTEED_FALLBACK: Emergency fallback - generated representative products", {
-        count: emergencyListings.length,
-        keyword: emergencyTier1.keyword,
-      });
-      
-      keywordMarketData = {
-        snapshot: {
-          keyword: emergencyTier1.keyword,
-          avg_price: emergencyTier1.average_price,
-          avg_reviews: 0,
-          avg_rating: null,
-          avg_bsr: emergencyTier1.average_bsr,
-          total_page1_listings: emergencyTier1.product_count,
-          sponsored_count: 0,
-          dominance_score: 0,
-          fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 },
-          est_total_monthly_revenue_min: revenueMin,
-          est_total_monthly_revenue_max: revenueMax,
-          est_total_monthly_units_min: unitsMin,
-          est_total_monthly_units_max: unitsMax,
-          search_demand: null,
+
+      return NextResponse.json(
+        {
+          success: false,
+          code: "PAGE1_LISTINGS_UNAVAILABLE",
+          error: "Unable to load reliable Page-1 listings for this keyword.",
         },
-        listings: emergencyListings, // GUARANTEED: Never empty
-      };
-      snapshotStatus = 'estimated'; // Mark as estimated for emergency fallback
+        { status: 422, headers: res.headers }
+      );
     }
     
     // FINAL GUARANTEE: Ensure listings are never empty before proceeding
-    // BUT: Do NOT generate estimated products if dataSource === "market"
     if (!keywordMarketData.listings || keywordMarketData.listings.length === 0) {
       if (dataSource === "market") {
         console.error("🔴 FATAL: dataSource === 'market' but listings array is empty", {
@@ -1838,14 +1609,15 @@ export async function POST(req: NextRequest) {
           { status: 500, headers: res.headers }
         );
       }
-      
-      // Only allow fallback for snapshot/estimated dataSource
-      console.error("CRITICAL: listings array is empty - applying final fallback");
-      keywordMarketData.listings = generateRepresentativeProducts(
-        keywordMarketData.snapshot,
-        keywordMarketData.snapshot.keyword
+
+      return NextResponse.json(
+        {
+          success: false,
+          code: "PAGE1_LISTINGS_UNAVAILABLE",
+          error: "Unable to load reliable Page-1 listings for this keyword.",
+        },
+        { status: 422, headers: res.headers }
       );
-      console.log("FINAL_FALLBACK: Generated", keywordMarketData.listings.length, "representative products");
     }
 
     // Determine data source: market (real) vs snapshot (estimated)
@@ -2380,260 +2152,7 @@ export async function POST(req: NextRequest) {
       
       console.log("🔵 PAGE_ONE_PRODUCTS_LENGTH_AFTER_CANONICAL", pageOneProducts.length);
       
-      // ═══════════════════════════════════════════════════════════════════════════
-      // TIER-1 EARLY RETURN PATH (FAST PATH - ≤10s)
-      // ═══════════════════════════════════════════════════════════════════════════
-      // If Tier-1 snapshot was built, we can return it immediately
-      // This bypasses heavy computations (calibration, full contract building, etc.)
-      // Tier-2 refinement, BSR enrichment, and metadata enrichment run asynchronously in background
-      if (tier1Snapshot && body.input_type === "keyword") {
-        console.log("🚀 TIER1_EARLY_RETURN", {
-          snapshot_id: tier1Snapshot.snapshot.snapshot_id,
-          product_count: tier1Snapshot.snapshot.products.length,
-          timestamp: new Date().toISOString(),
-        });
-        
-        // ═══════════════════════════════════════════════════════════════════════════
-        // CONFIRM PAGE-1 RETURNS BEFORE ENRICHMENT
-        // ═══════════════════════════════════════════════════════════════════════════
-        console.log("✅ PAGE1_RETURN_BEFORE_ENRICHMENT", {
-          value: true,
-          message: "Page-1 returns immediately after search + canonicalization, before BSR/metadata enrichment",
-          timestamp: new Date().toISOString(),
-        });
-        
-        // ═══════════════════════════════════════════════════════════════════════════
-        // ASYNC ENRICHMENT: BSR + METADATA (NON-BLOCKING)
-        // ═══════════════════════════════════════════════════════════════════════════
-        // Trigger BSR and metadata enrichment asynchronously AFTER Tier-1 response
-        // These run in background and do NOT block /api/analyze
-        if (rawListings.length > 0 && keywordMarketData) {
-          // Prepare enrichment context
-          const enrichmentContext = {
-            keyword: body.input_value,
-            marketplace: marketplace as 'US' | 'CA',
-            listings: rawListings,
-            keywordMarketData,
-            supabase,
-            apiCallCounter,
-            snapshotId: tier1Snapshot.snapshot.snapshot_id,
-          };
-          
-          // Fire-and-forget: Do NOT await - let enrichment run in background
-          (async () => {
-            try {
-              const snapshotId = tier1Snapshot.snapshot.snapshot_id;
-              const locks = (globalThis as any).__SELLEREV_ENRICHMENT_LOCKS__ as {
-                inFlight: Set<string>;
-                completed: Set<string>;
-              };
-              if (locks.completed.has(snapshotId) || locks.inFlight.has(snapshotId)) {
-                console.log("ℹ️ ASYNC_ENRICHMENT_SKIPPED (LOCKED)", {
-                  keyword: body.input_value,
-                  snapshot_id: snapshotId,
-                });
-                return;
-              }
-              locks.inFlight.add(snapshotId);
-
-              // BSR Enrichment (async)
-              const { batchFetchBsrWithBackoff, bulkUpsertBsrCache } = await import("@/lib/amazon/asinBsrCache");
-              // FIX 3: Deduplicate ASINs before enrichment + hard cap
-              const page1Asins = Array.from(
-                new Set(
-                  rawListings
-                    .filter((l: any) => l.asin)
-                    .map((l: any) => String(l.asin).toUpperCase().trim())
-                    .filter((a: string) => /^[A-Z0-9]{10}$/.test(a))
-                )
-              ).slice(0, 4); // Max 4 ASINs for BSR (part of 7-call budget)
-              
-              // Check cache first
-              const { bulkLookupBsrCache } = await import("@/lib/amazon/asinBsrCache");
-              const cacheMap = supabase ? await bulkLookupBsrCache(supabase, page1Asins) : new Map();
-              const missingAsins = Array.from(
-                new Set(page1Asins.filter((asin: string) => !cacheMap.has(asin)))
-              );
-              
-              if (missingAsins.length > 0) {
-                console.log("🟡 BSR_FETCH_START (ASYNC)", {
-                  keyword: body.input_value,
-                  asins: missingAsins.slice(0, 4),
-                  count: Math.min(missingAsins.length, 4),
-                  timestamp: new Date().toISOString(),
-                });
-                
-                const rainforestApiKey = process.env.RAINFOREST_API_KEY;
-                if (rainforestApiKey) {
-                  const batchData = await batchFetchBsrWithBackoff(
-                    rainforestApiKey,
-                    missingAsins.slice(0, 4), // Max 4 ASINs
-                    body.input_value,
-                    apiCallCounter
-                  );
-                  
-                  if (batchData) {
-                    // Process and cache BSR data (same logic as sync version)
-                    const { extractMainCategoryBSR } = await import("@/lib/amazon/keywordMarket");
-                    let products: any[] = [];
-                    
-                    if (Array.isArray(batchData)) {
-                      products = batchData;
-                    } else if (batchData.products && Array.isArray(batchData.products)) {
-                      products = batchData.products;
-                    } else if (batchData.product) {
-                      products = Array.isArray(batchData.product) ? batchData.product : [batchData.product];
-                    } else if (batchData.asin || batchData.title) {
-                      products = [batchData];
-                    }
-                    
-                    const freshEntries = products.map((product: any) => {
-                      const productObj = product?.product || product;
-                      const asin = productObj?.asin || product?.asin;
-                      if (!asin) return null;
-                      
-                      const bsrData = extractMainCategoryBSR(productObj || product);
-                      return {
-                        asin,
-                        main_category: bsrData?.category || null,
-                        main_category_bsr: bsrData?.rank || null,
-                        price: productObj?.price?.value || productObj?.price?.raw || productObj?.price || product?.price || null,
-                        brand: productObj?.brand || productObj?.by_line?.name || product?.brand || null,
-                      };
-                    }).filter((e: any): e is any => e !== null && e.asin);
-                    
-                    if (freshEntries.length > 0 && supabase) {
-                      await bulkUpsertBsrCache(supabase, freshEntries);
-                    }
-                    
-                    console.log("✅ BSR_ENRICHMENT_COMPLETE (ASYNC)", {
-                      keyword: body.input_value,
-                      enriched_count: freshEntries.length,
-                      timestamp: new Date().toISOString(),
-                    });
-                  }
-                }
-              }
-              
-              // Metadata Enrichment (async)
-              console.log("🔵 METADATA_ENRICHMENT_FETCH_START (ASYNC)", {
-                keyword: body.input_value,
-                listings_count: rawListings.length,
-                timestamp: new Date().toISOString(),
-              });
-              
-              const { enrichListingsMetadata } = await import("@/lib/amazon/keywordMarket");
-              const enrichedListings = await enrichListingsMetadata(
-                rawListings,
-                body.input_value,
-                undefined,
-                apiCallCounter
-              );
-              
-              console.log("✅ METADATA_ENRICHMENT_COMPLETE (ASYNC)", {
-                keyword: body.input_value,
-                enriched_listings_count: enrichedListings.length,
-                timestamp: new Date().toISOString(),
-              });
-              
-              // Mark enrichment complete for this snapshot_id (lock persists for process lifetime)
-              locks.completed.add(snapshotId);
-            } catch (enrichmentError) {
-              console.error("❌ ASYNC_ENRICHMENT_ERROR", {
-                keyword: body.input_value,
-                error: enrichmentError instanceof Error ? enrichmentError.message : String(enrichmentError),
-                timestamp: new Date().toISOString(),
-              });
-              // Fail silently - Page-1 data is still usable without enrichment
-            } finally {
-              try {
-                const snapshotId = tier1Snapshot.snapshot.snapshot_id;
-                const locks = (globalThis as any).__SELLEREV_ENRICHMENT_LOCKS__ as {
-                  inFlight: Set<string>;
-                  completed: Set<string>;
-                };
-                locks.inFlight.delete(snapshotId);
-              } catch {
-                // ignore
-              }
-            }
-          })();
-        }
-        
-        // Save analysis run immediately so chat can work (even with Tier-1 data)
-        // Build minimal response object for analysis_runs table
-        const tier1Response = {
-          decision: {
-            verdict: "CAUTION" as const, // Default until Tier-2 refines
-            confidence: 50, // Default until Tier-2 refines
-            executive_summary: "Tier-1 analysis complete. Refinement in progress...",
-          },
-          market_snapshot: {
-            keyword: tier1Snapshot.snapshot.keyword,
-            avg_price: tier1Snapshot.snapshot.aggregates.avg_price,
-            avg_reviews: tier1Snapshot.snapshot.aggregates.avg_reviews,
-            avg_rating: tier1Snapshot.snapshot.aggregates.avg_rating,
-            page1_count: tier1Snapshot.snapshot.products.length,
-            total_page1_listings: tier1Snapshot.snapshot.products.length,
-            total_monthly_units_est: tier1Snapshot.snapshot.aggregates.total_page1_units,
-            total_monthly_revenue_est: tier1Snapshot.snapshot.aggregates.total_page1_revenue,
-          },
-          page_one_listings: tier1Snapshot.snapshot.products || [],
-          tier: "tier1" as const,
-          snapshot_id: tier1Snapshot.snapshot.snapshot_id,
-        };
-        
-        const { data: insertedRun, error: insertError } = await supabase
-          .from("analysis_runs")
-          .insert({
-            user_id: user.id,
-            input_type: "keyword",
-            input_value: body.input_value,
-            ai_verdict: "CAUTION", // Default until Tier-2 refines
-            ai_confidence: 50, // Default until Tier-2 refines
-            seller_stage: sellerProfile.stage,
-            seller_experience_months: sellerProfile.experience_months,
-            seller_monthly_revenue_range: sellerProfile.monthly_revenue_range,
-            response: tier1Response,
-          })
-          .select("id")
-          .single();
-        
-        if (insertError || !insertedRun || !insertedRun.id) {
-          console.error("TIER1_ANALYSIS_RUN_INSERT_ERROR", {
-            error: insertError,
-            has_insertedRun: !!insertedRun,
-            insertedRun_id: insertedRun?.id,
-          });
-          // Continue anyway - return response without analysisRunId
-          // Chat won't work until Tier-2 completes, but at least UI can display data
-        } else {
-          console.log("TIER1_ANALYSIS_RUN_INSERT_SUCCESS", {
-            analysis_run_id: insertedRun.id,
-            snapshot_id: tier1Snapshot.snapshot.snapshot_id,
-          });
-        }
-        
-        // TODO: Still do AI analysis with Tier-1 data (needed for UI)
-        // For now, return Tier-1 snapshot immediately
-        // AI can be added to Tier-1 response in future iteration
-        
-        return NextResponse.json(
-          {
-            success: true,
-            status: "partial", // Tier-1 is partial until Tier-2 refines
-            tier: "tier1",
-            snapshot: tier1Snapshot.snapshot,
-            ui_hints: tier1Snapshot.ui_hints,
-            analysisRunId: insertedRun?.id || null, // Return ID if insert succeeded
-            message: "Tier-1 snapshot returned. Refinement in progress...",
-          },
-          { 
-            status: 200,
-            headers: res.headers,
-          }
-        );
-      }
+      // TIER-1 early-return removed: we always run AI before persisting and responding.
       
       // Assign to function-scope variable (final authority)
       canonicalProducts = pageOneProducts;
@@ -3396,32 +2915,16 @@ Convert this plain text decision into the required JSON contract format. Extract
       ...(keywordMarket ? keywordMarket : {}),
     };
     
-    // FINAL GUARANTEE: Ensure products array is never empty in final response
+    // Hard requirement: never fabricate products. If canonical Page-1 is empty, return a hard error.
     if (!finalResponse.products || finalResponse.products.length === 0) {
-      console.error("CRITICAL: Final response products empty - adding from listings");
-      // Map finalListings to products format with required defaults
-      const emergencyProducts = finalListings.map((l: any, idx: number) => ({
-        rank: idx + 1,
-        asin: l.asin || `ESTIMATED-${idx + 1}`,
-        title: l.title || "Estimated Page-1 Listing",
-        image_url: l.image || l.image_url || "https://via.placeholder.com/300x300?text=Product+Image",
-        price: l.price || 0,
-        rating: l.rating || 4.3, // Default 4.1-4.5 range
-        review_count: l.reviews || 25, // Default > 20
-        bsr: l.bsr || null,
-        estimated_monthly_units: l.units_est || l.est_monthly_units || 0,
-        estimated_monthly_revenue: l.revenue_est || l.est_monthly_revenue || 0,
-        revenue_share_pct: 0,
-        fulfillment: l.fulfillment || "FBA", // Default FBA
-        brand: l.brand || null,
-        seller_country: "Unknown",
-      }));
-      
-      finalResponse.products = emergencyProducts;
-      // Also set page_one_listings to ensure consistency
-      if (!finalResponse.page_one_listings || finalResponse.page_one_listings.length === 0) {
-        finalResponse.page_one_listings = emergencyProducts;
-      }
+      return NextResponse.json(
+        {
+          success: false,
+          code: "PAGE1_LISTINGS_UNAVAILABLE",
+          error: "Unable to load reliable Page-1 listings for this keyword.",
+        },
+        { status: 422, headers: res.headers }
+      );
     }
     
     // Ensure page_one_listings is always set (use products if not explicitly set)
@@ -3560,7 +3063,6 @@ Convert this plain text decision into the required JSON contract format. Extract
     });
     
     // STEP 4: Hard guarantee - products must never be empty
-    // BUT: Do NOT generate estimated products if dataSource === "market"
     if (!finalResponse.products || finalResponse.products.length === 0) {
       if (dataSource === "market") {
         console.error("🔴 FATAL: dataSource === 'market' but finalResponse.products is empty", {
@@ -3582,70 +3084,15 @@ Convert this plain text decision into the required JSON contract format. Extract
           { status: 500, headers: res.headers }
         );
       }
-      
-      // Only allow fallback for snapshot/estimated dataSource
-      console.error("🔴 CRITICAL: Final response has no products - applying emergency fallback", {
-        keyword: body.input_value,
-        has_contract_response: !!contractResponse,
-        has_keyword_market: !!keywordMarket,
-        has_keyword_market_data: !!keywordMarketData,
-        timestamp: new Date().toISOString(),
-      });
-      
-      // Emergency fallback: generate from snapshot if available
-      if (keywordMarketData && keywordMarketData.snapshot) {
-        const emergencyProducts = generateRepresentativeProducts(
-          keywordMarketData.snapshot,
-          keywordMarketData.snapshot.keyword
-        );
-        
-        // Map to product format
-        finalResponse.products = emergencyProducts.map((l: any, idx: number) => ({
-          rank: idx + 1,
-          asin: l.asin || `ESTIMATED-${idx + 1}`,
-          title: l.title || "Estimated Page-1 Listing",
-          image_url: l.image_url || null,
-          price: l.price || 0,
-          rating: l.rating || 0,
-          review_count: l.reviews || 0,
-          bsr: l.bsr || null,
-          estimated_monthly_units: l.est_monthly_units || 0,
-          estimated_monthly_revenue: l.est_monthly_revenue || 0,
-          revenue_share_pct: 0,
-          fulfillment: l.fulfillment || "FBM",
-          brand: l.brand || null,
-          seller_country: "Unknown",
-        }));
-        
-        console.log("🔵 EMERGENCY_PRODUCTS_GENERATED", {
-          keyword: body.input_value,
-          generated_count: finalResponse.products.length,
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        // Last resort: generate minimal products
-        console.error("🔴 CRITICAL: No snapshot available for emergency fallback", {
-          keyword: body.input_value,
-          timestamp: new Date().toISOString(),
-        });
-        
-        finalResponse.products = Array.from({ length: 4 }, (_, idx) => ({
-          rank: idx + 1,
-          asin: `FALLBACK-${idx + 1}`,
-          title: "Estimated Page-1 Listing",
-          image_url: null,
-          price: 25,
-          rating: 0,
-          review_count: 0,
-          bsr: null,
-          estimated_monthly_units: 150,
-          estimated_monthly_revenue: 3750,
-          revenue_share_pct: 0,
-          fulfillment: "FBM",
-          brand: null,
-          seller_country: "Unknown",
-        }));
-      }
+
+      return NextResponse.json(
+        {
+          success: false,
+          code: "PAGE1_LISTINGS_UNAVAILABLE",
+          error: "Unable to load reliable Page-1 listings for this keyword.",
+        },
+        { status: 422, headers: res.headers }
+      );
     }
     
     // STEP 4: Verify final state

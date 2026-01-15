@@ -159,7 +159,10 @@ function canonicalizeListings(listings: ParsedListing[]): ParsedListing[] {
   const asinMap = new Map<string, ParsedListing>();
   
   for (const listing of listings) {
-    const asin = listing.asin || `KEYWORD-${listing.position}`;
+    const asinRaw = listing.asin;
+    const asin = typeof asinRaw === "string" ? asinRaw.trim().toUpperCase() : "";
+    // Hard requirement: Tier-1 snapshot products must reference real ASINs (no KEYWORD-* fallbacks).
+    if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
     const currentRank = listing.position || 999;
     
     if (asinMap.has(asin)) {

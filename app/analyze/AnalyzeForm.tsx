@@ -808,9 +808,8 @@ export default function AnalyzeForm({
         return;
       }
 
-      // STEP 7: Never block on errors - always render with best available data
-      // Only show errors for actual failures (500), not missing data (which uses fallbacks)
-      if (!res.ok || (!data.success && res.status >= 500)) {
+      // Hard error state: missing reliable Page-1 listings must block (no fake data).
+      if (!res.ok || data?.code === "PAGE1_LISTINGS_UNAVAILABLE") {
         const errorMsg = data.error || "Analysis failed";
         const errorDetails = data.details || "";
         const errorStack = data.stack || "";
@@ -839,126 +838,8 @@ export default function AnalyzeForm({
         return;
       }
 
-      // ═══════════════════════════════════════════════════════════════════════════
-      // TIER-1 SNAPSHOT RESPONSE HANDLING (NEW)
-      // ═══════════════════════════════════════════════════════════════════════════
-      // Check for Tier-1 snapshot response (new contract)
-      if (data.snapshot && data.snapshot.snapshot_id) {
-        const snapshot = data.snapshot;
-        const snapshotId = snapshot.snapshot_id;
-        // Use analysisRunId if available (for chat), otherwise fall back to snapshot_id
-        const analysisRunId = data.analysisRunId || snapshotId;
-        
-        console.log("TIER1_SNAPSHOT_RECEIVED", {
-          snapshot_id: snapshotId,
-          analysisRunId: analysisRunId,
-          product_count: snapshot.products?.length || 0,
-          show_refining_badge: data.ui_hints?.show_refining_badge || false,
-        });
-
-        // Store Tier-2 refinement hints
-        setShowRefiningBadge(data.ui_hints?.show_refining_badge || false);
-        setNextUpdateExpectedSec(data.ui_hints?.next_update_expected_sec || null);
-
-        // Transform Tier-1 snapshot to AnalysisResponse format
-        // Convert Tier1Product[] to page_one_listings format
-        const pageOneListings = (snapshot.products || []).map((p: any) => ({
-          rank: p.organic_rank,
-          asin: p.asin,
-          title: p.title,
-          image_url: p.image_url,
-          price: p.price || 0,
-          rating: p.rating,
-          review_count: p.review_count,
-          bsr: null, // Tier-1 doesn't include BSR
-          estimated_monthly_units: p.estimated_monthly_units || 0,
-          estimated_monthly_revenue: p.estimated_monthly_revenue || 0,
-          revenue_share_pct: snapshot.aggregates?.total_page1_revenue 
-            ? (p.estimated_monthly_revenue || 0) / snapshot.aggregates.total_page1_revenue * 100
-            : 0,
-          fulfillment: p.fulfillment || "Unknown",
-          brand: p.brand,
-          seller_country: "Unknown" as const,
-        }));
-
-        // Build market_snapshot from Tier-1 aggregates
-        const marketSnapshot = {
-          keyword: snapshot.keyword,
-          avg_price: snapshot.aggregates?.avg_price || null,
-          avg_reviews: snapshot.aggregates?.avg_reviews || null,
-          avg_rating: snapshot.aggregates?.avg_rating || null,
-          total_page1_listings: snapshot.products?.length || 0,
-          sponsored_count: snapshot.products?.filter((p: any) => p.is_sponsored).length || 0,
-          dominance_score: 0, // Tier-2 will compute this
-          listings: pageOneListings,
-        };
-
-        // Create AnalysisResponse with analysisRunId (UUID) for chat compatibility
-        // Use analysisRunId if available (for chat API), otherwise use snapshot_id as fallback
-        const analysisData: AnalysisResponse = {
-          analysis_run_id: analysisRunId, // Use analysisRunId (UUID) for chat, snapshot_id as fallback
-          created_at: snapshot.created_at || new Date().toISOString(),
-          input_type: "keyword",
-          input_value: inputValue.trim(),
-          // Tier-1 doesn't have AI decision yet - create placeholder
-          decision: {
-            verdict: "CAUTION" as const,
-            confidence: 0.5,
-          },
-          executive_summary: "Market analysis in progress. Refining accuracy...",
-          reasoning: {
-            primary_factors: ["Initial market snapshot available"],
-            seller_context_impact: "Analysis refining in background",
-          },
-          risks: {
-            competition: { level: "Medium" as const, explanation: "Analysis refining" },
-            pricing: { level: "Medium" as const, explanation: "Analysis refining" },
-            differentiation: { level: "Medium" as const, explanation: "Analysis refining" },
-            operations: { level: "Medium" as const, explanation: "Analysis refining" },
-          },
-          recommended_actions: {
-            must_do: [],
-            should_do: [],
-            avoid: [],
-          },
-          assumptions_and_limits: ["Initial snapshot - refinement in progress"],
-          market_snapshot: marketSnapshot,
-          page_one_listings: pageOneListings,
-          products: pageOneListings,
-          aggregates_derived_from_page_one: {
-            avg_price: snapshot.aggregates?.avg_price || 0,
-            avg_rating: snapshot.aggregates?.avg_rating || 0,
-            avg_bsr: null,
-            total_monthly_units_est: snapshot.aggregates?.total_page1_units || 0,
-            total_monthly_revenue_est: snapshot.aggregates?.total_page1_revenue || 0,
-            page1_product_count: snapshot.products?.length || 0,
-          },
-        };
-
-        console.log("TIER1_ANALYSIS_CREATED", {
-          snapshot_id: snapshotId,
-          analysisRunId: analysisRunId,
-          product_count: pageOneListings.length,
-        });
-
-        // Store the actual analysisRunId (UUID) for chat
-        setAnalysisRunIdForChat(analysisRunId);
-
-        // Store estimated flag and snapshot type
-        setIsEstimated(false); // Tier-1 is real data, not estimated
-        setSnapshotType("snapshot");
-
-        // Normalize and set analysis
-        setAnalysis(normalizeAnalysis(analysisData));
-        setError(null);
-
-        // Update URL with snapshot_id for persistence
-        // Use snapshot_id instead of run_id
-        router.replace(`/analyze?snapshot=${snapshotId}`, { scroll: false });
-
-        setLoading(false);
-        return; // Early return - Tier-1 is complete
-      }
+      // Tier-1 snapshot responses are intentionally not used for persistence (correctness first).
+      // /api/analyze returns only fully-AI-complete runs (with `analysisRunId`) for URL/chat persistence.
 
       // ═══════════════════════════════════════════════════════════════════════════
       // LEGACY RESPONSE HANDLING (OLD CONTRACT)

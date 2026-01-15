@@ -297,8 +297,13 @@ export function buildKeywordPageOne(
   }>();
   
   // Track all instances to find best canonical instance per ASIN
-  listings.forEach((listing, index) => {
-    const asin = listing.asin || `KEYWORD-${index + 1}`;
+  for (let index = 0; index < listings.length; index++) {
+    const listing = listings[index];
+    const asinRaw = listing.asin;
+    const asin = typeof asinRaw === "string" ? asinRaw.trim().toUpperCase() : "";
+    // Hard requirement: no synthetic ASINs on Page-1; skip rows without a valid ASIN.
+    if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
+
     const currentRank = listing.position || index + 1;
     const isOrganic = !listing.is_sponsored;
     
@@ -330,7 +335,7 @@ export function buildKeywordPageOne(
         isOrganic, // Track if this instance is organic
       });
     }
-  });
+  }
   
   // Log canonical rank selection for each ASIN
   asinMap.forEach((value, asin) => {
@@ -446,7 +451,10 @@ export function buildKeywordPageOne(
   }>();
   
   cappedListings.forEach((listing, index) => {
-    const asin = listing.asin || `KEYWORD-${index + 1}`;
+    const asinRaw = listing.asin;
+    const asin = typeof asinRaw === "string" ? asinRaw.trim().toUpperCase() : "";
+    // Hard requirement: no synthetic ASINs on Page-1; skip rows without a valid ASIN.
+    if (!/^[A-Z0-9]{10}$/.test(asin)) return;
     const position = listing.position || index + 1;
     
     if (cappedAsinMap.has(asin)) {
@@ -740,8 +748,32 @@ export function buildKeywordPageOne(
   // Map to store ASIN-to-listing mapping for parent-child normalization
   const asinToListingMap = new Map<string, ParsedListing>();
   
+  // Hard requirement: Page-1 cards must map to real ASINs.
+  // Filter out any listings without a valid 10-char ASIN (no synthetic KEYWORD-* fallbacks).
+  const productsWithValidAsins = productsWithWeights.filter((pw) => {
+    const asinRaw = (pw.listing as any)?.asin;
+    const asin = typeof asinRaw === "string" ? asinRaw.trim().toUpperCase() : "";
+    return /^[A-Z0-9]{10}$/.test(asin);
+  });
+
+  if (productsWithValidAsins.length === 0) {
+    return [];
+  }
+
+  // Re-normalize weights to sum to 1.0 after filtering
+  const totalValidWeight = productsWithValidAsins.reduce((sum, p) => sum + p.allocationWeight, 0);
+  if (totalValidWeight === 0) {
+    productsWithValidAsins.forEach((p) => {
+      p.allocationWeight = 1.0 / productsWithValidAsins.length;
+    });
+  } else {
+    productsWithValidAsins.forEach((p) => {
+      p.allocationWeight = p.allocationWeight / totalValidWeight;
+    });
+  }
+
   // Allocate units and revenue
-  const products = productsWithWeights.map((pw, i) => {
+  const products = productsWithValidAsins.map((pw, i) => {
     const l = pw.listing;
     const allocatedUnits = Math.max(1, Math.round(totalPage1Units * pw.allocationWeight));
     const allocatedRevenue = Math.round(allocatedUnits * pw.price);
@@ -749,10 +781,8 @@ export function buildKeywordPageOne(
     // ═══════════════════════════════════════════════════════════════════════════
     // ASIN HANDLING
     // ═══════════════════════════════════════════════════════════════════════════
-    // Real Rainforest listings MUST have ASINs - preserve them as-is
-    // Only use synthetic ASINs for explicitly estimated products (created by estimation logic)
-    // If a real listing has null ASIN, preserve it (don't create synthetic ASIN)
-    const asin = l.asin ?? `KEYWORD-${i + 1}`;
+    // REQUIRE real ASINs on all Page-1 cards; never fabricate KEYWORD-* / ESTIMATED-* IDs.
+    const asin = (l.asin as string).trim().toUpperCase();
 
     // ═══════════════════════════════════════════════════════════════════════════
     // NORMALIZE FULFILLMENT (Helium-10 Style)
@@ -974,7 +1004,7 @@ export function buildKeywordPageOne(
 
     const product: CanonicalProduct = {
       rank: pw.organicRank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
-      asin, // Allow synthetic ASINs for keywords
+      asin, // Real ASIN only
       title: title ?? null, // Preserved from Rainforest SEARCH response - null if truly missing (never fabricated)
       price: pw.price, // Preserved from listing
       rating, // Preserved from listing (or 0 for ESTIMATED only)

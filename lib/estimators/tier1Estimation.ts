@@ -103,12 +103,18 @@ export function buildTier1Products(
   
   // HARD CAP: Never exceed 49 products
   const cappedListings = listings.slice(0, maxProducts);
+  // Hard requirement: Tier-1 products must reference real ASINs (no KEYWORD-* fallbacks).
+  const validListings = cappedListings.filter((l) => {
+    const asinRaw = l.asin;
+    const asin = typeof asinRaw === "string" ? asinRaw.trim().toUpperCase() : "";
+    return /^[A-Z0-9]{10}$/.test(asin);
+  });
   
   // Estimate total market revenue (fast heuristic)
   const totalMarketRevenue = estimateTotalMarketRevenueFast(cappedListings);
   
   // Build Tier-1 products with fast estimation
-  const products: Tier1Product[] = cappedListings.map((listing, index) => {
+  const products: Tier1Product[] = validListings.map((listing, index) => {
     const rank = index + 1; // Organic rank (1-based)
     const price = listing.price ?? 0;
     
@@ -139,8 +145,8 @@ export function buildTier1Products(
     }
     
     return {
-      asin: listing.asin || `KEYWORD-${rank}`,
-      title: listing.title || `Product #${rank}`,
+      asin: (listing.asin as string).trim().toUpperCase(),
+      title: listing.title || null,
       brand: listing.brand || null,
       image_url: listing.image_url || null,
       price: listing.price,

@@ -2126,8 +2126,16 @@ export async function POST(req: NextRequest) {
         escalationDecision.escalation_reason
       );
 
+    // Only hard-block when the question is clearly ASIN-specific.
+    // Broad Page-1 questions must never be blocked for having 0 selected ASINs.
+    const isProductSpecificQuestion =
+      /\b(B[A-Z0-9]{9})\b/i.test(body.message || "") ||
+      /\b(product|listing|rank|position)\s*(?:#|number)?\s*\d+\b/i.test((body.message || "").toLowerCase()) ||
+      /\b(this|that)\s+product\b/i.test((body.message || "").toLowerCase());
+
     if (
       requiresProductSelectionForThisMessage &&
+      isProductSpecificQuestion &&
       selectedAsins.length === 0 &&
       explicitAsins.length === 0
     ) {

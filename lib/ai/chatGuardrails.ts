@@ -31,6 +31,13 @@ export function evaluateChatGuardrails({
 }: GuardrailInput): GuardrailResult {
   const normalized = (question || "").toLowerCase();
 
+  // Product-specific signal (explicit ASIN, rank reference, or "this product").
+  // Used to avoid hard-blocking broad Page-1 questions that mention specs/fees generically.
+  const isProductSpecific =
+    /\b(B[A-Z0-9]{9})\b/i.test(question || "") ||
+    /\b(product|listing|rank|position)\s*(?:#|number)?\s*\d+\b/i.test(normalized) ||
+    /\b(this|that)\s+product\b/i.test(normalized);
+
   const wantsFees =
     /\b(fees?|fba|profit|profitability|margin|referral fee|fulfillment fee)\b/i.test(normalized);
 
@@ -42,7 +49,9 @@ export function evaluateChatGuardrails({
 
   // 1) Fee / explicit live intents
   if (wantsFees || wantsPerAsinLive) {
-    if (selectedAsins.length !== 1) {
+    // Only hard-require a selected ASIN when the user is asking for a specific ASIN-level lookup.
+    // Broad Page-1 questions must remain answerable without product selection.
+    if (selectedAsins.length !== 1 && isProductSpecific) {
       return {
         intent: "INVALID_STATE",
         requiresCredits: false,
@@ -51,8 +60,20 @@ export function evaluateChatGuardrails({
       };
     }
 
-    // Fees use SP-API (no Seller Credits).
-    if (wantsFees) {
+    // If fees are mentioned but no specific product is selected/referenced, treat as analysis-only (no live lookup).
+    if (wantsFees && selectedAsins.length !== 1) {
+      if (hasSnapshot) {
+        return {
+          intent: "ANALYSIS_ONLY",
+          requiresCredits: false,
+          creditsRequired: 0,
+          reason: "General fees/margin question without a specific product selected.",
+        };
+      }
+    }
+
+    // Fees use SP-API (no Seller Credits) when a specific ASIN is selected.
+    if (wantsFees && selectedAsins.length === 1) {
       return {
         intent: "REQUIRES_LIVE_DATA",
         requiresCredits: false,
