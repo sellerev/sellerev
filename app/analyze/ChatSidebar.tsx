@@ -42,6 +42,9 @@ type FeesQuote = {
   totalAmazonFees: number;
   source: "sp_api" | "estimated";
   confidence: "high" | "medium" | "low";
+  cached?: boolean;
+  fetchedAt?: string | null;
+  cacheAgeHours?: number | null;
   estimateBasis?: {
     referral?: string;
     fulfillment?: string;
@@ -110,6 +113,10 @@ interface ChatSidebarProps {
   analysisRunId: string | null;
   /** The snapshot ID (Tier-1/Tier-2 identifier). Used as primary identifier if analysisRunId is null. */
   snapshotId?: string | null;
+  /** Created-at timestamp for the loaded analysis/snapshot (used for UI-only stale snapshot hint). */
+  analysisCreatedAt?: string | null;
+  /** True if the currently loaded analysis was opened from History navigation. */
+  isHistoryContext?: boolean;
   /** Initial messages loaded from history */
   initialMessages?: ChatMessage[];
   /** Callback when messages change (for parent state sync) */
@@ -293,6 +300,8 @@ function sanitizeVerdictLanguage(content: string): string {
 export default function ChatSidebar({
   analysisRunId,
   snapshotId = null,
+  analysisCreatedAt = null,
+  isHistoryContext = false,
   initialMessages = [],
   onMessagesChange,
   marketSnapshot = null,
@@ -320,6 +329,9 @@ export default function ChatSidebar({
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   // Context line shown ABOVE assistant response (not a chat message)
   const [responseContextLine, setResponseContextLine] = useState<string | null>(null);
+  // UI-only hint for historical snapshots (shown once per session per run when stale > 24h)
+  const [showHistoricalSnapshotHint, setShowHistoricalSnapshotHint] = useState(false);
+  const [historicalHintText, setHistoricalHintText] = useState<string | null>(null);
   const hadEscalationThisResponseRef = useRef(false);
   const [pendingEscalationConfirmation, setPendingEscalationConfirmation] = useState<{
     message: string;
@@ -336,6 +348,40 @@ export default function ChatSidebar({
   const [escalationState, setEscalationState] = useState<{ question: string; asin: string | null } | null>(null);
   const [escalationMessage, setEscalationMessage] = useState<string | null>(null);
   const [currentCitations, setCurrentCitations] = useState<Citation[]>([]);
+
+  useEffect(() => {
+    try {
+      if (!isHistoryContext) {
+        setShowHistoricalSnapshotHint(false);
+        setHistoricalHintText(null);
+        return;
+      }
+      if (!analysisCreatedAt) return;
+      const createdMs = new Date(analysisCreatedAt).getTime();
+      if (!Number.isFinite(createdMs)) return;
+      const ageHours = (Date.now() - createdMs) / (1000 * 60 * 60);
+      if (ageHours <= 24) {
+        setShowHistoricalSnapshotHint(false);
+        setHistoricalHintText(null);
+        return;
+      }
+
+      const key = `sellerev_history_hint_shown:${analysisRunId || snapshotId || "unknown"}`;
+      if (typeof window !== "undefined" && window.sessionStorage?.getItem(key) === "1") {
+        setShowHistoricalSnapshotHint(false);
+        setHistoricalHintText(null);
+        return;
+      }
+
+      setHistoricalHintText("Using historical snapshot — some data may be outdated");
+      setShowHistoricalSnapshotHint(true);
+      if (typeof window !== "undefined") {
+        window.sessionStorage?.setItem(key, "1");
+      }
+    } catch {
+      // ignore
+    }
+  }, [analysisCreatedAt, analysisRunId, isHistoryContext, snapshotId]);
   
   // Global Copilot activity status (Figma AI / Lovable AI style)
   const [copilotStatus, setCopilotStatus] = useState<"idle" | "thinking" | "analyzing" | "fetching">("idle");
@@ -646,6 +692,10 @@ export default function ChatSidebar({
             typeof data?.total_amazon_fees === "number"
               ? data.total_amazon_fees
               : fulfillmentFee + referralFee;
+          const cached = typeof data?.cached === "boolean" ? (data.cached as boolean) : undefined;
+          const fetchedAt = typeof data?.fetched_at === "string" ? (data.fetched_at as string) : null;
+          const cacheAgeHours =
+            typeof data?.cache_age_hours === "number" ? (data.cache_age_hours as number) : null;
           return {
             kind: "ok",
             quote: {
@@ -659,6 +709,9 @@ export default function ChatSidebar({
                 data.source === "sp_api"
                   ? "high"
                   : (data.confidence === "medium" ? "medium" : "low"),
+              cached,
+              fetchedAt,
+              cacheAgeHours,
               estimateBasis: data.source === "estimated" ? data.estimate_basis : undefined,
             },
           };
@@ -854,7 +907,7 @@ export default function ChatSidebar({
   const startFeesFlow = useCallback(
     (asin: string) => {
       // Prevent duplicate starts (e.g., repeated intent metadata chunks)
-      if (feesFlow.status !== "idle" && (feesFlow as any).asin === asin) return;
+      if (feesFlow.status !== "idle" && "asin" in feesFlow && feesFlow.asin === asin) return;
 
       const prefilledPrice = getPrefilledPrice();
       console.log("[FBA_FEES_QUOTE_START]", { asin, prefilledPrice });
@@ -1807,7 +1860,17 @@ export default function ChatSidebar({
                 </div>
               )}
               {feesFlow.quote.source === "sp_api" && (
-                <div className="mt-1 text-[11px] text-gray-500">Exact (Seller API)</div>
+                <div className="mt-1 text-[11px] text-gray-500">
+                  {feesFlow.quote.cached
+                    ? feesFlow.quote.cacheAgeHours !== null && feesFlow.quote.cacheAgeHours !== undefined
+                      ? feesFlow.quote.cacheAgeHours < 24
+                        ? "Exact (cached)"
+                        : feesFlow.quote.cacheAgeHours < 24 * 7
+                          ? "Cached (estimated)"
+                          : "Cached (stale — refresh recommended)"
+                      : "Exact (cached)"
+                    : "Exact (Seller API)"}
+                </div>
               )}
               <div className="mt-2 flex items-center justify-between text-xs text-gray-600">
                 <span>Referral fee</span>
@@ -1946,6 +2009,11 @@ export default function ChatSidebar({
         </div>
       )}
       <div className="px-6 py-4 shrink-0 bg-white border-t border-[#E5E7EB]">
+        {showHistoricalSnapshotHint && historicalHintText && (
+          <div className="mb-2 px-1">
+            <div className="text-[11px] text-gray-500">{historicalHintText}</div>
+          </div>
+        )}
         <div className="flex flex-wrap gap-2 items-end bg-white border border-gray-300 rounded-xl px-3 py-2 shadow-sm hover:border-gray-400 focus-within:ring-2 focus-within:ring-[#3B82F6] focus-within:border-transparent transition-all">
           {/* Selected ASIN chips (chat context) */}
           {selectedAsins.length > 0 && (

@@ -30,6 +30,7 @@ import {
   checkCreditBalance,
   executeEscalation,
 } from "@/lib/ai/copilotEscalationHelpers";
+import { evaluateChatGuardrails } from "@/lib/ai/chatGuardrails";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -2039,6 +2040,24 @@ export async function POST(req: NextRequest) {
       effectiveSelectedAsinForEscalation, // Backward compatibility (single ASIN)
       eligibleAsinsForEscalation // Multi-ASIN support (selected OR explicit)
     );
+
+    // Server-side guardrails (single source of truth for creditless analysis-only chat).
+    // NOTE: this does NOT change pricing/credit logic; it only clarifies intent classification.
+    const hasSnapshot = !!body.analysisRunId; // analysis_run_id anchors an existing snapshot/context
+    const guardrails = evaluateChatGuardrails({
+      question: body.message,
+      selectedAsins,
+      hasSnapshot,
+      creditsAvailable: optimisticCreditContext.available_credits,
+    });
+    console.log("CHAT_GUARDRAILS", {
+      analysis_run_id: body.analysisRunId,
+      intent: guardrails.intent,
+      requires_credits: guardrails.requiresCredits,
+      credits_required: guardrails.creditsRequired,
+      selected_count: selectedAsins.length,
+      timestamp: new Date().toISOString(),
+    });
 
     // Only now (and only if needed) load real credit context and re-run decision.
     const creditContext: CreditContext = escalationDecision.requires_escalation

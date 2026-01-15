@@ -141,6 +141,11 @@ export async function POST(request: NextRequest) {
       const fulfillment_fee = parseFloat(cachedData.fulfillment_fee.toString());
       const referral_fee = parseFloat(cachedData.referral_fee.toString());
       const total_amazon_fees = Math.round((fulfillment_fee + referral_fee) * 100) / 100;
+      const fetchedAt = cachedData.fetched_at ? new Date(cachedData.fetched_at).toISOString() : null;
+      const ageHours =
+        cachedData.fetched_at
+          ? Math.max(0, (Date.now() - new Date(cachedData.fetched_at).getTime()) / (1000 * 60 * 60))
+          : null;
       return NextResponse.json(
         {
           ok: true,
@@ -148,6 +153,8 @@ export async function POST(request: NextRequest) {
           confidence: "high",
           marketplace,
           cached: true,
+          fetched_at: fetchedAt,
+          cache_age_hours: ageHours !== null ? Math.round(ageHours * 10) / 10 : null,
           fulfillment_fee,
           referral_fee,
           total_amazon_fees,
@@ -222,6 +229,8 @@ export async function POST(request: NextRequest) {
         confidence: "high",
         marketplace,
         cached: false,
+        fetched_at: new Date().toISOString(),
+        cache_age_hours: 0,
         fulfillment_fee,
         referral_fee,
         total_amazon_fees,
