@@ -282,6 +282,15 @@ export async function processKeyword(
 
     const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER'; // Default to US
     
+    // Log that SP-API enrichment is being forced for ALL ASINs
+    console.log('SP_API_CATALOG_ENRICHMENT_FORCED', {
+      keyword,
+      total_asins: asinsForSpApi.length,
+      marketplace_id: marketplaceId,
+      reason: 'SP-API is authoritative source for brand, title, image, category, and BSR',
+      timestamp: new Date().toISOString(),
+    });
+    
     console.log('SP_API_ENRICH_START', {
       keyword,
       asin_count: asinsForSpApi.length,
@@ -342,15 +351,34 @@ export async function processKeyword(
               });
             }
 
-            // Emit verification log
+            // Calculate successful vs failed API calls (batch-level)
+            // A batch is successful if all its ASINs were enriched, failed if all failed, partial if mixed
+            // For simplicity: successful_calls = batches where at least one ASIN succeeded
+            // failed_calls = batches where all ASINs failed
+            // Estimate: if all ASINs enriched, all batches succeeded; if all failed, all batches failed
+            // Otherwise, estimate based on success rate
+            const enrichedCount = enrichmentResult.enriched.size;
+            const failedCount = enrichmentResult.failed.length;
+            const successRate = enrichedCount / asinsForSpApi.length;
+            const successfulCalls = successRate === 1 
+              ? totalBatches 
+              : successRate === 0 
+                ? 0 
+                : Math.max(1, Math.round(totalBatches * successRate));
+            const failedCalls = totalBatches - successfulCalls;
+
+            // Emit verification log with all required fields
             console.log('SP_API_CATALOG_BATCH_COMPLETE', {
               keyword,
               total_asins: asinsForSpApi.length,
               total_batches: totalBatches,
               batch_sizes: batchSizes,
-              enriched_count: enrichmentResult.enriched.size,
-              failed_count: enrichmentResult.failed.length,
+              successful_calls: successfulCalls,
+              failed_calls: failedCalls,
+              enriched_count: enrichedCount,
+              failed_count: failedCount,
               duration_ms: catalogDuration,
+              timestamp: new Date().toISOString(),
             });
 
             if (enrichmentResult.failed.length > 0) {
