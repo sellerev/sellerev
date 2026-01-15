@@ -6,10 +6,71 @@ import { getFbaFees } from "@/lib/spapi/getFbaFees";
  * API endpoint to fetch FBA fees for an ASIN
  * Used by FeasibilityCalculator to get SP-API fees
  */
+
+// Helper: referral fee estimate by category
+function estimateReferralPct(categoryHint: string | null): { pct: number; label: string } {
+  if (!categoryHint) return { pct: 15, label: "Default (15%)" };
+  const c = categoryHint.toLowerCase();
+  if (c.includes("electronics") || c.includes("computer") || c.includes("tech")) return { pct: 8, label: "Electronics (8%)" };
+  if (c.includes("beauty") || c.includes("cosmetic") || c.includes("skincare")) return { pct: 8.5, label: "Beauty (8.5%)" };
+  if (c.includes("clothing") || c.includes("apparel") || c.includes("fashion")) return { pct: 17, label: "Clothing (17%)" };
+  if (c.includes("home") || c.includes("kitchen") || c.includes("household")) return { pct: 15, label: "Home (15%)" };
+  return { pct: 15, label: "Default (15%)" };
+}
+
+// Helper: fulfillment fee estimate using size/weight if present, otherwise rough bucket
+function estimateFulfillmentFee(
+  weightKg: number | null,
+  dimsCm: { length?: number | null; width?: number | null; height?: number | null } | null,
+  categoryHint: string | null,
+  price: number
+): { fee: number; confidence: "low" | "medium"; label: string } {
+  const l = dimsCm?.length ?? null;
+  const w = dimsCm?.width ?? null;
+  const h = dimsCm?.height ?? null;
+  const maxDim = Math.max(l || 0, w || 0, h || 0);
+
+  if (
+    (typeof weightKg === "number" && weightKg > 0) ||
+    maxDim > 0
+  ) {
+    // Small/standard
+    if ((weightKg === null || weightKg < 0.45) && (maxDim === 0 || maxDim < 45.72)) {
+      return { fee: 7.5, confidence: "medium", label: "Small/standard (estimated)" };
+    }
+    // Oversize/home goods
+    if (
+      (weightKg !== null && weightKg > 9.07) ||
+      maxDim > 45.72 ||
+      (categoryHint && /furniture|appliance|oversized/i.test(categoryHint))
+    ) {
+      return { fee: 10.0, confidence: "medium", label: "Oversize/home goods (estimated)" };
+    }
+    return { fee: 8.5, confidence: "medium", label: "Large standard (estimated)" };
+  }
+
+  // No size/weight — fallback on simple price bucket (low confidence)
+  const f = price < 10 ? 2.0 : price < 25 ? 3.0 : price < 50 ? 4.0 : 5.0;
+  return { fee: f, confidence: "low", label: "Fulfillment fee (low-confidence estimate)" };
+}
+
 export async function POST(request: NextRequest) {
+  // Parse body first so we can use values in catch block if needed
+  let body: any = {};
+  let price: number = 25; // Default fallback price
+  let marketplace: string = "ATVPDKIKX0DER";
+  
   try {
-    // Fast-fail diagnostics: if SP-API env vars are missing, we can’t possibly return an exact quote.
-    // This helps distinguish “config missing” from transient SP-API failures.
+    body = await request.json();
+    price = body?.price || 25;
+    marketplace = body?.marketplace || "ATVPDKIKX0DER";
+  } catch (parseError) {
+    // If body parsing fails, we'll use defaults in catch block
+  }
+
+  try {
+    // Fast-fail diagnostics: if SP-API env vars are missing, we can't possibly return an exact quote.
+    // This helps distinguish "config missing" from transient SP-API failures.
     const requiredEnv = [
       "SP_API_CLIENT_ID",
       "SP_API_CLIENT_SECRET",
@@ -19,11 +80,8 @@ export async function POST(request: NextRequest) {
     ] as const;
     const missingEnv = requiredEnv.filter((k) => !process.env[k]);
 
-    const body = await request.json();
     const {
       asin,
-      price,
-      marketplace = "ATVPDKIKX0DER",
       category = null,
       weight_kg = null,
       dims_cm = null,
@@ -43,57 +101,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Helper: referral fee estimate by category
-    const estimateReferralPct = (categoryHint: string | null): { pct: number; label: string } => {
-      if (!categoryHint) return { pct: 15, label: "Default (15%)" };
-      const c = categoryHint.toLowerCase();
-      if (c.includes("electronics") || c.includes("computer") || c.includes("tech")) return { pct: 8, label: "Electronics (8%)" };
-      if (c.includes("beauty") || c.includes("cosmetic") || c.includes("skincare")) return { pct: 8.5, label: "Beauty (8.5%)" };
-      if (c.includes("clothing") || c.includes("apparel") || c.includes("fashion")) return { pct: 17, label: "Clothing (17%)" };
-      if (c.includes("home") || c.includes("kitchen") || c.includes("household")) return { pct: 15, label: "Home (15%)" };
-      return { pct: 15, label: "Default (15%)" };
-    };
-
-    // Helper: fulfillment fee estimate using size/weight if present, otherwise rough bucket
-    const estimateFulfillmentFee = (
-      weightKg: number | null,
-      dimsCm: { length?: number | null; width?: number | null; height?: number | null } | null,
-      categoryHint: string | null
-    ): { fee: number; confidence: "low" | "medium"; label: string } => {
-      const l = dimsCm?.length ?? null;
-      const w = dimsCm?.width ?? null;
-      const h = dimsCm?.height ?? null;
-      const maxDim = Math.max(l || 0, w || 0, h || 0);
-
-      if (
-        (typeof weightKg === "number" && weightKg > 0) ||
-        maxDim > 0
-      ) {
-        // Small/standard
-        if ((weightKg === null || weightKg < 0.45) && (maxDim === 0 || maxDim < 45.72)) {
-          return { fee: 7.5, confidence: "medium", label: "Small/standard (estimated)" };
-        }
-        // Oversize/home goods
-        if (
-          (weightKg !== null && weightKg > 9.07) ||
-          maxDim > 45.72 ||
-          (categoryHint && /furniture|appliance|oversized/i.test(categoryHint))
-        ) {
-          return { fee: 10.0, confidence: "medium", label: "Oversize/home goods (estimated)" };
-        }
-        return { fee: 8.5, confidence: "medium", label: "Large standard (estimated)" };
-      }
-
-      // No size/weight — fallback on simple price bucket (low confidence)
-      const f = price < 10 ? 2.0 : price < 25 ? 3.0 : price < 50 ? 4.0 : 5.0;
-      return { fee: f, confidence: "low", label: "Fulfillment fee (low-confidence estimate)" };
-    };
-
     const referral = estimateReferralPct(typeof category === "string" ? category : null);
     const fulfillmentEst = estimateFulfillmentFee(
       typeof weight_kg === "number" ? weight_kg : null,
       (dims_cm && typeof dims_cm === "object") ? dims_cm : null,
-      typeof category === "string" ? category : null
+      typeof category === "string" ? category : null,
+      price
     );
 
     const estimated = {
@@ -265,9 +278,13 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     // Never fail - always return estimate on any error
     console.error("FBA fees API error:", error);
+    
+    // Use parsed price if available, otherwise use default
+    const fallbackPrice = (typeof price === "number" && price > 0) ? price : 25;
+    
     const referral = estimateReferralPct(null);
-    const fulfillmentEst = estimateFulfillmentFee(null, null, null);
-    const referral_fee = Math.round(((price * referral.pct) / 100) * 100) / 100;
+    const fulfillmentEst = estimateFulfillmentFee(null, null, null, fallbackPrice);
+    const referral_fee = Math.round(((fallbackPrice * referral.pct) / 100) * 100) / 100;
     const fulfillment_fee = Math.round(fulfillmentEst.fee * 100) / 100;
     const total_amazon_fees = Math.round((referral_fee + fulfillment_fee) * 100) / 100;
     
