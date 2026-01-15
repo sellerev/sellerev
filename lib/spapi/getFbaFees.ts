@@ -212,8 +212,13 @@ function extractFees(data: any): {
   totalFee: number | null;
 } {
   try {
+    // SP-API docs: successful response is wrapped in `payload`:
+    // { payload: { FeesEstimateResult: ... }, errors?: [...] }
+    // Some clients/loggers may provide the inner object directly, so support both.
+    const root = data?.payload ? data.payload : data;
+
     // Handle array response (multiple fulfillment programs)
-    const feesEstimateResult = data?.FeesEstimateResult;
+    const feesEstimateResult = root?.FeesEstimateResult;
     if (!feesEstimateResult) {
       return {
         fulfillmentFee: null,
