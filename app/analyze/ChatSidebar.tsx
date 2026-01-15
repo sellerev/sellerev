@@ -528,9 +528,24 @@ export default function ChatSidebar({
   // HANDLERS
   // ─────────────────────────────────────────────────────────────────────────
 
+  // Queue assistant messages that should not interleave with the streaming assistant response.
+  // This keeps output clean (Cursor-style): one assistant response stream at a time.
+  const queuedAssistantMessagesRef = useRef<string[]>([]);
+
   const appendAssistantMessage = useCallback((content: string) => {
     setMessages((prev) => [...prev, { role: "assistant", content }]);
   }, []);
+
+  const appendAssistantMessageDeferred = useCallback(
+    (content: string) => {
+      if (isLoading) {
+        queuedAssistantMessagesRef.current.push(content);
+        return;
+      }
+      setMessages((prev) => [...prev, { role: "assistant", content }]);
+    },
+    [isLoading]
+  );
 
   const formatMoney = (n: number) => `$${n.toFixed(2)}`;
 
@@ -763,8 +778,84 @@ export default function ChatSidebar({
     [appendAssistantMessage, explainMarketContextForProfitability, formatMoney]
   );
 
+  const runFeesQuote = useCallback(
+    async (
+      asin: string,
+      price: number,
+      opts?: { silent?: boolean }
+    ): Promise<void> => {
+      setCopilotStatus("fetching");
+      setFeesFlow({
+        status: "quote_loading",
+        asin,
+        price,
+        startedAtMs: Date.now(),
+      });
+
+      const res = await fetchFeesQuoteDetailed(asin, price);
+      setCopilotStatus("idle");
+
+      if (res.kind !== "ok") {
+        const msg =
+          res.kind === "timeout"
+            ? res.message
+            : `${res.message}\n\nYou can retry now, or try a different item price.${
+                res.fallbackQuote ? " Or you can use an estimated fee breakdown." : ""
+              }`;
+
+        // Collapse fee responses: no pre-run bubble; only emit a single message per attempt (unless silent UI action).
+        if (opts?.silent !== true) {
+          appendAssistantMessageDeferred(msg);
+        }
+
+        setFeesFlow({
+          status: "quote_error",
+          asin,
+          price,
+          message: msg,
+          reason: res.kind === "timeout" ? "timeout" : res.reason,
+          httpStatus: res.kind === "error" ? res.httpStatus : undefined,
+          requestId: res.kind === "error" ? res.requestId : undefined,
+          missingEnv: res.kind === "error" ? res.missingEnv : undefined,
+          errors: res.kind === "error" ? res.errors : undefined,
+          fallbackQuote: res.kind === "error" ? res.fallbackQuote : undefined,
+        });
+        return;
+      }
+
+      // Successful quote: update inline panel state (and preserve any existing cost inputs).
+      setFeesFlow((prev) => {
+        if (prev.status === "awaiting_profit_inputs" && prev.asin === asin) {
+          return { ...prev, quote: res.quote };
+        }
+        return {
+          status: "awaiting_profit_inputs",
+          asin,
+          prefilledPrice: price,
+          quote: res.quote,
+          cogs: null,
+          shipIn: null,
+          otherCosts: 0,
+        };
+      });
+
+      // Only initialize profit form if we're not already in profit-input mode
+      setProfitForm((prev) => (feesFlow.status === "awaiting_profit_inputs" ? prev : { cogs: "", shipIn: "", otherCosts: "0" }));
+
+      if (opts?.silent !== true) {
+        appendAssistantMessageDeferred(
+          `Amazon fees at **${formatMoney(res.quote.price)}**:\n- **Total Amazon fees: ${formatMoney(res.quote.totalAmazonFees)}**\n  - Referral fee: ${formatMoney(res.quote.referralFee)}\n  - FBA fulfillment fee: ${formatMoney(res.quote.fulfillmentFee)}\n\nWant to calculate your **profitability** for this product? Add your costs below (COGS + inbound shipping are required).`
+        );
+      }
+    },
+    [appendAssistantMessage, fetchFeesQuoteDetailed, formatMoney, feesFlow.status]
+  );
+
   const startFeesFlow = useCallback(
     (asin: string) => {
+      // Prevent duplicate starts (e.g., repeated intent metadata chunks)
+      if (feesFlow.status !== "idle" && (feesFlow as any).asin === asin) return;
+
       const prefilledPrice = getPrefilledPrice();
       console.log("[FBA_FEES_QUOTE_START]", { asin, prefilledPrice });
 
@@ -779,65 +870,13 @@ export default function ChatSidebar({
         return;
       }
 
-      appendAssistantMessage(
-        `I can calculate **exact Amazon fees** using Amazon’s **Seller API** for this product.\n\nPulling the fee quote for ASIN **${asin}** at **${formatMoney(prefilledPrice)}** now…`
-      );
-
-      setCopilotStatus("fetching");
-      setFeesFlow({
-        status: "quote_loading",
-        asin,
-        price: prefilledPrice,
-        startedAtMs: Date.now(),
-      });
-      void (async () => {
-        const res = await fetchFeesQuoteDetailed(asin, prefilledPrice);
-        setCopilotStatus("idle");
-
-        if (res.kind !== "ok") {
-          const msg =
-            res.kind === "timeout"
-              ? res.message
-              : `${res.message}\n\nYou can retry now, or try a different item price.${
-                  res.fallbackQuote ? " Or you can use an estimated fee breakdown." : ""
-                }`;
-          appendAssistantMessage(msg);
-          setFeesFlow({
-            status: "quote_error",
-            asin,
-            price: prefilledPrice,
-            message: msg,
-            reason: res.kind === "timeout" ? "timeout" : res.reason,
-            httpStatus: res.kind === "error" ? res.httpStatus : undefined,
-            requestId: res.kind === "error" ? res.requestId : undefined,
-            missingEnv: res.kind === "error" ? res.missingEnv : undefined,
-            errors: res.kind === "error" ? res.errors : undefined,
-            fallbackQuote: res.kind === "error" ? res.fallbackQuote : undefined,
-          });
-          return;
-        }
-
-        appendAssistantMessage(
-          `Amazon fees at **${formatMoney(res.quote.price)}**:\n- **Total Amazon fees: ${formatMoney(res.quote.totalAmazonFees)}**\n  - Referral fee: ${formatMoney(res.quote.referralFee)}\n  - FBA fulfillment fee: ${formatMoney(res.quote.fulfillmentFee)}\n\nWant to calculate your **profitability** for this product? Add your costs below (COGS + inbound shipping are required).`
-        );
-
-        setFeesFlow({
-          status: "awaiting_profit_inputs",
-          asin,
-          prefilledPrice,
-          quote: res.quote,
-          cogs: null,
-          shipIn: null,
-          otherCosts: 0,
-        });
-        setProfitForm({ cogs: "", shipIn: "", otherCosts: "0" });
-      })();
+      void runFeesQuote(asin, prefilledPrice, { silent: false });
     },
-    [appendAssistantMessage, fetchFeesQuoteDetailed, formatMoney, getPrefilledPrice]
+    [appendAssistantMessage, feesFlow, getPrefilledPrice, runFeesQuote]
   );
 
   const handleFeesFlowTurn = useCallback(
-    async (messageToSend: string): Promise<boolean> => {
+    async (messageToSend: string, opts?: { silent?: boolean }): Promise<boolean> => {
       const prefilledPrice = getPrefilledPrice();
 
       if (feesFlow.status === "idle") return false;
@@ -880,60 +919,7 @@ export default function ChatSidebar({
 
       // Allow rerun of fees quote at a new price (Price X)
       if (typeof parsed.price === "number" && parsed.price > 0) {
-        appendAssistantMessage(
-          `Got it — rerunning the Amazon fee quote at **${formatMoney(parsed.price)}**…`
-        );
-        setCopilotStatus("fetching");
-        setFeesFlow({
-          status: "quote_loading",
-          asin: feesFlow.asin,
-          price: parsed.price,
-          startedAtMs: Date.now(),
-        });
-        const res = await fetchFeesQuoteDetailed(feesFlow.asin, parsed.price);
-        setCopilotStatus("idle");
-        if (res.kind !== "ok") {
-          const msg =
-            res.kind === "timeout"
-              ? res.message
-              : `${res.message}\n\nYou can retry now, or try a different item price.${
-                  res.fallbackQuote ? " Or you can use an estimated fee breakdown." : ""
-                }`;
-          appendAssistantMessage(msg);
-          setFeesFlow({
-            status: "quote_error",
-            asin: feesFlow.asin,
-            price: parsed.price,
-            message: msg,
-            reason: res.kind === "timeout" ? "timeout" : res.reason,
-            httpStatus: res.kind === "error" ? res.httpStatus : undefined,
-            requestId: res.kind === "error" ? res.requestId : undefined,
-            missingEnv: res.kind === "error" ? res.missingEnv : undefined,
-            errors: res.kind === "error" ? res.errors : undefined,
-            fallbackQuote: res.kind === "error" ? res.fallbackQuote : undefined,
-          });
-          return true;
-        }
-
-        appendAssistantMessage(
-          `Amazon fees at **${formatMoney(res.quote.price)}**:\n- **Total Amazon fees: ${formatMoney(res.quote.totalAmazonFees)}**\n  - Referral fee: ${formatMoney(res.quote.referralFee)}\n  - FBA fulfillment fee: ${formatMoney(res.quote.fulfillmentFee)}`
-        );
-
-        // If we had existing costs, preserve them; otherwise start fresh profitability mode.
-        setFeesFlow((prev) => {
-          if (prev.status === "awaiting_profit_inputs") {
-            return { ...prev, quote: res.quote };
-          }
-          return {
-            status: "awaiting_profit_inputs",
-            asin: feesFlow.asin,
-            prefilledPrice: prefilledPrice,
-            quote: res.quote,
-            cogs: null,
-            shipIn: null,
-            otherCosts: 0,
-          };
-        });
+        await runFeesQuote(feesFlow.asin, parsed.price, { silent: opts?.silent === true });
         return true;
       }
 
@@ -1004,6 +990,7 @@ export default function ChatSidebar({
       getPrefilledPrice,
       formatMoney,
       selectedAsins,
+      runFeesQuote,
     ]
   );
 
@@ -1129,13 +1116,7 @@ export default function ChatSidebar({
                   });
                   // Update Copilot status to "fetching" when escalation message appears
                   setCopilotStatus("fetching");
-                  // Context line: escalation approved + in-flight
                   hadEscalationThisResponseRef.current = true;
-                  if (selectedAsins && selectedAsins.length > 0) {
-                    setResponseContextLine("Looking up product details for selected ASIN(s)…");
-                  } else {
-                    setResponseContextLine("Looking up product details…");
-                  }
                 } else if (json.metadata.type === "escalation_started") {
                   // Backward compatibility - show escalation loading state
                   setEscalationState({
@@ -1144,13 +1125,7 @@ export default function ChatSidebar({
                   });
                   // Update Copilot status to "analyzing" when escalation decision is being made
                   setCopilotStatus("analyzing");
-                  // Context line: escalation in-flight
                   hadEscalationThisResponseRef.current = true;
-                  if (selectedAsins && selectedAsins.length > 0) {
-                    setResponseContextLine("Looking up product details for selected ASIN(s)…");
-                  } else {
-                    setResponseContextLine("Looking up product details…");
-                  }
                 } else if (json.metadata.type === "escalation_confirmation_required") {
                   // Backend is requesting explicit confirmation before any credits are consumed.
                   // Do NOT add a chat bubble; show a lightweight inline prompt.
@@ -1160,12 +1135,6 @@ export default function ChatSidebar({
                     credits: typeof json.metadata.credits === "number" ? json.metadata.credits : 1,
                     originalQuestion: messageToSend,
                   });
-                  // Context line: reflect that escalation is the data path for this response (confirmation required)
-                  if (selectedAsins && selectedAsins.length > 0) {
-                    setResponseContextLine("Looking up product details for selected ASIN(s)…");
-                  } else {
-                    setResponseContextLine("Looking up product details…");
-                  }
                   // Stop loading indicator (no assistant response will stream until confirmed)
                   setCopilotStatus("idle");
                   setIsLoading(false);
@@ -1179,7 +1148,6 @@ export default function ChatSidebar({
                   const asinToUse = asinFromMeta || (selectedAsins?.[0] || null);
                   if (asinToUse) {
                     startFeesFlow(asinToUse);
-                    setResponseContextLine(`Profitability lookup for selected ASIN: ${asinToUse}`);
                   }
                   // Do NOT stop loading here; the backend will still stream a normal assistant response.
                 } else if (json.metadata.type === "citations") {
@@ -1187,19 +1155,6 @@ export default function ChatSidebar({
                   const cits = (json.metadata.citations || []) as Citation[];
                   citationsForFinal = cits;
                   setCurrentCitations(cits);
-                  // Context line: reflect actual data source used
-                  const usedLive = cits.some((c) => c.source === "rainforest_product");
-                  if (usedLive && selectedAsins && selectedAsins.length > 0) {
-                    setResponseContextLine("Answering using selected ASIN(s) + live product data");
-                  } else if (selectedAsins && selectedAsins.length > 0) {
-                    if (selectedAsins.length === 1) {
-                      setResponseContextLine(`Answering using selected ASIN: ${selectedAsins[0]}`);
-                    } else {
-                      setResponseContextLine(`Answering using ${selectedAsins.length} selected ASINs`);
-                    }
-                  } else {
-                    setResponseContextLine("Answering using Page-1 market data");
-                  }
                 }
               }
               
@@ -1211,19 +1166,6 @@ export default function ChatSidebar({
                   setEscalationMessage(null);
                 }
                 setCopilotStatus("idle"); // Clear status when response starts
-                // Once we start streaming, we're answering (escalation already completed server-side).
-                // Keep this grounded in selection state; citations may later upgrade this to "+ live product data".
-                if (hadEscalationThisResponseRef.current) {
-                  if (selectedAsins && selectedAsins.length > 0) {
-                    if (selectedAsins.length === 1) {
-                      setResponseContextLine(`Answering using selected ASIN: ${selectedAsins[0]}`);
-                    } else {
-                      setResponseContextLine(`Answering using ${selectedAsins.length} selected ASINs`);
-                    }
-                  } else {
-                    setResponseContextLine("Answering using Page-1 market data");
-                  }
-                }
                 accumulatedContent += json.content;
                 setStreamingContent(accumulatedContent);
               }
@@ -1262,6 +1204,15 @@ export default function ChatSidebar({
       setCopilotStatus("idle"); // Clear Copilot status when done
       // Focus input after send
       inputRef.current?.focus();
+
+      // Flush any deferred assistant messages (e.g., fee results) now that streaming is done.
+      const queued = queuedAssistantMessagesRef.current.splice(0);
+      if (queued.length > 0) {
+        setMessages((prev) => [
+          ...prev,
+          ...queued.map((content) => ({ role: "assistant" as const, content })),
+        ]);
+      }
     }
   }, [analysisRunId, feesFlow.status, handleFeesFlowTurn, input, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange, escalationState, escalationMessage, startFeesFlow]);
 
@@ -1771,7 +1722,7 @@ export default function ChatSidebar({
                 type="button"
                 onClick={() => {
                   const q = feesFlow.fallbackQuote!;
-                  appendAssistantMessage(
+                appendAssistantMessageDeferred(
                     `Using **estimated** Amazon fees at **${formatMoney(q.price)}** (confidence: **${q.confidence}**):\n- **Total Amazon fees: ${formatMoney(q.totalAmazonFees)}**\n  - Referral fee: ${formatMoney(q.referralFee)}\n  - FBA fulfillment fee: ${formatMoney(q.fulfillmentFee)}`
                   );
                   setFeesFlow({
@@ -1794,7 +1745,7 @@ export default function ChatSidebar({
               type="button"
               onClick={() => {
                 // Retry with the currently entered price
-                void handleFeesFlowTurn(`Price ${feesFlow.price}`);
+                void handleFeesFlowTurn(`Price ${feesFlow.price}`, { silent: true });
               }}
               className="flex-1 px-3 py-2 bg-[#3B82F6] text-white rounded-lg text-sm font-medium hover:bg-[#2563EB]"
             >
@@ -1835,7 +1786,7 @@ export default function ChatSidebar({
                 type="button"
                 onClick={() => {
                   // Rerun fees quote at edited price (no extra chat bubble)
-                  void handleFeesFlowTurn(`Price ${feesFlow.quote.price}`);
+                  void handleFeesFlowTurn(`Price ${feesFlow.quote.price}`, { silent: true });
                 }}
                 className="mt-2 w-full px-3 py-2 bg-white rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 border border-gray-300"
               >
@@ -2025,7 +1976,11 @@ export default function ChatSidebar({
               lineHeight: "24px"
             }}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              // Copilot context line should disappear as soon as the user starts the next input.
+              if (responseContextLine) setResponseContextLine(null);
+            }}
             onKeyDown={handleKeyDown}
             placeholder={isDisabled ? "Open a saved analysis run to chat" : "Ask about the analysis..."}
             disabled={isDisabled || isLoading}
