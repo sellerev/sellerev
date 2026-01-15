@@ -1593,67 +1593,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4a. Load or create seller_memory (AI Copilot persistent memory)
-    let sellerMemory: SellerMemory;
+    // 4a. Seller memory (legacy blob) is NO LONGER stored in `seller_memory`.
+    // `seller_memory` is now the structured memory table (memory_type/key/value).
+    // To prevent chat failures from schema mismatches, we build a safe in-memory
+    // SellerMemory snapshot from seller_profiles each turn.
+    let sellerMemory: SellerMemory = createDefaultSellerMemory();
     try {
-      const { data: memoryRow, error: memoryError } = await supabase
-        .from("seller_memory")
-        .select("memory")
-        .eq("user_id", user.id)
-        .single();
-
-      if (memoryError || !memoryRow || !memoryRow.memory) {
-        // Create default memory
-        sellerMemory = createDefaultSellerMemory();
-        // Merge with seller profile data
-        const profileData = mapSellerProfileToMemory(sellerProfile);
-        sellerMemory.seller_profile = {
-          ...sellerMemory.seller_profile,
-          ...profileData,
-        };
-        
-        // Save to database (don't fail if this fails)
-        try {
-          await supabase
-            .from("seller_memory")
-            .insert({
-              user_id: user.id,
-              memory: sellerMemory,
-            });
-        } catch (insertError) {
-          console.error("Failed to insert seller memory (non-critical):", insertError);
-        }
-      } else {
-        // Validate and use existing memory
-        const memory = memoryRow.memory as unknown;
-        if (validateSellerMemory(memory)) {
-          sellerMemory = memory;
-          // Update profile data if it changed
-          const profileData = mapSellerProfileToMemory(sellerProfile);
-          sellerMemory.seller_profile = {
-            ...sellerMemory.seller_profile,
-            ...profileData,
-          };
-        } else {
-          // Invalid memory, reset to default
-          console.warn("Invalid seller memory structure, resetting to default");
-          sellerMemory = createDefaultSellerMemory();
-          const profileData = mapSellerProfileToMemory(sellerProfile);
-          sellerMemory.seller_profile = {
-            ...sellerMemory.seller_profile,
-            ...profileData,
-          };
-        }
-      }
-    } catch (memoryError) {
-      console.error("Error loading/creating seller memory:", memoryError);
-      // Fallback to default memory if loading fails
-      sellerMemory = createDefaultSellerMemory();
       const profileData = mapSellerProfileToMemory(sellerProfile);
       sellerMemory.seller_profile = {
         ...sellerMemory.seller_profile,
         ...profileData,
       };
+    } catch (e) {
+      console.error("Failed to map seller profile into sellerMemory (non-blocking):", e);
     }
     
     // Record analyzed keyword in memory (append-only, no confirmation needed)
@@ -1714,25 +1666,8 @@ export async function POST(req: NextRequest) {
       // Continue without structured memories - don't block chat
     }
     
-    // Save updated memory (if changed)
-    try {
-      const { error: memorySaveError } = await supabase
-        .from("seller_memory")
-        .upsert({
-          user_id: user.id,
-          memory: sellerMemory,
-        }, {
-          onConflict: "user_id",
-        });
-      
-      if (memorySaveError) {
-        console.error("Failed to save seller memory:", memorySaveError);
-        // Don't fail the request - memory save is not critical
-      }
-    } catch (memoryError) {
-      console.error("Error saving seller memory:", memoryError);
-      // Don't fail the request - memory save is not critical
-    }
+    // NOTE: We do not write the legacy sellerMemory blob to the DB.
+    // Structured memories are handled by the memory extraction + merge pipeline and stored in `seller_memory` (memory_type/key/value).
 
     // 5. Fetch all prior analysis_messages for this run (conversation history)
     // ────────────────────────────────────────────────────────────────────────
