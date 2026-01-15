@@ -22,8 +22,19 @@ export interface FbaFeesResult {
     rate_limit?: string | null;
     marketplace_id?: string;
     errors?: Array<{ code?: string; message?: string; details?: string }>;
+    // True if we attempted (and possibly succeeded with) a Catalog Items dimension retry.
+    used_dimensions_retry?: boolean;
   };
 }
+
+type SpApiLength = { Unit: string; Value: number };
+type SpApiWeight = { Unit: string; Value: number };
+type SpApiProductDimensions = {
+  Length: SpApiLength;
+  Width: SpApiLength;
+  Height: SpApiLength;
+  Weight: SpApiWeight;
+};
 
 /**
  * Get FBA fees for an ASIN using Amazon SP-API
@@ -65,121 +76,78 @@ export async function getFbaFees({
   }
 
   try {
-    // Get access token
     const accessToken = await getSpApiAccessToken();
-
-    // Determine endpoint based on marketplace
     const endpoint = getEndpointForMarketplace(marketplaceId);
     const host = new URL(endpoint).hostname;
-    // Correct endpoint path for FBA fees (matches FBA calculator)
-    const path = `/products/fees/v0/items/${asin}/feesEstimate`;
+    const region = getRegionForMarketplace(marketplaceId);
 
-    // Prepare request body (matches FBA calculator format)
-    const requestBody = JSON.stringify({
-      FeesEstimateRequest: {
-        MarketplaceId: marketplaceId,
-        IsAmazonFulfilled: true, // CRITICAL: Must be true for FBA fees
-        PriceToEstimateFees: {
-          ListingPrice: {
-            Amount: price,
-            CurrencyCode: "USD",
-          },
-          Shipping: {
-            CurrencyCode: "USD",
-            Amount: 0.00, // Default shipping (can be adjusted if needed)
-          },
-          Points: {
-            PointsNumber: 0,
-            PointsMonetaryValue: {
-              CurrencyCode: "USD",
-              Amount: 0.00,
-            },
-          },
-        },
-        Identifier: `fees-estimate-${asin}-${Date.now()}`,
-        OptionalFulfillmentProgram: "FBA_CORE", // Specify FBA Core program
-      },
-    });
-
-    // Create SigV4 signed request
-    const signedRequest = await createSignedRequest({
-      method: "POST",
+    const attempt1 = await callFeesEstimate({
+      asin,
+      price,
+      marketplaceId,
+      endpoint,
       host,
-      path,
-      body: requestBody,
+      region,
       accessToken,
       awsAccessKeyId,
       awsSecretAccessKey,
-      region: getRegionForMarketplace(marketplaceId),
+      productDimensions: null,
+    });
+    if (attempt1.fulfillment_fee !== null && attempt1.referral_fee !== null) {
+      return attempt1;
+    }
+
+    // If auth/signature failed, a dimension retry won't help.
+    const status = attempt1.debug?.http_status;
+    if (status === 401 || status === 403) {
+      return attempt1;
+    }
+
+    // Retry strategy: Catalog Items → dimensions → retry fees request with ProductDimensions.
+    // This improves success for ASINs not in the seller catalog (SP-API may require dimensions).
+    const dims = await fetchCatalogProductDimensions({
+      asin,
+      marketplaceId,
+      endpoint,
+      host,
+      region,
+      accessToken,
+      awsAccessKeyId,
+      awsSecretAccessKey,
     });
 
-    // Make request
-    const response = await fetch(`${endpoint}${path}`, {
-      method: "POST",
-      headers: signedRequest.headers,
-      body: requestBody,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "Unknown error");
-      // Log error but don't throw - return nulls gracefully
-      const requestId =
-        response.headers.get("x-amzn-requestid") ||
-        response.headers.get("x-amz-request-id") ||
-        response.headers.get("x-amzn-RequestId") ||
-        null;
-      const rateLimit =
-        response.headers.get("x-amzn-ratelimit-limit") ||
-        response.headers.get("x-amzn-RateLimit-Limit") ||
-        null;
-
-      // Try to parse SP-API error payload
-      let parsedErrors: Array<{ code?: string; message?: string; details?: string }> | undefined = undefined;
-      try {
-        const parsed = JSON.parse(errorText);
-        if (Array.isArray(parsed?.errors)) {
-          parsedErrors = parsed.errors.map((e: any) => ({
-            code: typeof e?.code === "string" ? e.code : undefined,
-            message: typeof e?.message === "string" ? e.message : undefined,
-            details: typeof e?.details === "string" ? e.details : undefined,
-          }));
-        }
-      } catch {
-        // ignore
-      }
-
-      console.error("SP-API getFbaFees failed", {
-        status: response.status,
-        requestId,
-        rateLimit,
-        body: errorText,
-      });
+    if (!dims) {
       return {
-        fulfillment_fee: null,
-        referral_fee: null,
-        total_fba_fees: null,
-        currency: "USD",
+        ...attempt1,
         debug: {
-          http_status: response.status,
-          request_id: requestId,
-          rate_limit: rateLimit,
+          ...(attempt1.debug || {}),
           marketplace_id: marketplaceId,
-          errors: parsedErrors,
+          used_dimensions_retry: true,
         },
       };
     }
 
-    const data = await response.json();
+    const attempt2 = await callFeesEstimate({
+      asin,
+      price,
+      marketplaceId,
+      endpoint,
+      host,
+      region,
+      accessToken,
+      awsAccessKeyId,
+      awsSecretAccessKey,
+      productDimensions: dims,
+    });
 
-    // Extract fees from response
-    const fees = extractFees(data);
+    // Mark retry was used for diagnostics (regardless of success)
+    if (attempt2.debug) {
+      attempt2.debug.used_dimensions_retry = true;
+    } else {
+      attempt2.debug = { used_dimensions_retry: true, marketplace_id: marketplaceId };
+    }
 
-    return {
-      fulfillment_fee: fees.fulfillmentFee,
-      referral_fee: fees.referralFee,
-      total_fba_fees: fees.totalFee,
-      currency: "USD",
-    };
+    return attempt2.fulfillment_fee !== null && attempt2.referral_fee !== null ? attempt2 : attempt1;
   } catch (error) {
     // Log error but don't throw - return nulls gracefully
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -191,6 +159,279 @@ export async function getFbaFees({
       currency: "USD",
     };
   }
+}
+
+async function callFeesEstimate({
+  asin,
+  price,
+  marketplaceId,
+  endpoint,
+  host,
+  region,
+  accessToken,
+  awsAccessKeyId,
+  awsSecretAccessKey,
+  productDimensions,
+}: {
+  asin: string;
+  price: number;
+  marketplaceId: string;
+  endpoint: string;
+  host: string;
+  region: string;
+  accessToken: string;
+  awsAccessKeyId: string;
+  awsSecretAccessKey: string;
+  productDimensions: SpApiProductDimensions | null;
+}): Promise<FbaFeesResult> {
+  const path = `/products/fees/v0/items/${asin}/feesEstimate`;
+
+  // Prepare request body (matches FBA calculator format)
+  const bodyObj: any = {
+    FeesEstimateRequest: {
+      MarketplaceId: marketplaceId,
+      IsAmazonFulfilled: true, // CRITICAL: Must be true for FBA fees
+      PriceToEstimateFees: {
+        ListingPrice: {
+          Amount: price,
+          CurrencyCode: "USD",
+        },
+        Shipping: {
+          CurrencyCode: "USD",
+          Amount: 0.0,
+        },
+        Points: {
+          PointsNumber: 0,
+          PointsMonetaryValue: {
+            CurrencyCode: "USD",
+            Amount: 0.0,
+          },
+        },
+      },
+      Identifier: `fees-estimate-${asin}-${Date.now()}`,
+      OptionalFulfillmentProgram: "FBA_CORE",
+    },
+  };
+
+  // Optional: provide dimensions (helps when ASIN isn't in seller catalog)
+  if (productDimensions) {
+    bodyObj.FeesEstimateRequest.ProductDimensions = productDimensions;
+  }
+
+  const requestBody = JSON.stringify(bodyObj);
+
+  const signedRequest = await createSignedRequest({
+    method: "POST",
+    host,
+    path,
+    queryString: "",
+    body: requestBody,
+    accessToken,
+    awsAccessKeyId,
+    awsSecretAccessKey,
+    region,
+  });
+
+  const response = await fetch(`${endpoint}${path}`, {
+    method: "POST",
+    headers: signedRequest.headers,
+    body: requestBody,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "Unknown error");
+    const requestId =
+      response.headers.get("x-amzn-requestid") ||
+      response.headers.get("x-amz-request-id") ||
+      response.headers.get("x-amzn-RequestId") ||
+      null;
+    const rateLimit =
+      response.headers.get("x-amzn-ratelimit-limit") ||
+      response.headers.get("x-amzn-RateLimit-Limit") ||
+      null;
+
+    let parsedErrors: Array<{ code?: string; message?: string; details?: string }> | undefined = undefined;
+    try {
+      const parsed = JSON.parse(errorText);
+      if (Array.isArray(parsed?.errors)) {
+        parsedErrors = parsed.errors.map((e: any) => ({
+          code: typeof e?.code === "string" ? e.code : undefined,
+          message: typeof e?.message === "string" ? e.message : undefined,
+          details: typeof e?.details === "string" ? e.details : undefined,
+        }));
+      }
+    } catch {
+      // ignore
+    }
+
+    console.error("SP-API getMyFeesEstimateForASIN failed", {
+      status: response.status,
+      requestId,
+      rateLimit,
+      body: errorText,
+      withDimensions: !!productDimensions,
+    });
+    return {
+      fulfillment_fee: null,
+      referral_fee: null,
+      total_fba_fees: null,
+      currency: "USD",
+      debug: {
+        http_status: response.status,
+        request_id: requestId,
+        rate_limit: rateLimit,
+        marketplace_id: marketplaceId,
+        errors: parsedErrors,
+      },
+    };
+  }
+
+  const data = await response.json();
+  const fees = extractFees(data);
+
+  return {
+    fulfillment_fee: fees.fulfillmentFee,
+    referral_fee: fees.referralFee,
+    total_fba_fees: fees.totalFee,
+    currency: "USD",
+    debug: { marketplace_id: marketplaceId },
+  };
+}
+
+async function fetchCatalogProductDimensions({
+  asin,
+  marketplaceId,
+  endpoint,
+  host,
+  region,
+  accessToken,
+  awsAccessKeyId,
+  awsSecretAccessKey,
+}: {
+  asin: string;
+  marketplaceId: string;
+  endpoint: string;
+  host: string;
+  region: string;
+  accessToken: string;
+  awsAccessKeyId: string;
+  awsSecretAccessKey: string;
+}): Promise<SpApiProductDimensions | null> {
+  const path = `/catalog/2022-04-01/items/${asin}`;
+
+  // Use attributes because dimensions are often present as item_package_dimensions / item_package_weight.
+  const params = new URLSearchParams();
+  params.set("marketplaceIds", marketplaceId);
+  params.set("includedData", "attributes");
+  const queryString = params.toString();
+
+  const signedRequest = await createSignedRequest({
+    method: "GET",
+    host,
+    path,
+    queryString,
+    body: "",
+    accessToken,
+    awsAccessKeyId,
+    awsSecretAccessKey,
+    region,
+  });
+
+  const response = await fetch(`${endpoint}${path}?${queryString}`, {
+    method: "GET",
+    headers: signedRequest.headers,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "Unknown error");
+    console.warn("SP-API Catalog Items dimension fetch failed", {
+      status: response.status,
+      asin,
+      marketplaceId,
+      body: errorText,
+    });
+    return null;
+  }
+
+  const data = await response.json().catch(() => null);
+  if (!data) return null;
+
+  // Support both doc format (payload wrapper) and raw objects.
+  const root = (data as any)?.payload ? (data as any).payload : data;
+  const attributes = (root as any)?.attributes || (root as any)?.AttributeSets || null;
+
+  // Robust extraction across common Catalog attribute shapes.
+  const pickNumber = (v: any): number | null => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = Number.parseFloat(v);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  };
+
+  const normalizeUnit = (u: any): string | null => {
+    if (typeof u !== "string") return null;
+    const s = u.toLowerCase().trim();
+    // SP-API fees commonly expects "inches"/"pounds" for US. Catalog may return in/cm/oz/lb etc.
+    if (s === "in" || s === "inch" || s === "inches") return "inches";
+    if (s === "cm" || s === "centimeter" || s === "centimeters") return "centimeters";
+    if (s === "lb" || s === "lbs" || s === "pound" || s === "pounds") return "pounds";
+    if (s === "oz" || s === "ounce" || s === "ounces") return "ounces";
+    if (s === "kg" || s === "kilogram" || s === "kilograms") return "kilograms";
+    if (s === "g" || s === "gram" || s === "grams") return "grams";
+    return u;
+  };
+
+  const getFirst = (obj: any, key: string): any => {
+    const v = obj?.[key];
+    if (Array.isArray(v)) return v[0];
+    return v;
+  };
+
+  // Try item_package_dimensions first (best proxy for shipped item to Amazon)
+  const pkgDims = attributes ? getFirst(attributes, "item_package_dimensions") : null;
+  const pkgWeight = attributes ? getFirst(attributes, "item_package_weight") : null;
+
+  // Fallback: item_dimensions / item_weight
+  const itemDims = attributes ? getFirst(attributes, "item_dimensions") : null;
+  const itemWeight = attributes ? getFirst(attributes, "item_weight") : null;
+
+  const dimsObj = pkgDims || itemDims || null;
+  const weightObj = pkgWeight || itemWeight || null;
+
+  const len = pickNumber(dimsObj?.length?.value ?? dimsObj?.length ?? dimsObj?.Length?.Value);
+  const wid = pickNumber(dimsObj?.width?.value ?? dimsObj?.width ?? dimsObj?.Width?.Value);
+  const hei = pickNumber(dimsObj?.height?.value ?? dimsObj?.height ?? dimsObj?.Height?.Value);
+  const dimUnitRaw =
+    dimsObj?.length?.unit ??
+    dimsObj?.unit ??
+    dimsObj?.Length?.Unit ??
+    dimsObj?.width?.unit ??
+    dimsObj?.height?.unit;
+  const dimUnit = normalizeUnit(dimUnitRaw);
+
+  const wVal = pickNumber(weightObj?.value ?? weightObj?.weight?.value ?? weightObj?.Weight?.Value);
+  const wUnit = normalizeUnit(weightObj?.unit ?? weightObj?.weight?.unit ?? weightObj?.Weight?.Unit);
+
+  if (
+    len === null ||
+    wid === null ||
+    hei === null ||
+    wVal === null ||
+    !dimUnit ||
+    !wUnit
+  ) {
+    return null;
+  }
+
+  // Prefer inches/pounds for US; if Catalog returned cm/kg, pass through as-is.
+  return {
+    Length: { Unit: dimUnit, Value: len },
+    Width: { Unit: dimUnit, Value: wid },
+    Height: { Unit: dimUnit, Value: hei },
+    Weight: { Unit: wUnit, Value: wVal },
+  };
 }
 
 /**
@@ -333,6 +574,7 @@ async function createSignedRequest({
   method,
   host,
   path,
+  queryString,
   body,
   accessToken,
   awsAccessKeyId,
@@ -342,6 +584,7 @@ async function createSignedRequest({
   method: string;
   host: string;
   path: string;
+  queryString?: string;
   body: string;
   accessToken: string;
   awsAccessKeyId: string;
@@ -355,7 +598,7 @@ async function createSignedRequest({
 
   // Step 1: Create canonical request
   const canonicalUri = path;
-  const canonicalQueryString = "";
+  const canonicalQueryString = (queryString || "").trim();
   const canonicalHeaders = [
     `content-type:application/json`,
     `host:${host}`,
