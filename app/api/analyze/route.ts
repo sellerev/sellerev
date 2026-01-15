@@ -1353,6 +1353,19 @@ export async function POST(req: NextRequest) {
     // 🚨 API SAFETY LIMIT: Create shared counter at route level (max 7 calls per analysis)
     // Call budget: 1 search + 4 BSR + 2 metadata = 7 total
     const apiCallCounter = { count: 0, max: 7 };
+
+    // FIX 3: Lock enrichment per snapshot to avoid duplicate async re-runs in the same invocation
+    // (serverless can execute multiple detached promises; this prevents double-triggering for same snapshot_id)
+    const enrichmentLocks = (globalThis as any).__SELLEREV_ENRICHMENT_LOCKS__ as {
+      inFlight: Set<string>;
+      completed: Set<string>;
+    } | undefined;
+    if (!(globalThis as any).__SELLEREV_ENRICHMENT_LOCKS__) {
+      (globalThis as any).__SELLEREV_ENRICHMENT_LOCKS__ = {
+        inFlight: new Set<string>(),
+        completed: new Set<string>(),
+      };
+    }
     
     try {
       // Rehydrate cache if available, otherwise fetch from Rainforest
@@ -2409,17 +2422,38 @@ export async function POST(req: NextRequest) {
           // Fire-and-forget: Do NOT await - let enrichment run in background
           (async () => {
             try {
+              const snapshotId = tier1Snapshot.snapshot.snapshot_id;
+              const locks = (globalThis as any).__SELLEREV_ENRICHMENT_LOCKS__ as {
+                inFlight: Set<string>;
+                completed: Set<string>;
+              };
+              if (locks.completed.has(snapshotId) || locks.inFlight.has(snapshotId)) {
+                console.log("ℹ️ ASYNC_ENRICHMENT_SKIPPED (LOCKED)", {
+                  keyword: body.input_value,
+                  snapshot_id: snapshotId,
+                });
+                return;
+              }
+              locks.inFlight.add(snapshotId);
+
               // BSR Enrichment (async)
               const { batchFetchBsrWithBackoff, bulkUpsertBsrCache } = await import("@/lib/amazon/asinBsrCache");
-              const page1Asins = rawListings
-                .filter((l: any) => l.asin)
-                .map((l: any) => l.asin)
-                .slice(0, 4); // Max 4 ASINs for BSR (part of 7-call budget)
+              // FIX 3: Deduplicate ASINs before enrichment + hard cap
+              const page1Asins = Array.from(
+                new Set(
+                  rawListings
+                    .filter((l: any) => l.asin)
+                    .map((l: any) => String(l.asin).toUpperCase().trim())
+                    .filter((a: string) => /^[A-Z0-9]{10}$/.test(a))
+                )
+              ).slice(0, 4); // Max 4 ASINs for BSR (part of 7-call budget)
               
               // Check cache first
               const { bulkLookupBsrCache } = await import("@/lib/amazon/asinBsrCache");
               const cacheMap = supabase ? await bulkLookupBsrCache(supabase, page1Asins) : new Map();
-              const missingAsins = page1Asins.filter((asin: string) => !cacheMap.has(asin));
+              const missingAsins = Array.from(
+                new Set(page1Asins.filter((asin: string) => !cacheMap.has(asin)))
+              );
               
               if (missingAsins.length > 0) {
                 console.log("🟡 BSR_FETCH_START (ASYNC)", {
@@ -2502,6 +2536,8 @@ export async function POST(req: NextRequest) {
                 timestamp: new Date().toISOString(),
               });
               
+              // Mark enrichment complete for this snapshot_id (lock persists for process lifetime)
+              locks.completed.add(snapshotId);
             } catch (enrichmentError) {
               console.error("❌ ASYNC_ENRICHMENT_ERROR", {
                 keyword: body.input_value,
@@ -2509,6 +2545,17 @@ export async function POST(req: NextRequest) {
                 timestamp: new Date().toISOString(),
               });
               // Fail silently - Page-1 data is still usable without enrichment
+            } finally {
+              try {
+                const snapshotId = tier1Snapshot.snapshot.snapshot_id;
+                const locks = (globalThis as any).__SELLEREV_ENRICHMENT_LOCKS__ as {
+                  inFlight: Set<string>;
+                  completed: Set<string>;
+                };
+                locks.inFlight.delete(snapshotId);
+              } catch {
+                // ignore
+              }
             }
           })();
         }
@@ -4001,15 +4048,20 @@ Convert this plain text decision into the required JSON contract format. Extract
       // Fire-and-forget: Enrich brands for top 10 ASINs
       // Do NOT await - let it run in background
       if (top10Asins.length > 0) {
+        // FIX 3: Deduplicate, and respect remaining shared budget so we never exceed the hard cap.
+        const uniqueTopAsins = Array.from(new Set(top10Asins.map((a) => a.toUpperCase().trim())));
+        const remainingBudget = Math.max(0, apiCallCounter.max - apiCallCounter.count);
+        const asinsToEnrich = uniqueTopAsins.slice(0, remainingBudget);
+
         // Use Promise.allSettled to handle all async operations without blocking
         Promise.allSettled(
-          top10Asins.map((asin) => enrichAsinBrandIfMissing(asin, supabase))
+          asinsToEnrich.map((asin) => enrichAsinBrandIfMissing(asin, supabase, apiCallCounter))
         ).catch((error) => {
           // Fail silently - log only
           console.warn("[BrandEnrichment] Background enrichment error:", error);
         });
         
-        console.log(`[BrandEnrichment] Triggered lazy enrichment for ${top10Asins.length} ASINs`);
+        console.log(`[BrandEnrichment] Triggered lazy enrichment for ${asinsToEnrich.length} ASINs (remaining_budget=${remainingBudget})`);
       }
     }
 

@@ -170,7 +170,8 @@ function parseSellerCount(item: any): number | null {
  */
 export async function enrichAsinBrandIfMissing(
   asin: string,
-  supabase: any
+  supabase: any,
+  apiCallBudget?: { count: number; max: number }
 ): Promise<void> {
   try {
     // Validate ASIN format
@@ -203,6 +204,24 @@ export async function enrichAsinBrandIfMissing(
     if (!rainforestApiKey) {
       console.warn(`[BrandEnrichment] RAINFOREST_API_KEY not configured`);
       return;
+    }
+
+    // 🚨 API SAFETY LIMIT: Respect shared budget (prevents runaway background enrichment)
+    if (apiCallBudget && apiCallBudget.count >= apiCallBudget.max) {
+      console.warn("🚨 ENRICHMENT_SKIPPED_DUE_TO_BUDGET", {
+        enrichment_type: "brand",
+        asin: cleanAsin,
+        current_count: apiCallBudget.count,
+        max_allowed: apiCallBudget.max,
+        remaining_budget: apiCallBudget.max - apiCallBudget.count,
+        message: "Brand enrichment skipped - API call budget exhausted",
+      });
+      return;
+    }
+
+    // Increment counter before API call
+    if (apiCallBudget) {
+      apiCallBudget.count++;
     }
 
     // Call Rainforest product API
