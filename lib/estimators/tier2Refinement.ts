@@ -118,60 +118,13 @@ export async function refineTier2Estimates(
 }
 
 /**
- * Fetch BSR for limited subset (top 5-10 ASINs only)
+ * DISABLED: Fetch BSR for limited subset
  * 
- * TIER-2 ONLY: This is expensive and should not block Tier-1.
+ * This function has been removed to prevent additional Rainforest API calls.
+ * BSR data should come from SP-API Catalog Items enrichment instead.
+ * 
+ * @deprecated Use SP-API Catalog Items batch enrichment (Step 2 in keywordProcessor)
  */
-async function fetchBSRForSubset(
-  asins: string[],
-  keyword: string,
-  apiCallCounter?: { count: number; max: number }
-): Promise<Map<string, number>> {
-  // Limit to top 5 ASINs for BSR fetch (cost optimization)
-  const limitedAsins = asins.slice(0, 5);
-  const bsrMap = new Map<string, number>();
-  
-  // Import BSR fetching logic
-  const { batchFetchBsrWithBackoff } = await import("@/lib/amazon/asinBsrCache");
-  
-  const rainforestApiKey = process.env.RAINFOREST_API_KEY;
-  if (!rainforestApiKey) {
-    console.warn("⚠️ TIER2_BSR_FETCH_SKIPPED", {
-      keyword,
-      reason: "RAINFOREST_API_KEY not configured",
-    });
-    return bsrMap;
-  }
-  
-  try {
-    // Fetch BSR for limited subset
-    const bsrResults = await batchFetchBsrWithBackoff(
-      rainforestApiKey,
-      limitedAsins,
-      keyword,
-      apiCallCounter
-    );
-    
-    // Extract BSR from results
-    if (Array.isArray(bsrResults)) {
-      for (const product of bsrResults) {
-        const asin = product?.asin;
-        const bsr = product?.main_category_bsr || product?.bestsellers_rank?.[0]?.rank;
-        if (asin && bsr && typeof bsr === 'number' && bsr > 0) {
-          bsrMap.set(asin, bsr);
-        }
-      }
-    }
-  } catch (error) {
-    console.warn("⚠️ TIER2_BSR_FETCH_ERROR", {
-      keyword,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    // Continue without BSR data if fetch fails
-  }
-  
-  return bsrMap;
-}
 
 /**
  * Run calibration + dampening models

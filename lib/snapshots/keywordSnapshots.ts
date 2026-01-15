@@ -33,7 +33,7 @@ export interface KeywordProduct {
   main_category_bsr: number | null;
   estimated_monthly_units: number | null;
   estimated_monthly_revenue: number | null;
-  // Full product card rendering fields (from Rainforest SERP only)
+  // Full product card rendering fields (from Rainforest SERP + SP-API)
   title: string | null;
   rating: number | null;
   review_count: number | null;
@@ -41,6 +41,10 @@ export interface KeywordProduct {
   brand: string | null;
   is_sponsored: boolean;
   fulfillment: "FBA" | "FBM" | "AMZ" | null;
+  // SP-API enrichment fields
+  category: string | null; // Product category from SP-API
+  bsr: number | null; // Best Seller Rank from SP-API
+  last_enriched_at: string | null; // Timestamp when metadata was last enriched (7-day TTL)
   last_updated: string;
 }
 

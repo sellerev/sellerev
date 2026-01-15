@@ -1,0 +1,445 @@
+/**
+ * SP-API Catalog Items Batch Enrichment
+ * 
+ * Fetches product metadata (title, brand, image, category, BSR) from SP-API Catalog Items API v2022-04-01.
+ * Supports batch requests (max 20 ASINs per request) with parallel execution.
+ * 
+ * Required environment variables:
+ * - SP_API_CLIENT_ID
+ * - SP_API_CLIENT_SECRET
+ * - SP_API_REFRESH_TOKEN
+ * - SP_API_AWS_ACCESS_KEY_ID
+ * - SP_API_AWS_SECRET_ACCESS_KEY
+ */
+
+import { createHmac, createHash } from "crypto";
+import { getSpApiAccessToken } from "./auth";
+
+export interface CatalogItemMetadata {
+  asin: string;
+  title: string | null;
+  brand: string | null;
+  image_url: string | null;
+  category: string | null;
+  bsr: number | null;
+}
+
+export interface BatchEnrichmentResult {
+  enriched: Map<string, CatalogItemMetadata>;
+  failed: string[];
+  errors: Array<{ asin: string; error: string }>;
+}
+
+/**
+ * Batch enrich ASINs with SP-API Catalog Items metadata
+ * 
+ * @param asins - Array of ASINs to enrich (max 49, will be batched into groups of 20)
+ * @param marketplaceId - Marketplace ID (default: ATVPDKIKX0DER for US)
+ * @param timeoutMs - Request timeout in milliseconds (default: 4000)
+ * @returns Promise<BatchEnrichmentResult> Enrichment results with metadata map
+ */
+export async function batchEnrichCatalogItems(
+  asins: string[],
+  marketplaceId: string = "ATVPDKIKX0DER",
+  timeoutMs: number = 4000
+): Promise<BatchEnrichmentResult> {
+  const result: BatchEnrichmentResult = {
+    enriched: new Map(),
+    failed: [],
+    errors: [],
+  };
+
+  if (!asins || asins.length === 0) {
+    return result;
+  }
+
+  // Check credentials
+  const awsAccessKeyId = process.env.SP_API_AWS_ACCESS_KEY_ID;
+  const awsSecretAccessKey = process.env.SP_API_AWS_SECRET_ACCESS_KEY;
+
+  if (!awsAccessKeyId || !awsSecretAccessKey) {
+    console.warn("SP-API credentials not configured, skipping catalog enrichment");
+    result.failed = [...asins];
+    return result;
+  }
+
+  // Batch ASINs into groups of 20 (SP-API limit)
+  const batches: string[][] = [];
+  for (let i = 0; i < asins.length; i += 20) {
+    batches.push(asins.slice(i, i + 20));
+  }
+
+  // Execute batches in parallel with timeout
+  const batchPromises = batches.map((batch) =>
+    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey)
+  );
+
+  const batchResults = await Promise.allSettled(batchPromises);
+
+  // Aggregate results
+  for (let i = 0; i < batchResults.length; i++) {
+    const batchResult = batchResults[i];
+    const batch = batches[i];
+
+    if (batchResult.status === "fulfilled") {
+      const batchData = batchResult.value;
+      for (const [asin, metadata] of batchData.entries()) {
+        result.enriched.set(asin, metadata);
+      }
+    } else {
+      // Mark all ASINs in failed batch as failed
+      for (const asin of batch) {
+        result.failed.push(asin);
+        result.errors.push({
+          asin,
+          error: batchResult.reason?.message || "Batch request failed",
+        });
+      }
+    }
+  }
+
+  // Mark any ASINs not in enriched map as failed
+  for (const asin of asins) {
+    if (!result.enriched.has(asin) && !result.failed.includes(asin)) {
+      result.failed.push(asin);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Fetch a batch of ASINs with timeout
+ */
+async function fetchBatchWithTimeout(
+  asins: string[],
+  marketplaceId: string,
+  timeoutMs: number,
+  awsAccessKeyId: string,
+  awsSecretAccessKey: string
+): Promise<Map<string, CatalogItemMetadata>> {
+  const timeoutPromise = new Promise<Map<string, CatalogItemMetadata>>((_, reject) => {
+    setTimeout(() => reject(new Error("SP-API batch request timeout")), timeoutMs);
+  });
+
+  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey);
+
+  return Promise.race([fetchPromise, timeoutPromise]);
+}
+
+/**
+ * Fetch a single batch of ASINs (max 20)
+ */
+async function fetchBatch(
+  asins: string[],
+  marketplaceId: string,
+  awsAccessKeyId: string,
+  awsSecretAccessKey: string
+): Promise<Map<string, CatalogItemMetadata>> {
+  const result = new Map<string, CatalogItemMetadata>();
+
+  try {
+    const accessToken = await getSpApiAccessToken();
+    const endpoint = getEndpointForMarketplace(marketplaceId);
+    const host = new URL(endpoint).hostname;
+    const region = getRegionForMarketplace(marketplaceId);
+
+    // Build query parameters
+    const params = new URLSearchParams();
+    params.set("marketplaceIds", marketplaceId);
+    params.set("identifiersType", "ASIN");
+    params.set("identifiers", asins.join(","));
+    params.set("includedData", "attributes,identifiers,images,summaries,salesRanks");
+    const queryString = params.toString();
+
+    const path = "/catalog/2022-04-01/items";
+    const signedRequest = await createSignedRequest({
+      method: "GET",
+      host,
+      path,
+      queryString,
+      body: "",
+      accessToken,
+      awsAccessKeyId,
+      awsSecretAccessKey,
+      region,
+    });
+
+    const response = await fetch(`${endpoint}${path}?${queryString}`, {
+      method: "GET",
+      headers: signedRequest.headers,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      console.warn("SP-API Catalog Items batch fetch failed", {
+        status: response.status,
+        asin_count: asins.length,
+        error: errorText.substring(0, 200),
+      });
+      return result; // Return empty map on failure
+    }
+
+    const data = await response.json();
+
+    // Parse response (SP-API returns items array)
+    const items = data?.items || [];
+    for (const item of items) {
+      const asin = item?.asin || item?.identifiers?.marketplaceIdentifiers?.[0]?.identifier;
+      if (!asin) continue;
+
+      const metadata: CatalogItemMetadata = {
+        asin,
+        title: extractTitle(item),
+        brand: extractBrand(item),
+        image_url: extractImageUrl(item),
+        category: extractCategory(item),
+        bsr: extractBSR(item),
+      };
+
+      result.set(asin, metadata);
+    }
+  } catch (error) {
+    console.error("SP-API Catalog Items batch fetch error", {
+      error: error instanceof Error ? error.message : String(error),
+      asin_count: asins.length,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Extract title from SP-API Catalog Item
+ */
+function extractTitle(item: any): string | null {
+  // Try multiple paths for title
+  const title =
+    item?.attributes?.item_name?.[0]?.value ||
+    item?.attributes?.title?.[0]?.value ||
+    item?.summaries?.[0]?.itemName ||
+    item?.title ||
+    null;
+
+  if (typeof title === "string" && title.trim().length > 0) {
+    return title.trim();
+  }
+
+  return null;
+}
+
+/**
+ * Extract brand from SP-API Catalog Item
+ */
+function extractBrand(item: any): string | null {
+  // Try multiple paths for brand
+  const brand =
+    item?.attributes?.brand?.[0]?.value ||
+    item?.attributes?.manufacturer?.[0]?.value ||
+    item?.attributes?.brand_name?.[0]?.value ||
+    item?.summaries?.[0]?.brandName ||
+    item?.brand ||
+    null;
+
+  if (typeof brand === "string" && brand.trim().length > 0) {
+    return normalizeBrand(brand.trim());
+  }
+
+  return null;
+}
+
+/**
+ * Extract primary image URL from SP-API Catalog Item
+ */
+function extractImageUrl(item: any): string | null {
+  // Try images array (primary image first)
+  const images = item?.images || [];
+  if (Array.isArray(images) && images.length > 0) {
+    const primaryImage = images[0];
+    const imageUrl =
+      primaryImage?.images?.[0]?.url ||
+      primaryImage?.variant?.[0]?.images?.[0]?.url ||
+      primaryImage?.url ||
+      null;
+
+    if (typeof imageUrl === "string" && imageUrl.trim().length > 0) {
+      return imageUrl.trim();
+    }
+  }
+
+  // Try attributes path
+  const imageUrl =
+    item?.attributes?.main_product_image_locator?.[0]?.value ||
+    item?.attributes?.other_image_url_1?.[0]?.value ||
+    null;
+
+  if (typeof imageUrl === "string" && imageUrl.trim().length > 0) {
+    return imageUrl.trim();
+  }
+
+  return null;
+}
+
+/**
+ * Extract category from SP-API Catalog Item
+ */
+function extractCategory(item: any): string | null {
+  // Try browse classification
+  const browseClassification =
+    item?.attributes?.product_type_name?.[0]?.value ||
+    item?.attributes?.item_type_name?.[0]?.value ||
+    item?.summaries?.[0]?.websiteDisplayGroup ||
+    null;
+
+  if (typeof browseClassification === "string" && browseClassification.trim().length > 0) {
+    return browseClassification.trim();
+  }
+
+  return null;
+}
+
+/**
+ * Extract BSR from SP-API Catalog Item
+ */
+function extractBSR(item: any): number | null {
+  // Try salesRanks array
+  const salesRanks = item?.salesRanks || [];
+  if (Array.isArray(salesRanks) && salesRanks.length > 0) {
+    // Get first rank (typically main category)
+    const rank = salesRanks[0]?.rank;
+    if (typeof rank === "number" && rank > 0) {
+      return rank;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Normalize brand name (lightweight)
+ */
+function normalizeBrand(brand: string): string {
+  return brand
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/**
+ * Get SP-API endpoint for marketplace
+ */
+function getEndpointForMarketplace(marketplaceId: string): string {
+  const endpointMap: Record<string, string> = {
+    ATVPDKIKX0DER: "https://sellingpartnerapi-na.amazon.com", // US
+    A1PA6795UKMFR9: "https://sellingpartnerapi-eu.amazon.com", // DE
+    A1RKKUPIHCS9HS: "https://sellingpartnerapi-eu.amazon.com", // ES
+    A13V1IB3VIYZZH: "https://sellingpartnerapi-eu.amazon.com", // FR
+    APJ6JRA9NG5V4: "https://sellingpartnerapi-eu.amazon.com", // IT
+    A1F83G8C2ARO7P: "https://sellingpartnerapi-eu.amazon.com", // UK
+    A1VC38T7YXB528: "https://sellingpartnerapi-fe.amazon.com", // JP
+    A19VAU5U5O7RUS: "https://sellingpartnerapi-fe.amazon.com", // CA
+  };
+
+  return endpointMap[marketplaceId] || "https://sellingpartnerapi-na.amazon.com";
+}
+
+/**
+ * Get AWS region for marketplace
+ */
+function getRegionForMarketplace(marketplaceId: string): string {
+  const regionMap: Record<string, string> = {
+    ATVPDKIKX0DER: "us-east-1", // US
+    A1PA6795UKMFR9: "eu-west-1", // DE
+    A1RKKUPIHCS9HS: "eu-west-1", // ES
+    A13V1IB3VIYZZH: "eu-west-1", // FR
+    APJ6JRA9NG5V4: "eu-west-1", // IT
+    A1F83G8C2ARO7P: "eu-west-1", // UK
+    A1VC38T7YXB528: "us-west-2", // JP
+    A19VAU5U5O7RUS: "us-east-1", // CA
+  };
+
+  return regionMap[marketplaceId] || "us-east-1";
+}
+
+/**
+ * Create AWS SigV4 signed request
+ */
+async function createSignedRequest({
+  method,
+  host,
+  path,
+  queryString,
+  body,
+  accessToken,
+  awsAccessKeyId,
+  awsSecretAccessKey,
+  region,
+}: {
+  method: string;
+  host: string;
+  path: string;
+  queryString: string;
+  body: string;
+  accessToken: string;
+  awsAccessKeyId: string;
+  awsSecretAccessKey: string;
+  region: string;
+}): Promise<{ headers: Record<string, string> }> {
+  const service = "execute-api";
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, "");
+  const dateStamp = amzDate.substr(0, 8);
+
+  // Step 1: Create canonical request
+  const canonicalUri = path;
+  const canonicalQueryString = queryString || "";
+  const canonicalHeaders = [
+    `host:${host}`,
+    `x-amz-access-token:${accessToken}`,
+    `x-amz-date:${amzDate}`,
+  ].join("\n");
+
+  const signedHeaders = "host;x-amz-access-token;x-amz-date";
+  const payloadHash = createHash("sha256").update(body).digest("hex");
+
+  const canonicalRequest = [
+    method,
+    canonicalUri,
+    canonicalQueryString,
+    canonicalHeaders,
+    "",
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+
+  // Step 2: Create string to sign
+  const algorithm = "AWS4-HMAC-SHA256";
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const canonicalRequestHash = createHash("sha256")
+    .update(canonicalRequest)
+    .digest("hex");
+  const stringToSign = [algorithm, amzDate, credentialScope, canonicalRequestHash].join("\n");
+
+  // Step 3: Calculate signature
+  const kDate = createHmac("sha256", `AWS4${awsSecretAccessKey}`).update(dateStamp).digest();
+  const kRegion = createHmac("sha256", kDate).update(region).digest();
+  const kService = createHmac("sha256", kRegion).update(service).digest();
+  const kSigning = createHmac("sha256", kService).update("aws4_request").digest();
+  const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
+
+  // Step 4: Create authorization header
+  const authorization = `${algorithm} Credential=${awsAccessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  return {
+    headers: {
+      Host: host,
+      "x-amz-access-token": accessToken,
+      "x-amz-date": amzDate,
+      Authorization: authorization,
+    },
+  };
+}
+
