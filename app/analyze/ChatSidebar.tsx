@@ -373,6 +373,14 @@ export default function ChatSidebar({
     // No need to force a re-render - the component will naturally show updated suggestions
   }, [selectedListing]);
 
+  // Safety: never let the chat input get "stuck disabled" due to a dropped/short-circuited stream.
+  // If we are not actively streaming content and copilotStatus is idle, keep isLoading false.
+  useEffect(() => {
+    if (copilotStatus === "idle" && streamingContent === "" && isLoading) {
+      setIsLoading(false);
+    }
+  }, [copilotStatus, isLoading, streamingContent]);
+
   // Load seller stage for contextual explanations (new/existing/scaling)
   useEffect(() => {
     let cancelled = false;

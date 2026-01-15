@@ -115,7 +115,21 @@ export async function getFbaFees({
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
       // Log error but don't throw - return nulls gracefully
-      console.error(`SP-API getFbaFees failed: ${response.status} ${errorText}`);
+      const requestId =
+        response.headers.get("x-amzn-requestid") ||
+        response.headers.get("x-amz-request-id") ||
+        response.headers.get("x-amzn-RequestId") ||
+        null;
+      const rateLimit =
+        response.headers.get("x-amzn-ratelimit-limit") ||
+        response.headers.get("x-amzn-RateLimit-Limit") ||
+        null;
+      console.error("SP-API getFbaFees failed", {
+        status: response.status,
+        requestId,
+        rateLimit,
+        body: errorText,
+      });
       return {
         fulfillment_fee: null,
         referral_fee: null,

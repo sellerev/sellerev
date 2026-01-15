@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
     const feesResult = await resolveFbaFees(asin, price);
 
     if (!feesResult) {
+      console.warn("[FBA_FEES_QUOTE_UNAVAILABLE]", { asin, price });
       return NextResponse.json(
         { fee: null, source: "estimated", reason: "sp_api_quote_unavailable" },
         { status: 200 }
