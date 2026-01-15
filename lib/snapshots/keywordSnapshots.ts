@@ -33,6 +33,14 @@ export interface KeywordProduct {
   main_category_bsr: number | null;
   estimated_monthly_units: number | null;
   estimated_monthly_revenue: number | null;
+  // Full product card rendering fields (from Rainforest SERP only)
+  title: string | null;
+  rating: number | null;
+  review_count: number | null;
+  image_url: string | null;
+  brand: string | null;
+  is_sponsored: boolean;
+  fulfillment: "FBA" | "FBM" | "AMZ" | null;
   last_updated: string;
 }
 

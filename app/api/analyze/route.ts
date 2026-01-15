@@ -1357,6 +1357,7 @@ export async function POST(req: NextRequest) {
     }
     
     // STEP 2: Only use snapshot if NO real market data exists
+    let snapshot: any = null; // Declare at function scope for freshness badge
     if (!keywordMarketData || dataSource !== "market") {
       const {
         buildKeywordSnapshotFromCache,
@@ -1366,7 +1367,7 @@ export async function POST(req: NextRequest) {
       } = await import("@/lib/snapshots/keywordSnapshots");
       
       // Build snapshot from cached keyword_products (zero Rainforest API calls)
-      let snapshot = await buildKeywordSnapshotFromCache(supabase, body.input_value, marketplace);
+      snapshot = await buildKeywordSnapshotFromCache(supabase, body.input_value, marketplace);
 
       if (snapshot) {
       // Snapshot exists - use it (pure database read)
@@ -1445,20 +1446,21 @@ export async function POST(req: NextRequest) {
 
       // Convert snapshot to KeywordMarketData format
       // Hard requirement: if keyword_products is empty, return a hard error (no synthetic listings).
+      // CRITICAL: Use cached fields from keyword_products for full product card rendering
       let listings: ParsedListing[] = products.map((p) => ({
         asin: p.asin || '',
-        title: null,
+        title: p.title || null, // From cache
         price: p.price,
-        rating: null,
-        reviews: null,
-        is_sponsored: false,
+        rating: p.rating || null, // From cache
+        reviews: p.review_count || null, // From cache (mapped from review_count)
+        is_sponsored: p.is_sponsored || false, // From cache (not assumed false)
         position: p.rank,
-        brand: null,
-        image_url: null,
+        brand: p.brand || null, // From cache
+        image_url: p.image_url || null, // From cache
         bsr: p.main_category_bsr,
         main_category_bsr: p.main_category_bsr,
         main_category: p.main_category,
-        fulfillment: null,
+        fulfillment: p.fulfillment || null, // From cache (not assumed null)
         est_monthly_revenue: p.estimated_monthly_revenue,
         est_monthly_units: p.estimated_monthly_units,
         revenue_confidence: 'medium' as const,
@@ -1492,17 +1494,43 @@ export async function POST(req: NextRequest) {
         );
       }
       
+      // Compute sponsored_count and fulfillment_mix from cached products
+      const sponsoredCount = products.filter((p: any) => p.is_sponsored === true).length;
+      const fulfillmentCounts = {
+        fba: products.filter((p: any) => p.fulfillment === 'FBA').length,
+        fbm: products.filter((p: any) => p.fulfillment === 'FBM').length,
+        amazon: products.filter((p: any) => p.fulfillment === 'AMZ').length,
+      };
+      const totalFulfillment = fulfillmentCounts.fba + fulfillmentCounts.fbm + fulfillmentCounts.amazon;
+      const fulfillmentMix = totalFulfillment > 0 ? {
+        fba: Math.round((fulfillmentCounts.fba / totalFulfillment) * 100),
+        fbm: Math.round((fulfillmentCounts.fbm / totalFulfillment) * 100),
+        amazon: Math.round((fulfillmentCounts.amazon / totalFulfillment) * 100),
+      } : { fba: 0, fbm: 0, amazon: 0 };
+      
+      // Compute avg_rating from cached products
+      const productsWithRating = products.filter((p: any) => p.rating !== null && p.rating !== undefined && p.rating > 0);
+      const avgRating = productsWithRating.length > 0
+        ? productsWithRating.reduce((sum: number, p: any) => sum + (p.rating || 0), 0) / productsWithRating.length
+        : null;
+      
+      // Compute avg_reviews from cached products
+      const productsWithReviews = products.filter((p: any) => p.review_count !== null && p.review_count !== undefined && p.review_count > 0);
+      const avgReviews = productsWithReviews.length > 0
+        ? Math.round(productsWithReviews.reduce((sum: number, p: any) => sum + (p.review_count || 0), 0) / productsWithReviews.length)
+        : 0;
+
       keywordMarketData = {
         snapshot: {
           keyword: snapshot.keyword,
           avg_price: avgPrice > 0 ? avgPrice : null,
-          avg_reviews: 0, // Reviews not stored in snapshot
-          avg_rating: null, // Rating not stored in snapshot
+          avg_reviews: avgReviews, // Computed from cached products
+          avg_rating: avgRating, // Computed from cached products
           avg_bsr: snapshot.average_bsr,
           total_page1_listings: snapshot.product_count,
-          sponsored_count: 0, // Not stored in snapshot
-          dominance_score: 0, // Not stored in snapshot
-          fulfillment_mix: { fba: 0, fbm: 0, amazon: 0 }, // Not stored in snapshot
+          sponsored_count: sponsoredCount, // Computed from cached products
+          dominance_score: 0, // Not stored in snapshot (would need brand breakdown)
+          fulfillment_mix: fulfillmentMix, // Computed from cached products
           est_total_monthly_revenue_min: revenueMin,
           est_total_monthly_revenue_max: revenueMax,
           est_total_monthly_units_min: unitsMin,
@@ -1615,11 +1643,19 @@ export async function POST(req: NextRequest) {
     // Determine data source: market (real) vs snapshot (estimated)
     // CRITICAL: If dataSource is "market", listings are real and must be used
     const isEstimated = dataSource === "snapshot" && (snapshotStatus === 'estimated' || snapshotStatus === 'miss');
+    
+    // Capture snapshot metadata for freshness badge
+    let snapshotLastUpdated: string | null = null;
+    if (snapshotStatus === 'hit' && snapshot) {
+      snapshotLastUpdated = snapshot.last_updated;
+    }
+    
     const dataQuality = {
       snapshot: snapshotStatus,
       source: dataSource === "market" ? "market" : (isEstimated ? 'estimated' : 'precomputed'),
       fallback_used: false,
       estimated: isEstimated,
+      snapshot_last_updated: snapshotLastUpdated, // For freshness badge
     };
     
     // Use the snapshot (guaranteed to exist after snapshot check)
@@ -2162,9 +2198,17 @@ export async function POST(req: NextRequest) {
             price: p.price,
             estimated_monthly_units: p.estimated_monthly_units,
             estimated_monthly_revenue: p.estimated_monthly_revenue,
+            // Full product card rendering fields (from Rainforest SERP only)
+            title: p.title || null,
             rating: p.rating || null,
             review_count: p.review_count || null,
+            image_url: p.image_url || null,
+            brand: p.brand || null,
+            is_sponsored: p.is_sponsored || false,
             fulfillment: p.fulfillment || null,
+            // Legacy fields
+            main_category: null, // Not extracted from SERP
+            main_category_bsr: null, // Not extracted from SERP (BSR disabled for keyword Page-1)
             last_updated: new Date().toISOString(),
           }));
           
@@ -3526,6 +3570,7 @@ Convert this plain text decision into the required JSON contract format. Extract
         estimated: isEstimated, // Explicit flag for UI state management
         dataSource: dataSource, // "market" if real listings, "snapshot" if estimated/precomputed
         snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"), // Canonical snapshot type
+        snapshot_last_updated: snapshotLastUpdated, // For freshness badge (null if not using cached snapshot)
         queued: isEstimated, // Background job is queued when using estimates
         message: isEstimated ? "Estimated market data. Refining with live data…" : undefined,
         analysisRunId: insertedRun.id,

@@ -471,6 +471,7 @@ export default function AnalyzeForm({
   // Track if current analysis is estimated (Tier-1) vs snapshot (Tier-2)
   const [isEstimated, setIsEstimated] = useState(false);
   const [snapshotType, setSnapshotType] = useState<"estimated" | "snapshot">("snapshot");
+  const [snapshotLastUpdated, setSnapshotLastUpdated] = useState<string | null>(null); // For freshness badge
   // Track Tier-2 refinement status (from ui_hints)
   const [showRefiningBadge, setShowRefiningBadge] = useState(false);
   const [nextUpdateExpectedSec, setNextUpdateExpectedSec] = useState<number | null>(null);
@@ -937,6 +938,8 @@ export default function AnalyzeForm({
       // Store estimated flag and snapshot type for UI badges
       setIsEstimated(data.estimated === true || data.dataSource === 'estimated');
       setSnapshotType(data.snapshotType === 'estimated' ? 'estimated' : 'snapshot');
+      // Store snapshot last_updated for freshness badge
+      setSnapshotLastUpdated(data.snapshot_last_updated || null);
 
       // Normalize and set analysis
       setAnalysis(normalizeAnalysis(analysisData));
@@ -1293,6 +1296,14 @@ export default function AnalyzeForm({
                     
                     return (
                       <div className="bg-white border rounded-lg p-6">
+                        {/* Snapshot Freshness Badge */}
+                        {snapshotLastUpdated && snapshotType === 'snapshot' && (
+                          <div className="mb-4 flex items-center gap-2">
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">
+                              Using cached Page-1 snapshot (last updated: {formatTimeAgo(snapshotLastUpdated)})
+                            </span>
+                          </div>
+                        )}
                         {/* Tier-2 Refinement Badge (non-blocking) */}
                         {showRefiningBadge && (
                           <div className="mb-4 flex items-center gap-2">
