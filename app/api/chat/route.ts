@@ -673,7 +673,7 @@ When the user asks about specific products, you MUST only reference these select
 No products are currently selected. You may only answer using market-level / Page-1 aggregate data.
 - Do NOT reference specific products
 - Do NOT escalate for product-specific questions
-- If the user asks about a specific product, respond: "Select a product from Page-1 to analyze it."`);
+- If the user asks about a specific product, ask them to select exactly 1 product card from Page-1 (so the answer is tied to a single ASIN).`);
   }
   
 
@@ -2068,6 +2068,46 @@ export async function POST(req: NextRequest) {
         escalationDecision.required_asins = requiredAsins;
         escalationDecision.required_credits = requiredAsins.length;
       }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // FIX 1: PER-MESSAGE PRODUCT SELECTION GATING (NON-STICKY)
+    // Only require product selection when THIS message cannot be answered from Page-1
+    // and it appears to be product-specific (per escalation decision), not because of prior turns.
+    // ────────────────────────────────────────────────────────────────────────
+    const requiresProductSelectionForThisMessage =
+      typeof escalationDecision.escalation_reason === "string" &&
+      /select a product from page-1|product specifications|requires product details/i.test(
+        escalationDecision.escalation_reason
+      );
+
+    if (
+      requiresProductSelectionForThisMessage &&
+      selectedAsins.length === 0 &&
+      explicitAsins.length === 0
+    ) {
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                content:
+                  "Select a product from Page-1 to analyze it.",
+              })}\n\n`
+            )
+          );
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new NextResponse(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
     }
     
     // STEP 5: GUARANTEED LOGGING - Log escalation decision BEFORE LLM runs
