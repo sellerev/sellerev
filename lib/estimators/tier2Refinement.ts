@@ -52,10 +52,11 @@ export async function refineTier2Estimates(
   
   try {
     // ═══════════════════════════════════════════════════════════════════════════
-    // TIER-2 STEP 1: Fetch BSR for limited subset (top 5-10 ASINs only)
+    // TIER-2 STEP 1: DISABLED - BSR fetching removed (use SP-API enrichment instead)
     // ═══════════════════════════════════════════════════════════════════════════
-    const topAsins = tier1_products.slice(0, 10).map(p => p.asin);
-    const bsrData = await fetchBSRForSubset(topAsins, keyword, apiCallCounter);
+    // BSR data should come from SP-API Catalog Items enrichment (Step 2 in keywordProcessor)
+    // This prevents additional Rainforest API calls
+    const bsrData = new Map<string, number>();
     
     // ═══════════════════════════════════════════════════════════════════════════
     // TIER-2 STEP 2: Run calibration + dampening models
