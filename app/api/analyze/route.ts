@@ -1652,7 +1652,8 @@ export async function POST(req: NextRequest) {
       if (keywordMarketData && marketSnapshot) {
         const representativeAsin = pickRepresentativeAsin(keywordMarketData.listings);
         if (representativeAsin) {
-          const fbaFeesResult = await resolveFbaFees(representativeAsin, priceForMargin);
+          // Use default US marketplace ID (ATVPDKIKX0DER) for FBA fee resolution
+          const fbaFeesResult = await resolveFbaFees(representativeAsin, priceForMargin, "ATVPDKIKX0DER");
           if (fbaFeesResult) {
             fbaFees = {
               total_fba_fees: fbaFeesResult.total_fba_fees,

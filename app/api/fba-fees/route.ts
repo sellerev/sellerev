@@ -126,14 +126,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Cache lookup (30d TTL) — only use if complete
+    // CRITICAL: Cache key is (asin, price, marketplace) - fees vary by price
     const supabase = await createClient();
     const normalizedAsin = asin.toUpperCase().trim();
+    const normalizedMarketplace = typeof marketplace === "string" ? marketplace : "ATVPDKIKX0DER";
     const cutoffTime = new Date();
     cutoffTime.setDate(cutoffTime.getDate() - 30);
     const { data: cachedData, error: cacheError } = await supabase
       .from("fba_fee_cache")
       .select("fulfillment_fee, referral_fee, total_fba_fees, currency, fetched_at")
       .eq("asin", normalizedAsin)
+      .eq("price", price)
+      .eq("marketplace", normalizedMarketplace)
       .gte("fetched_at", cutoffTime.toISOString())
       .single();
 
@@ -201,19 +205,22 @@ export async function POST(request: NextRequest) {
     }
 
     // Cache exact result (best-effort)
+    // CRITICAL: Cache key is (asin, price, marketplace) - fees vary by price
     try {
       await supabase
         .from("fba_fee_cache")
         .upsert(
           {
             asin: normalizedAsin,
+            price: price,
+            marketplace: normalizedMarketplace,
             fulfillment_fee: feesResult.fulfillment_fee,
             referral_fee: feesResult.referral_fee,
             total_fba_fees: feesResult.total_fba_fees,
             currency: feesResult.currency,
             fetched_at: new Date().toISOString(),
           },
-          { onConflict: "asin" }
+          { onConflict: "asin,price,marketplace" }
         );
     } catch (e) {
       console.error("Failed to cache FBA fees (non-blocking):", e);

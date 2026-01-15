@@ -13,6 +13,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getFbaFees, FbaFeesResult } from "./getFbaFees";
 
 const CACHE_TTL_DAYS = 30;
+const FAILURE_CACHE_TTL_MINUTES = 7; // Cache failures for 7 minutes to prevent retry loops
 
 /**
  * Resolve FBA fees for an ASIN with cache-first strategy
@@ -23,13 +24,37 @@ const CACHE_TTL_DAYS = 30;
  */
 export async function resolveFbaFees(
   asin: string,
-  price: number
+  price: number,
+  marketplace: string = "ATVPDKIKX0DER"
 ): Promise<FbaFeesResult | null> {
   try {
     const supabase = await createClient();
     const normalizedAsin = asin.toUpperCase().trim();
+    const normalizedMarketplace = marketplace || "ATVPDKIKX0DER";
 
-    // Step 1: Check cache
+    // Step 1: Check failure cache (prevent retry loops)
+    const failureCutoffTime = new Date();
+    failureCutoffTime.setMinutes(failureCutoffTime.getMinutes() - FAILURE_CACHE_TTL_MINUTES);
+    
+    const { data: failureCacheData } = await supabase
+      .from("fba_fee_cache")
+      .select("fetched_at, fulfillment_fee, referral_fee")
+      .eq("asin", normalizedAsin)
+      .eq("price", price)
+      .eq("marketplace", normalizedMarketplace)
+      .gte("fetched_at", failureCutoffTime.toISOString())
+      .single();
+    
+    // If we have a recent failure (null fees but recent fetch), don't retry
+    if (failureCacheData && 
+        failureCacheData.fulfillment_fee === null && 
+        failureCacheData.referral_fee === null) {
+      console.log(`[FBA_FEES] Skipping retry - recent failure cached for ${normalizedAsin} at price ${price}`);
+      return null; // Return null gracefully - caller should use estimate
+    }
+
+    // Step 2: Check success cache (30d TTL)
+    // CRITICAL: Cache key is (asin, price, marketplace) - fees vary by price
     const cutoffTime = new Date();
     cutoffTime.setDate(cutoffTime.getDate() - CACHE_TTL_DAYS);
 
@@ -37,10 +62,12 @@ export async function resolveFbaFees(
       .from("fba_fee_cache")
       .select("fulfillment_fee, referral_fee, total_fba_fees, currency, fetched_at")
       .eq("asin", normalizedAsin)
+      .eq("price", price)
+      .eq("marketplace", normalizedMarketplace)
       .gte("fetched_at", cutoffTime.toISOString())
       .single();
 
-    // Step 2: If found and fresh, return cached ONLY if it contains a usable quote.
+    // Step 3: If found and fresh, return cached ONLY if it contains a usable quote.
     // IMPORTANT: do not treat cached nulls as a hit (this can "poison" fees for 30 days).
     if (!cacheError && cachedData) {
       const cachedFulfillment =
@@ -67,39 +94,43 @@ export async function resolveFbaFees(
       // Otherwise: fall through and retry SP-API
     }
 
-    // Step 3: Cache miss or stale - fetch from SP-API
+    // Step 4: Cache miss or stale - fetch from SP-API (single attempt per request)
     const feesResult = await getFbaFees({
       asin: normalizedAsin,
       price,
+      marketplaceId: normalizedMarketplace,
     });
 
-    // Step 4: Store in cache ONLY if we have a usable quote (best effort, don't block).
-    // Avoid writing nulls to cache; that prevents recovery for CACHE_TTL_DAYS.
-    if (feesResult.fulfillment_fee !== null && feesResult.referral_fee !== null) {
-      try {
-        await supabase
-          .from("fba_fee_cache")
-          .upsert(
-            {
-              asin: normalizedAsin,
-              fulfillment_fee: feesResult.fulfillment_fee,
-              referral_fee: feesResult.referral_fee,
-              total_fba_fees: feesResult.total_fba_fees,
-              currency: feesResult.currency,
-              fetched_at: new Date().toISOString(),
-            },
-            {
-              onConflict: "asin",
-            }
-          );
-      } catch (cacheWriteError) {
-        // Log but don't throw - caching failure shouldn't block analysis
-        console.error("Failed to cache FBA fees:", cacheWriteError);
-      }
+    // Step 5: Store in cache (success OR failure) to prevent retry loops
+    // CRITICAL: Cache key is (asin, price, marketplace) - fees vary by price
+    // Store failures briefly (7 min) to prevent retry loops, successes for 30 days
+    try {
+      await supabase
+        .from("fba_fee_cache")
+        .upsert(
+          {
+            asin: normalizedAsin,
+            price: price,
+            marketplace: normalizedMarketplace,
+            fulfillment_fee: feesResult.fulfillment_fee,
+            referral_fee: feesResult.referral_fee,
+            total_fba_fees: feesResult.total_fba_fees,
+            currency: feesResult.currency,
+            fetched_at: new Date().toISOString(),
+          },
+          {
+            onConflict: "asin,price,marketplace",
+          }
+        );
+    } catch (cacheWriteError) {
+      // Log but don't throw - caching failure shouldn't block analysis
+      console.error("Failed to cache FBA fees:", cacheWriteError);
     }
 
-    // Step 5: Return fetched values ONLY if usable
+    // Step 6: Return fetched values ONLY if usable
+    // If null, return null gracefully - caller should use estimate fallback
     if (feesResult.fulfillment_fee === null || feesResult.referral_fee === null) {
+      // Failure is now cached (7 min TTL) to prevent retry loops
       return null;
     }
     return feesResult;

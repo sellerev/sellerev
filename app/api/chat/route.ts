@@ -2230,7 +2230,9 @@ export async function POST(req: NextRequest) {
         if (body.escalationConfirmed !== true) {
           const confirmationMetadata = {
             type: "escalation_confirmation_required",
-            message: `This will use ${escalationDecision.required_credits} Seller Credit${escalationDecision.required_credits === 1 ? "" : "s"} to load live product data. Continue?`,
+            message: escalationDecision.required_credits === 1
+              ? "This will use 1 credit to fetch live Amazon data. Continue?"
+              : `This will use ${escalationDecision.required_credits} credits to fetch live Amazon data. Continue?`,
             asins: escalationDecision.required_asins,
             credits: escalationDecision.required_credits,
           };

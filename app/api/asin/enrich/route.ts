@@ -19,6 +19,7 @@ interface EnrichRequestBody {
   asin: string;
   analysisRunId: string;
   currentPrice?: number; // Price from the listing card (for revenue calculation)
+  creditConfirmed?: boolean; // Explicit user confirmation before charging credits
 }
 
 interface RefinedUnitsRange {
@@ -206,7 +207,7 @@ export async function POST(req: NextRequest) {
 
     // 2. Parse request body
     const body: EnrichRequestBody = await req.json();
-    const { asin, analysisRunId, currentPrice } = body;
+    const { asin, analysisRunId, currentPrice, creditConfirmed } = body;
     const marketplace = "US";
 
     if (!asin || !analysisRunId) {
@@ -573,6 +574,19 @@ export async function POST(req: NextRequest) {
     // Only charge credits when THIS request triggers a new provider call.
     const existingInflight = inflight.get(cacheKey);
     if (!existingInflight) {
+      // Require explicit user confirmation before charging credits
+      if (body.creditConfirmed !== true) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "confirmation_required",
+            message: "This will use 1 credit to fetch live Amazon data. Continue?",
+            requires_confirmation: true,
+          },
+          { status: 200, headers: res.headers }
+        );
+      }
+
       // Charge 1 credit because we're about to initiate a paid provider call
       const charged = await consumeCredits(
         user.id,
