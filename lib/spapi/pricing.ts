@@ -14,6 +14,7 @@
 
 import { createHmac, createHash } from "crypto";
 import { getSpApiAccessToken } from "./auth";
+import { logSpApiEvent, extractSpApiHeaders } from "./logging";
 
 export interface PricingMetadata {
   asin: string;
@@ -63,16 +64,22 @@ export async function batchEnrichPricing(
     return result;
   }
 
-  // Batch ASINs into groups of 5-10 (conservative for Pricing API)
+  // Batch ASINs into groups of 5 (conservative for Pricing API - per-ASIN calls with concurrency limit)
   const batchSize = 5; // Smaller batches for Pricing API
   const batches: string[][] = [];
+  const batchSizes: number[] = [];
   for (let i = 0; i < asins.length; i += batchSize) {
-    batches.push(asins.slice(i, i + batchSize));
+    const batch = asins.slice(i, i + batchSize);
+    batches.push(batch);
+    batchSizes.push(batch.length);
   }
 
+  const totalBatches = batches.length;
+  const totalStartTime = Date.now();
+
   // Execute batches in parallel with timeout
-  const batchPromises = batches.map((batch) =>
-    fetchPricingBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey)
+  const batchPromises = batches.map((batch, batchIndex) =>
+    fetchPricingBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches)
   );
 
   const batchResults = await Promise.allSettled(batchPromises);
@@ -106,6 +113,22 @@ export async function batchEnrichPricing(
     }
   }
 
+  // Emit batch summary log
+  const totalDuration = Date.now() - totalStartTime;
+  const avgDuration = totalBatches > 0 ? Math.round(totalDuration / totalBatches) : 0;
+  
+  console.log('SP_API_BATCH_COMPLETE', {
+    endpoint_name: 'pricing',
+    total_asins: asins.length,
+    total_batches: totalBatches,
+    batch_sizes: batchSizes,
+    enriched_count: result.enriched.size,
+    failed_count: result.failed.length,
+    total_duration_ms: totalDuration,
+    avg_duration_ms: avgDuration,
+    timestamp: new Date().toISOString(),
+  });
+
   return result;
 }
 
@@ -117,13 +140,15 @@ async function fetchPricingBatchWithTimeout(
   marketplaceId: string,
   timeoutMs: number,
   awsAccessKeyId: string,
-  awsSecretAccessKey: string
+  awsSecretAccessKey: string,
+  batchIndex: number,
+  totalBatches: number
 ): Promise<Map<string, PricingMetadata>> {
   const timeoutPromise = new Promise<Map<string, PricingMetadata>>((_, reject) => {
     setTimeout(() => reject(new Error("SP-API pricing batch request timeout")), timeoutMs);
   });
 
-  const fetchPromise = fetchPricingBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey);
+  const fetchPromise = fetchPricingBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches);
 
   return Promise.race([fetchPromise, timeoutPromise]);
 }
@@ -135,7 +160,9 @@ async function fetchPricingBatch(
   asins: string[],
   marketplaceId: string,
   awsAccessKeyId: string,
-  awsSecretAccessKey: string
+  awsSecretAccessKey: string,
+  batchIndex: number,
+  totalBatches: number
 ): Promise<Map<string, PricingMetadata>> {
   const result = new Map<string, PricingMetadata>();
 
@@ -147,7 +174,7 @@ async function fetchPricingBatch(
 
     // Use GetItemOffers for each ASIN (more reliable than GetPricing for buy box data)
     const pricingPromises = asins.map((asin) =>
-      fetchItemOffers(asin, marketplaceId, endpoint, host, region, accessToken, awsAccessKeyId, awsSecretAccessKey)
+      fetchItemOffers(asin, marketplaceId, endpoint, host, region, accessToken, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches)
     );
 
     const pricingResults = await Promise.allSettled(pricingPromises);
@@ -161,9 +188,17 @@ async function fetchPricingBatch(
       }
     }
   } catch (error) {
-    console.error("SP-API Pricing batch fetch error", {
-      error: error instanceof Error ? error.message : String(error),
+    logSpApiEvent({
+      event_type: 'SP_API_ERROR',
+      endpoint_name: 'pricing',
+      api_version: 'v0',
+      method: 'GET',
+      path: '/pricing/v0/items/{asin}/offers',
+      marketplace_id: marketplaceId,
       asin_count: asins.length,
+      error: error instanceof Error ? error.message : String(error),
+      batch_index: batchIndex,
+      total_batches: totalBatches,
     });
   }
 
@@ -181,9 +216,12 @@ async function fetchItemOffers(
   region: string,
   accessToken: string,
   awsAccessKeyId: string,
-  awsSecretAccessKey: string
+  awsSecretAccessKey: string,
+  batchIndex: number,
+  totalBatches: number
 ): Promise<PricingMetadata | null> {
   const path = `/pricing/v0/items/${asin}/offers`;
+  const startTime = Date.now();
 
   // Build query parameters
   const params = new URLSearchParams();
@@ -193,6 +231,21 @@ async function fetchItemOffers(
   const queryString = params.toString();
 
   try {
+    // Log request
+    logSpApiEvent({
+      event_type: 'SP_API_REQUEST',
+      endpoint_name: 'pricing',
+      api_version: 'v0',
+      method: 'GET',
+      path,
+      query_params: queryString,
+      marketplace_id: marketplaceId,
+      asin_count: 1,
+      asins: [asin],
+      batch_index: batchIndex,
+      total_batches: totalBatches,
+    });
+
     const signedRequest = await createSignedRequest({
       method: "GET",
       host,
@@ -210,17 +263,55 @@ async function fetchItemOffers(
       headers: signedRequest.headers,
     });
 
+    const duration = Date.now() - startTime;
+    const headers = extractSpApiHeaders(response.headers);
+
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
-      console.warn("SP-API GetItemOffers failed", {
-        status: response.status,
-        asin,
-        error: errorText.substring(0, 200),
+      
+      // Log error
+      logSpApiEvent({
+        event_type: 'SP_API_ERROR',
+        endpoint_name: 'pricing',
+        api_version: 'v0',
+        method: 'GET',
+        path,
+        query_params: queryString,
+        marketplace_id: marketplaceId,
+        asin_count: 1,
+        http_status: response.status,
+        duration_ms: duration,
+        request_id: headers.request_id,
+        rate_limit_limit: headers.rate_limit_limit,
+        rate_limit_remaining: headers.rate_limit_remaining,
+        error: errorText.substring(0, 500),
+        batch_index: batchIndex,
+        total_batches: totalBatches,
       });
+      
       return null;
     }
 
     const data = await response.json();
+
+    // Log successful response
+    logSpApiEvent({
+      event_type: 'SP_API_RESPONSE',
+      endpoint_name: 'pricing',
+      api_version: 'v0',
+      method: 'GET',
+      path,
+      query_params: queryString,
+      marketplace_id: marketplaceId,
+      asin_count: 1,
+      http_status: response.status,
+      duration_ms: duration,
+      request_id: headers.request_id,
+      rate_limit_limit: headers.rate_limit_limit,
+      rate_limit_remaining: headers.rate_limit_remaining,
+      batch_index: batchIndex,
+      total_batches: totalBatches,
+    });
 
     // Parse response
     const summary = data?.Summary || data?.payload?.Summary || null;
@@ -272,10 +363,23 @@ async function fetchItemOffers(
       buy_box_price: buyBoxPrice,
     };
   } catch (error) {
-    console.error("SP-API GetItemOffers error", {
-      asin,
+    const duration = Date.now() - startTime;
+    
+    // Log error
+    logSpApiEvent({
+      event_type: 'SP_API_ERROR',
+      endpoint_name: 'pricing',
+      api_version: 'v0',
+      method: 'GET',
+      path,
+      marketplace_id: marketplaceId,
+      asin_count: 1,
+      duration_ms: duration,
       error: error instanceof Error ? error.message : String(error),
+      batch_index: batchIndex,
+      total_batches: totalBatches,
     });
+    
     return null;
   }
 }

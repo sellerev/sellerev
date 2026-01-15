@@ -91,8 +91,22 @@ export async function processKeyword(
     };
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // KILL-SWITCH: DISABLE_RAINFOREST_ENRICHMENT
+  // ═══════════════════════════════════════════════════════════════════════════
+  // When enabled, Rainforest still runs for ASIN discovery and SERP fields,
+  // but Rainforest hints (title, image, price, fulfillment) are NOT used as fallbacks.
+  const disableRainforestEnrichment = process.env.DISABLE_RAINFOREST_ENRICHMENT === 'true';
+
   try {
-    // STEP 1: Rainforest Search (1 credit)
+    // STEP 1: Rainforest Search (1 credit) - ASIN discovery only
+    console.log('RAINFOREST_SEARCH_START', {
+      keyword,
+      marketplace,
+      kill_switch_enabled: disableRainforestEnrichment,
+      timestamp: new Date().toISOString(),
+    });
+
     const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=${marketplace}&search_term=${encodeURIComponent(keyword)}&page=1`;
     
     const searchResponse = await fetch(apiUrl, {
@@ -145,6 +159,12 @@ export async function processKeyword(
     }
 
     const page1Asins = page1Results.map((item: any) => item.asin.trim().toUpperCase());
+
+    console.log('RAINFOREST_SEARCH_COMPLETE', {
+      keyword,
+      asin_count: page1Asins.length,
+      timestamp: new Date().toISOString(),
+    });
 
     // Extract Rainforest SERP data (DISCOVERY-ONLY: ASIN, position, sponsored, price, rating, reviews)
     // Rainforest fields are NON-AUTHORITATIVE hints for metadata (title, brand, image, category, BSR)
@@ -260,6 +280,15 @@ export async function processKeyword(
     const asinsNeedingEnrichment = page1Asins.filter(asin => !metadataCache.has(asin));
 
     const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER'; // Default to US
+    
+    console.log('SP_API_ENRICH_START', {
+      keyword,
+      asin_count: asinsNeedingEnrichment.length,
+      marketplace_id: marketplaceId,
+      kill_switch_enabled: disableRainforestEnrichment,
+      timestamp: new Date().toISOString(),
+    });
+
     const startTime = Date.now();
 
     // SP-API Catalog Items enrichment (brand, category, BSR, title, image)
@@ -449,10 +478,16 @@ export async function processKeyword(
       // SP-API Pricing fields
       buy_box_owner: "Amazon" | "Merchant" | "Unknown" | null;
       offer_count: number | null;
-      // Source tagging for debugging
-      brand_source: 'sp_api' | 'rainforest' | 'inferred' | null;
-      title_source: 'sp_api' | 'rainforest' | null;
-      category_source: 'sp_api' | null;
+      // Source tagging for debugging and verification
+      brand_source: 'sp_api_catalog' | 'model_inferred' | null;
+      title_source: 'sp_api_catalog' | 'rainforest_serp' | 'model_inferred' | null;
+      category_source: 'sp_api_catalog' | null;
+      bsr_source: 'sp_api_catalog' | null;
+      buy_box_owner_source: 'sp_api_pricing' | null;
+      offer_count_source: 'sp_api_pricing' | null;
+      fulfillment_source: 'sp_api_pricing' | 'rainforest_serp' | null;
+      price_source: 'sp_api_pricing' | 'rainforest_serp' | null;
+      image_source: 'sp_api_catalog' | 'rainforest_serp' | null;
     }> = [];
 
     const productEstimates: Array<{
@@ -474,90 +509,138 @@ export async function processKeyword(
       // SP-API IS AUTHORITATIVE (override, not fallback)
       // ═══════════════════════════════════════════════════════════════════════════
       // If SP-API has a value, use it. Otherwise fall back to cache, then Rainforest hints.
+      // KILL-SWITCH: When enabled, skip Rainforest hint fallbacks for title/image/price/fulfillment.
       
-      // Title: SP-API → Cache → Rainforest hint → Canonical
+      // Title: SP-API → Cache → Rainforest hint (if kill-switch OFF) → Canonical
       let finalTitle: string | null = null;
-      let titleSource: 'sp_api' | 'rainforest' | null = null;
+      let titleSource: 'sp_api_catalog' | 'rainforest_serp' | 'model_inferred' | null = null;
       if (catalogEnriched?.title) {
         finalTitle = catalogEnriched.title;
-        titleSource = 'sp_api';
+        titleSource = 'sp_api_catalog';
       } else if (cached?.title) {
         finalTitle = cached.title;
-        titleSource = 'sp_api'; // Cached from previous SP-API call
-      } else if (rf?.title_hint) {
+        titleSource = 'sp_api_catalog'; // Cached from previous SP-API call
+      } else if (!disableRainforestEnrichment && rf?.title_hint) {
         finalTitle = rf.title_hint;
-        titleSource = 'rainforest';
-      } else if (canonical.title) {
+        titleSource = 'rainforest_serp';
+      } else if (!disableRainforestEnrichment && canonical.title) {
         finalTitle = canonical.title;
-        titleSource = 'rainforest';
+        titleSource = 'rainforest_serp';
+      } else if (canonical.title) {
+        // Only use canonical if kill-switch is ON and we have no SP-API/cached value
+        finalTitle = canonical.title;
+        titleSource = 'model_inferred';
       }
 
-      // Brand: SP-API → Cache (always store, never drop)
+      // Brand: SP-API → Cache → Canonical (model inferred) - NEVER from Rainforest
       let finalBrand: string | null = null;
-      let brandSource: 'sp_api' | 'rainforest' | 'inferred' | null = null;
+      let brandSource: 'sp_api_catalog' | 'model_inferred' | null = null;
       if (catalogEnriched?.brand) {
         finalBrand = catalogEnriched.brand;
-        brandSource = 'sp_api';
+        brandSource = 'sp_api_catalog';
       } else if (cached?.brand) {
         finalBrand = cached.brand;
-        brandSource = 'sp_api'; // Cached from previous SP-API call
+        brandSource = 'sp_api_catalog'; // Cached from previous SP-API call
       } else if (canonical.brand) {
         // Brand from canonical builder (likely inferred from title)
         finalBrand = canonical.brand;
-        brandSource = 'inferred';
+        brandSource = 'model_inferred';
       }
       // Never drop brand - always store if available (even if inferred)
 
-      // Image: SP-API → Cache → Rainforest hint → Canonical
+      // Image: SP-API → Cache → Rainforest hint (if kill-switch OFF) → Canonical
       let finalImageUrl: string | null = null;
+      let imageSource: 'sp_api_catalog' | 'rainforest_serp' | null = null;
       if (catalogEnriched?.image_url) {
         finalImageUrl = catalogEnriched.image_url;
+        imageSource = 'sp_api_catalog';
       } else if (cached?.image_url) {
         finalImageUrl = cached.image_url;
-      } else if (rf?.image_hint) {
+        imageSource = 'sp_api_catalog'; // Cached from previous SP-API call
+      } else if (!disableRainforestEnrichment && rf?.image_hint) {
         finalImageUrl = rf.image_hint;
+        imageSource = 'rainforest_serp';
+      } else if (!disableRainforestEnrichment && canonical.image_url) {
+        finalImageUrl = canonical.image_url;
+        imageSource = 'rainforest_serp';
       } else if (canonical.image_url) {
         finalImageUrl = canonical.image_url;
+        imageSource = null; // No source if from canonical but kill-switch is ON
       }
 
-      // Category: SP-API only (no Rainforest fallback)
+      // Category: SP-API only (no Rainforest fallback, no kill-switch needed)
       let finalCategory: string | null = null;
-      let categorySource: 'sp_api' | null = null;
+      let categorySource: 'sp_api_catalog' | null = null;
       if (catalogEnriched?.category) {
         finalCategory = catalogEnriched.category;
-        categorySource = 'sp_api';
+        categorySource = 'sp_api_catalog';
       } else if (cached?.category) {
         finalCategory = cached.category;
-        categorySource = 'sp_api'; // Cached from previous SP-API call
+        categorySource = 'sp_api_catalog'; // Cached from previous SP-API call
       }
 
-      // BSR: SP-API only (no Rainforest fallback)
+      // BSR: SP-API only (no Rainforest fallback, no kill-switch needed)
       let finalBsr: number | null = null;
+      let bsrSource: 'sp_api_catalog' | null = null;
       if (catalogEnriched?.bsr) {
         finalBsr = catalogEnriched.bsr;
+        bsrSource = 'sp_api_catalog';
       } else if (cached?.bsr) {
         finalBsr = cached.bsr;
+        bsrSource = 'sp_api_catalog'; // Cached from previous SP-API call
       } else if (canonical.bsr) {
         // Canonical BSR might come from other sources, but prefer SP-API
         finalBsr = canonical.bsr;
+        bsrSource = null; // Not from SP-API
       }
 
       // Pricing API fields (authoritative from SP-API Pricing)
       const buyBoxOwner = pricingEnriched?.buy_box_owner || null;
       const offerCount = pricingEnriched?.offer_count || null;
       const fulfillmentChannel = pricingEnriched?.fulfillment_channel || null;
+      const buyBoxOwnerSource: 'sp_api_pricing' | null = buyBoxOwner ? 'sp_api_pricing' : null;
+      const offerCountSource: 'sp_api_pricing' | null = offerCount !== null ? 'sp_api_pricing' : null;
 
-      // Rainforest-only fields (authoritative from Rainforest)
+      // Rainforest-only fields (authoritative from Rainforest - always used regardless of kill-switch)
       const finalRating = rf?.rating || canonical.rating || null;
       const finalReviews = rf?.reviews || canonical.review_count || null;
       
-      // Fulfillment: SP-API Pricing → Rainforest hint → Canonical
-      const finalFulfillment = fulfillmentChannel 
-        ? (fulfillmentChannel === 'FBA' ? 'FBA' : 'FBM')
-        : (rf?.fulfillment_hint === 'AMZ' ? 'AMZ' : (rf?.fulfillment_hint || canonical.fulfillment || null));
+      // Fulfillment: SP-API Pricing → Rainforest hint (if kill-switch OFF) → Canonical
+      let finalFulfillment: string | null = null;
+      let fulfillmentSource: 'sp_api_pricing' | 'rainforest_serp' | null = null;
+      if (fulfillmentChannel) {
+        finalFulfillment = fulfillmentChannel === 'FBA' ? 'FBA' : 'FBM';
+        fulfillmentSource = 'sp_api_pricing';
+      } else if (!disableRainforestEnrichment && rf?.fulfillment_hint) {
+        finalFulfillment = rf.fulfillment_hint === 'AMZ' ? 'AMZ' : rf.fulfillment_hint;
+        fulfillmentSource = 'rainforest_serp';
+      } else if (!disableRainforestEnrichment && canonical.fulfillment) {
+        finalFulfillment = canonical.fulfillment;
+        fulfillmentSource = 'rainforest_serp';
+      } else if (canonical.fulfillment) {
+        finalFulfillment = canonical.fulfillment;
+        fulfillmentSource = null; // No source if from canonical but kill-switch is ON
+      }
       
-      // Price: SP-API Pricing → Rainforest
-      const finalPrice = pricingEnriched?.buy_box_price || pricingEnriched?.lowest_price || rf?.price || canonical.price || null;
+      // Price: SP-API Pricing → Rainforest (if kill-switch OFF) → Canonical
+      let finalPrice: number | null = null;
+      let priceSource: 'sp_api_pricing' | 'rainforest_serp' | null = null;
+      if (pricingEnriched?.buy_box_price) {
+        finalPrice = pricingEnriched.buy_box_price;
+        priceSource = 'sp_api_pricing';
+      } else if (pricingEnriched?.lowest_price) {
+        finalPrice = pricingEnriched.lowest_price;
+        priceSource = 'sp_api_pricing';
+      } else if (!disableRainforestEnrichment && rf?.price) {
+        finalPrice = rf.price;
+        priceSource = 'rainforest_serp';
+      } else if (!disableRainforestEnrichment && canonical.price) {
+        finalPrice = canonical.price;
+        priceSource = 'rainforest_serp';
+      } else if (canonical.price) {
+        finalPrice = canonical.price;
+        priceSource = null; // No source if from canonical but kill-switch is ON
+      }
 
       // ═══════════════════════════════════════════════════════════════════════════
       // MODEL AUTHORITY (never overwritten by SP-API)
@@ -602,10 +685,16 @@ export async function processKeyword(
         // SP-API Pricing fields
         buy_box_owner: buyBoxOwner,
         offer_count: offerCount,
-        // Source tagging for debugging
+        // Source tagging for debugging and verification
         brand_source: brandSource,
         title_source: titleSource,
         category_source: categorySource,
+        bsr_source: bsrSource,
+        buy_box_owner_source: buyBoxOwnerSource,
+        offer_count_source: offerCountSource,
+        fulfillment_source: fulfillmentSource,
+        price_source: priceSource,
+        image_source: imageSource,
       });
     }
 

@@ -14,6 +14,7 @@
 
 import { createHmac, createHash } from "crypto";
 import { getSpApiAccessToken } from "./auth";
+import { logSpApiEvent, extractSpApiHeaders } from "./logging";
 
 export interface CatalogItemMetadata {
   asin: string;
@@ -65,13 +66,19 @@ export async function batchEnrichCatalogItems(
 
   // Batch ASINs into groups of 20 (SP-API limit)
   const batches: string[][] = [];
+  const batchSizes: number[] = [];
   for (let i = 0; i < asins.length; i += 20) {
-    batches.push(asins.slice(i, i + 20));
+    const batch = asins.slice(i, i + 20);
+    batches.push(batch);
+    batchSizes.push(batch.length);
   }
 
+  const totalBatches = batches.length;
+  const totalStartTime = Date.now();
+
   // Execute batches in parallel with timeout
-  const batchPromises = batches.map((batch) =>
-    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey)
+  const batchPromises = batches.map((batch, batchIndex) =>
+    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches)
   );
 
   const batchResults = await Promise.allSettled(batchPromises);
@@ -105,6 +112,22 @@ export async function batchEnrichCatalogItems(
     }
   }
 
+  // Emit batch summary log
+  const totalDuration = Date.now() - totalStartTime;
+  const avgDuration = totalBatches > 0 ? Math.round(totalDuration / totalBatches) : 0;
+  
+  console.log('SP_API_BATCH_COMPLETE', {
+    endpoint_name: 'catalogItems',
+    total_asins: asins.length,
+    total_batches: totalBatches,
+    batch_sizes: batchSizes,
+    enriched_count: result.enriched.size,
+    failed_count: result.failed.length,
+    total_duration_ms: totalDuration,
+    avg_duration_ms: avgDuration,
+    timestamp: new Date().toISOString(),
+  });
+
   return result;
 }
 
@@ -116,13 +139,15 @@ async function fetchBatchWithTimeout(
   marketplaceId: string,
   timeoutMs: number,
   awsAccessKeyId: string,
-  awsSecretAccessKey: string
+  awsSecretAccessKey: string,
+  batchIndex: number,
+  totalBatches: number
 ): Promise<Map<string, CatalogItemMetadata>> {
   const timeoutPromise = new Promise<Map<string, CatalogItemMetadata>>((_, reject) => {
     setTimeout(() => reject(new Error("SP-API batch request timeout")), timeoutMs);
   });
 
-  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey);
+  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches);
 
   return Promise.race([fetchPromise, timeoutPromise]);
 }
@@ -134,9 +159,12 @@ async function fetchBatch(
   asins: string[],
   marketplaceId: string,
   awsAccessKeyId: string,
-  awsSecretAccessKey: string
+  awsSecretAccessKey: string,
+  batchIndex: number,
+  totalBatches: number
 ): Promise<Map<string, CatalogItemMetadata>> {
   const result = new Map<string, CatalogItemMetadata>();
+  const startTime = Date.now();
 
   try {
     const accessToken = await getSpApiAccessToken();
@@ -153,6 +181,22 @@ async function fetchBatch(
     const queryString = params.toString();
 
     const path = "/catalog/2022-04-01/items";
+    
+    // Log request
+    logSpApiEvent({
+      event_type: 'SP_API_REQUEST',
+      endpoint_name: 'catalogItems',
+      api_version: '2022-04-01',
+      method: 'GET',
+      path,
+      query_params: queryString,
+      marketplace_id: marketplaceId,
+      asin_count: asins.length,
+      asins: asins.slice(0, 20), // Log first 20 ASINs
+      batch_index: batchIndex,
+      total_batches: totalBatches,
+    });
+
     const signedRequest = await createSignedRequest({
       method: "GET",
       host,
@@ -170,17 +214,55 @@ async function fetchBatch(
       headers: signedRequest.headers,
     });
 
+    const duration = Date.now() - startTime;
+    const headers = extractSpApiHeaders(response.headers);
+
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
-      console.warn("SP-API Catalog Items batch fetch failed", {
-        status: response.status,
+      
+      // Log error
+      logSpApiEvent({
+        event_type: 'SP_API_ERROR',
+        endpoint_name: 'catalogItems',
+        api_version: '2022-04-01',
+        method: 'GET',
+        path,
+        query_params: queryString,
+        marketplace_id: marketplaceId,
         asin_count: asins.length,
-        error: errorText.substring(0, 200),
+        http_status: response.status,
+        duration_ms: duration,
+        request_id: headers.request_id,
+        rate_limit_limit: headers.rate_limit_limit,
+        rate_limit_remaining: headers.rate_limit_remaining,
+        error: errorText.substring(0, 500),
+        batch_index: batchIndex,
+        total_batches: totalBatches,
       });
+
       return result; // Return empty map on failure
     }
 
     const data = await response.json();
+
+    // Log successful response
+    logSpApiEvent({
+      event_type: 'SP_API_RESPONSE',
+      endpoint_name: 'catalogItems',
+      api_version: '2022-04-01',
+      method: 'GET',
+      path,
+      query_params: queryString,
+      marketplace_id: marketplaceId,
+      asin_count: asins.length,
+      http_status: response.status,
+      duration_ms: duration,
+      request_id: headers.request_id,
+      rate_limit_limit: headers.rate_limit_limit,
+      rate_limit_remaining: headers.rate_limit_remaining,
+      batch_index: batchIndex,
+      total_batches: totalBatches,
+    });
 
     // Parse response (SP-API returns items array)
     const items = data?.items || [];
@@ -200,9 +282,21 @@ async function fetchBatch(
       result.set(asin, metadata);
     }
   } catch (error) {
-    console.error("SP-API Catalog Items batch fetch error", {
-      error: error instanceof Error ? error.message : String(error),
+    const duration = Date.now() - startTime;
+    
+    // Log error
+    logSpApiEvent({
+      event_type: 'SP_API_ERROR',
+      endpoint_name: 'catalogItems',
+      api_version: '2022-04-01',
+      method: 'GET',
+      path: '/catalog/2022-04-01/items',
+      marketplace_id: marketplaceId,
       asin_count: asins.length,
+      duration_ms: duration,
+      error: error instanceof Error ? error.message : String(error),
+      batch_index: batchIndex,
+      total_batches: totalBatches,
     });
   }
 
