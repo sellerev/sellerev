@@ -37,11 +37,11 @@ export interface PageOneListing {
 
 /**
  * Normalizes brand name (handles null, empty)
- * Missing brand = "Unknown" (NOT excluded from calculation)
+ * Missing brand = "Generic" (excluded from brand share calculations)
  */
 function normalizeBrand(brand: string | null | undefined): string {
   if (!brand || typeof brand !== "string" || brand.trim().length === 0) {
-    return "Unknown";
+    return "Generic";
   }
   return brand.trim();
 }
@@ -53,7 +53,7 @@ function normalizeBrand(brand: string | null | undefined): string {
  * Pure derived aggregation using ONLY canonical Page-1 data.
  * 
  * Aggregates Page-1 listings by brand and computes:
- * - brand (includes "Unknown" for missing brands)
+ * - brand (includes "Generic" for missing brands)
  * - asin_count
  * - total_revenue (sum of estimated_monthly_revenue)
  * - revenue_share_pct (vs total Page-1 revenue)
@@ -81,7 +81,7 @@ export function analyzeBrandMoat(
     };
   }
 
-  // Group ALL listings by brand (missing brands = "Unknown")
+  // Group ALL listings by brand (missing brands = "Generic")
   const brandGroups = new Map<string, PageOneListing[]>();
   
   listings.forEach((listing) => {
@@ -92,20 +92,20 @@ export function analyzeBrandMoat(
     brandGroups.get(brand)!.push(listing);
   });
 
-  // Calculate total Page-1 revenue (from ALL listings, including Unknown brands)
+  // Calculate total Page-1 revenue (from ALL listings, including Generic brands)
   // This is used as the denominator for revenue share calculations (Helium-10 style)
   const totalPage1Revenue = listings.reduce(
     (sum, l) => sum + (l.estimated_monthly_revenue || 0),
     0
   );
 
-  // HELIUM-10 "CHEAT": Exclude "Unknown" from brand list, but include in denominator
-  // Compute metrics per brand (EXCLUDE "Unknown" from breakdown list)
+  // HELIUM-10 "CHEAT": Exclude "Generic" from brand list, but include in denominator
+  // Compute metrics per brand (EXCLUDE "Generic" from breakdown list)
   const brandBreakdown: BrandBreakdown[] = [];
 
   brandGroups.forEach((brandListings, brandName) => {
-    // Skip "Unknown" brands in breakdown list (but they're already included in totalPage1Revenue)
-    if (brandName === "Unknown") {
+    // Skip "Generic" brands in breakdown list (but they're already included in totalPage1Revenue)
+    if (brandName === "Generic") {
       return;
     }
     
@@ -116,7 +116,7 @@ export function analyzeBrandMoat(
       0
     );
     
-    // Revenue share uses totalPage1Revenue as denominator (includes Unknown revenue)
+    // Revenue share uses totalPage1Revenue as denominator (includes Generic revenue)
     const revenue_share_pct =
       totalPage1Revenue > 0
         ? (total_revenue / totalPage1Revenue) * 100
@@ -133,18 +133,18 @@ export function analyzeBrandMoat(
   // Sort by revenue share (descending)
   brandBreakdown.sort((a, b) => b.revenue_share_pct - a.revenue_share_pct);
 
-  // Get top brand share (from non-Unknown brands only)
+  // Get top brand share (from non-Generic brands only)
   const topBrand = brandBreakdown[0];
   const top_brand_revenue_share_pct = topBrand ? topBrand.revenue_share_pct : 0;
 
-  // Calculate top 3 brands revenue share (from non-Unknown brands only, denominator includes Unknown)
+  // Calculate top 3 brands revenue share (from non-Generic brands only, denominator includes Generic)
   const top3Revenue = brandBreakdown
     .slice(0, 3)
     .reduce((sum, b) => sum + b.total_revenue, 0);
   const top_3_brands_revenue_share_pct =
     totalPage1Revenue > 0 ? Math.round((top3Revenue / totalPage1Revenue) * 100 * 100) / 100 : 0;
 
-  // Total brands count (EXCLUDE "Unknown" - Helium-10 style)
+  // Total brands count (EXCLUDE "Generic" - Helium-10 style)
   const total_brands_count = brandBreakdown.length;
 
   // ──────────────────────────────────────────────────────────────────────────────

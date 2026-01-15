@@ -11,20 +11,20 @@ import { buildTier1Products, calculateTier1Aggregates } from "@/lib/estimators/t
 
 function normalizeBrandBucket(brand: string | null | undefined): string {
   const raw = (brand || "").trim();
-  if (!raw) return "Unknown";
+  if (!raw) return "Generic";
   const normalized = raw.toLowerCase();
   if (normalized === "unknown" || normalized === "generic" || normalized === "unbranded") {
-    return "Unknown";
+    return "Generic";
   }
   return normalized;
 }
 
 function isHiddenBrandBucket(bucket: string): boolean {
-  return bucket === "Unknown" || bucket === "unknown" || bucket === "generic" || bucket === "unbranded";
+  return bucket === "Generic" || bucket === "generic" || bucket === "unknown" || bucket === "unbranded";
 }
 
 function computeBrandStats(products: Tier1Product[]): { page1_brand_count: number; top_5_brand_share_pct: number } {
-  // Count unique brand buckets INCLUDING Unknown/Generic (counts toward diversity)
+  // Count unique brand buckets INCLUDING Generic (counts toward diversity)
   const buckets = new Set<string>();
   const revenueByBucket = new Map<string, number>();
 
@@ -37,7 +37,7 @@ function computeBrandStats(products: Tier1Product[]): { page1_brand_count: numbe
 
   const totalRevenue = Array.from(revenueByBucket.values()).reduce((sum, r) => sum + r, 0);
 
-  // Top-5 share: exclude "Unknown/Generic" buckets from numerator but keep them in denominator
+  // Top-5 share: exclude "Generic" buckets from numerator but keep them in denominator
   const top5Revenue = Array.from(revenueByBucket.entries())
     .filter(([bucket]) => !isHiddenBrandBucket(bucket))
     .sort((a, b) => b[1] - a[1])

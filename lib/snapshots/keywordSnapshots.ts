@@ -272,19 +272,20 @@ export async function queueKeyword(
   const normalized = normalizeKeyword(keyword);
 
   // Check if already queued (pending or processing)
+  // CRITICAL: Select both 'id' and 'priority' to read full row for priority comparison
   const { data: existing } = await supabase
     .from('keyword_queue')
-    .select('id')
+    .select('id, priority')
     .eq('keyword', normalized)
     .eq('marketplace', marketplace)
     .in('status', ['pending', 'processing'])
     .single();
 
   if (existing) {
-    // Update priority if higher
+    // Update priority if higher (now we have existing.priority from the select)
     await supabase
       .from('keyword_queue')
-      .update({ priority: Math.max(priority, existing.priority) })
+      .update({ priority: Math.max(priority, existing.priority || 0) })
       .eq('id', existing.id);
     return existing.id;
   }

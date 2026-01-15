@@ -330,11 +330,11 @@ function calculateTop5AvgReviews(products: Array<{ review_count: number }>): num
  * Rules:
  * - "Amazon" → "Amazon"
  * - Non-empty brand string → that brand
- * - Otherwise → "Unknown"
+ * - Otherwise → "Generic"
  */
 function normalizeBrandBucket(brand: string | null | undefined): string {
   if (!brand || typeof brand !== 'string' || brand.trim().length === 0) {
-    return 'Unknown';
+    return 'Generic';
   }
   const trimmed = brand.trim();
   // Normalize "Amazon" variations
@@ -568,7 +568,7 @@ export async function buildKeywordAnalyzeResponse(
     // PHASE 1: BRAND STATS COMPUTATION (Page-1 aggregate only)
     // ═══════════════════════════════════════════════════════════════════════════
     // Compute brand buckets and aggregate stats
-    // Rules: Amazon, brand string, or Unknown - all contribute to counts
+    // Rules: Amazon, brand string, or Generic - all contribute to counts
     
     // Step 1: Compute brand buckets and aggregate revenue
     const brandRevenueMap = new Map<string, number>();
@@ -583,7 +583,7 @@ export async function buildKeywordAnalyzeResponse(
       brandRevenueMap.set(brandBucket, currentRevenue + revenue);
     }
     
-    // Step 2: Compute page1_brand_count (includes Unknown)
+    // Step 2: Compute page1_brand_count (includes Generic)
     const page1_brand_count = brandBuckets.size;
     
     // Step 3: Compute top 5 brand share

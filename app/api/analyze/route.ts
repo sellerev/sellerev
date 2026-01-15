@@ -1368,10 +1368,6 @@ export async function POST(req: NextRequest) {
       // Build snapshot from cached keyword_products (zero Rainforest API calls)
       let snapshot = await buildKeywordSnapshotFromCache(supabase, body.input_value, marketplace);
 
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:778',message:'Snapshot lookup result',data:{has_snapshot:!!snapshot,keyword:body.input_value,marketplace},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
-
       if (snapshot) {
       // Snapshot exists - use it (pure database read)
       snapshotStatus = 'hit';
@@ -1380,10 +1376,6 @@ export async function POST(req: NextRequest) {
         last_updated: snapshot.last_updated,
         product_count: snapshot.product_count,
       });
-
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:782',message:'Snapshot hit - proceeding with analysis',data:{snapshot_status:snapshotStatus},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
 
       // Increment search count
       await incrementSearchCount(supabase, body.input_value, marketplace);
@@ -2276,15 +2268,9 @@ export async function POST(req: NextRequest) {
     
     // Guard: Ensure required data before AI call
     if (!sellerProfile) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:1014',message:'Missing seller profile - early return',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       throw new Error("Missing seller profile");
     }
     if (!marketSnapshot) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:1017',message:'Missing market snapshot - early return',data:{has_keywordMarketData:!!keywordMarketData},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       throw new Error("Missing market snapshot");
     }
 
@@ -3191,10 +3177,6 @@ Convert this plain text decision into the required JSON contract format. Extract
       response_size_bytes: serializedResponse.length,
     });
 
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:1465',message:'Before analysis_runs insert',data:{has_finalResponse:!!finalResponse,has_decision:!!finalResponse?.decision,has_verdict:!!finalResponse?.decision?.verdict},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
-
     const { data: insertedRun, error: insertError } = await supabase
       .from("analysis_runs")
       .insert({
@@ -3210,10 +3192,6 @@ Convert this plain text decision into the required JSON contract format. Extract
       })
       .select("id")
       .single();
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:1479',message:'After analysis_runs insert',data:{has_insertedRun:!!insertedRun,insertedRun_id:insertedRun?.id,has_insertError:!!insertError,insertError_message:insertError?.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
 
     if (insertError) {
       console.error("ANALYSIS_RUN_INSERT_ERROR", {
@@ -3447,9 +3425,6 @@ Convert this plain text decision into the required JSON contract format. Extract
       // Don't throw - observation insertion is non-critical
     }
     
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/2d717643-6e0f-44e0-836b-7d7b2c0dda42',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'app/api/analyze/route.ts:1637',message:'Returning success response',data:{has_insertedRun:!!insertedRun,analysisRunId:insertedRun?.id,has_finalResponse:!!finalResponse,has_decision:!!finalResponse?.decision,responseStatus},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
 
     // ═══════════════════════════════════════════════════════════════════════════
     // STEP 4 — CONFIRM API RESPONSE SHAPE

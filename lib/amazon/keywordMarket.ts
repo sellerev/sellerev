@@ -50,7 +50,7 @@ export interface KeywordMarketSnapshot {
   total_page1_listings: number; // Only Page 1 listings
   sponsored_count: number;
   dominance_score: number; // 0-100, % of listings belonging to top brand
-  total_page1_brands?: number; // Total distinct brands on Page-1 (includes "Unknown")
+  total_page1_brands?: number; // Total distinct brands on Page-1 (includes "Generic")
   top_brands_by_frequency?: Array<{ brand: string; count: number }>; // Top brands by listing count
   fulfillment_mix: {
     fba: number; // % of listings fulfilled by Amazon (FBA)
@@ -761,15 +761,15 @@ function normalizeBrand(brand: string): string {
  * NOT ALLOWED:
  * - Product API calls (type=product)
  * - High confidence requirement
- * - Dropping "Unknown" brands for counting
+ * - Dropping "Generic" brands for counting
  */
 function resolveBrandFromSearchResult(
   item: any
 ): { 
   brand_display: string | null;
-  brand_entity: string | 'Amazon' | 'Unknown';
+  brand_entity: string | 'Amazon' | 'Generic';
   brand_confidence: 'high' | 'medium' | 'low' | 'none';
-  brand_source: 'search' | 'brand_name' | 'seller' | 'title' | 'amazon_flag' | 'unknown';
+  brand_source: 'search' | 'brand_name' | 'seller' | 'title' | 'amazon_flag' | 'generic';
 } {
   // Priority 1: Amazon brand flags
   if (item.is_amazon_brand === true || 
@@ -835,12 +835,12 @@ function resolveBrandFromSearchResult(
     }
   }
   
-  // Priority 6: Unknown (no brand found)
+  // Priority 6: Generic (no brand found)
   return {
     brand_display: null,
-    brand_entity: 'Unknown',
+    brand_entity: 'Generic',
     brand_confidence: 'none',
-    brand_source: 'unknown'
+    brand_source: 'generic'
   };
 }
 
@@ -1733,7 +1733,7 @@ export async function fetchKeywordMarketSnapshot(
       // Uses ONLY: item.brand, item.is_amazon_brand, item.is_exclusive_to_amazon, item.featured_from_our_brands
       // NO title extraction, NO product API, NO seller inference
       const brandResolution = resolveBrandFromSearchResult(item);
-      const brand = brandResolution.brand_entity === 'Unknown' ? null : brandResolution.brand_display;
+      const brand = brandResolution.brand_entity === 'Generic' ? null : brandResolution.brand_display;
       // Store brand metadata for backward compatibility and new fields
       (item as any)._brand_confidence = brandResolution.brand_confidence;
       (item as any)._brand_entity = brandResolution.brand_entity;
@@ -1988,15 +1988,15 @@ export async function fetchKeywordMarketSnapshot(
     // ═══════════════════════════════════════════════════════════════════════════
     // BRAND COUNTING (SEARCH RESULTS ONLY - NO API CALLS)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Count distinct brands including "Unknown" for accurate brand diversity metrics
+    // Count distinct brands including "Generic" for accurate brand diversity metrics
     // Uses normalized brand entities (lowercase, trimmed) for deduplication
     const brandCounts: Record<string, number> = {};
     const brandEntityMap = new Map<string, string>(); // Map normalized entity -> display name
     
     listings.forEach((l) => {
-      // Get brand entity (normalized) - includes "Unknown" for missing brands
-      const brandEntity = l.brand ? normalizeBrand(l.brand) : 'Unknown';
-      const brandDisplay = l.brand || 'Unknown';
+      // Get brand entity (normalized) - includes "Generic" for missing brands
+      const brandEntity = l.brand ? normalizeBrand(l.brand) : 'Generic';
+      const brandDisplay = l.brand || 'Generic';
       
       // Count by normalized entity (deduplicates variations)
       brandCounts[brandEntity] = (brandCounts[brandEntity] || 0) + 1;
@@ -2015,12 +2015,12 @@ export async function fetchKeywordMarketSnapshot(
       }))
       .sort((a, b) => b.count - a.count);
 
-    // Total distinct brands (includes "Unknown" if present)
+    // Total distinct brands (includes "Generic" if present)
     const total_page1_brands = Object.keys(brandCounts).length;
 
     // Page 1 dominance score: % of Page 1 listings belonging to top brand (0-100)
-    // Exclude "Unknown" from dominance calculation (only count known brands)
-    const topKnownBrand = top_brands.find(b => b.brand !== 'Unknown');
+    // Exclude "Generic" from dominance calculation (only count known brands)
+    const topKnownBrand = top_brands.find(b => b.brand !== 'Generic');
     const dominance_score =
       topKnownBrand && total_page1_listings > 0
         ? Math.round((topKnownBrand.count / total_page1_listings) * 100)
@@ -2060,7 +2060,7 @@ export async function fetchKeywordMarketSnapshot(
       total_page1_listings,
       sponsored_count,
       dominance_score,
-      total_page1_brands, // Total distinct brands (includes "Unknown")
+      total_page1_brands, // Total distinct brands (includes "Generic")
       top_brands_by_frequency: top_brands.slice(0, 10), // Top 10 brands by frequency
       fulfillment_mix: fulfillmentMix, // Always an object now (never null when listings exist)
       ppc: ppcIndicators,
