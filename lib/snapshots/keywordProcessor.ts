@@ -3,10 +3,15 @@
  * 
  * Processes keywords from queue using Rainforest API (search only) and SP-API (enrichment).
  * 
- * STEP 1: Rainforest Search (1 credit) - ASIN discovery
- * STEP 2: SP-API Batch Enrichment (parallel) - Metadata enrichment
- * STEP 3: Immediate Revenue Modeling (internal) - Estimation
- * STEP 4: Canonical Merge - Priority: Rainforest → SP-API → Estimators
+ * AUTHORITY MODEL:
+ * - Rainforest: ASIN discovery, page position, sponsored flag (SERP-only fields)
+ * - SP-API: Authoritative source for all product metadata (title, brand, image, category, BSR)
+ * - Internal Model: Sole source for revenue & units estimates
+ * 
+ * STEP 1: Rainforest Search (1 credit) - ASIN discovery only
+ * STEP 2: SP-API Batch Enrichment (synchronous) - Authoritative metadata enrichment
+ * STEP 3: Immediate Revenue Modeling (internal) - Estimation using canonicalPageOne
+ * STEP 4: Canonical Merge - SP-API overrides Rainforest for metadata, Model owns economics
  * STEP 5: Persist Results
  */
 
@@ -47,9 +52,23 @@ function calculateDemandLevel(totalUnits: number): 'high' | 'medium' | 'low' | '
  * Process a single keyword through the pipeline
  * 
  * STEP 1: Rainforest Search (1 credit) - ASIN discovery only
- * STEP 2: SP-API Batch Enrichment (parallel) - Metadata enrichment (title, brand, image, category, BSR)
- * STEP 3: Immediate Revenue Modeling (internal) - Estimation using canonicalPageOne
- * STEP 4: Canonical Merge - Priority: Rainforest → SP-API → Estimators
+ *   - Extracts: ASIN, page_position, is_sponsored, price, rating, reviews
+ *   - Treats title/image as non-authoritative hints only
+ * 
+ * STEP 2: SP-API Batch Enrichment (synchronous) - Authoritative metadata
+ *   - Always enriches top ASINs synchronously (deterministic)
+ *   - SP-API values OVERRIDE Rainforest hints (not fallback)
+ *   - Extracts: title, brand, image_url, category, BSR
+ * 
+ * STEP 3: Immediate Revenue Modeling (internal) - Estimation
+ *   - Uses canonicalPageOne for revenue/units estimates
+ *   - Model authority: never overwritten by SP-API
+ * 
+ * STEP 4: Canonical Merge - SP-API authoritative, Model owns economics
+ *   - Metadata: SP-API → Cache → Rainforest hints
+ *   - Economics: Internal model only
+ *   - Source tagging: brand_source, title_source, category_source
+ * 
  * STEP 5: Persist Results
  */
 export async function processKeyword(
@@ -126,7 +145,8 @@ export async function processKeyword(
 
     const page1Asins = page1Results.map((item: any) => item.asin.trim().toUpperCase());
 
-    // Extract Rainforest SERP data (rank, sponsored, page position, price, fulfillment hints)
+    // Extract Rainforest SERP data (DISCOVERY-ONLY: ASIN, position, sponsored, price, rating, reviews)
+    // Rainforest fields are NON-AUTHORITATIVE hints for metadata (title, brand, image, category, BSR)
     const rainforestData = new Map<string, {
       asin: string;
       rank: number;
@@ -134,10 +154,12 @@ export async function processKeyword(
       page_position: number;
       price: number | null;
       fulfillment_hint: 'FBA' | 'FBM' | 'AMZ' | null;
-      title: string | null;
-      image_url: string | null;
       rating: number | null;
       reviews: number | null;
+      // Non-authoritative hints (will be overridden by SP-API)
+      title_hint: string | null;
+      image_hint: string | null;
+      source: 'rainforest_serp';
     }>();
 
     for (let i = 0; i < page1Results.length; i++) {
@@ -181,10 +203,12 @@ export async function processKeyword(
         page_position: i + 1,
         price,
         fulfillment_hint: fulfillmentHint,
-        title: item.title || null,
-        image_url: item.image || item.image_url || null,
         rating,
         reviews,
+        // Non-authoritative hints (temporary placeholders until SP-API enrichment)
+        title_hint: item.title || null,
+        image_hint: item.image || item.image_url || null,
+        source: 'rainforest_serp',
       });
     }
 
@@ -230,16 +254,19 @@ export async function processKeyword(
       }
     }
 
+    // STEP 2: SP-API Batch Enrichment (DETERMINISTIC - always enrich top 10 synchronously)
     // Determine which ASINs need enrichment
     const asinsNeedingEnrichment = page1Asins.filter(asin => !metadataCache.has(asin));
 
-    // SP-API batch enrichment (non-blocking, fails gracefully)
+    // SP-API batch enrichment (authoritative source for metadata)
+    // Always enrich synchronously to guarantee metadata availability
     let spApiEnrichment = new Map<string, {
       title: string | null;
       brand: string | null;
       image_url: string | null;
       category: string | null;
       bsr: number | null;
+      source: 'sp_api';
     }>();
 
     if (asinsNeedingEnrichment.length > 0) {
@@ -248,10 +275,10 @@ export async function processKeyword(
         const enrichmentResult = await batchEnrichCatalogItems(
           asinsNeedingEnrichment,
           marketplaceId,
-          4000 // 4 second timeout
+          4000 // 4 second timeout per batch
         );
 
-        // Convert enrichment result to map
+        // Convert enrichment result to map (SP-API is authoritative)
         for (const [asin, metadata] of enrichmentResult.enriched.entries()) {
           spApiEnrichment.set(asin, {
             title: metadata.title,
@@ -259,6 +286,7 @@ export async function processKeyword(
             image_url: metadata.image_url,
             category: metadata.category,
             bsr: metadata.bsr,
+            source: 'sp_api',
           });
         }
 
@@ -270,36 +298,43 @@ export async function processKeyword(
           });
         }
       } catch (error) {
-        console.warn('SP-API enrichment failed (non-blocking)', {
+        console.warn('SP-API enrichment failed (graceful degradation)', {
           keyword,
           error: error instanceof Error ? error.message : String(error),
         });
-        // Continue without SP-API data - will use Rainforest data only
+        // Continue without SP-API data - will use Rainforest hints as fallback
       }
     }
 
     // STEP 3: Immediate Revenue Modeling (using buildKeywordPageOne)
     // Convert Rainforest data to ParsedListing format for buildKeywordPageOne
-    const parsedListings: ParsedListing[] = Array.from(rainforestData.values()).map((rf) => ({
-      asin: rf.asin,
-      position: rf.rank,
-      price: rf.price,
-      title: rf.title,
-      image_url: rf.image_url,
-      rating: rf.rating,
-      reviews: rf.reviews,
-      is_sponsored: rf.sponsored,
-      fulfillment: rf.fulfillment_hint === 'AMZ' ? 'Amazon' : rf.fulfillment_hint,
-      brand: null, // Will be enriched from SP-API
-      main_category: null, // Will be enriched from SP-API
-      main_category_bsr: null, // Will be enriched from SP-API
-      bsr: null,
-    }));
+    // Use SP-API metadata where available, Rainforest hints as temporary placeholders
+    const parsedListings: ParsedListing[] = Array.from(rainforestData.values()).map((rf) => {
+      const enriched = spApiEnrichment.get(rf.asin);
+      const cached = metadataCache.get(rf.asin);
+      
+      // SP-API is authoritative for metadata (override, not fallback)
+      return {
+        asin: rf.asin,
+        position: rf.rank,
+        price: rf.price,
+        title: enriched?.title || cached?.title || rf.title_hint || null,
+        image_url: enriched?.image_url || cached?.image_url || rf.image_hint || null,
+        rating: rf.rating,
+        reviews: rf.reviews,
+        is_sponsored: rf.sponsored,
+        fulfillment: rf.fulfillment_hint === 'AMZ' ? 'Amazon' : rf.fulfillment_hint,
+        brand: enriched?.brand || cached?.brand || null, // SP-API only (no Rainforest inference)
+        main_category: enriched?.category || cached?.category || null, // SP-API only
+        main_category_bsr: enriched?.bsr || cached?.bsr || null, // SP-API only
+        bsr: enriched?.bsr || cached?.bsr || null,
+      };
+    });
 
     // Run buildKeywordPageOne to get revenue estimates
     const canonicalProducts = buildKeywordPageOne(parsedListings);
 
-    // STEP 4: Canonical Merge (Priority: Rainforest → SP-API → Estimators)
+    // STEP 4: Canonical Merge (SP-API is authoritative for metadata, Model owns economics)
     const keywordProducts: Array<{
       keyword: string;
       asin: string;
@@ -319,6 +354,10 @@ export async function processKeyword(
       estimated_monthly_revenue: number | null;
       is_sponsored: boolean;
       last_enriched_at: string | null;
+      // Source tagging for debugging
+      brand_source: 'sp_api' | 'rainforest' | 'inferred' | null;
+      title_source: 'sp_api' | 'rainforest' | null;
+      category_source: 'sp_api' | null;
     }> = [];
 
     const productEstimates: Array<{
@@ -335,18 +374,88 @@ export async function processKeyword(
       const cached = metadataCache.get(asin);
       const enriched = spApiEnrichment.get(asin);
 
-      // Merge priority: Rainforest → SP-API → Estimators
-      const finalTitle = rf?.title || enriched?.title || cached?.title || canonical.title || null;
-      const finalBrand = enriched?.brand || cached?.brand || canonical.brand || null;
-      const finalImageUrl = rf?.image_url || enriched?.image_url || cached?.image_url || canonical.image_url || null;
-      const finalCategory = enriched?.category || cached?.category || null;
-      const finalBsr = enriched?.bsr || cached?.bsr || canonical.bsr || null;
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SP-API IS AUTHORITATIVE (override, not fallback)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // If SP-API has a value, use it. Otherwise fall back to cache, then Rainforest hints.
+      
+      // Title: SP-API → Cache → Rainforest hint → Canonical
+      let finalTitle: string | null = null;
+      let titleSource: 'sp_api' | 'rainforest' | null = null;
+      if (enriched?.title) {
+        finalTitle = enriched.title;
+        titleSource = 'sp_api';
+      } else if (cached?.title) {
+        finalTitle = cached.title;
+        titleSource = 'sp_api'; // Cached from previous SP-API call
+      } else if (rf?.title_hint) {
+        finalTitle = rf.title_hint;
+        titleSource = 'rainforest';
+      } else if (canonical.title) {
+        finalTitle = canonical.title;
+        titleSource = 'rainforest';
+      }
+
+      // Brand: SP-API → Cache (always store, never drop)
+      let finalBrand: string | null = null;
+      let brandSource: 'sp_api' | 'rainforest' | 'inferred' | null = null;
+      if (enriched?.brand) {
+        finalBrand = enriched.brand;
+        brandSource = 'sp_api';
+      } else if (cached?.brand) {
+        finalBrand = cached.brand;
+        brandSource = 'sp_api'; // Cached from previous SP-API call
+      } else if (canonical.brand) {
+        // Brand from canonical builder (likely inferred from title)
+        finalBrand = canonical.brand;
+        brandSource = 'inferred';
+      }
+      // Never drop brand - always store if available (even if inferred)
+
+      // Image: SP-API → Cache → Rainforest hint → Canonical
+      let finalImageUrl: string | null = null;
+      if (enriched?.image_url) {
+        finalImageUrl = enriched.image_url;
+      } else if (cached?.image_url) {
+        finalImageUrl = cached.image_url;
+      } else if (rf?.image_hint) {
+        finalImageUrl = rf.image_hint;
+      } else if (canonical.image_url) {
+        finalImageUrl = canonical.image_url;
+      }
+
+      // Category: SP-API only (no Rainforest fallback)
+      let finalCategory: string | null = null;
+      let categorySource: 'sp_api' | null = null;
+      if (enriched?.category) {
+        finalCategory = enriched.category;
+        categorySource = 'sp_api';
+      } else if (cached?.category) {
+        finalCategory = cached.category;
+        categorySource = 'sp_api'; // Cached from previous SP-API call
+      }
+
+      // BSR: SP-API only (no Rainforest fallback)
+      let finalBsr: number | null = null;
+      if (enriched?.bsr) {
+        finalBsr = enriched.bsr;
+      } else if (cached?.bsr) {
+        finalBsr = cached.bsr;
+      } else if (canonical.bsr) {
+        // Canonical BSR might come from other sources, but prefer SP-API
+        finalBsr = canonical.bsr;
+      }
+
+      // Rainforest-only fields (authoritative from Rainforest)
       const finalRating = rf?.rating || canonical.rating || null;
       const finalReviews = rf?.reviews || canonical.review_count || null;
       const finalFulfillment = rf?.fulfillment_hint || canonical.fulfillment || null;
       const finalPrice = rf?.price || canonical.price || null;
 
-      // Use canonical estimates (from canonicalPageOne)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // MODEL AUTHORITY (never overwritten by SP-API)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Revenue and units come ONLY from internal model (canonicalPageOne)
       const monthlyUnits = canonical.estimated_monthly_units || null;
       const monthlyRevenue = canonical.estimated_monthly_revenue || null;
 
@@ -361,7 +470,7 @@ export async function processKeyword(
       }
 
       // Determine if we need to update last_enriched_at
-      const shouldUpdateEnrichment = enriched && enriched.title !== null;
+      const shouldUpdateEnrichment = enriched && (enriched.title !== null || enriched.brand !== null);
       const lastEnrichedAt = shouldUpdateEnrichment ? new Date().toISOString() : (cached?.last_enriched_at || null);
 
       keywordProducts.push({
@@ -370,7 +479,7 @@ export async function processKeyword(
         rank: rf?.rank || canonical.page_position || 0,
         price: finalPrice,
         title: finalTitle,
-        brand: finalBrand,
+        brand: finalBrand, // Always store if available (never drop)
         image_url: finalImageUrl,
         rating: finalRating,
         review_count: finalReviews,
@@ -379,10 +488,14 @@ export async function processKeyword(
         bsr: finalBsr,
         main_category: finalCategory,
         main_category_bsr: finalBsr,
-        estimated_monthly_units: monthlyUnits,
-        estimated_monthly_revenue: monthlyRevenue ? Math.round(monthlyRevenue * 100) / 100 : null,
+        estimated_monthly_units: monthlyUnits, // Model authority - never overwritten
+        estimated_monthly_revenue: monthlyRevenue ? Math.round(monthlyRevenue * 100) / 100 : null, // Model authority
         is_sponsored: rf?.sponsored || canonical.is_sponsored || false,
         last_enriched_at: lastEnrichedAt,
+        // Source tagging for debugging
+        brand_source: brandSource,
+        title_source: titleSource,
+        category_source: categorySource,
       });
     }
 

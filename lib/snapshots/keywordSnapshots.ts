@@ -45,6 +45,10 @@ export interface KeywordProduct {
   category: string | null; // Product category from SP-API
   bsr: number | null; // Best Seller Rank from SP-API
   last_enriched_at: string | null; // Timestamp when metadata was last enriched (7-day TTL)
+  // Source tagging (for debugging and UI badges)
+  brand_source: 'sp_api' | 'rainforest' | 'inferred' | null;
+  title_source: 'sp_api' | 'rainforest' | null;
+  category_source: 'sp_api' | null;
   last_updated: string;
 }
 
