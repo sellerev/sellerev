@@ -1819,9 +1819,17 @@ export async function POST(req: NextRequest) {
     // ═══════════════════════════════════════════════════════════════════════════
     // COPILOT INTENT: FBA PROFITABILITY LOOKUP (SP-API Fees, chat-only)
     // ═══════════════════════════════════════════════════════════════════════════
-    // This is handled without the LLM and without Rainforest escalation.
-    // The frontend will run /api/fba-fees only after collecting inputs + confirmation.
+    // IMPORTANT: This must NOT block normal chat answers.
+    // For the valid (exactly 1 ASIN) case we:
+    // - emit SSE metadata to trigger the inline fees UI
+    // - still call the LLM and stream a helpful assistant response
     const isFbaProfitabilityIntent = detectFbaProfitabilityIntent(body.message);
+    let copilotIntentMetadata: null | {
+      type: "copilot_intent";
+      intent: "fba_profitability_lookup";
+      asins: string[];
+      asin: string;
+    } = null;
     if (isFbaProfitabilityIntent) {
       console.log("[COPILOT_INTENT]", {
         intent: "fba_profitability_lookup",
@@ -1883,30 +1891,13 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // Valid: exactly 1 ASIN selected → emit intent metadata and stop.
-      const intentMetadata = {
+      // Valid: exactly 1 ASIN selected → emit intent metadata AND continue to LLM.
+      copilotIntentMetadata = {
         type: "copilot_intent",
         intent: "fba_profitability_lookup",
         asins: selectedAsins,
         asin: selectedAsins[0],
       };
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ metadata: intentMetadata })}\n\n`)
-          );
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
-        },
-      });
-      return new NextResponse(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-transform",
-          Connection: "keep-alive",
-          ...Object.fromEntries(res.headers.entries()),
-        },
-      });
     }
     
     // Guardrail input: explicit ASINs in user question (allows escalation only when explicitly referenced)
@@ -1966,6 +1957,15 @@ export async function POST(req: NextRequest) {
       // Fallback to minimal context
       contextMessage = `Analysis for ${analysisRun.input_type}: ${analysisRun.input_value}`;
       marketSnapshotSummary = "";
+    }
+
+    // If fee intent is active, instruct the assistant to respond normally AND guide the inline fees workflow.
+    if (copilotIntentMetadata) {
+      const priceHint =
+        typeof body.selectedListing?.price === "number" && body.selectedListing.price > 0
+          ? `$${body.selectedListing.price.toFixed(2)}`
+          : "the current listing price";
+      contextMessage += `\n\nCOPILOT_INTENT: FBA_PROFITABILITY_LOOKUP\nUser asked to run Amazon fees/profitability for the selected ASIN (${copilotIntentMetadata.asin}).\nFrontend will attempt to fetch an exact Seller API fee quote at ${priceHint}.\nYou MUST still answer normally:\n- Briefly say you're attempting to fetch exact Amazon fees using Amazon's Seller API.\n- Tell the user what they'll see (fee breakdown first), and that they can retry or change price if it fails.\n- Ask for COGS and inbound shipping (and optional other costs) so profitability can be calculated after fees load.\n- Do not proceed silently.\n`;
     }
 
     // Determine analysis mode from input_type
@@ -2479,6 +2479,13 @@ CRITICAL RULES FOR ESCALATED DATA:
 
     const stream = new ReadableStream({
       async start(controller) {
+        // Send copilot intent metadata early (non-blocking) so the UI can start inline workflows
+        if (copilotIntentMetadata) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ metadata: copilotIntentMetadata })}\n\n`)
+          );
+        }
+
         // CRITICAL: Send escalation message IMMEDIATELY when escalation is required
         // This must happen BEFORE the OpenAI API call so the user sees the message first
         if (shouldShowEscalationMessage && escalationMessage) {

@@ -1036,8 +1036,7 @@ export default function ChatSidebar({
                     startFeesFlow(asinToUse);
                     setResponseContextLine(`Profitability lookup for selected ASIN: ${asinToUse}`);
                   }
-                  setCopilotStatus("idle");
-                  setIsLoading(false);
+                  // Do NOT stop loading here; the backend will still stream a normal assistant response.
                 } else if (json.metadata.type === "citations") {
                   // Store citations for the current message
                   const cits = (json.metadata.citations || []) as Citation[];
