@@ -20,6 +20,8 @@ export interface FbaFeesResult {
     http_status?: number;
     request_id?: string | null;
     rate_limit?: string | null;
+    marketplace_id?: string;
+    errors?: Array<{ code?: string; message?: string; details?: string }>;
   };
 }
 
@@ -130,6 +132,22 @@ export async function getFbaFees({
         response.headers.get("x-amzn-ratelimit-limit") ||
         response.headers.get("x-amzn-RateLimit-Limit") ||
         null;
+
+      // Try to parse SP-API error payload
+      let parsedErrors: Array<{ code?: string; message?: string; details?: string }> | undefined = undefined;
+      try {
+        const parsed = JSON.parse(errorText);
+        if (Array.isArray(parsed?.errors)) {
+          parsedErrors = parsed.errors.map((e: any) => ({
+            code: typeof e?.code === "string" ? e.code : undefined,
+            message: typeof e?.message === "string" ? e.message : undefined,
+            details: typeof e?.details === "string" ? e.details : undefined,
+          }));
+        }
+      } catch {
+        // ignore
+      }
+
       console.error("SP-API getFbaFees failed", {
         status: response.status,
         requestId,
@@ -141,7 +159,13 @@ export async function getFbaFees({
         referral_fee: null,
         total_fba_fees: null,
         currency: "USD",
-        debug: { http_status: response.status, request_id: requestId, rate_limit: rateLimit },
+        debug: {
+          http_status: response.status,
+          request_id: requestId,
+          rate_limit: rateLimit,
+          marketplace_id: marketplaceId,
+          errors: parsedErrors,
+        },
       };
     }
 
