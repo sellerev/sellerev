@@ -65,7 +65,13 @@ export async function POST(request: NextRequest) {
     // If any required component is missing, treat as unavailable (do not pretend this is an exact quote)
     if (feesResult.fulfillment_fee === null || feesResult.referral_fee === null) {
       return NextResponse.json(
-        { fee: null, source: "estimated", reason: "sp_api_quote_unavailable" },
+        {
+          fee: null,
+          source: "estimated",
+          reason: "sp_api_quote_unavailable",
+          http_status: feesResult.debug?.http_status,
+          request_id: feesResult.debug?.request_id ?? undefined,
+        },
         { status: 200 }
       );
     }

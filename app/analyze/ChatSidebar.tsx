@@ -295,6 +295,8 @@ export default function ChatSidebar({
   // Use snapshotId as primary identifier if analysisRunId is not available (Tier-1/Tier-2 model)
   // For chat API, we still need analysisRunId, but UI unlocking uses snapshotId
   const effectiveId = analysisRunId || snapshotId;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const canChat = typeof analysisRunId === "string" && uuidRegex.test(analysisRunId);
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
   // ─────────────────────────────────────────────────────────────────────────
@@ -595,6 +597,20 @@ export default function ChatSidebar({
             console.warn("[FBA_FEES_QUOTE_NOT_CONFIGURED]", { missingEnv });
             appendAssistantMessage(
               `I can’t retrieve an exact fee quote because the Seller API credentials are not configured in this environment.\n\nMissing: \`${missingEnv.join("`, `")}\``
+            );
+          } else if (reason === "sp_api_quote_unavailable") {
+            const httpStatus =
+              typeof data?.http_status === "number" ? (data.http_status as number) : null;
+            const requestId =
+              typeof data?.request_id === "string" ? (data.request_id as string) : null;
+            const extra =
+              httpStatus || requestId
+                ? `\n\nDetails: ${httpStatus ? `HTTP ${httpStatus}` : ""}${
+                    httpStatus && requestId ? " • " : ""
+                  }${requestId ? `request_id ${requestId}` : ""}`
+                : "";
+            appendAssistantMessage(
+              `I wasn’t able to retrieve an **exact fee quote** from Amazon’s Seller API for this ASIN right now.${extra}`
             );
           }
           return null;
@@ -1129,9 +1145,8 @@ export default function ChatSidebar({
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
 
-  // UI unlocks with snapshotId (Tier-1/Tier-2), but chat API still needs analysisRunId
-  // For now, unlock UI if either exists (chat will work only if analysisRunId exists)
-  const isDisabled = !effectiveId;
+  // UI may have snapshotId, but chat API requires a UUID analysisRunId.
+  const isDisabled = !effectiveId || !canChat;
 
   return (
     <div className="h-full bg-white flex flex-col overflow-hidden border-l border-[#E5E7EB]" style={{ minHeight: 0 }}>
@@ -1142,9 +1157,9 @@ export default function ChatSidebar({
         <div className="flex-1 min-w-0">
           <h2 className="font-semibold text-gray-900 text-sm">AI Assistant</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            {analysisRunId
+            {canChat
               ? "Explains the visible Page-1 data only"
-              : "Complete an analysis to start chatting"}
+              : "Chat is unavailable for this snapshot view. Open a saved run to continue chatting."}
           </p>
         </div>
         <div className="flex items-center gap-1">
@@ -1776,7 +1791,7 @@ export default function ChatSidebar({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isDisabled ? "Run an analysis first" : "Ask about the analysis..."}
+            placeholder={isDisabled ? "Open a saved analysis run to chat" : "Ask about the analysis..."}
             disabled={isDisabled || isLoading}
             rows={1}
           />

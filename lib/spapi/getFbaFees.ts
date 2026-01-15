@@ -15,6 +15,12 @@ export interface FbaFeesResult {
   referral_fee: number | null;
   total_fba_fees: number | null;
   currency: "USD";
+  // Optional debug metadata to help distinguish auth vs throttling vs other failures
+  debug?: {
+    http_status?: number;
+    request_id?: string | null;
+    rate_limit?: string | null;
+  };
 }
 
 /**
@@ -135,6 +141,7 @@ export async function getFbaFees({
         referral_fee: null,
         total_fba_fees: null,
         currency: "USD",
+        debug: { http_status: response.status, request_id: requestId, rate_limit: rateLimit },
       };
     }
 
