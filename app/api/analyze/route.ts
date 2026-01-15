@@ -2310,7 +2310,7 @@ export async function POST(req: NextRequest) {
       }
     }
     
-    // Guard: Ensure required data before AI call
+    // Guard: Ensure required data
     if (!sellerProfile) {
       throw new Error("Missing seller profile");
     }
@@ -2318,6 +2318,138 @@ export async function POST(req: NextRequest) {
       throw new Error("Missing market snapshot");
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 4: Create analysis_run immediately (before AI processing)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Create analysis_run record with listings data, status: "processing"
+    // AI will update this record asynchronously when complete
+    
+    const listingsResponse = {
+      input_type: "keyword",
+      page_one_listings: canonicalProducts,
+      products: canonicalProducts,
+      aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
+      ...(keywordMarket ? keywordMarket : {}),
+      ...(contractResponse ? contractResponse : {}),
+    };
+
+    // Clean response for database storage
+    function cleanForJSON(obj: any): any {
+      if (obj === null || obj === undefined) {
+        return null;
+      }
+      if (Array.isArray(obj)) {
+        return obj.map(cleanForJSON).filter(item => item !== undefined);
+      }
+      if (typeof obj === 'object') {
+        const cleaned: any = {};
+        for (const [key, value] of Object.entries(obj)) {
+          if (value !== undefined) {
+            cleaned[key] = cleanForJSON(value);
+          }
+        }
+        return cleaned;
+      }
+      return obj;
+    }
+
+    const cleanedListingsResponse = cleanForJSON(listingsResponse);
+    const serializedListingsResponse = JSON.stringify(cleanedListingsResponse);
+
+    // Create analysis_run with status: "processing"
+    const { data: insertedRun, error: insertError } = await supabase
+      .from("analysis_runs")
+      .insert({
+        user_id: user.id,
+        input_type: "keyword",
+        input_value: body.input_value,
+        ai_verdict: null, // Will be updated by async AI processing
+        ai_confidence: null, // Will be updated by async AI processing
+        seller_stage: sellerProfile.stage,
+        seller_experience_months: sellerProfile.experience_months,
+        seller_monthly_revenue_range: sellerProfile.monthly_revenue_range,
+        response: cleanedListingsResponse, // Store listings data immediately
+      })
+      .select("id")
+      .single();
+
+    if (insertError) {
+      console.error("ANALYSIS_RUN_INSERT_ERROR", {
+        error: insertError,
+        message: insertError?.message,
+      });
+      // Continue anyway - we'll still return listings
+    }
+
+    console.log("LISTINGS_READY_RETURNING_IMMEDIATELY", {
+      analysis_run_id: insertedRun?.id,
+      product_count: canonicalProducts.length,
+      timestamp: new Date().toISOString(),
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 5: Trigger async AI processing (fire-and-forget)
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (insertedRun?.id) {
+      const { processAiAsync } = await import("@/lib/analyze/asyncAiProcessing");
+      
+      // Fire-and-forget: Process AI in background
+      processAiAsync({
+        analysisRunId: insertedRun.id,
+        keyword: body.input_value,
+        sellerProfile: {
+          stage: sellerProfile.stage,
+          experience_months: sellerProfile.experience_months,
+          monthly_revenue_range: sellerProfile.monthly_revenue_range,
+        },
+        marketSnapshot,
+        contractResponse,
+        supabase,
+      }).catch((error) => {
+        console.error("Async AI processing failed (non-blocking):", error);
+      });
+
+      console.log("ASYNC_AI_PROCESSING_TRIGGERED", {
+        analysis_run_id: insertedRun.id,
+        keyword: body.input_value,
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 6: Return listings immediately (before AI completes)
+    // ═══════════════════════════════════════════════════════════════════════════
+    return NextResponse.json(
+      {
+        success: true,
+        status: "processing", // AI is processing in background
+        analysisRunId: insertedRun?.id,
+        data_quality: dataQuality,
+        dataSource: dataSource,
+        snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
+        snapshot_last_updated: snapshotLastUpdated,
+        // Return listings immediately
+        page_one_listings: canonicalProducts,
+        products: canonicalProducts,
+        aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
+        ...(keywordMarket ? keywordMarket : {}),
+        ...(contractResponse ? contractResponse : {}),
+        // AI decision will be null initially, frontend should poll or use websocket
+        decision: null,
+        message: "Listings loaded. AI insights processing...",
+      },
+      { 
+        status: 200,
+        headers: res.headers,
+      }
+    );
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // OLD AI PROCESSING CODE BELOW - MOVED TO asyncAiProcessing.ts
+    // ═══════════════════════════════════════════════════════════════════════════
+    // This code is kept for reference but should not execute
+    // AI processing now happens asynchronously via processAiAsync()
+    
+    /* DISABLED - MOVED TO ASYNC
     console.log("AI_TWO_PASS_START");
 
     const openaiApiKey = process.env.OPENAI_API_KEY;

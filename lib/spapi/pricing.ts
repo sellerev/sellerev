@@ -1,0 +1,397 @@
+/**
+ * SP-API Pricing API Integration
+ * 
+ * Fetches pricing data (Buy Box owner, offer count, fulfillment channel) from SP-API Pricing API.
+ * Uses GetItemOffers and GetPricing endpoints.
+ * 
+ * Required environment variables:
+ * - SP_API_CLIENT_ID
+ * - SP_API_CLIENT_SECRET
+ * - SP_API_REFRESH_TOKEN
+ * - SP_API_AWS_ACCESS_KEY_ID
+ * - SP_API_AWS_SECRET_ACCESS_KEY
+ */
+
+import { createHmac, createHash } from "crypto";
+import { getSpApiAccessToken } from "./auth";
+
+export interface PricingMetadata {
+  asin: string;
+  buy_box_owner: "Amazon" | "Merchant" | "Unknown" | null;
+  offer_count: number | null;
+  fulfillment_channel: "FBA" | "FBM" | null;
+  lowest_price: number | null;
+  buy_box_price: number | null;
+}
+
+export interface BatchPricingResult {
+  enriched: Map<string, PricingMetadata>;
+  failed: string[];
+  errors: Array<{ asin: string; error: string }>;
+}
+
+/**
+ * Batch fetch pricing data for ASINs
+ * 
+ * @param asins - Array of ASINs to enrich (max 20 per batch)
+ * @param marketplaceId - Marketplace ID (default: ATVPDKIKX0DER for US)
+ * @param timeoutMs - Request timeout in milliseconds (default: 2000)
+ * @returns Promise<BatchPricingResult> Pricing results with metadata map
+ */
+export async function batchEnrichPricing(
+  asins: string[],
+  marketplaceId: string = "ATVPDKIKX0DER",
+  timeoutMs: number = 2000
+): Promise<BatchPricingResult> {
+  const result: BatchPricingResult = {
+    enriched: new Map(),
+    failed: [],
+    errors: [],
+  };
+
+  if (!asins || asins.length === 0) {
+    return result;
+  }
+
+  // Check credentials
+  const awsAccessKeyId = process.env.SP_API_AWS_ACCESS_KEY_ID;
+  const awsSecretAccessKey = process.env.SP_API_AWS_SECRET_ACCESS_KEY;
+
+  if (!awsAccessKeyId || !awsSecretAccessKey) {
+    console.warn("SP-API credentials not configured, skipping pricing enrichment");
+    result.failed = [...asins];
+    return result;
+  }
+
+  // Batch ASINs into groups of 5-10 (conservative for Pricing API)
+  const batchSize = 5; // Smaller batches for Pricing API
+  const batches: string[][] = [];
+  for (let i = 0; i < asins.length; i += batchSize) {
+    batches.push(asins.slice(i, i + batchSize));
+  }
+
+  // Execute batches in parallel with timeout
+  const batchPromises = batches.map((batch) =>
+    fetchPricingBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey)
+  );
+
+  const batchResults = await Promise.allSettled(batchPromises);
+
+  // Aggregate results
+  for (let i = 0; i < batchResults.length; i++) {
+    const batchResult = batchResults[i];
+    const batch = batches[i];
+
+    if (batchResult.status === "fulfilled") {
+      const batchData = batchResult.value;
+      for (const [asin, metadata] of batchData.entries()) {
+        result.enriched.set(asin, metadata);
+      }
+    } else {
+      // Mark all ASINs in failed batch as failed
+      for (const asin of batch) {
+        result.failed.push(asin);
+        result.errors.push({
+          asin,
+          error: batchResult.reason?.message || "Batch request failed",
+        });
+      }
+    }
+  }
+
+  // Mark any ASINs not in enriched map as failed
+  for (const asin of asins) {
+    if (!result.enriched.has(asin) && !result.failed.includes(asin)) {
+      result.failed.push(asin);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Fetch a batch of ASINs with timeout
+ */
+async function fetchPricingBatchWithTimeout(
+  asins: string[],
+  marketplaceId: string,
+  timeoutMs: number,
+  awsAccessKeyId: string,
+  awsSecretAccessKey: string
+): Promise<Map<string, PricingMetadata>> {
+  const timeoutPromise = new Promise<Map<string, PricingMetadata>>((_, reject) => {
+    setTimeout(() => reject(new Error("SP-API pricing batch request timeout")), timeoutMs);
+  });
+
+  const fetchPromise = fetchPricingBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey);
+
+  return Promise.race([fetchPromise, timeoutPromise]);
+}
+
+/**
+ * Fetch pricing data for a single batch of ASINs
+ */
+async function fetchPricingBatch(
+  asins: string[],
+  marketplaceId: string,
+  awsAccessKeyId: string,
+  awsSecretAccessKey: string
+): Promise<Map<string, PricingMetadata>> {
+  const result = new Map<string, PricingMetadata>();
+
+  try {
+    const accessToken = await getSpApiAccessToken();
+    const endpoint = getEndpointForMarketplace(marketplaceId);
+    const host = new URL(endpoint).hostname;
+    const region = getRegionForMarketplace(marketplaceId);
+
+    // Use GetItemOffers for each ASIN (more reliable than GetPricing for buy box data)
+    const pricingPromises = asins.map((asin) =>
+      fetchItemOffers(asin, marketplaceId, endpoint, host, region, accessToken, awsAccessKeyId, awsSecretAccessKey)
+    );
+
+    const pricingResults = await Promise.allSettled(pricingPromises);
+
+    for (let i = 0; i < pricingResults.length; i++) {
+      const pricingResult = pricingResults[i];
+      const asin = asins[i];
+
+      if (pricingResult.status === "fulfilled" && pricingResult.value) {
+        result.set(asin, pricingResult.value);
+      }
+    }
+  } catch (error) {
+    console.error("SP-API Pricing batch fetch error", {
+      error: error instanceof Error ? error.message : String(error),
+      asin_count: asins.length,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Fetch item offers for a single ASIN using GetItemOffers
+ */
+async function fetchItemOffers(
+  asin: string,
+  marketplaceId: string,
+  endpoint: string,
+  host: string,
+  region: string,
+  accessToken: string,
+  awsAccessKeyId: string,
+  awsSecretAccessKey: string
+): Promise<PricingMetadata | null> {
+  const path = `/pricing/v0/items/${asin}/offers`;
+
+  // Build query parameters
+  const params = new URLSearchParams();
+  params.set("MarketplaceId", marketplaceId);
+  params.set("ItemCondition", "New");
+  params.set("CustomerType", "Consumer");
+  const queryString = params.toString();
+
+  try {
+    const signedRequest = await createSignedRequest({
+      method: "GET",
+      host,
+      path,
+      queryString,
+      body: "",
+      accessToken,
+      awsAccessKeyId,
+      awsSecretAccessKey,
+      region,
+    });
+
+    const response = await fetch(`${endpoint}${path}?${queryString}`, {
+      method: "GET",
+      headers: signedRequest.headers,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      console.warn("SP-API GetItemOffers failed", {
+        status: response.status,
+        asin,
+        error: errorText.substring(0, 200),
+      });
+      return null;
+    }
+
+    const data = await response.json();
+
+    // Parse response
+    const summary = data?.Summary || data?.payload?.Summary || null;
+    const offers = data?.Offers || data?.payload?.Offers || [];
+
+    if (!summary) {
+      return null;
+    }
+
+    // Extract Buy Box owner
+    let buyBoxOwner: "Amazon" | "Merchant" | "Unknown" | null = null;
+    const buyBoxWinner = summary.BuyBoxPrices?.[0] || summary.LowestPrices?.[0];
+    if (buyBoxWinner) {
+      const sellerType = buyBoxWinner.LandedPrice?.ListingPrice?.CurrencyCode 
+        ? (buyBoxWinner.sellerId === "ATVPDKIKX0DER" ? "Amazon" : "Merchant")
+        : null;
+      buyBoxOwner = sellerType || "Unknown";
+    }
+
+    // Extract offer count
+    const offerCount = summary.TotalOfferCount || offers.length || null;
+
+    // Extract fulfillment channel from Buy Box winner or lowest price
+    let fulfillmentChannel: "FBA" | "FBM" | null = null;
+    if (buyBoxWinner) {
+      const fulfillment = buyBoxWinner.FulfillmentChannel || buyBoxWinner.fulfillmentChannel;
+      if (fulfillment === "Amazon" || fulfillment === "FBA") {
+        fulfillmentChannel = "FBA";
+      } else if (fulfillment === "Merchant" || fulfillment === "FBM") {
+        fulfillmentChannel = "FBM";
+      }
+    }
+
+    // Extract prices
+    const buyBoxPrice = buyBoxWinner?.LandedPrice?.Amount 
+      ? parseFloat(buyBoxWinner.LandedPrice.Amount)
+      : null;
+    
+    const lowestPrice = summary.LowestPrices?.[0]?.LandedPrice?.Amount
+      ? parseFloat(summary.LowestPrices[0].LandedPrice.Amount)
+      : buyBoxPrice;
+
+    return {
+      asin,
+      buy_box_owner: buyBoxOwner,
+      offer_count: offerCount,
+      fulfillment_channel: fulfillmentChannel,
+      lowest_price: lowestPrice,
+      buy_box_price: buyBoxPrice,
+    };
+  } catch (error) {
+    console.error("SP-API GetItemOffers error", {
+      asin,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * Get SP-API endpoint for marketplace
+ */
+function getEndpointForMarketplace(marketplaceId: string): string {
+  const endpointMap: Record<string, string> = {
+    ATVPDKIKX0DER: "https://sellingpartnerapi-na.amazon.com", // US
+    A1PA6795UKMFR9: "https://sellingpartnerapi-eu.amazon.com", // DE
+    A1RKKUPIHCS9HS: "https://sellingpartnerapi-eu.amazon.com", // ES
+    A13V1IB3VIYZZH: "https://sellingpartnerapi-eu.amazon.com", // FR
+    APJ6JRA9NG5V4: "https://sellingpartnerapi-eu.amazon.com", // IT
+    A1F83G8C2ARO7P: "https://sellingpartnerapi-eu.amazon.com", // UK
+    A1VC38T7YXB528: "https://sellingpartnerapi-fe.amazon.com", // JP
+    A19VAU5U5O7RUS: "https://sellingpartnerapi-fe.amazon.com", // CA
+  };
+
+  return endpointMap[marketplaceId] || "https://sellingpartnerapi-na.amazon.com";
+}
+
+/**
+ * Get AWS region for marketplace
+ */
+function getRegionForMarketplace(marketplaceId: string): string {
+  const regionMap: Record<string, string> = {
+    ATVPDKIKX0DER: "us-east-1", // US
+    A1PA6795UKMFR9: "eu-west-1", // DE
+    A1RKKUPIHCS9HS: "eu-west-1", // ES
+    A13V1IB3VIYZZH: "eu-west-1", // FR
+    APJ6JRA9NG5V4: "eu-west-1", // IT
+    A1F83G8C2ARO7P: "eu-west-1", // UK
+    A1VC38T7YXB528: "us-west-2", // JP
+    A19VAU5U5O7RUS: "us-east-1", // CA
+  };
+
+  return regionMap[marketplaceId] || "us-east-1";
+}
+
+/**
+ * Create AWS SigV4 signed request
+ */
+async function createSignedRequest({
+  method,
+  host,
+  path,
+  queryString,
+  body,
+  accessToken,
+  awsAccessKeyId,
+  awsSecretAccessKey,
+  region,
+}: {
+  method: string;
+  host: string;
+  path: string;
+  queryString: string;
+  body: string;
+  accessToken: string;
+  awsAccessKeyId: string;
+  awsSecretAccessKey: string;
+  region: string;
+}): Promise<{ headers: Record<string, string> }> {
+  const service = "execute-api";
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, "");
+  const dateStamp = amzDate.substr(0, 8);
+
+  // Step 1: Create canonical request
+  const canonicalUri = path;
+  const canonicalQueryString = queryString || "";
+  const canonicalHeaders = [
+    `host:${host}`,
+    `x-amz-access-token:${accessToken}`,
+    `x-amz-date:${amzDate}`,
+  ].join("\n");
+
+  const signedHeaders = "host;x-amz-access-token;x-amz-date";
+  const payloadHash = createHash("sha256").update(body).digest("hex");
+
+  const canonicalRequest = [
+    method,
+    canonicalUri,
+    canonicalQueryString,
+    canonicalHeaders,
+    "",
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+
+  // Step 2: Create string to sign
+  const algorithm = "AWS4-HMAC-SHA256";
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const canonicalRequestHash = createHash("sha256")
+    .update(canonicalRequest)
+    .digest("hex");
+  const stringToSign = [algorithm, amzDate, credentialScope, canonicalRequestHash].join("\n");
+
+  // Step 3: Calculate signature
+  const kDate = createHmac("sha256", `AWS4${awsSecretAccessKey}`).update(dateStamp).digest();
+  const kRegion = createHmac("sha256", kDate).update(region).digest();
+  const kService = createHmac("sha256", kRegion).update(service).digest();
+  const kSigning = createHmac("sha256", kService).update("aws4_request").digest();
+  const signature = createHmac("sha256", kSigning).update(stringToSign).digest("hex");
+
+  // Step 4: Create authorization header
+  const authorization = `${algorithm} Credential=${awsAccessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  return {
+    headers: {
+      Host: host,
+      "x-amz-access-token": accessToken,
+      "x-amz-date": amzDate,
+      Authorization: authorization,
+    },
+  };
+}
+
