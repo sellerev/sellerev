@@ -111,15 +111,19 @@ export async function POST(request: NextRequest) {
     };
     estimated.total_amazon_fees = Math.round((estimated.referral_fee + estimated.fulfillment_fee) * 100) / 100;
 
-    // If SP-API not configured, return actionable error info + fallback estimate
+    // Always compute estimated fees first (estimate-first approach)
+    // If SP-API not configured, return estimate immediately
     if (missingEnv.length > 0) {
       return NextResponse.json(
         {
-          ok: false,
-          reason: "sp_api_not_configured",
-          missing_env: missingEnv,
+          ok: true,
+          source: "estimated",
+          confidence_label: "Estimated",
           marketplace,
-          fallback: estimated,
+          referral_fee: estimated.referral_fee,
+          fulfillment_fee: estimated.fulfillment_fee,
+          total_amazon_fees: estimated.total_amazon_fees,
+          net_margin: null, // Will be computed by caller if COGS present
         },
         { status: 200 }
       );
@@ -145,64 +149,42 @@ export async function POST(request: NextRequest) {
       const fulfillment_fee = parseFloat(cachedData.fulfillment_fee.toString());
       const referral_fee = parseFloat(cachedData.referral_fee.toString());
       const total_amazon_fees = Math.round((fulfillment_fee + referral_fee) * 100) / 100;
-      const fetchedAt = cachedData.fetched_at ? new Date(cachedData.fetched_at).toISOString() : null;
-      const ageHours =
-        cachedData.fetched_at
-          ? Math.max(0, (Date.now() - new Date(cachedData.fetched_at).getTime()) / (1000 * 60 * 60))
-          : null;
       return NextResponse.json(
         {
           ok: true,
           source: "sp_api",
-          confidence: "high",
+          confidence_label: "Amazon Quote",
           marketplace,
-          cached: true,
-          fetched_at: fetchedAt,
-          cache_age_hours: ageHours !== null ? Math.round(ageHours * 10) / 10 : null,
-          fulfillment_fee,
           referral_fee,
+          fulfillment_fee,
           total_amazon_fees,
+          net_margin: null, // Will be computed by caller if COGS present
         },
         { status: 200 }
       );
     }
 
-    // SP-API attempt (no null caching)
-    const feesResult = await getFbaFees({
-      asin: normalizedAsin,
-      price,
-      marketplaceId: typeof marketplace === "string" ? marketplace : "ATVPDKIKX0DER",
-    });
-
-    if (feesResult.debug?.http_status && feesResult.fulfillment_fee === null && feesResult.referral_fee === null) {
-      return NextResponse.json(
-        {
-          ok: false,
-          reason: "sp_api_error",
-          status: feesResult.debug.http_status,
-          request_id: feesResult.debug.request_id ?? undefined,
-          errors: feesResult.debug.errors ?? undefined,
-          marketplace: feesResult.debug.marketplace_id ?? marketplace,
-          fallback: estimated,
-        },
-        { status: 200 }
-      );
+    // SP-API attempt (single attempt, no retries)
+    let feesResult: { fulfillment_fee: number | null; referral_fee: number | null; total_fba_fees?: number | null; currency?: string } | null = null;
+    try {
+      const spApiResult = await getFbaFees({
+        asin: normalizedAsin,
+        price,
+        marketplaceId: typeof marketplace === "string" ? marketplace : "ATVPDKIKX0DER",
+      });
+      
+      // Only use SP-API result if both fees are available
+      if (spApiResult.fulfillment_fee !== null && spApiResult.referral_fee !== null) {
+        feesResult = spApiResult;
+      }
+      // If SP-API fails or returns null, silently fall through to estimate (never surface error)
+    } catch (spApiError) {
+      // Silently fall through to estimate - never show SP-API failures to user
+      console.log(`[FBA_FEES] SP-API unavailable for ${normalizedAsin}, using estimate`);
     }
 
-    // Quote unavailable (no fees estimate)
-    if (feesResult.fulfillment_fee === null || feesResult.referral_fee === null) {
-      console.warn("[FBA_FEES_QUOTE_UNAVAILABLE]", { asin: normalizedAsin, price, marketplace });
-      return NextResponse.json(
-        {
-          ok: false,
-          reason: "quote_unavailable",
-          details: "No fees estimate returned for this ASIN at the provided price.",
-          marketplace,
-          fallback: estimated,
-        },
-        { status: 200 }
-      );
-    }
+    // If SP-API succeeded, cache and return
+    if (feesResult && feesResult.fulfillment_fee !== null && feesResult.referral_fee !== null) {
 
     // Cache exact result (best-effort)
     // CRITICAL: Cache key is (asin, price, marketplace) - fees vary by price
@@ -226,29 +208,81 @@ export async function POST(request: NextRequest) {
       console.error("Failed to cache FBA fees (non-blocking):", e);
     }
 
-    const fulfillment_fee = feesResult.fulfillment_fee;
-    const referral_fee = feesResult.referral_fee;
-    const total_amazon_fees = Math.round((fulfillment_fee + referral_fee) * 100) / 100;
+      const fulfillment_fee = feesResult.fulfillment_fee;
+      const referral_fee = feesResult.referral_fee;
+      const total_amazon_fees = Math.round((fulfillment_fee + referral_fee) * 100) / 100;
+      
+      // Cache exact result (best-effort)
+      try {
+        await supabase
+          .from("fba_fee_cache")
+          .upsert(
+            {
+              asin: normalizedAsin,
+              price: price,
+              marketplace: normalizedMarketplace,
+              fulfillment_fee: feesResult.fulfillment_fee,
+              referral_fee: feesResult.referral_fee,
+              total_fba_fees: feesResult.total_fba_fees || total_amazon_fees,
+              currency: feesResult.currency || "USD",
+              fetched_at: new Date().toISOString(),
+            },
+            { onConflict: "asin,price,marketplace" }
+          );
+      } catch (e) {
+        console.error("Failed to cache FBA fees (non-blocking):", e);
+      }
+      
+      return NextResponse.json(
+        {
+          ok: true,
+          source: "sp_api",
+          confidence_label: "Amazon Quote",
+          marketplace,
+          referral_fee,
+          fulfillment_fee,
+          total_amazon_fees,
+          net_margin: null, // Will be computed by caller if COGS present
+        },
+        { status: 200 }
+      );
+    }
+
+    // SP-API unavailable or failed - return estimate (never show error to user)
     return NextResponse.json(
       {
         ok: true,
-        source: "sp_api",
-        confidence: "high",
+        source: "estimated",
+        confidence_label: "Estimated",
         marketplace,
-        cached: false,
-        fetched_at: new Date().toISOString(),
-        cache_age_hours: 0,
-        fulfillment_fee,
-        referral_fee,
-        total_amazon_fees,
+        referral_fee: estimated.referral_fee,
+        fulfillment_fee: estimated.fulfillment_fee,
+        total_amazon_fees: estimated.total_amazon_fees,
+        net_margin: null, // Will be computed by caller if COGS present
       },
       { status: 200 }
     );
   } catch (error) {
+    // Never fail - always return estimate on any error
     console.error("FBA fees API error:", error);
+    const referral = estimateReferralPct(null);
+    const fulfillmentEst = estimateFulfillmentFee(null, null, null);
+    const referral_fee = Math.round(((price * referral.pct) / 100) * 100) / 100;
+    const fulfillment_fee = Math.round(fulfillmentEst.fee * 100) / 100;
+    const total_amazon_fees = Math.round((referral_fee + fulfillment_fee) * 100) / 100;
+    
     return NextResponse.json(
-      { ok: false, reason: "sp_api_error", error: "Failed to fetch fees" },
-      { status: 200 } // Don't fail - return null so calculator can use estimate
+      {
+        ok: true,
+        source: "estimated",
+        confidence_label: "Estimated",
+        marketplace: typeof marketplace === "string" ? marketplace : "ATVPDKIKX0DER",
+        referral_fee,
+        fulfillment_fee,
+        total_amazon_fees,
+        net_margin: null,
+      },
+      { status: 200 }
     );
   }
 }

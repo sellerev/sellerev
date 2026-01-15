@@ -1967,17 +1967,8 @@ export async function fetchKeywordMarketSnapshot(
       missing_bsr_asins: listingsWithoutBSR.slice(0, 5).map(l => l.asin),
     });
     
-    // WARNING: If BSR extraction rate is low, log detailed info
-    if (listingsWithMainBSR.length < listings.length * 0.5) {
-      console.warn("BSR_EXTRACTION_LOW_RATE", {
-        keyword,
-        extraction_rate: `${((listingsWithMainBSR.length / listings.length) * 100).toFixed(1)}%`,
-        total_listings: listings.length,
-        with_bsr: listingsWithMainBSR.length,
-        without_bsr: listingsWithoutBSR.length,
-        message: "Less than 50% of listings have BSR - check Rainforest API response structure",
-      });
-    }
+    // BSR is optional for keyword Page-1 analysis - no warnings logged
+    // BSR warnings only apply to explicit ASIN deep dives
 
     // Fulfillment mix calculation - ALWAYS return a value (use computeFulfillmentMix helper)
     const { computeFulfillmentMix } = await import("./fulfillmentMix");
@@ -2255,13 +2246,8 @@ export async function fetchKeywordMarketSnapshot(
           units_range: `${aggregated.total_units_min} - ${aggregated.total_units_max}`,
         });
       } else {
-        console.warn("NO_BSR_BASED_ESTIMATES", {
-          keyword,
-          total_listings: listings.length,
-          listings_with_bsr: listings.filter(l => l.main_category_bsr !== null).length,
-          listings_with_price: listings.filter(l => l.price !== null && l.price > 0).length,
-          message: "No listings had both BSR and price, cannot generate estimates",
-        });
+        // BSR is optional for keyword Page-1 - estimates proceed without BSR
+        // No warning logged (BSR only required for explicit ASIN deep dives)
       }
     } catch (aggError) {
       console.warn("BSR_BASED_AGGREGATION_FAILED", {

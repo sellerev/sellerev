@@ -966,9 +966,14 @@ function validateResponseForHallucination(
         const hasCitation = /(?:according to|based on|from|per|according|data shows|analysis shows|market data)/i.test(contextBefore + contextAfter);
         
         if (!hasCitation) {
+          // Include exact offending substring in reason
+          const exactSubstring = response.substring(
+            Math.max(0, index - 20),
+            Math.min(response.length, index + match[0].length + 20)
+          );
           return {
             isValid: false,
-            reason: `Forbidden phrase "${match[0]}" used without citation`,
+            reason: `Forbidden phrase "${match[0]}" used without citation. Context: "${exactSubstring}"`,
           };
         }
       }
@@ -988,10 +993,17 @@ function validateResponseForHallucination(
   ];
   
   for (const pattern of unsupportedMetrics) {
-    if (pattern.test(response)) {
+    const match = response.match(pattern);
+    if (match) {
+      // Include exact offending substring in reason
+      const matchIndex = response.indexOf(match[0]);
+      const exactSubstring = response.substring(
+        Math.max(0, matchIndex - 30),
+        Math.min(response.length, matchIndex + match[0].length + 30)
+      );
       return {
         isValid: false,
-        reason: `Unsupported metric referenced: ${pattern.source}`,
+        reason: `Unsupported metric referenced: "${match[0]}". Context: "${exactSubstring}"`,
       };
     }
   }
