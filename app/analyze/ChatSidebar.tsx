@@ -40,6 +40,12 @@ type FeesQuote = {
   referralFee: number;
   fulfillmentFee: number;
   totalAmazonFees: number;
+  source: "sp_api" | "estimated";
+  confidence: "high" | "medium" | "low";
+  estimateBasis?: {
+    referral?: string;
+    fulfillment?: string;
+  };
 };
 
 type FeesFlowState =
@@ -585,45 +591,74 @@ export default function ChatSidebar({
           body: JSON.stringify({ asin, price }),
         });
         const data = await response.json().catch(() => null);
-        const source = typeof data?.source === "string" ? data.source : null;
-        const reason = typeof data?.reason === "string" ? data.reason : null;
-        const missingEnv = Array.isArray(data?.missing_env) ? (data.missing_env as string[]) : [];
-        const fulfillmentFee =
-          typeof data?.fulfillment_fee === "number" ? data.fulfillment_fee : null;
-        const referralFee = typeof data?.referral_fee === "number" ? data.referral_fee : null;
-
-        if (source !== "sp_api" || fulfillmentFee === null || referralFee === null) {
-          if (reason === "sp_api_not_configured" && missingEnv.length > 0) {
-            console.warn("[FBA_FEES_QUOTE_NOT_CONFIGURED]", { missingEnv });
-            appendAssistantMessage(
-              `I can’t retrieve an exact fee quote because the Seller API credentials are not configured in this environment.\n\nMissing: \`${missingEnv.join("`, `")}\``
-            );
-          } else if (reason === "sp_api_quote_unavailable") {
-            const httpStatus =
-              typeof data?.http_status === "number" ? (data.http_status as number) : null;
-            const requestId =
-              typeof data?.request_id === "string" ? (data.request_id as string) : null;
-            const extra =
-              httpStatus || requestId
-                ? `\n\nDetails: ${httpStatus ? `HTTP ${httpStatus}` : ""}${
-                    httpStatus && requestId ? " • " : ""
-                  }${requestId ? `request_id ${requestId}` : ""}`
-                : "";
-            appendAssistantMessage(
-              `I wasn’t able to retrieve an **exact fee quote** from Amazon’s Seller API for this ASIN right now.${extra}`
-            );
-          }
-          return null;
+        // New contract: ok=true with source sp_api/estimated; ok=false with fallback + diagnostics.
+        if (data?.ok === true && (data?.source === "sp_api" || data?.source === "estimated")) {
+          const fulfillmentFee =
+            typeof data?.fulfillment_fee === "number" ? data.fulfillment_fee : null;
+          const referralFee =
+            typeof data?.referral_fee === "number" ? data.referral_fee : null;
+          if (fulfillmentFee === null || referralFee === null) return null;
+          const totalAmazonFees =
+            typeof data?.total_amazon_fees === "number"
+              ? data.total_amazon_fees
+              : fulfillmentFee + referralFee;
+          return {
+            asin,
+            price,
+            referralFee,
+            fulfillmentFee,
+            totalAmazonFees,
+            source: data.source,
+            confidence:
+              data.source === "sp_api"
+                ? "high"
+                : (data.confidence === "medium" ? "medium" : "low"),
+            estimateBasis: data.source === "estimated" ? data.estimate_basis : undefined,
+          };
         }
 
-        const totalAmazonFees = fulfillmentFee + referralFee;
-        return {
-          asin,
-          price,
-          referralFee,
-          fulfillmentFee,
-          totalAmazonFees,
-        };
+        const fallback = data?.fallback;
+        if (fallback?.ok === true && fallback?.source === "estimated") {
+          const fulfillmentFee =
+            typeof fallback?.fulfillment_fee === "number" ? fallback.fulfillment_fee : null;
+          const referralFee =
+            typeof fallback?.referral_fee === "number" ? fallback.referral_fee : null;
+          if (fulfillmentFee === null || referralFee === null) return null;
+          const totalAmazonFees =
+            typeof fallback?.total_amazon_fees === "number"
+              ? fallback.total_amazon_fees
+              : fulfillmentFee + referralFee;
+          return {
+            asin,
+            price,
+            referralFee,
+            fulfillmentFee,
+            totalAmazonFees,
+            source: "estimated",
+            confidence: fallback.confidence === "medium" ? "medium" : "low",
+            estimateBasis: fallback.estimate_basis,
+          };
+        }
+
+        // No estimate possible: surface actionable diagnostics if present
+        if (typeof data?.reason === "string") {
+          const missingEnv = Array.isArray(data?.missing_env) ? (data.missing_env as string[]) : [];
+          if (data.reason === "sp_api_not_configured" && missingEnv.length > 0) {
+            appendAssistantMessage(
+              `Seller API fee quote isn’t available (**not configured**).\nMissing: \`${missingEnv.join("`, `")}\``
+            );
+          } else if (data.reason === "sp_api_error") {
+            appendAssistantMessage(
+              `Seller API fee quote failed (HTTP ${typeof data?.status === "number" ? data.status : "?"}).`
+            );
+          } else if (data.reason === "quote_unavailable") {
+            appendAssistantMessage(
+              `Seller API couldn’t generate a fee quote for this ASIN at the current price.`
+            );
+          }
+        }
+
+        return null;
       } catch {
         return null;
       }
@@ -1619,8 +1654,18 @@ export default function ChatSidebar({
             <div className="text-sm">
               <div className="flex items-center justify-between">
                 <span className="text-gray-700">Total Amazon fees</span>
-                <span className="font-semibold text-gray-900">{formatMoney(feesFlow.quote.totalAmazonFees)}</span>
+                <span className="font-semibold text-gray-900">
+                  {formatMoney(feesFlow.quote.totalAmazonFees)}
+                </span>
               </div>
+              {feesFlow.quote.source === "estimated" && (
+                <div className="mt-1 text-[11px] text-amber-700">
+                  Estimated ({feesFlow.quote.confidence} confidence)
+                </div>
+              )}
+              {feesFlow.quote.source === "sp_api" && (
+                <div className="mt-1 text-[11px] text-gray-500">Exact (Seller API)</div>
+              )}
               <div className="mt-2 flex items-center justify-between text-xs text-gray-600">
                 <span>Referral fee</span>
                 <span>{formatMoney(feesFlow.quote.referralFee)}</span>
