@@ -276,14 +276,15 @@ export async function processKeyword(
     }
 
     // STEP 2: SP-API Batch Enrichment (parallel calls: Catalog Items + Pricing)
-    // Determine which ASINs need enrichment
-    const asinsNeedingEnrichment = page1Asins.filter(asin => !metadataCache.has(asin));
+    // CRITICAL: Force SP-API enrichment for ALL page-1 ASINs (not just those needing enrichment)
+    // SP-API is authoritative, so we always enrich regardless of cache or Rainforest hints
+    const asinsForSpApi = page1Asins;
 
     const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER'; // Default to US
     
     console.log('SP_API_ENRICH_START', {
       keyword,
-      asin_count: asinsNeedingEnrichment.length,
+      asin_count: asinsForSpApi.length,
       marketplace_id: marketplaceId,
       kill_switch_enabled: disableRainforestEnrichment,
       timestamp: new Date().toISOString(),
@@ -311,22 +312,23 @@ export async function processKeyword(
     }>();
 
     // Execute Catalog Items and Pricing API calls in parallel
-    const catalogPromise = asinsNeedingEnrichment.length > 0
+    const catalogPromise = asinsForSpApi.length > 0
       ? (async () => {
           try {
-            console.log('SP_API_CATALOG_CALL', {
-              keyword,
-              asin_count: asinsNeedingEnrichment.length,
-              marketplace_id: marketplaceId,
-            });
-
             const catalogStart = Date.now();
             const enrichmentResult = await batchEnrichCatalogItems(
-              asinsNeedingEnrichment,
+              asinsForSpApi,
               marketplaceId,
               2000 // 2 second timeout per batch
             );
             const catalogDuration = Date.now() - catalogStart;
+
+            // Calculate batch sizes for logging
+            const totalBatches = Math.ceil(asinsForSpApi.length / 20);
+            const batchSizes: number[] = [];
+            for (let i = 0; i < asinsForSpApi.length; i += 20) {
+              batchSizes.push(Math.min(20, asinsForSpApi.length - i));
+            }
 
             // Convert enrichment result to map (SP-API is authoritative)
             for (const [asin, metadata] of enrichmentResult.enriched.entries()) {
@@ -340,8 +342,12 @@ export async function processKeyword(
               });
             }
 
-            console.log('SP_API_CATALOG_CALL_COMPLETE', {
+            // Emit verification log
+            console.log('SP_API_CATALOG_BATCH_COMPLETE', {
               keyword,
+              total_asins: asinsForSpApi.length,
+              total_batches: totalBatches,
+              batch_sizes: batchSizes,
               enriched_count: enrichmentResult.enriched.size,
               failed_count: enrichmentResult.failed.length,
               duration_ms: catalogDuration,
@@ -351,7 +357,7 @@ export async function processKeyword(
               console.warn('SP_API_CATALOG_CALL_PARTIAL_FAILURE', {
                 keyword,
                 failed_count: enrichmentResult.failed.length,
-                total_count: asinsNeedingEnrichment.length,
+                total_count: asinsForSpApi.length,
               });
             }
           } catch (error) {
@@ -364,30 +370,36 @@ export async function processKeyword(
         })()
       : Promise.resolve();
 
-    const pricingPromise = asinsNeedingEnrichment.length > 0
+    const pricingPromise = asinsForSpApi.length > 0
       ? (async () => {
           try {
-            console.log('SP_API_PRICING_CALL', {
-              keyword,
-              asin_count: asinsNeedingEnrichment.length,
-              marketplace_id: marketplaceId,
-            });
-
             const pricingStart = Date.now();
             const pricingResult = await batchEnrichPricing(
-              asinsNeedingEnrichment,
+              asinsForSpApi,
               marketplaceId,
               2000 // 2 second timeout per batch
             );
             const pricingDuration = Date.now() - pricingStart;
+
+            // Calculate batch sizes for logging (pricing uses 5 ASINs per concurrent batch)
+            const batchSize = 5;
+            const totalBatches = Math.ceil(asinsForSpApi.length / batchSize);
+            const batchSizes: number[] = [];
+            for (let i = 0; i < asinsForSpApi.length; i += batchSize) {
+              batchSizes.push(Math.min(batchSize, asinsForSpApi.length - i));
+            }
 
             // Convert pricing result to map
             for (const [asin, metadata] of pricingResult.enriched.entries()) {
               spApiPricingEnrichment.set(asin, metadata);
             }
 
-            console.log('SP_API_PRICING_CALL_COMPLETE', {
+            // Emit verification log
+            console.log('SP_API_PRICING_BATCH_COMPLETE', {
               keyword,
+              total_asins: asinsForSpApi.length,
+              total_batches: totalBatches,
+              batch_sizes: batchSizes,
               enriched_count: pricingResult.enriched.size,
               failed_count: pricingResult.failed.length,
               duration_ms: pricingDuration,
@@ -397,7 +409,7 @@ export async function processKeyword(
               console.warn('SP_API_PRICING_CALL_PARTIAL_FAILURE', {
                 keyword,
                 failed_count: pricingResult.failed.length,
-                total_count: asinsNeedingEnrichment.length,
+                total_count: asinsForSpApi.length,
               });
             }
           } catch (error) {

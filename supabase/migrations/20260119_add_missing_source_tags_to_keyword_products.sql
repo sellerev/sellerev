@@ -1,6 +1,10 @@
 -- Add missing source tagging fields to keyword_products table
 -- These fields track where metadata came from (for debugging and verification)
 
+-- Ensure is_sponsored exists (from previous migration, but make it safe)
+ALTER TABLE public.keyword_products
+  ADD COLUMN IF NOT EXISTS is_sponsored BOOLEAN NOT NULL DEFAULT false;
+
 -- First, update existing brand_source constraint to match new values
 ALTER TABLE public.keyword_products
   DROP CONSTRAINT IF EXISTS keyword_products_brand_source_check;
