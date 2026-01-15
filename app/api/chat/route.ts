@@ -2016,18 +2016,44 @@ export async function POST(req: NextRequest) {
       brand_moat: (analysisResponse.brand_moat as any) || undefined,
     };
     
-    // Check credit balance
-    const creditContext = await checkCreditBalance(user.id, supabase, body.analysisRunId);
-    
-    // Make escalation decision (with selected ASINs lock)
-    // Note: selectedAsins and selectedAsin are already defined above
-    const escalationDecision = decideEscalation(
+    // ────────────────────────────────────────────────────────────────────────
+    // FIX (Credtless chat on existing context):
+    // Credits are ONLY required to CREATE new data (escalation / provider calls),
+    // NOT to answer Page-1 questions about an existing analysis run.
+    //
+    // We therefore avoid calling checkCreditBalance unless escalation is actually required.
+    // ────────────────────────────────────────────────────────────────────────
+    const optimisticCreditContext: CreditContext = {
+      available_credits: Number.MAX_SAFE_INTEGER,
+      session_credits_used: 0,
+      daily_credits_used: 0,
+      max_session_credits: 10,
+      max_daily_credits: 50,
+    };
+
+    // Pass 1: decide escalation WITHOUT hitting credits DB (fast, and does not block history chat).
+    let escalationDecision = decideEscalation(
       body.message,
       page1Context,
-      creditContext,
+      optimisticCreditContext,
       effectiveSelectedAsinForEscalation, // Backward compatibility (single ASIN)
       eligibleAsinsForEscalation // Multi-ASIN support (selected OR explicit)
     );
+
+    // Only now (and only if needed) load real credit context and re-run decision.
+    const creditContext: CreditContext = escalationDecision.requires_escalation
+      ? await checkCreditBalance(user.id, supabase, body.analysisRunId)
+      : optimisticCreditContext;
+
+    if (escalationDecision.requires_escalation) {
+      escalationDecision = decideEscalation(
+        body.message,
+        page1Context,
+        creditContext,
+        effectiveSelectedAsinForEscalation,
+        eligibleAsinsForEscalation
+      );
+    }
 
     // ────────────────────────────────────────────────────────────────────────
     // ESCALATION GUARDRAILS (STRICT)
@@ -2357,11 +2383,20 @@ CRITICAL RULES:
     }
     
     // Log AI reasoning inputs for audit/debugging
+    // FIX (History context): ai_context may be missing on older analysis runs, but the analysis_run_id
+    // still represents valid grounded context (Page-1 snapshot + response JSON).
+    const hasAiContextForThisRequest =
+      !!body.analysisRunId &&
+      !!analysisResponse &&
+      (!!aiContext ||
+        !!analysisResponse.market_snapshot ||
+        Array.isArray((analysisResponse as any).page_one_listings) ||
+        Array.isArray((analysisResponse as any).products));
     console.log("AI_COPILOT_INPUT", {
       analysisRunId: body.analysisRunId,
       userId: user.id,
       analysisMode,
-      hasAiContext: !!aiContext,
+      hasAiContext: hasAiContextForThisRequest,
       memoryVersion: sellerMemory.version,
       sellerProfileVersion: sellerProfile.updated_at || "unknown",
       sellerProfileUpdatedAt: sellerProfile.updated_at || null,
@@ -2617,6 +2652,19 @@ CRITICAL RULES FOR ESCALATED DATA:
           if (!readerReleased) {
             reader.releaseLock();
             readerReleased = true;
+          }
+
+          // FIX 4: Safety assertion — never silently fail on valid Page-1 context.
+          // If we have an analysis_run_id and the question can be answered from Page-1,
+          // OpenAI must produce some content. If not, crash loudly (caught and surfaced to client).
+          const hasAiContext =
+            !!body.analysisRunId &&
+            (!!aiContext ||
+              !!analysisResponse.market_snapshot ||
+              Array.isArray((analysisResponse as any).page_one_listings) ||
+              Array.isArray((analysisResponse as any).products));
+          if (hasAiContext && escalationDecisionForCitations.can_answer_from_page1 && !fullAssistantMessage.trim()) {
+            throw new Error("Chat failed despite valid Page-1 context");
           }
 
           // 14. Validate response for forbidden language (TRIPWIRE)
