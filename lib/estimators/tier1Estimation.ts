@@ -146,7 +146,11 @@ export function buildTier1Products(
     
     return {
       asin: (listing.asin as string).trim().toUpperCase(),
-      title: listing.title || null,
+      // Contract requires title: string. Avoid fabricating structured placeholders; use a neutral fallback.
+      title:
+        typeof listing.title === "string" && listing.title.trim().length > 0
+          ? listing.title.trim()
+          : "Unknown product",
       brand: listing.brand || null,
       image_url: listing.image_url || null,
       price: listing.price,
