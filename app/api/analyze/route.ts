@@ -2329,7 +2329,6 @@ export async function POST(req: NextRequest) {
       page_one_listings: canonicalProducts,
       products: canonicalProducts,
       aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
-      ...(keywordMarket ? keywordMarket : {}),
       ...(contractResponse ? contractResponse : {}),
     };
 
