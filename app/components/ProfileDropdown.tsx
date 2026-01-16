@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { User, LogOut, Settings, Shield, Bell, CreditCard, FileText, Coins } from "lucide-react";
+import { User, LogOut, Settings, Shield, Bell, CreditCard, FileText, Coins, Link2 } from "lucide-react";
 import type { User as SupabaseUser, AuthChangeEvent, Session } from "@supabase/supabase-js";
 
 interface CreditBalance {
@@ -391,6 +391,16 @@ export default function ProfileDropdown() {
             >
               <FileText className="w-4 h-4 text-gray-400" />
               Data Sources
+            </button>
+            <button
+              onClick={() => {
+                router.push("/settings#integrations");
+                setIsOpen(false);
+              }}
+              className="w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
+            >
+              <Link2 className="w-4 h-4 text-gray-400" />
+              Integrations
             </button>
           </div>
 
