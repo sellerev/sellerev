@@ -19,8 +19,8 @@ let tokenCache: TokenCache | null = null;
  * Caches token in memory until expiry (typically 1 hour).
  * 
  * Required environment variables:
- * - SP_API_CLIENT_ID: LWA client ID
- * - SP_API_CLIENT_SECRET: LWA client secret
+ * - SP_API_CLIENT_ID or SP_API_LWA_CLIENT_ID: LWA client ID
+ * - SP_API_CLIENT_SECRET or SP_API_LWA_CLIENT_SECRET: LWA client secret
  * - SP_API_REFRESH_TOKEN: OAuth refresh token
  * 
  * @returns Promise<string> Access token for SP-API requests
@@ -31,8 +31,9 @@ export async function getSpApiAccessToken(): Promise<string> {
     return tokenCache.accessToken;
   }
 
-  const clientId = process.env.SP_API_CLIENT_ID;
-  const clientSecret = process.env.SP_API_CLIENT_SECRET;
+  // Support both variable name formats for backward compatibility
+  const clientId = process.env.SP_API_CLIENT_ID || process.env.SP_API_LWA_CLIENT_ID;
+  const clientSecret = process.env.SP_API_CLIENT_SECRET || process.env.SP_API_LWA_CLIENT_SECRET;
   const refreshToken = process.env.SP_API_REFRESH_TOKEN;
 
   if (!clientId || !clientSecret || !refreshToken) {

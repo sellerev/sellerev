@@ -800,8 +800,8 @@ export async function POST(req: NextRequest) {
   // SP-API ENVIRONMENT VARIABLE VALIDATION (DEBUGGING)
   // ═══════════════════════════════════════════════════════════════════════════
   const REQUIRED_ENV = [
-    'SP_API_LWA_CLIENT_ID',
-    'SP_API_LWA_CLIENT_SECRET',
+    'SP_API_CLIENT_ID',
+    'SP_API_CLIENT_SECRET',
     'SP_API_REFRESH_TOKEN',
     'SP_API_AWS_ACCESS_KEY_ID',
     'SP_API_AWS_SECRET_ACCESS_KEY',
