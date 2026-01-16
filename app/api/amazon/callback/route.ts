@@ -136,13 +136,14 @@ export async function GET(req: NextRequest) {
     });
 
     // Upsert connection (one per user)
+    // Note: SP-API token responses don't include scope. Permissions come from IAM role configuration.
     const { error: dbError } = await supabaseAdmin
       .from("amazon_connections")
       .upsert({
         user_id: user.id,
         refresh_token_encrypted: encryptedToken,
         refresh_token_last4: tokenLast4,
-        scopes: tokenData.scope ? [tokenData.scope] : ["sellingpartnerapi::api"],
+        scopes: tokenData.scope ? [tokenData.scope] : [], // SP-API doesn't return scopes in token response
         status: "connected",
         revoked_at: null,
         updated_at: new Date().toISOString(),
