@@ -1860,6 +1860,116 @@ export async function POST(req: NextRequest) {
       console.log("🔵 RAW_LISTINGS_LENGTH_BEFORE_CANONICAL", rawListings.length);
       
       // ═══════════════════════════════════════════════════════════════════════════
+      // FORCE SP-API ENRICHMENT FOR ALL PAGE-1 ASINs (MANDATORY)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SP-API must run unconditionally for all page-1 ASINs, regardless of:
+      // - Cache state
+      // - Confidence level
+      // - Missing metadata checks
+      // - Title-derived brands
+      // This executes BEFORE canonicalization to ensure authoritative data
+      if (rawListings.length > 0 && body.input_type === "keyword") {
+        // Extract and deduplicate page-1 ASINs
+        const page1Asins = Array.from(new Set(
+          rawListings
+            .map((l: any) => l.asin)
+            .filter((asin: string | null) => asin && /^[A-Z0-9]{10}$/i.test(asin.trim().toUpperCase()))
+            .map((asin: string) => asin.trim().toUpperCase())
+        ));
+        
+        if (page1Asins.length > 0) {
+          const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER';
+          
+          // REQUIRED LOG: SP_API_FORCED_CALL
+          console.log("SP_API_FORCED_CALL", {
+            keyword: body.input_value,
+            asin_count: page1Asins.length,
+            timestamp: new Date().toISOString(),
+          });
+          
+          // Execute SP-API Catalog and Pricing enrichment in parallel
+          // NO conditional gates - always executes
+          try {
+            const [catalogResult, pricingResult] = await Promise.all([
+              batchEnrichCatalogItems(page1Asins, marketplaceId, 2000),
+              batchEnrichPricing(page1Asins, marketplaceId, 2000),
+            ]);
+            
+            // Create a map of ASIN to listing for efficient updates
+            const listingMap = new Map<string, any>();
+            rawListings.forEach((listing: any) => {
+              if (listing.asin) {
+                listingMap.set(listing.asin.toUpperCase(), listing);
+              }
+            });
+            
+            // Apply SP-API Catalog enrichment (authoritative: brand, category, BSR)
+            for (const [asin, metadata] of catalogResult.enriched.entries()) {
+              const listing = listingMap.get(asin.toUpperCase());
+              if (listing) {
+                // SP-API overwrites: brand, category, BSR
+                if (metadata.brand) {
+                  listing.brand = metadata.brand;
+                  (listing as any).brand_source = 'sp_api_catalog';
+                }
+                if (metadata.category) {
+                  listing.main_category = metadata.category;
+                  (listing as any).category_source = 'sp_api_catalog';
+                }
+                if (metadata.bsr !== null) {
+                  listing.bsr = metadata.bsr;
+                  listing.main_category_bsr = metadata.bsr;
+                  (listing as any).bsr_source = 'sp_api_catalog';
+                }
+                if (metadata.title) {
+                  listing.title = metadata.title;
+                  (listing as any).title_source = 'sp_api_catalog';
+                }
+                if (metadata.image_url) {
+                  listing.image_url = metadata.image_url;
+                  (listing as any).image_source = 'sp_api_catalog';
+                }
+              }
+            }
+            
+            // Apply SP-API Pricing enrichment (authoritative: fulfillment, buy box)
+            for (const [asin, metadata] of pricingResult.enriched.entries()) {
+              const listing = listingMap.get(asin.toUpperCase());
+              if (listing) {
+                // SP-API overwrites: fulfillment
+                if (metadata.fulfillment_channel) {
+                  listing.fulfillment = metadata.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
+                  (listing as any).fulfillment_source = 'sp_api_pricing';
+                }
+                // Update price if available from SP-API
+                if (metadata.buy_box_price !== null) {
+                  listing.price = metadata.buy_box_price;
+                  (listing as any).price_source = 'sp_api_pricing';
+                } else if (metadata.lowest_price !== null) {
+                  listing.price = metadata.lowest_price;
+                  (listing as any).price_source = 'sp_api_pricing';
+                }
+                if (metadata.buy_box_owner) {
+                  (listing as any).buy_box_owner = metadata.buy_box_owner;
+                  (listing as any).buy_box_owner_source = 'sp_api_pricing';
+                }
+                if (metadata.offer_count !== null) {
+                  (listing as any).offer_count = metadata.offer_count;
+                  (listing as any).offer_count_source = 'sp_api_pricing';
+                }
+              }
+            }
+          } catch (error) {
+            // Log error but continue - SP-API enrichment is non-fatal
+            console.error("SP_API_ENRICHMENT_ERROR", {
+              keyword: body.input_value,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+      
+      // ═══════════════════════════════════════════════════════════════════════════
       // ASIN METADATA ENRICHMENT (MOVED TO ASYNC/BACKGROUND)
       // ═══════════════════════════════════════════════════════════════════════════
       // Metadata enrichment is now done asynchronously after Page-1 returns
