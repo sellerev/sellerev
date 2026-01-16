@@ -288,7 +288,6 @@ async function fetchItemOffers(
         error: errorText.substring(0, 500),
         batch_index: batchIndex,
         total_batches: totalBatches,
-        permission_denied: isPermissionError,
       });
       
       // Log specific message for 403 errors (permission issue)
