@@ -36,10 +36,19 @@ export async function middleware(req: NextRequest) {
   const isAuth = path.startsWith("/auth");
   const isConnectAmazon = path.startsWith("/connect-amazon");
   const isOnboarding = path.startsWith("/onboarding");
+  
+  // Public pages that don't require authentication
+  const publicPages = ["/", "/terms", "/privacy", "/support"];
+  const isPublicPage = publicPages.includes(path);
 
-  // Not logged in → auth
-  if (!user && !isAuth) {
+  // Not logged in → allow public pages and auth page
+  if (!user && !isAuth && !isPublicPage) {
     return NextResponse.redirect(new URL("/auth", req.url));
+  }
+  
+  // Public pages: allow access without auth
+  if (isPublicPage) {
+    return res;
   }
 
   // Logged in → check onboarding flow
