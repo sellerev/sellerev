@@ -24,7 +24,8 @@ export default function AuthPage() {
       (event: AuthChangeEvent, session: Session | null) => {
         if (event === "SIGNED_IN" && session) {
           // User has signed in (e.g., after email confirmation)
-          router.replace("/onboarding");
+          // Redirect to Amazon connection step (before onboarding)
+          router.replace("/connect-amazon");
         }
       }
     );
@@ -61,8 +62,8 @@ export default function AuthPage() {
     } else {
       // Sign-in: Check if session exists
       if (result.data.session) {
-        // Session exists - redirect to onboarding
-        router.replace("/onboarding");
+        // Session exists - redirect to Amazon connection step (before onboarding)
+        router.replace("/connect-amazon");
       } else {
         setError("Sign in failed. Please try again.");
         setLoading(false);

@@ -54,12 +54,30 @@ export async function GET(req: NextRequest) {
     const redirectUri = `${appUrl}/api/amazon/callback`;
     const scope = "sellingpartnerapi::api"; // Standard SP-API scope for seller authorization
     
+    // Check if user is in onboarding flow (no profile yet)
+    const { data: profile } = await supabase
+      .from("seller_profiles")
+      .select("id, sourcing_model")
+      .eq("id", user.id)
+      .single();
+
     const authUrl = new URL("https://www.amazon.com/ap/oa");
     authUrl.searchParams.set("client_id", clientId);
     authUrl.searchParams.set("scope", scope);
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("redirect_uri", redirectUri);
     authUrl.searchParams.set("state", state);
+    
+    // Store return destination in state cookie (will be checked in callback)
+    if (!profile || !profile.sourcing_model) {
+      res.cookies.set("amazon_oauth_return_to", "onboarding", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 600, // 10 minutes
+        path: "/",
+      });
+    }
 
     console.log("Amazon OAuth connect initiated", {
       user_id: user.id,

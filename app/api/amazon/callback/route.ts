@@ -33,17 +33,21 @@ export async function GET(req: NextRequest) {
     const state = searchParams.get("state");
     const error = searchParams.get("error");
 
+    // Check return destination from cookie
+    const returnTo = req.cookies.get("amazon_oauth_return_to")?.value;
+    const errorRedirect = returnTo === "onboarding" 
+      ? "/connect-amazon?error=oauth_failed"
+      : "/settings?error=oauth_denied";
+
     // Handle OAuth errors
     if (error) {
       console.error("Amazon OAuth error:", error);
-      return NextResponse.redirect(
-        new URL("/settings?error=oauth_denied", req.url)
-      );
+      return NextResponse.redirect(new URL(errorRedirect, req.url));
     }
 
     if (!code || !state) {
       return NextResponse.redirect(
-        new URL("/settings?error=missing_params", req.url)
+        new URL(returnTo === "onboarding" ? "/connect-amazon?error=missing_params" : "/settings?error=missing_params", req.url)
       );
     }
 
@@ -55,7 +59,7 @@ export async function GET(req: NextRequest) {
         received: state.substring(0, 8),
       });
       return NextResponse.redirect(
-        new URL("/settings?error=state_mismatch", req.url)
+        new URL(returnTo === "onboarding" ? "/connect-amazon?error=state_mismatch" : "/settings?error=state_mismatch", req.url)
       );
     }
 
@@ -72,9 +76,10 @@ export async function GET(req: NextRequest) {
 
     if (!clientId || !clientSecret) {
       console.error("SP-API credentials not configured");
-      return NextResponse.redirect(
-        new URL("/settings?error=config", req.url)
-      );
+      const errorRedirect = returnTo === "onboarding" 
+        ? "/connect-amazon?error=config"
+        : "/settings?error=config";
+      return NextResponse.redirect(new URL(errorRedirect, req.url));
     }
 
     // Exchange authorization code for tokens
@@ -95,18 +100,20 @@ export async function GET(req: NextRequest) {
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text().catch(() => "Unknown error");
       console.error("Token exchange failed:", tokenResponse.status, errorText);
-      return NextResponse.redirect(
-        new URL("/settings?error=token_exchange_failed", req.url)
-      );
+      const errorRedirect = returnTo === "onboarding" 
+        ? "/connect-amazon?error=token_exchange_failed"
+        : "/settings?error=token_exchange_failed";
+      return NextResponse.redirect(new URL(errorRedirect, req.url));
     }
 
     const tokenData = await tokenResponse.json();
 
     if (!tokenData.refresh_token) {
       console.error("Token response missing refresh_token");
-      return NextResponse.redirect(
-        new URL("/settings?error=no_refresh_token", req.url)
-      );
+      const errorRedirect = returnTo === "onboarding" 
+        ? "/connect-amazon?error=no_refresh_token"
+        : "/settings?error=no_refresh_token";
+      return NextResponse.redirect(new URL(errorRedirect, req.url));
     }
 
     // Encrypt refresh token
@@ -145,9 +152,10 @@ export async function GET(req: NextRequest) {
 
     if (dbError) {
       console.error("Failed to store connection:", dbError);
-      return NextResponse.redirect(
-        new URL("/settings?error=storage_failed", req.url)
-      );
+      const errorRedirect = returnTo === "onboarding" 
+        ? "/connect-amazon?error=storage_failed"
+        : "/settings?error=storage_failed";
+      return NextResponse.redirect(new URL(errorRedirect, req.url));
     }
 
     console.log("Amazon OAuth connection successful", {
@@ -155,16 +163,31 @@ export async function GET(req: NextRequest) {
       token_last4: tokenLast4,
     });
 
-    // Redirect to settings with success
+    // Check return destination from cookie
+    const returnTo = req.cookies.get("amazon_oauth_return_to")?.value;
+    res.cookies.delete("amazon_oauth_return_to");
+
+    // If returning to onboarding flow, redirect to connect-amazon success page
+    if (returnTo === "onboarding") {
+      return NextResponse.redirect(
+        new URL("/connect-amazon?connected=amazon", req.url),
+        { headers: res.headers }
+      );
+    }
+
+    // Otherwise, redirect to settings
     return NextResponse.redirect(
       new URL("/settings?connected=amazon", req.url),
       { headers: res.headers }
     );
   } catch (error) {
     console.error("Amazon OAuth callback error:", error);
-    return NextResponse.redirect(
-      new URL("/settings?error=callback_failed", req.url)
-    );
+    // Try to get return destination, but default to settings if unavailable
+    const returnTo = req.cookies.get("amazon_oauth_return_to")?.value;
+    const errorRedirect = returnTo === "onboarding" 
+      ? "/connect-amazon?error=callback_failed"
+      : "/settings?error=callback_failed";
+    return NextResponse.redirect(new URL(errorRedirect, req.url));
   }
 }
 
