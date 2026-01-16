@@ -809,7 +809,10 @@ export async function POST(req: NextRequest) {
   ];
 
   for (const key of REQUIRED_ENV) {
-    const denoValue = typeof Deno !== 'undefined' ? Deno.env.get(key) : undefined;
+    // Check for Deno environment (Supabase Edge Functions) - use type-safe check
+    const denoValue = typeof (globalThis as any).Deno !== 'undefined' 
+      ? (globalThis as any).Deno.env.get(key) 
+      : undefined;
     const nodeValue = process.env[key];
     if (!denoValue && !nodeValue) {
       const errorMsg = `❌ MISSING ENV VAR: ${key}`;
