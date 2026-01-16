@@ -26,14 +26,15 @@ export async function GET(req: NextRequest) {
     }
 
     // Get OAuth configuration
-    // SP-API seller authorization does not use OAuth scopes or OpenID.
-    const clientId = process.env.SP_API_CLIENT_ID || process.env.SP_API_LWA_CLIENT_ID;
+    // SP-API seller authorization uses Seller Central consent, not Login With Amazon.
+    // We need the SP-API application_id (amzn1.sp.solution.*), NOT the LWA client_id.
+    const applicationId = process.env.SP_API_APPLICATION_ID || process.env.SP_API_APP_ID;
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL 
       ? `https://${process.env.VERCEL_URL}` 
       : "http://localhost:3000";
 
-    if (!clientId) {
-      console.error("SP-API client ID not configured");
+    if (!applicationId) {
+      console.error("SP-API application ID not configured. Need SP_API_APPLICATION_ID or SP_API_APP_ID (format: amzn1.sp.solution.*)");
       return NextResponse.redirect(
         new URL("/settings?error=config", req.url)
       );
@@ -51,8 +52,8 @@ export async function GET(req: NextRequest) {
       path: "/",
     });
 
-    // Build authorization URL manually to ensure no OpenID parameters are added
-    // SP-API seller authorization does not use OAuth scopes or OpenID.
+    // Build authorization URL for SP-API seller authorization
+    // SP-API seller authorization uses Seller Central consent, not Login With Amazon.
     const redirectUri = `${appUrl}/api/amazon/callback`;
     
     // Check if user is in onboarding flow (no profile yet)
@@ -62,18 +63,23 @@ export async function GET(req: NextRequest) {
       .eq("id", user.id)
       .single();
 
-    // Manually construct query string to ensure ONLY required parameters
-    // Base URL: https://www.amazon.com/ap/oa
-    // Parameters: client_id, response_type=code, redirect_uri, state
-    // DO NOT include: scope, openid, profile, email, prompt, claims, openid.assoc_handle
+    // Manually construct query string for Seller Central consent endpoint
+    // Base URL: https://sellercentral.amazon.com/apps/authorize/consent
+    // Parameters: application_id, redirect_uri, state
+    // DO NOT include: client_id, scope, openid, profile, email, response_type
     const queryParams = new URLSearchParams();
-    queryParams.set("client_id", clientId);
-    queryParams.set("response_type", "code");
+    queryParams.set("application_id", applicationId);
     queryParams.set("redirect_uri", redirectUri);
     queryParams.set("state", state);
     
-    // Construct final URL manually (don't use URL object to avoid any auto-injection)
-    const authUrl = `https://www.amazon.com/ap/oa?${queryParams.toString()}`;
+    // If app is in draft/beta status, add version=beta
+    const useBeta = process.env.SP_API_USE_BETA === "true";
+    if (useBeta) {
+      queryParams.set("version", "beta");
+    }
+    
+    // Construct final URL manually (Seller Central endpoint, not LWA)
+    const authUrl = `https://sellercentral.amazon.com/apps/authorize/consent?${queryParams.toString()}`;
     
     // Store return destination in state cookie (will be checked in callback)
     if (!profile || !profile.sourcing_model) {
