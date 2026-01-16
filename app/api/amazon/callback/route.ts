@@ -163,8 +163,7 @@ export async function GET(req: NextRequest) {
       token_last4: tokenLast4,
     });
 
-    // Check return destination from cookie
-    const returnTo = req.cookies.get("amazon_oauth_return_to")?.value;
+    // Clear return destination cookie (we already have returnTo from line 37)
     res.cookies.delete("amazon_oauth_return_to");
 
     // If returning to onboarding flow, redirect to connect-amazon success page
