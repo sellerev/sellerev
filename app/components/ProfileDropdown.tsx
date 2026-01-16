@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { User, LogOut, Settings, Shield, Bell, CreditCard, FileText, Coins } from "lucide-react";
-import type { User as SupabaseUser } from "@supabase/supabase-js";
+import type { User as SupabaseUser, AuthChangeEvent, Session } from "@supabase/supabase-js";
 
 interface CreditBalance {
   credits_remaining: number;
@@ -32,15 +32,17 @@ export default function ProfileDropdown() {
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabaseBrowser.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        setUser(session.user);
-        loadCredits(); // Reload credits when user changes
-      } else {
-        setUser(null);
-        setCreditBalance(null);
+    } = supabaseBrowser.auth.onAuthStateChange(
+      (_event: AuthChangeEvent, session: Session | null) => {
+        if (session?.user) {
+          setUser(session.user);
+          loadCredits(); // Reload credits when user changes
+        } else {
+          setUser(null);
+          setCreditBalance(null);
+        }
       }
-    });
+    );
 
     return () => {
       subscription.unsubscribe();
