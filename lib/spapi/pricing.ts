@@ -42,7 +42,8 @@ export interface BatchPricingResult {
 export async function batchEnrichPricing(
   asins: string[],
   marketplaceId: string = "ATVPDKIKX0DER",
-  timeoutMs: number = 2000
+  timeoutMs: number = 2000,
+  keyword?: string
 ): Promise<BatchPricingResult> {
   const result: BatchPricingResult = {
     enriched: new Map(),
@@ -79,7 +80,7 @@ export async function batchEnrichPricing(
 
   // Execute batches in parallel with timeout
   const batchPromises = batches.map((batch, batchIndex) =>
-    fetchPricingBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches)
+    fetchPricingBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword)
   );
 
   const batchResults = await Promise.allSettled(batchPromises);
@@ -142,13 +143,14 @@ async function fetchPricingBatchWithTimeout(
   awsAccessKeyId: string,
   awsSecretAccessKey: string,
   batchIndex: number,
-  totalBatches: number
+  totalBatches: number,
+  keyword?: string
 ): Promise<Map<string, PricingMetadata>> {
   const timeoutPromise = new Promise<Map<string, PricingMetadata>>((_, reject) => {
     setTimeout(() => reject(new Error("SP-API pricing batch request timeout")), timeoutMs);
   });
 
-  const fetchPromise = fetchPricingBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches);
+  const fetchPromise = fetchPricingBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword);
 
   return Promise.race([fetchPromise, timeoutPromise]);
 }
@@ -162,7 +164,8 @@ async function fetchPricingBatch(
   awsAccessKeyId: string,
   awsSecretAccessKey: string,
   batchIndex: number,
-  totalBatches: number
+  totalBatches: number,
+  keyword?: string
 ): Promise<Map<string, PricingMetadata>> {
   const result = new Map<string, PricingMetadata>();
 
@@ -174,7 +177,7 @@ async function fetchPricingBatch(
 
     // Use GetItemOffers for each ASIN (more reliable than GetPricing for buy box data)
     const pricingPromises = asins.map((asin) =>
-      fetchItemOffers(asin, marketplaceId, endpoint, host, region, accessToken, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches)
+      fetchItemOffers(asin, marketplaceId, endpoint, host, region, accessToken, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword)
     );
 
     const pricingResults = await Promise.allSettled(pricingPromises);
@@ -218,7 +221,8 @@ async function fetchItemOffers(
   awsAccessKeyId: string,
   awsSecretAccessKey: string,
   batchIndex: number,
-  totalBatches: number
+  totalBatches: number,
+  keyword?: string
 ): Promise<PricingMetadata | null> {
   const path = `/pricing/v0/items/${asin}/offers`;
   const startTime = Date.now();
@@ -231,6 +235,18 @@ async function fetchItemOffers(
   const queryString = params.toString();
 
   try {
+    // REQUIRED LOG: SP_API_PRICING_REQUEST_SENT
+    console.log('SP_API_PRICING_REQUEST_SENT', {
+      keyword: keyword || 'unknown',
+      asins: [asin],
+      batch_index: batchIndex,
+      http_status: null, // Not available yet
+      x_amzn_requestid: null, // Not available yet
+      x_amzn_ratelimit_limit: null, // Not available yet
+      duration_ms: null, // Not available yet
+      timestamp: new Date().toISOString(),
+    });
+    
     // Log request
     logSpApiEvent({
       event_type: 'SP_API_REQUEST',
@@ -304,6 +320,18 @@ async function fetchItemOffers(
     }
 
     const data = await response.json();
+
+    // REQUIRED LOG: SP_API_PRICING_RESPONSE_RECEIVED
+    console.log('SP_API_PRICING_RESPONSE_RECEIVED', {
+      keyword: keyword || 'unknown',
+      asins: [asin],
+      batch_index: batchIndex,
+      http_status: response.status,
+      x_amzn_requestid: headers.request_id,
+      x_amzn_ratelimit_limit: headers.rate_limit_limit,
+      duration_ms: duration,
+      timestamp: new Date().toISOString(),
+    });
 
     // Log successful response
     logSpApiEvent({

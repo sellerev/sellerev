@@ -42,7 +42,8 @@ export interface BatchEnrichmentResult {
 export async function batchEnrichCatalogItems(
   asins: string[],
   marketplaceId: string = "ATVPDKIKX0DER",
-  timeoutMs: number = 4000
+  timeoutMs: number = 4000,
+  keyword?: string
 ): Promise<BatchEnrichmentResult> {
   const result: BatchEnrichmentResult = {
     enriched: new Map(),
@@ -78,7 +79,7 @@ export async function batchEnrichCatalogItems(
 
   // Execute batches in parallel with timeout
   const batchPromises = batches.map((batch, batchIndex) =>
-    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches)
+    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword)
   );
 
   const batchResults = await Promise.allSettled(batchPromises);
@@ -141,13 +142,14 @@ async function fetchBatchWithTimeout(
   awsAccessKeyId: string,
   awsSecretAccessKey: string,
   batchIndex: number,
-  totalBatches: number
+  totalBatches: number,
+  keyword?: string
 ): Promise<Map<string, CatalogItemMetadata>> {
   const timeoutPromise = new Promise<Map<string, CatalogItemMetadata>>((_, reject) => {
     setTimeout(() => reject(new Error("SP-API batch request timeout")), timeoutMs);
   });
 
-  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches);
+  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword);
 
   return Promise.race([fetchPromise, timeoutPromise]);
 }
@@ -161,7 +163,8 @@ async function fetchBatch(
   awsAccessKeyId: string,
   awsSecretAccessKey: string,
   batchIndex: number,
-  totalBatches: number
+  totalBatches: number,
+  keyword?: string
 ): Promise<Map<string, CatalogItemMetadata>> {
   const result = new Map<string, CatalogItemMetadata>();
   const startTime = Date.now();
@@ -181,6 +184,19 @@ async function fetchBatch(
     const queryString = params.toString();
 
     const path = "/catalog/2022-04-01/items";
+    
+    // REQUIRED LOG: SP_API_CATALOG_REQUEST_SENT
+    console.log('SP_API_CATALOG_REQUEST_SENT', {
+      keyword: keyword || 'unknown',
+      asins: asins,
+      batch_index: batchIndex,
+      total_batches: totalBatches,
+      http_status: null, // Not available yet
+      x_amzn_requestid: null, // Not available yet
+      x_amzn_ratelimit_limit: null, // Not available yet
+      duration_ms: null, // Not available yet
+      timestamp: new Date().toISOString(),
+    });
     
     // Log request
     logSpApiEvent({
@@ -244,6 +260,18 @@ async function fetchBatch(
     }
 
     const data = await response.json();
+
+    // REQUIRED LOG: SP_API_CATALOG_RESPONSE_RECEIVED
+    console.log('SP_API_CATALOG_RESPONSE_RECEIVED', {
+      keyword: keyword || 'unknown',
+      asins: asins,
+      batch_index: batchIndex,
+      http_status: response.status,
+      x_amzn_requestid: headers.request_id,
+      x_amzn_ratelimit_limit: headers.rate_limit_limit,
+      duration_ms: duration,
+      timestamp: new Date().toISOString(),
+    });
 
     // Log successful response
     logSpApiEvent({

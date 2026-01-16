@@ -1909,10 +1909,56 @@ export async function POST(req: NextRequest) {
         if (page1Asins.length > 0) {
           const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER';
           
-          // REQUIRED LOG: SP_API_FORCED_CALL
-          console.log("SP_API_FORCED_CALL", {
+          // ═══════════════════════════════════════════════════════════════════════════
+          // FORCE SP-API ENRICHMENT EVEN WHEN CACHE EXISTS
+          // ═══════════════════════════════════════════════════════════════════════════
+          // Check if cache exists (for logging only - we still force SP-API)
+          const { data: cachedProducts } = await supabase
+            .from('keyword_products')
+            .select('asin, brand, brand_source, last_enriched_at')
+            .in('asin', page1Asins)
+            .eq('keyword', body.input_value.toLowerCase().trim());
+          
+          const cachedCount = cachedProducts?.length || 0;
+          if (cachedCount > 0) {
+            console.log('SP_API_FORCED_DESPITE_CACHE', {
+              keyword: body.input_value,
+              cached_count: cachedCount,
+              total_asins: page1Asins.length,
+              message: 'SP-API enrichment forced even though cache exists',
+              timestamp: new Date().toISOString(),
+            });
+          }
+          
+          // ═══════════════════════════════════════════════════════════════════════════
+          // ENFORCE BATCHING RULES EXPLICITLY
+          // ═══════════════════════════════════════════════════════════════════════════
+          // If ASIN count ≤ 20 → 1 SP-API Catalog call
+          // If ASIN count > 20 → ceil(n / 20) calls
+          const catalogBatchSize = 20;
+          const catalogBatches = Math.ceil(page1Asins.length / catalogBatchSize);
+          const catalogBatchSizes: number[] = [];
+          for (let i = 0; i < page1Asins.length; i += catalogBatchSize) {
+            catalogBatchSizes.push(Math.min(catalogBatchSize, page1Asins.length - i));
+          }
+          
+          // REQUIRED LOG: SP_API_BATCH_PLAN
+          console.log('SP_API_BATCH_PLAN', {
             keyword: body.input_value,
-            asin_count: page1Asins.length,
+            total_asins: page1Asins.length,
+            batch_sizes: catalogBatchSizes,
+            catalog_batches: catalogBatches,
+            pricing_batches: page1Asins.length, // Pricing uses 1 ASIN per call
+            timestamp: new Date().toISOString(),
+          });
+          
+          // REQUIRED LOG: SP_API_CATALOG_FORCED_START
+          console.log('SP_API_CATALOG_FORCED_START', {
+            keyword: body.input_value,
+            asins: page1Asins,
+            batch_index: 0, // Will be logged per batch
+            total_asins: page1Asins.length,
+            marketplace_id: marketplaceId,
             timestamp: new Date().toISOString(),
           });
           
@@ -1924,7 +1970,7 @@ export async function POST(req: NextRequest) {
           
           try {
             // Execute catalog and pricing separately to handle failures independently
-            catalogResult = await batchEnrichCatalogItems(page1Asins, marketplaceId, 2000);
+            catalogResult = await batchEnrichCatalogItems(page1Asins, marketplaceId, 2000, body.input_value);
           } catch (error) {
             console.error("❌ SP_API_CATALOG_FAILURE", {
               keyword: body.input_value,
@@ -1936,7 +1982,7 @@ export async function POST(req: NextRequest) {
           }
           
           try {
-            pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000);
+            pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000, body.input_value);
           } catch (error) {
             console.error("❌ SP_API_PRICING_FAILURE", {
               keyword: body.input_value,
@@ -1962,6 +2008,9 @@ export async function POST(req: NextRequest) {
               const listing = listingMap.get(asin.toUpperCase());
               if (listing) {
                 // SP-API overwrites: brand, category, BSR
+                // ═══════════════════════════════════════════════════════════════════════════
+                // SOURCE-TAGGING ENFORCEMENT: Throw if field populated without source
+                // ═══════════════════════════════════════════════════════════════════════════
                 if (metadata.brand) {
                   listing.brand = metadata.brand;
                   (listing as any).brand_source = 'sp_api_catalog';
@@ -1984,6 +2033,58 @@ export async function POST(req: NextRequest) {
                 if (metadata.image_url) {
                   listing.image_url = metadata.image_url;
                   (listing as any).image_source = 'sp_api_catalog';
+                }
+              }
+            }
+            
+            // ═══════════════════════════════════════════════════════════════════════════
+            // RAINFOREST METADATA BLOCKING GUARDRAIL
+            // ═══════════════════════════════════════════════════════════════════════════
+            // Rainforest may be used ONLY for:
+            // - ASIN discovery
+            // - Sponsored flag
+            // - Page position
+            // Rainforest must NEVER populate: brand, category, BSR, fulfillment
+            for (const listing of rawListings) {
+              const asin = listing.asin?.toUpperCase();
+              if (!asin) continue;
+              
+              // Check if Rainforest tried to populate blocked fields
+              const hasRainforestBrand = listing.brand && (listing as any).brand_source !== 'sp_api_catalog' && (listing as any).brand_source !== 'model_inferred';
+              const hasRainforestCategory = listing.main_category && (listing as any).category_source !== 'sp_api_catalog';
+              const hasRainforestBsr = listing.bsr && (listing as any).bsr_source !== 'sp_api_catalog';
+              const hasRainforestFulfillment = listing.fulfillment && (listing as any).fulfillment_source !== 'sp_api_pricing';
+              
+              if (hasRainforestBrand || hasRainforestCategory || hasRainforestBsr || hasRainforestFulfillment) {
+                console.warn('RAINFOREST_METADATA_BLOCKED', {
+                  keyword: body.input_value,
+                  asin,
+                  blocked_fields: {
+                    brand: hasRainforestBrand,
+                    category: hasRainforestCategory,
+                    bsr: hasRainforestBsr,
+                    fulfillment: hasRainforestFulfillment,
+                  },
+                  message: 'Rainforest attempted to populate blocked metadata fields. These fields must come from SP-API only.',
+                });
+                
+                // Clear blocked fields if Rainforest populated them
+                if (hasRainforestBrand && (listing as any).brand_source !== 'sp_api_catalog') {
+                  listing.brand = null;
+                  (listing as any).brand_source = null;
+                }
+                if (hasRainforestCategory && (listing as any).category_source !== 'sp_api_catalog') {
+                  listing.main_category = null;
+                  (listing as any).category_source = null;
+                }
+                if (hasRainforestBsr && (listing as any).bsr_source !== 'sp_api_catalog') {
+                  listing.bsr = null;
+                  listing.main_category_bsr = null;
+                  (listing as any).bsr_source = null;
+                }
+                if (hasRainforestFulfillment && (listing as any).fulfillment_source !== 'sp_api_pricing') {
+                  listing.fulfillment = null;
+                  (listing as any).fulfillment_source = null;
                 }
               }
             }
@@ -2307,6 +2408,45 @@ export async function POST(req: NextRequest) {
         }
         
         // ═══════════════════════════════════════════════════════════════════════════
+        // HARD-FAIL: SP-API VERIFICATION (MANDATORY)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // If any page-1 ASIN exits canonicalization with:
+        // - brand = null OR
+        // - brand_source != 'sp_api_catalog'
+        // → Throw a hard error
+        if (body.input_type === "keyword" && pageOneProducts.length > 0) {
+          const failedAsins: Array<{ asin: string; brand: string | null; brand_source: string | null }> = [];
+          
+          for (const product of pageOneProducts) {
+            const asin = product.asin;
+            const listing = rawListings.find((l: any) => l.asin?.toUpperCase() === asin.toUpperCase());
+            const brandSource = listing ? (listing as any).brand_source : null;
+            const brand = product.brand;
+            
+            // Hard-fail if brand is null or brand_source is not 'sp_api_catalog'
+            if (!brand || brandSource !== 'sp_api_catalog') {
+              failedAsins.push({
+                asin,
+                brand,
+                brand_source: brandSource,
+              });
+            }
+          }
+          
+          if (failedAsins.length > 0) {
+            const errorMessage = `SP_API_EXPECTED_BUT_NOT_CALLED: ${failedAsins.length} page-1 ASIN(s) missing SP-API brand_source. Failed ASINs: ${failedAsins.map(f => `${f.asin}(brand=${f.brand},source=${f.brand_source})`).join(', ')}`;
+            console.error("❌ SP_API_EXPECTED_BUT_NOT_CALLED", {
+              keyword: body.input_value,
+              failed_count: failedAsins.length,
+              total_asins: pageOneProducts.length,
+              failed_asins: failedAsins,
+              message: "SP-API Catalog MUST be called for all page-1 ASINs. No silent fallback allowed.",
+            });
+            throw new Error(errorMessage);
+          }
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════════════
         // STEP 2: Log normalized brand data after canonical builder
         // ═══════════════════════════════════════════════════════════════════════════
         console.log("🟢 NORMALIZED BRAND SAMPLE", pageOneProducts.slice(0, 5).map((p: any) => ({
@@ -2557,6 +2697,38 @@ export async function POST(req: NextRequest) {
           const upsertData = canonicalProducts.map((p) => {
             const sourceTags = sourceTagMap.get(p.asin.toUpperCase()) || {};
             
+            // ═══════════════════════════════════════════════════════════════════════════
+            // SOURCE-TAGGING ENFORCEMENT: Throw if field populated without source
+            // ═══════════════════════════════════════════════════════════════════════════
+            // Required source tags:
+            // - brand → brand_source = 'sp_api_catalog'
+            // - category → category_source = 'sp_api_catalog'
+            // - bsr → bsr_source = 'sp_api_catalog'
+            // - fulfillment → fulfillment_source = 'sp_api_pricing'
+            // - buy_box_owner → buy_box_owner_source = 'sp_api_pricing'
+            const brand = p.brand || null;
+            const category = sourceTags.main_category || null;
+            const bsr = sourceTags.main_category_bsr || null;
+            const fulfillment = p.fulfillment || null;
+            const buyBoxOwner = sourceTags.buy_box_owner || null;
+            
+            // Validate source tags
+            if (brand && !sourceTags.brand_source) {
+              throw new Error(`SOURCE_TAG_MISSING: brand populated (${brand}) but brand_source is missing for ASIN ${p.asin}`);
+            }
+            if (category && !sourceTags.category_source) {
+              throw new Error(`SOURCE_TAG_MISSING: category populated (${category}) but category_source is missing for ASIN ${p.asin}`);
+            }
+            if (bsr && !sourceTags.bsr_source) {
+              throw new Error(`SOURCE_TAG_MISSING: bsr populated (${bsr}) but bsr_source is missing for ASIN ${p.asin}`);
+            }
+            if (fulfillment && !sourceTags.fulfillment_source) {
+              throw new Error(`SOURCE_TAG_MISSING: fulfillment populated (${fulfillment}) but fulfillment_source is missing for ASIN ${p.asin}`);
+            }
+            if (buyBoxOwner && !sourceTags.buy_box_owner_source) {
+              throw new Error(`SOURCE_TAG_MISSING: buy_box_owner populated (${buyBoxOwner}) but buy_box_owner_source is missing for ASIN ${p.asin}`);
+            }
+            
             // Compute DB flags based on source tags
             // spapi_brands = TRUE when brand comes from catalogItems
             const spapi_brands = sourceTags.brand_source === 'sp_api_catalog';
@@ -2575,13 +2747,13 @@ export async function POST(req: NextRequest) {
               rating: p.rating || null,
               review_count: p.review_count || null,
               image_url: p.image_url || null,
-              brand: p.brand || null,
+              brand: brand,
               is_sponsored: p.is_sponsored || false,
-              fulfillment: p.fulfillment || null,
+              fulfillment: fulfillment,
               // SP-API fields (authoritative)
-              main_category: sourceTags.main_category || null,
-              main_category_bsr: sourceTags.main_category_bsr || null,
-              buy_box_owner: sourceTags.buy_box_owner || null,
+              main_category: category,
+              main_category_bsr: bsr,
+              buy_box_owner: buyBoxOwner,
               offer_count: sourceTags.offer_count || null,
               // Source tags (MANDATORY for SP-API verification)
               brand_source: sourceTags.brand_source || null,
@@ -2634,6 +2806,30 @@ export async function POST(req: NextRequest) {
               keyword: normalizedKeyword,
               product_count: upsertData.length,
             });
+            
+            // ═══════════════════════════════════════════════════════════════════════════
+            // SQL VERIFICATION HELPER (DEV-ONLY)
+            // ═══════════════════════════════════════════════════════════════════════════
+            // One-line SQL verification query result
+            const { data: verificationData, error: verificationError } = await supabase
+              .from('keyword_products')
+              .select('brand_source')
+              .eq('keyword', normalizedKeyword);
+            
+            if (!verificationError && verificationData) {
+              const total = verificationData.length;
+              const spapiBrands = verificationData.filter((p: any) => p.brand_source === 'sp_api_catalog').length;
+              
+              // REQUIRED LOG: SP_API_DB_VERIFICATION
+              console.log('SP_API_DB_VERIFICATION', {
+                keyword: normalizedKeyword,
+                total: total,
+                spapi_brands: spapiBrands,
+                spapi_brands_pct: total > 0 ? Math.round((spapiBrands / total) * 10000) / 100 : 0,
+                sql_query: `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE brand_source = 'sp_api_catalog') AS spapi_brands FROM keyword_products WHERE keyword = '${normalizedKeyword}';`,
+                timestamp: new Date().toISOString(),
+              });
+            }
           }
         } catch (error) {
           console.warn("Error caching keyword products:", error);
