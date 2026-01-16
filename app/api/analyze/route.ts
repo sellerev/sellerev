@@ -796,6 +796,33 @@ export async function POST(req: NextRequest) {
     timestamp: new Date().toISOString(),
   });
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SP-API ENVIRONMENT VARIABLE VALIDATION (DEBUGGING)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const REQUIRED_ENV = [
+    'SP_API_LWA_CLIENT_ID',
+    'SP_API_LWA_CLIENT_SECRET',
+    'SP_API_REFRESH_TOKEN',
+    'SP_API_AWS_ACCESS_KEY_ID',
+    'SP_API_AWS_SECRET_ACCESS_KEY',
+    'SP_API_SELLING_PARTNER_ROLE_ARN',
+  ];
+
+  for (const key of REQUIRED_ENV) {
+    const denoValue = typeof Deno !== 'undefined' ? Deno.env.get(key) : undefined;
+    const nodeValue = process.env[key];
+    if (!denoValue && !nodeValue) {
+      const errorMsg = `❌ MISSING ENV VAR: ${key}`;
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+  }
+  
+  console.log("✅ SP_API_ENV_VARS_VALIDATED", {
+    all_vars_present: true,
+    timestamp: new Date().toISOString(),
+  });
+  
   // Create a response object that can be modified for cookie handling
   let res = new NextResponse();
   const supabase = createApiClient(req, res);
