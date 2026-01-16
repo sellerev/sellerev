@@ -15,13 +15,23 @@ Add these to your **Vercel** project settings and **`.env.local`** for local dev
   - **Local**: For local development, use `http://localhost:3000`
 
 ### Amazon SP-API / Login with Amazon
-- ✅ `SP_API_LWA_CLIENT_ID` or `SP_API_CLIENT_ID` - LWA (Login with Amazon) Client ID
+- ✅ **`SP_API_APPLICATION_ID` or `SP_API_APP_ID`** (PREFERRED) - SP-API Application ID
+  - Get this from your SP-API app in Seller Central (Solution Provider Portal)
+  - Format: `amzn1.sp.solution.xxxxx` or similar
+  - **This is required for SP-API seller authorization** (uses Seller Central endpoint, no scope issues)
+  - If not set, will fall back to LWA client_id (may have scope issues)
+- ✅ `SP_API_LWA_CLIENT_ID` or `SP_API_CLIENT_ID` - LWA (Login with Amazon) Client ID (FALLBACK)
   - Get this from your SP-API app in Seller Central
+  - Only used if `SP_API_APPLICATION_ID` is not set
+  - May cause scope errors with standard LWA endpoint
 - ✅ `SP_API_LWA_CLIENT_SECRET` or `SP_API_CLIENT_SECRET` - LWA Client Secret
   - Get this from your SP-API app in Seller Central
+  - Required for token exchange
 - ✅ `SP_API_REFRESH_TOKEN` - Developer refresh token (fallback when user hasn't connected)
   - This is your existing developer token
   - Used as fallback when users haven't connected their own accounts
+- ✅ `SP_API_USE_BETA` (optional) - Set to `"true"` if your app is in draft/beta status
+  - Adds `version=beta` parameter to authorization URL
 
 ### AWS Credentials (Already Configured)
 - ✅ `SP_API_AWS_ACCESS_KEY_ID` - AWS IAM user access key

@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Get OAuth configuration
+    // SP-API seller authorization does not use OAuth scopes or OpenID.
     const clientId = process.env.SP_API_CLIENT_ID || process.env.SP_API_LWA_CLIENT_ID;
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL 
       ? `https://${process.env.VERCEL_URL}` 
@@ -50,7 +51,8 @@ export async function GET(req: NextRequest) {
       path: "/",
     });
 
-    // Build authorization URL
+    // Build authorization URL manually to ensure no OpenID parameters are added
+    // SP-API seller authorization does not use OAuth scopes or OpenID.
     const redirectUri = `${appUrl}/api/amazon/callback`;
     
     // Check if user is in onboarding flow (no profile yet)
@@ -60,13 +62,18 @@ export async function GET(req: NextRequest) {
       .eq("id", user.id)
       .single();
 
-    const authUrl = new URL("https://www.amazon.com/ap/oa");
-    authUrl.searchParams.set("client_id", clientId);
-    // Note: For SP-API seller authorization, scope is NOT included in the OAuth URL.
-    // Permissions are determined by the IAM role configured in the SP-API app, not by OAuth scope.
-    authUrl.searchParams.set("response_type", "code");
-    authUrl.searchParams.set("redirect_uri", redirectUri);
-    authUrl.searchParams.set("state", state);
+    // Manually construct query string to ensure ONLY required parameters
+    // Base URL: https://www.amazon.com/ap/oa
+    // Parameters: client_id, response_type=code, redirect_uri, state
+    // DO NOT include: scope, openid, profile, email, prompt, claims, openid.assoc_handle
+    const queryParams = new URLSearchParams();
+    queryParams.set("client_id", clientId);
+    queryParams.set("response_type", "code");
+    queryParams.set("redirect_uri", redirectUri);
+    queryParams.set("state", state);
+    
+    // Construct final URL manually (don't use URL object to avoid any auto-injection)
+    const authUrl = `https://www.amazon.com/ap/oa?${queryParams.toString()}`;
     
     // Store return destination in state cookie (will be checked in callback)
     if (!profile || !profile.sourcing_model) {
@@ -83,10 +90,11 @@ export async function GET(req: NextRequest) {
       user_id: user.id,
       state: state.substring(0, 8) + "...",
       redirect_uri: redirectUri,
+      auth_url: authUrl, // Log the full URL for debugging
     });
 
-    // Redirect to Amazon
-    return NextResponse.redirect(authUrl.toString(), { headers: res.headers });
+    // Redirect to Amazon (using string URL, not URL object)
+    return NextResponse.redirect(authUrl, { headers: res.headers });
   } catch (error) {
     console.error("Amazon OAuth connect error:", error);
     return NextResponse.redirect(
