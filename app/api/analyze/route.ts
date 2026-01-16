@@ -1279,91 +1279,77 @@ export async function POST(req: NextRequest) {
           // FORCE SP-API ENRICHMENT AFTER CACHE REHYDRATION (MANDATORY)
           // ═══════════════════════════════════════════════════════════════════════════
           // SP-API must run even when Rainforest is skipped (cache rehydration path)
-          // This ensures brand, category, BSR, and fulfillment are always enriched
-          // Do NOT gate this on confidence_skip - SP-API always runs
+          // This executes BEFORE buildKeywordPageOne, canonical ranking, snapshot building
+          // NO conditional gates - always runs when cache is rehydrated
+          const asins = cachedProducts.map((p: any) => p.asin).filter(Boolean);
+          const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER';
+          
+          // REQUIRED LOG: SP_API_ENRICHMENT_FORCED_AFTER_CACHE
+          console.log("SP_API_ENRICHMENT_FORCED_AFTER_CACHE", {
+            keyword: normalizedKeyword,
+            asin_count: asins.length,
+            source: "cache",
+            timestamp: new Date().toISOString(),
+          });
+          
+          // Execute SP-API Catalog and Pricing enrichment in parallel
+          // NO conditional gates - always executes
           try {
-            // Extract all valid ASINs from cached products
-            const asins = cachedProducts
-              .map((p: any) => p.asin)
-              .filter((asin: string | null) => asin && /^[A-Z0-9]{10}$/i.test(asin.trim().toUpperCase()))
-              .map((asin: string) => asin.trim().toUpperCase());
+            const [catalogResult, pricingResult] = await Promise.all([
+              batchEnrichCatalogItems(asins, marketplaceId, 2000),
+              batchEnrichPricing(asins, marketplaceId, 2000),
+            ]);
             
-            if (asins.length > 0) {
-              const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER';
-              
-              // REQUIRED LOG: SP_API_ENRICHMENT_FORCED_AFTER_CACHE
-              console.log("SP_API_ENRICHMENT_FORCED_AFTER_CACHE", {
-                keyword: normalizedKeyword,
-                asin_count: asins.length,
-                source: "cache",
-                timestamp: new Date().toISOString(),
-              });
-              
-              // Execute SP-API Catalog and Pricing enrichment in parallel
-              const [catalogResult, pricingResult] = await Promise.allSettled([
-                batchEnrichCatalogItems(asins, marketplaceId, 2000),
-                batchEnrichPricing(asins, marketplaceId, 2000),
-              ]);
-              
-              // Update listings with SP-API Catalog data (brand, category, BSR, title, image)
-              const catalogEnrichment = catalogResult.status === 'fulfilled' ? catalogResult.value.enriched : new Map();
-              const pricingEnrichment = pricingResult.status === 'fulfilled' ? pricingResult.value.enriched : new Map();
-              
-              // Create a map of ASIN to listing for efficient updates
-              const listingMap = new Map<string, ParsedListing>();
-              realMarketData.listings.forEach((listing: ParsedListing) => {
-                if (listing.asin) {
-                  listingMap.set(listing.asin.toUpperCase(), listing);
+            // Update listings with SP-API Catalog data (brand, category, BSR, title, image)
+            const catalogEnrichment = catalogResult.enriched;
+            const pricingEnrichment = pricingResult.enriched;
+            
+            // Create a map of ASIN to listing for efficient updates
+            const listingMap = new Map<string, ParsedListing>();
+            realMarketData.listings.forEach((listing: ParsedListing) => {
+              if (listing.asin) {
+                listingMap.set(listing.asin.toUpperCase(), listing);
+              }
+            });
+            
+            // Apply SP-API Catalog enrichment (authoritative: brand, category, BSR)
+            for (const [asin, metadata] of catalogEnrichment.entries()) {
+              const listing = listingMap.get(asin.toUpperCase());
+              if (listing) {
+                // SP-API overwrites: brand, category, BSR
+                if (metadata.brand) listing.brand = metadata.brand;
+                if (metadata.category) listing.main_category = metadata.category;
+                if (metadata.bsr !== null) {
+                  listing.bsr = metadata.bsr;
+                  listing.main_category_bsr = metadata.bsr;
                 }
-              });
-              
-              // Apply SP-API Catalog enrichment (authoritative: brand, category, BSR)
-              for (const [asin, metadata] of catalogEnrichment.entries()) {
-                const listing = listingMap.get(asin.toUpperCase());
-                if (listing) {
-                  // SP-API overwrites: brand, category, BSR
-                  if (metadata.brand) listing.brand = metadata.brand;
-                  if (metadata.category) listing.main_category = metadata.category;
-                  if (metadata.bsr !== null) {
-                    listing.bsr = metadata.bsr;
-                    listing.main_category_bsr = metadata.bsr;
-                  }
-                  if (metadata.title) listing.title = metadata.title;
-                  if (metadata.image_url) listing.image_url = metadata.image_url;
+                if (metadata.title) listing.title = metadata.title;
+                if (metadata.image_url) listing.image_url = metadata.image_url;
+              }
+            }
+            
+            // Apply SP-API Pricing enrichment (authoritative: fulfillment, buy box)
+            for (const [asin, metadata] of pricingEnrichment.entries()) {
+              const listing = listingMap.get(asin.toUpperCase());
+              if (listing) {
+                // SP-API overwrites: fulfillment
+                if (metadata.fulfillment_channel) {
+                  listing.fulfillment = metadata.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
+                }
+                // Update price if available from SP-API
+                if (metadata.buy_box_price !== null) {
+                  listing.price = metadata.buy_box_price;
+                } else if (metadata.lowest_price !== null) {
+                  listing.price = metadata.lowest_price;
                 }
               }
-              
-              // Apply SP-API Pricing enrichment (authoritative: fulfillment, buy box)
-              for (const [asin, metadata] of pricingEnrichment.entries()) {
-                const listing = listingMap.get(asin.toUpperCase());
-                if (listing) {
-                  // SP-API overwrites: fulfillment
-                  if (metadata.fulfillment_channel) {
-                    listing.fulfillment = metadata.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
-                  }
-                  // Update price if available from SP-API
-                  if (metadata.buy_box_price !== null) {
-                    listing.price = metadata.buy_box_price;
-                  } else if (metadata.lowest_price !== null) {
-                    listing.price = metadata.lowest_price;
-                  }
-                }
-              }
-              
-              console.log("SP_API_ENRICHMENT_COMPLETE_AFTER_CACHE", {
-                keyword: normalizedKeyword,
-                catalog_enriched: catalogEnrichment.size,
-                pricing_enriched: pricingEnrichment.size,
-                total_asins: asins.length,
-                timestamp: new Date().toISOString(),
-              });
             }
           } catch (error) {
+            // Log error but continue - SP-API enrichment is non-fatal
             console.error("SP_API_ENRICHMENT_ERROR_AFTER_CACHE", {
               keyword: normalizedKeyword,
               error: error instanceof Error ? error.message : String(error),
             });
-            // Continue without SP-API enrichment - non-fatal
           }
         }
       } else {
