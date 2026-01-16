@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createApiClient } from "@/lib/supabase/server-api";
 import { getFbaFees } from "@/lib/spapi/getFbaFees";
 
 /**
@@ -55,6 +56,9 @@ function estimateFulfillmentFee(
 }
 
 export async function POST(request: NextRequest) {
+  let res = new NextResponse();
+  const supabase = createApiClient(request, res);
+
   // Parse body first so we can use values in catch block if needed
   let body: any = {};
   let price: number = 25; // Default fallback price
@@ -66,6 +70,15 @@ export async function POST(request: NextRequest) {
     marketplace = body?.marketplace || "ATVPDKIKX0DER";
   } catch (parseError) {
     // If body parsing fails, we'll use defaults in catch block
+  }
+
+  // Get user ID for per-user token (optional - will fallback to env token if not available)
+  let userId: string | undefined;
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    userId = user?.id;
+  } catch {
+    // Non-blocking - will use env token if user not available
   }
 
   try {
@@ -184,6 +197,7 @@ export async function POST(request: NextRequest) {
         asin: normalizedAsin,
         price,
         marketplaceId: typeof marketplace === "string" ? marketplace : "ATVPDKIKX0DER",
+        userId,
       });
       
       // Only use SP-API result if both fees are available

@@ -37,13 +37,16 @@ export interface BatchPricingResult {
  * @param asins - Array of ASINs to enrich (max 20 per batch)
  * @param marketplaceId - Marketplace ID (default: ATVPDKIKX0DER for US)
  * @param timeoutMs - Request timeout in milliseconds (default: 2000)
+ * @param keyword - Optional keyword for logging
+ * @param userId - Optional user ID to use per-user refresh token
  * @returns Promise<BatchPricingResult> Pricing results with metadata map
  */
 export async function batchEnrichPricing(
   asins: string[],
   marketplaceId: string = "ATVPDKIKX0DER",
   timeoutMs: number = 2000,
-  keyword?: string
+  keyword?: string,
+  userId?: string
 ): Promise<BatchPricingResult> {
   const result: BatchPricingResult = {
     enriched: new Map(),
@@ -80,7 +83,7 @@ export async function batchEnrichPricing(
 
   // Execute batches in parallel with timeout
   const batchPromises = batches.map((batch, batchIndex) =>
-    fetchPricingBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword)
+    fetchPricingBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, userId)
   );
 
   const batchResults = await Promise.allSettled(batchPromises);
@@ -144,13 +147,14 @@ async function fetchPricingBatchWithTimeout(
   awsSecretAccessKey: string,
   batchIndex: number,
   totalBatches: number,
-  keyword?: string
+  keyword?: string,
+  userId?: string
 ): Promise<Map<string, PricingMetadata>> {
   const timeoutPromise = new Promise<Map<string, PricingMetadata>>((_, reject) => {
     setTimeout(() => reject(new Error("SP-API pricing batch request timeout")), timeoutMs);
   });
 
-  const fetchPromise = fetchPricingBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword);
+  const fetchPromise = fetchPricingBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, userId);
 
   return Promise.race([fetchPromise, timeoutPromise]);
 }
@@ -165,12 +169,26 @@ async function fetchPricingBatch(
   awsSecretAccessKey: string,
   batchIndex: number,
   totalBatches: number,
-  keyword?: string
+  keyword?: string,
+  userId?: string
 ): Promise<Map<string, PricingMetadata>> {
   const result = new Map<string, PricingMetadata>();
 
   try {
-    const accessToken = await getSpApiAccessToken();
+    // Try to get user's refresh token if userId provided
+    let refreshToken: string | undefined;
+    if (userId) {
+      try {
+        const { getUserAmazonRefreshToken } = await import("@/lib/amazon/getUserToken");
+        refreshToken = await getUserAmazonRefreshToken(userId) || undefined;
+      } catch (error) {
+        console.warn("Failed to get user refresh token, falling back to env token:", error);
+      }
+    }
+
+    const accessToken = await getSpApiAccessToken(
+      refreshToken ? { refreshToken, userId } : undefined
+    );
     const endpoint = getEndpointForMarketplace(marketplaceId);
     const host = new URL(endpoint).hostname;
     const region = getRegionForMarketplace(marketplaceId);

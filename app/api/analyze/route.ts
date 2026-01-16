@@ -1327,7 +1327,7 @@ export async function POST(req: NextRequest) {
           try {
             const [catalogResult, pricingResult] = await Promise.all([
               batchEnrichCatalogItems(asins, marketplaceId, 2000),
-              batchEnrichPricing(asins, marketplaceId, 2000),
+              batchEnrichPricing(asins, marketplaceId, 2000, undefined, user.id),
             ]);
             
             // Update listings with SP-API Catalog data (brand, category, BSR, title, image)
@@ -1985,7 +1985,7 @@ export async function POST(req: NextRequest) {
           }
           
           try {
-            pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000, body.input_value);
+            pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000, body.input_value, user.id);
           } catch (error) {
             console.error("❌ SP_API_PRICING_FAILURE", {
               keyword: body.input_value,

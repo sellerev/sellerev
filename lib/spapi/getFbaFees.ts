@@ -44,23 +44,26 @@ type SpApiProductDimensions = {
  * Required environment variables:
  * - SP_API_CLIENT_ID: LWA client ID
  * - SP_API_CLIENT_SECRET: LWA client secret
- * - SP_API_REFRESH_TOKEN: OAuth refresh token
+ * - SP_API_REFRESH_TOKEN: OAuth refresh token (fallback if userId not provided)
  * - SP_API_AWS_ACCESS_KEY_ID: AWS access key for SigV4
  * - SP_API_AWS_SECRET_ACCESS_KEY: AWS secret key for SigV4
  * 
  * @param params.asin - Amazon ASIN
  * @param params.price - Selling price in USD (use avg page 1 price)
  * @param params.marketplaceId - Marketplace ID (default: ATVPDKIKX0DER for US)
+ * @param params.userId - Optional user ID to use per-user refresh token
  * @returns Promise<FbaFeesResult> Normalized fee breakdown
  */
 export async function getFbaFees({
   asin,
   price,
   marketplaceId = "ATVPDKIKX0DER", // US marketplace
+  userId,
 }: {
   asin: string;
   price: number;
   marketplaceId?: string;
+  userId?: string;
 }): Promise<FbaFeesResult> {
   const awsAccessKeyId = process.env.SP_API_AWS_ACCESS_KEY_ID;
   const awsSecretAccessKey = process.env.SP_API_AWS_SECRET_ACCESS_KEY;
@@ -76,7 +79,20 @@ export async function getFbaFees({
   }
 
   try {
-    const accessToken = await getSpApiAccessToken();
+    // Try to get user's refresh token if userId provided
+    let refreshToken: string | undefined;
+    if (userId) {
+      try {
+        const { getUserAmazonRefreshToken } = await import("@/lib/amazon/getUserToken");
+        refreshToken = await getUserAmazonRefreshToken(userId) || undefined;
+      } catch (error) {
+        console.warn("Failed to get user refresh token, falling back to env token:", error);
+      }
+    }
+
+    const accessToken = await getSpApiAccessToken(
+      refreshToken ? { refreshToken, userId } : undefined
+    );
     const endpoint = getEndpointForMarketplace(marketplaceId);
     const host = new URL(endpoint).hostname;
     const region = getRegionForMarketplace(marketplaceId);

@@ -8,9 +8,10 @@ import FinancialConstraintsTab from "./tabs/FinancialConstraintsTab";
 import SourcingLogisticsTab from "./tabs/SourcingLogisticsTab";
 import AIBehaviorTab from "./tabs/AIBehaviorTab";
 import DataSourcesTab from "./tabs/DataSourcesTab";
+import IntegrationsTab from "./tabs/IntegrationsTab";
 import PendingMemoryReview from "./components/PendingMemoryReview";
 
-type Tab = "overview" | "preferences" | "financial" | "sourcing" | "ai" | "data";
+type Tab = "overview" | "preferences" | "financial" | "sourcing" | "ai" | "data" | "integrations";
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("overview");
@@ -24,6 +25,7 @@ export default function SettingsPage() {
     { id: "sourcing" as Tab, label: "Sourcing & Logistics" },
     { id: "ai" as Tab, label: "AI Behavior" },
     { id: "data" as Tab, label: "Data Sources" },
+    { id: "integrations" as Tab, label: "Integrations" },
   ];
 
   // Load pending memory count
@@ -150,6 +152,7 @@ export default function SettingsPage() {
           {activeTab === "sourcing" && <SourcingLogisticsTab />}
           {activeTab === "ai" && <AIBehaviorTab />}
           {activeTab === "data" && <DataSourcesTab />}
+          {activeTab === "integrations" && <IntegrationsTab />}
         </div>
 
         {/* Pending Memory Review Modal */}
