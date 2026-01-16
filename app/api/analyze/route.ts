@@ -1860,7 +1860,7 @@ export async function POST(req: NextRequest) {
       console.log("🔵 RAW_LISTINGS_LENGTH_BEFORE_CANONICAL", rawListings.length);
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // FORCE SP-API ENRICHMENT FOR ALL PAGE-1 ASINs (MANDATORY)
+      // 🔥 HARD-FORCED SP-API EXECUTION (MANDATORY - NO CONDITIONALS)
       // ═══════════════════════════════════════════════════════════════════════════
       // SP-API must run unconditionally for all page-1 ASINs, regardless of:
       // - Cache state
@@ -1868,7 +1868,9 @@ export async function POST(req: NextRequest) {
       // - Missing metadata checks
       // - Title-derived brands
       // This executes BEFORE canonicalization to ensure authoritative data
-      if (rawListings.length > 0 && body.input_type === "keyword") {
+      // NOTE: SP-API also runs in fetchKeywordMarketSnapshot, but this is a safety net
+      // to ensure SP-API data is always applied even if keywordMarket.ts path is skipped
+      if (body.input_type === "keyword" && rawListings.length > 0) {
         // Extract and deduplicate page-1 ASINs
         const page1Asins = Array.from(new Set(
           rawListings
@@ -1960,13 +1962,28 @@ export async function POST(req: NextRequest) {
               }
             }
           } catch (error) {
-            // Log error but continue - SP-API enrichment is non-fatal
-            console.error("SP_API_ENRICHMENT_ERROR", {
+            // Log HARD ERROR but continue - SP-API enrichment failure is logged but non-fatal for UI
+            console.error("❌ SP_API_HARD_FAILURE", {
               keyword: body.input_value,
               error: error instanceof Error ? error.message : String(error),
+              asin_count: page1Asins.length,
+              message: "SP-API enrichment failed - this is a critical error but UI will continue",
             });
           }
+        } else {
+          // HARD ERROR: SP-API should have run but no ASINs were found
+          console.error("❌ SP_API_HARD_ERROR_NO_ASINS", {
+            keyword: body.input_value,
+            raw_listings_count: rawListings.length,
+            message: "SP-API MUST execute for all keyword searches. No ASINs found in raw listings.",
+          });
         }
+      } else if (body.input_type === "keyword") {
+        // HARD ERROR: SP-API should have run but rawListings is empty
+        console.error("❌ SP_API_HARD_ERROR_NO_LISTINGS", {
+          keyword: body.input_value,
+          message: "SP-API MUST execute for all keyword searches. Raw listings is empty.",
+        });
       }
       
       // ═══════════════════════════════════════════════════════════════════════════
@@ -2380,26 +2397,82 @@ export async function POST(req: NextRequest) {
       // ═══════════════════════════════════════════════════════════════════════════
       if (canonicalProducts.length > 0 && body.input_type === "keyword") {
         try {
-          const upsertData = canonicalProducts.map((p) => ({
-            keyword: normalizedKeyword,
-            asin: p.asin,
-            rank: p.organic_rank ?? p.page_position ?? 1,
-            price: p.price,
-            estimated_monthly_units: p.estimated_monthly_units,
-            estimated_monthly_revenue: p.estimated_monthly_revenue,
-            // Full product card rendering fields (from Rainforest SERP only)
-            title: p.title || null,
-            rating: p.rating || null,
-            review_count: p.review_count || null,
-            image_url: p.image_url || null,
-            brand: p.brand || null,
-            is_sponsored: p.is_sponsored || false,
-            fulfillment: p.fulfillment || null,
-            // Legacy fields
-            main_category: null, // Not extracted from SERP
-            main_category_bsr: null, // Not extracted from SERP (BSR disabled for keyword Page-1)
-            last_updated: new Date().toISOString(),
-          }));
+          // Create source tag map from raw listings (SP-API source tags)
+          const sourceTagMap = new Map<string, {
+            brand_source?: string;
+            category_source?: string;
+            bsr_source?: string;
+            fulfillment_source?: string;
+            price_source?: string;
+            buy_box_owner_source?: string;
+            offer_count_source?: string;
+            image_source?: string;
+            title_source?: string;
+            main_category?: string | null;
+            main_category_bsr?: number | null;
+            buy_box_owner?: string | null;
+            offer_count?: number | null;
+          }>();
+          
+          // Populate source tag map from raw listings
+          if (rawListings && rawListings.length > 0) {
+            for (const listing of rawListings) {
+              if (listing.asin) {
+                const asin = listing.asin.toUpperCase();
+                sourceTagMap.set(asin, {
+                  brand_source: (listing as any).brand_source || null,
+                  category_source: (listing as any).category_source || null,
+                  bsr_source: (listing as any).bsr_source || null,
+                  fulfillment_source: (listing as any).fulfillment_source || null,
+                  price_source: (listing as any).price_source || null,
+                  buy_box_owner_source: (listing as any).buy_box_owner_source || null,
+                  offer_count_source: (listing as any).offer_count_source || null,
+                  image_source: (listing as any).image_source || null,
+                  title_source: (listing as any).title_source || null,
+                  main_category: listing.main_category || null,
+                  main_category_bsr: listing.main_category_bsr || null,
+                  buy_box_owner: (listing as any).buy_box_owner || null,
+                  offer_count: (listing as any).offer_count || null,
+                });
+              }
+            }
+          }
+          
+          const upsertData = canonicalProducts.map((p) => {
+            const sourceTags = sourceTagMap.get(p.asin.toUpperCase()) || {};
+            return {
+              keyword: normalizedKeyword,
+              asin: p.asin,
+              rank: p.organic_rank ?? p.page_position ?? 1,
+              price: p.price,
+              estimated_monthly_units: p.estimated_monthly_units,
+              estimated_monthly_revenue: p.estimated_monthly_revenue,
+              // Full product card rendering fields (from Rainforest SERP + SP-API)
+              title: p.title || null,
+              rating: p.rating || null,
+              review_count: p.review_count || null,
+              image_url: p.image_url || null,
+              brand: p.brand || null,
+              is_sponsored: p.is_sponsored || false,
+              fulfillment: p.fulfillment || null,
+              // SP-API fields (authoritative)
+              main_category: sourceTags.main_category || null,
+              main_category_bsr: sourceTags.main_category_bsr || null,
+              buy_box_owner: sourceTags.buy_box_owner || null,
+              offer_count: sourceTags.offer_count || null,
+              // Source tags (MANDATORY for SP-API verification)
+              brand_source: sourceTags.brand_source || null,
+              category_source: sourceTags.category_source || null,
+              bsr_source: sourceTags.bsr_source || null,
+              fulfillment_source: sourceTags.fulfillment_source || null,
+              price_source: sourceTags.price_source || null,
+              buy_box_owner_source: sourceTags.buy_box_owner_source || null,
+              offer_count_source: sourceTags.offer_count_source || null,
+              image_source: sourceTags.image_source || null,
+              title_source: sourceTags.title_source || null,
+              last_updated: new Date().toISOString(),
+            };
+          });
           
           const { error: upsertError } = await supabase
             .from("keyword_products")

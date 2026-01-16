@@ -64,8 +64,8 @@ export async function batchEnrichPricing(
     return result;
   }
 
-  // Batch ASINs into groups of 5 (conservative for Pricing API - per-ASIN calls with concurrency limit)
-  const batchSize = 5; // Smaller batches for Pricing API
+  // Batch ASINs into groups of 20 (SP-API hard limit)
+  const batchSize = 20; // SP-API maximum batch size
   const batches: string[][] = [];
   const batchSizes: number[] = [];
   for (let i = 0; i < asins.length; i += batchSize) {

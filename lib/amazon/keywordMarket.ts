@@ -1507,52 +1507,153 @@ export async function fetchKeywordMarketSnapshot(
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 🔥 SP-API HARD EXECUTION (MANDATORY - NO CONDITIONALS)
+    // 🔥 HARD-FORCED SP-API EXECUTION
     // ═══════════════════════════════════════════════════════════════════════════
-    // SP-API must execute synchronously immediately after Rainforest search returns ASINs
-    // BEFORE cache, BEFORE normalization, BEFORE canonicalization
-    // NO conditional gates - always executes
+    // This must run for EVERY keyword search.
+    // No confidence checks. No cache skips.
+    // SP-API is PRIMARY DATA. Not enrichment.
     let spApiCatalogResults: Map<string, any> = new Map();
     let spApiPricingResults: Map<string, any> = new Map();
     
-    if (page1Asins.length > 0) {
-      const marketplaceId = "ATVPDKIKX0DER"; // US marketplace
+    console.log("🔥 SP_API_FORCED_START", {
+      keyword,
+      asin_count: page1Asins.length,
+      marketplace: "ATVPDKIKX0DER",
+    });
+    
+    if (!page1Asins.length) {
+      console.error("❌ SP_API_ABORTED_NO_ASINS", {
+        keyword,
+        error: "SP_API_ABORTED_NO_ASINS",
+      });
+      throw new Error("SP_API_ABORTED_NO_ASINS");
+    }
+    
+    // Batch ASINs by 20 (SP-API hard limit)
+    const asinBatches: string[][] = [];
+    for (let i = 0; i < page1Asins.length; i += 20) {
+      asinBatches.push(page1Asins.slice(i, i + 20));
+    }
+    
+    const marketplaceId = "ATVPDKIKX0DER"; // US marketplace
+    let spApiExecuted = false;
+    let spApiError: Error | null = null;
+    
+    try {
+      // --- SP-API CATALOG (Brand, Category, BSR) ---
+      const { batchEnrichCatalogItems } = await import("../spapi/catalogItems");
       
-      // REQUIRED LOG: SP_API_HARD_EXECUTION_START
-      console.log("🔥 SP_API_HARD_EXECUTION_START", {
+      for (let i = 0; i < asinBatches.length; i++) {
+        const batch = asinBatches[i];
+        console.log("🔥 SP_API_CATALOG_BATCH_START", {
+          batch_index: i,
+          batch_size: batch.length,
+          asins: batch,
+          keyword,
+        });
+        
+        try {
+          const catalogResponse = await batchEnrichCatalogItems(batch, marketplaceId, 2000);
+          
+          if (!catalogResponse || !catalogResponse.enriched || catalogResponse.enriched.size === 0) {
+            console.error("❌ SP_API_CATALOG_EMPTY_RESPONSE", { 
+              batch,
+              keyword,
+              batch_index: i,
+            });
+          } else {
+            // Merge results into main map
+            for (const [asin, metadata] of catalogResponse.enriched.entries()) {
+              spApiCatalogResults.set(asin, metadata);
+            }
+          }
+          
+          console.log("✅ SP_API_CATALOG_BATCH_COMPLETE", {
+            batch_index: i,
+            returned_items: catalogResponse?.enriched?.size ?? 0,
+            keyword,
+          });
+        } catch (error) {
+          console.error("❌ SP_API_CATALOG_BATCH_ERROR", {
+            batch_index: i,
+            batch,
+            keyword,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      
+      // --- SP-API PRICING (FBA / FBM / Buy Box) ---
+      const { batchEnrichPricing } = await import("../spapi/pricing");
+      
+      for (let i = 0; i < asinBatches.length; i++) {
+        const batch = asinBatches[i];
+        console.log("🔥 SP_API_PRICING_BATCH_START", {
+          batch_index: i,
+          batch_size: batch.length,
+          asins: batch,
+          keyword,
+        });
+        
+        try {
+          const pricingResponse = await batchEnrichPricing(batch, marketplaceId, 2000);
+          
+          if (!pricingResponse || !pricingResponse.enriched || pricingResponse.enriched.size === 0) {
+            console.error("❌ SP_API_PRICING_EMPTY_RESPONSE", { 
+              batch,
+              keyword,
+              batch_index: i,
+            });
+          } else {
+            // Merge results into main map
+            for (const [asin, metadata] of pricingResponse.enriched.entries()) {
+              spApiPricingResults.set(asin, metadata);
+            }
+          }
+          
+          console.log("✅ SP_API_PRICING_BATCH_COMPLETE", {
+            batch_index: i,
+            returned_items: pricingResponse?.enriched?.size ?? 0,
+            keyword,
+          });
+        } catch (error) {
+          console.error("❌ SP_API_PRICING_BATCH_ERROR", {
+            batch_index: i,
+            batch,
+            keyword,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      
+      spApiExecuted = true;
+      
+      console.log("🟢 SP_API_FORCED_COMPLETE", {
+        keyword,
+        total_asins: page1Asins.length,
+        total_batches: asinBatches.length,
+        catalog_enriched: spApiCatalogResults.size,
+        pricing_enriched: spApiPricingResults.size,
+      });
+    } catch (error) {
+      spApiError = error instanceof Error ? error : new Error(String(error));
+      console.error("❌ SP_API_HARD_FAILURE", {
+        keyword,
+        error: spApiError.message,
+        total_asins: page1Asins.length,
+        total_batches: asinBatches.length,
+      });
+      // Continue without SP-API data - non-fatal for UI, but log hard error
+    }
+    
+    // HARD VERIFICATION: If SP-API did not execute, log HARD ERROR
+    if (!spApiExecuted) {
+      console.error("❌ SP_API_HARD_ERROR_NOT_EXECUTED", {
         keyword,
         asin_count: page1Asins.length,
-        timestamp: new Date().toISOString(),
+        error: spApiError?.message || "SP-API execution was skipped or failed",
+        message: "SP-API MUST execute for all keyword searches. This is a critical error.",
       });
-      
-      try {
-        // DIRECTLY CALL SP-API (not helpers, not conditionals)
-        const { batchEnrichCatalogItems } = await import("../spapi/catalogItems");
-        const { batchEnrichPricing } = await import("../spapi/pricing");
-        
-        const [catalogResult, pricingResult] = await Promise.all([
-          batchEnrichCatalogItems(page1Asins, marketplaceId, 2000), // GET /catalog/2022-04-01/items
-          batchEnrichPricing(page1Asins, marketplaceId, 2000),     // GET /productPricing/v0/items
-        ]);
-        
-        spApiCatalogResults = catalogResult.enriched;
-        spApiPricingResults = pricingResult.enriched;
-        
-        console.log("🔥 SP_API_HARD_EXECUTION_COMPLETE", {
-          keyword,
-          catalog_enriched: spApiCatalogResults.size,
-          pricing_enriched: spApiPricingResults.size,
-          total_asins: page1Asins.length,
-          timestamp: new Date().toISOString(),
-        });
-      } catch (error) {
-        console.error("🔥 SP_API_HARD_EXECUTION_ERROR", {
-          keyword,
-          error: error instanceof Error ? error.message : String(error),
-          timestamp: new Date().toISOString(),
-        });
-        // Continue without SP-API data - non-fatal
-      }
     }
 
     // STEP C: Bulk cache lookup (includes BSR and brand data)
