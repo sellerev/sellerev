@@ -52,7 +52,6 @@ export async function GET(req: NextRequest) {
 
     // Build authorization URL
     const redirectUri = `${appUrl}/api/amazon/callback`;
-    const scope = "sellingpartnerapi::api"; // Standard SP-API scope for seller authorization
     
     // Check if user is in onboarding flow (no profile yet)
     const { data: profile } = await supabase
@@ -63,7 +62,8 @@ export async function GET(req: NextRequest) {
 
     const authUrl = new URL("https://www.amazon.com/ap/oa");
     authUrl.searchParams.set("client_id", clientId);
-    authUrl.searchParams.set("scope", scope);
+    // Note: For SP-API seller authorization, scope is NOT included in the OAuth URL.
+    // Permissions are determined by the IAM role configured in the SP-API app, not by OAuth scope.
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("redirect_uri", redirectUri);
     authUrl.searchParams.set("state", state);
