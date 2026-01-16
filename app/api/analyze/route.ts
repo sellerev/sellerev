@@ -2026,6 +2026,15 @@ export async function POST(req: NextRequest) {
               }
             }
           }
+          
+          console.log("✅ SP_API_ENRICHMENT_COMPLETE_CONTINUING", {
+            keyword: body.input_value,
+            raw_listings_count: rawListings.length,
+            catalog_enriched: catalogResult?.enriched?.size ?? 0,
+            pricing_enriched: pricingResult?.enriched?.size ?? 0,
+            message: "SP-API enrichment complete, continuing to canonical builder",
+            timestamp: new Date().toISOString(),
+          });
         } else {
           // HARD ERROR: SP-API should have run but no ASINs were found
           console.error("❌ SP_API_HARD_ERROR_NO_ASINS", {
@@ -2244,7 +2253,31 @@ export async function POST(req: NextRequest) {
           });
         }
         
-        pageOneProducts = buildKeywordPageOne(rawListings, searchVolumeLow, searchVolumeHigh);
+        // ═══════════════════════════════════════════════════════════════════════════
+        // LOG BEFORE CANONICAL BUILDER CALL
+        // ═══════════════════════════════════════════════════════════════════════════
+        console.log("🔵 CALLING_BUILD_KEYWORD_PAGE_ONE", {
+          keyword: body.input_value,
+          raw_listings_count: rawListings.length,
+          search_volume_low: searchVolumeLow,
+          search_volume_high: searchVolumeHigh,
+          sample_asins: rawListings.slice(0, 5).map((l: any) => l.asin),
+          timestamp: new Date().toISOString(),
+        });
+        
+        try {
+          pageOneProducts = buildKeywordPageOne(rawListings, searchVolumeLow, searchVolumeHigh);
+        } catch (canonicalError) {
+          console.error("❌ CANONICAL_BUILDER_ERROR", {
+            keyword: body.input_value,
+            error: canonicalError instanceof Error ? canonicalError.message : String(canonicalError),
+            stack: canonicalError instanceof Error ? canonicalError.stack : undefined,
+            raw_listings_count: rawListings.length,
+            timestamp: new Date().toISOString(),
+          });
+          // Continue with empty array - don't crash the request
+          pageOneProducts = [];
+        }
         
         // ═══════════════════════════════════════════════════════════════════════════
         // STEP 2: Log normalized brand data after canonical builder
