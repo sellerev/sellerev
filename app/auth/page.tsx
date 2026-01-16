@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
 export default function AuthPage() {
@@ -19,12 +20,14 @@ export default function AuthPage() {
   useEffect(() => {
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_IN" && session) {
-        // User has signed in (e.g., after email confirmation)
-        router.replace("/onboarding");
+    } = supabase.auth.onAuthStateChange(
+      (event: AuthChangeEvent, session: Session | null) => {
+        if (event === "SIGNED_IN" && session) {
+          // User has signed in (e.g., after email confirmation)
+          router.replace("/onboarding");
+        }
       }
-    });
+    );
 
     return () => {
       subscription.unsubscribe();
