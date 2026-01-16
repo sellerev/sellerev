@@ -2426,8 +2426,9 @@ export async function POST(req: NextRequest) {
             const brandSource = listing ? (listing as any).brand_source : null;
             const brand = product.brand;
             
-            // Hard-fail if brand is null or brand_source is not 'sp_api_catalog'
-            if (!brand || brandSource !== 'sp_api_catalog') {
+            // Hard-fail if brand_source is not 'sp_api_catalog'
+            // Note: brand can be null even when SP-API was called successfully (some products legitimately have no brand)
+            if (brandSource !== 'sp_api_catalog') {
               failedAsins.push({
                 asin,
                 brand,
