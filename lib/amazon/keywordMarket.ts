@@ -1506,6 +1506,55 @@ export async function fetchKeywordMarketSnapshot(
       asin_count: page1Asins.length,
     });
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 🔥 SP-API HARD EXECUTION (MANDATORY - NO CONDITIONALS)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SP-API must execute synchronously immediately after Rainforest search returns ASINs
+    // BEFORE cache, BEFORE normalization, BEFORE canonicalization
+    // NO conditional gates - always executes
+    let spApiCatalogResults: Map<string, any> = new Map();
+    let spApiPricingResults: Map<string, any> = new Map();
+    
+    if (page1Asins.length > 0) {
+      const marketplaceId = "ATVPDKIKX0DER"; // US marketplace
+      
+      // REQUIRED LOG: SP_API_HARD_EXECUTION_START
+      console.log("🔥 SP_API_HARD_EXECUTION_START", {
+        keyword,
+        asin_count: page1Asins.length,
+        timestamp: new Date().toISOString(),
+      });
+      
+      try {
+        // DIRECTLY CALL SP-API (not helpers, not conditionals)
+        const { batchEnrichCatalogItems } = await import("../spapi/catalogItems");
+        const { batchEnrichPricing } = await import("../spapi/pricing");
+        
+        const [catalogResult, pricingResult] = await Promise.all([
+          batchEnrichCatalogItems(page1Asins, marketplaceId, 2000), // GET /catalog/2022-04-01/items
+          batchEnrichPricing(page1Asins, marketplaceId, 2000),     // GET /productPricing/v0/items
+        ]);
+        
+        spApiCatalogResults = catalogResult.enriched;
+        spApiPricingResults = pricingResult.enriched;
+        
+        console.log("🔥 SP_API_HARD_EXECUTION_COMPLETE", {
+          keyword,
+          catalog_enriched: spApiCatalogResults.size,
+          pricing_enriched: spApiPricingResults.size,
+          total_asins: page1Asins.length,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        console.error("🔥 SP_API_HARD_EXECUTION_ERROR", {
+          keyword,
+          error: error instanceof Error ? error.message : String(error),
+          timestamp: new Date().toISOString(),
+        });
+        // Continue without SP-API data - non-fatal
+      }
+    }
+
     // STEP C: Bulk cache lookup (includes BSR and brand data)
     const { bulkLookupBsrCache, bulkUpsertBsrCache } = await import("./asinBsrCache");
     const cacheMap = supabase ? await bulkLookupBsrCache(supabase, page1Asins) : new Map();
@@ -1823,6 +1872,67 @@ export async function fetchKeywordMarketSnapshot(
 
     // TASK 1: Create canonical `listings` variable for all downstream logic
     let listings = validListings; // Canonical variable name
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MERGE SP-API RESULTS IMMEDIATELY (BEFORE ANY OTHER PROCESSING)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SP-API data is foundational - merge it immediately after parsing
+    // SP-API overwrites Rainforest data (authoritative source)
+    for (const listing of listings) {
+      if (!listing.asin) continue;
+      
+      const asin = listing.asin.toUpperCase();
+      const catalog = spApiCatalogResults.get(asin);
+      const pricing = spApiPricingResults.get(asin);
+      
+      // SP-API Catalog overwrites: brand, category, BSR, title, image
+      if (catalog) {
+        if (catalog.brand) {
+          listing.brand = catalog.brand;
+          (listing as any).brand_source = 'sp_api_catalog';
+        }
+        if (catalog.category) {
+          listing.main_category = catalog.category;
+          (listing as any).category_source = 'sp_api_catalog';
+        }
+        if (catalog.bsr !== null) {
+          listing.main_category_bsr = catalog.bsr;
+          listing.bsr = catalog.bsr;
+          (listing as any).bsr_source = 'sp_api_catalog';
+        }
+        if (catalog.title) {
+          listing.title = catalog.title;
+          (listing as any).title_source = 'sp_api_catalog';
+        }
+        if (catalog.image_url) {
+          listing.image_url = catalog.image_url;
+          (listing as any).image_source = 'sp_api_catalog';
+        }
+      }
+      
+      // SP-API Pricing overwrites: fulfillment, price, buy box
+      if (pricing) {
+        if (pricing.fulfillment_channel) {
+          listing.fulfillment = pricing.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
+          (listing as any).fulfillment_source = 'sp_api_pricing';
+        }
+        if (pricing.buy_box_price !== null) {
+          listing.price = pricing.buy_box_price;
+          (listing as any).price_source = 'sp_api_pricing';
+        } else if (pricing.lowest_price !== null) {
+          listing.price = pricing.lowest_price;
+          (listing as any).price_source = 'sp_api_pricing';
+        }
+        if (pricing.buy_box_owner) {
+          (listing as any).buy_box_owner = pricing.buy_box_owner;
+          (listing as any).buy_box_owner_source = 'sp_api_pricing';
+        }
+        if (pricing.offer_count !== null) {
+          (listing as any).offer_count = pricing.offer_count;
+          (listing as any).offer_count_source = 'sp_api_pricing';
+        }
+      }
+    }
 
     console.warn("PAGE1_LISTINGS_COUNT", listings.length); // Step 7: Debug log
     console.log(`Extracted ${listings.length} valid listings from ${parsedListings.length} total results`, {
