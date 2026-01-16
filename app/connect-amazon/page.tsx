@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
 type Step = "prompt" | "connecting" | "success";
 
-export default function ConnectAmazonPage() {
+function ConnectAmazonContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [step, setStep] = useState<Step>("prompt");
@@ -259,6 +259,18 @@ export default function ConnectAmazonPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ConnectAmazonPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-gray-500">Loading...</p>
+      </div>
+    }>
+      <ConnectAmazonContent />
+    </Suspense>
   );
 }
 
