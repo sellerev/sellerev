@@ -269,7 +269,8 @@ async function fetchItemOffers(
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
       
-      // Log error
+      // Log error with specific handling for 403 (permission denied)
+      const isPermissionError = response.status === 403;
       logSpApiEvent({
         event_type: 'SP_API_ERROR',
         endpoint_name: 'pricing',
@@ -287,7 +288,18 @@ async function fetchItemOffers(
         error: errorText.substring(0, 500),
         batch_index: batchIndex,
         total_batches: totalBatches,
+        permission_denied: isPermissionError,
       });
+      
+      // Log specific message for 403 errors (permission issue)
+      if (isPermissionError) {
+        console.error("❌ SP_API_PRICING_PERMISSION_DENIED", {
+          asin,
+          marketplace_id: marketplaceId,
+          message: "Pricing API returned 403 - check IAM role policies and SP-API scope permissions",
+          suggestion: "Verify that the selling partner app has Pricing API access enabled",
+        });
+      }
       
       return null;
     }

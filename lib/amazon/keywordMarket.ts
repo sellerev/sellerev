@@ -1599,11 +1599,29 @@ export async function fetchKeywordMarketSnapshot(
           const pricingResponse = await batchEnrichPricing(batch, marketplaceId, 2000);
           
           if (!pricingResponse || !pricingResponse.enriched || pricingResponse.enriched.size === 0) {
-            console.error("❌ SP_API_PRICING_EMPTY_RESPONSE", { 
-              batch,
-              keyword,
-              batch_index: i,
-            });
+            // Check if this is a permission error (all ASINs failed with 403)
+            const hasPermissionError = pricingResponse?.errors?.some((e: any) => 
+              e.error?.includes('Unauthorized') || e.error?.includes('403')
+            );
+            
+            if (hasPermissionError || pricingResponse?.failed?.length === batch.length) {
+              console.error("❌ SP_API_PRICING_PERMISSION_ERROR", { 
+                batch,
+                keyword,
+                batch_index: i,
+                failed_count: pricingResponse?.failed?.length ?? 0,
+                total_asins: batch.length,
+                message: "Pricing API permission denied - will fallback to Rainforest data",
+                suggestion: "Check IAM role policies and SP-API scope permissions for Pricing API",
+              });
+            } else {
+              console.error("❌ SP_API_PRICING_EMPTY_RESPONSE", { 
+                batch,
+                keyword,
+                batch_index: i,
+                failed_count: pricingResponse?.failed?.length ?? 0,
+              });
+            }
           } else {
             // Merge results into main map
             for (const [asin, metadata] of pricingResponse.enriched.entries()) {
@@ -1987,19 +2005,29 @@ export async function fetchKeywordMarketSnapshot(
       const pricing = spApiPricingResults.get(asin);
       
       // SP-API Catalog overwrites: brand, category, BSR, title, image
+      // CRITICAL: SP-API brand is authoritative - override title-parsed brands
       if (catalog) {
         if (catalog.brand) {
           listing.brand = catalog.brand;
           (listing as any).brand_source = 'sp_api_catalog';
+          // Update brand confidence to high when from SP-API (authoritative)
+          (listing as any)._brand_confidence = 'high';
+          (listing as any)._brand_entity = catalog.brand;
+          (listing as any)._brand_display = catalog.brand;
         }
         if (catalog.category) {
           listing.main_category = catalog.category;
           (listing as any).category_source = 'sp_api_catalog';
         }
-        if (catalog.bsr !== null) {
+        // CRITICAL: BSR from catalog is authoritative and must be preserved
+        // Pricing failures must NOT affect BSR coverage
+        if (catalog.bsr !== null && catalog.bsr > 0) {
           listing.main_category_bsr = catalog.bsr;
           listing.bsr = catalog.bsr;
           (listing as any).bsr_source = 'sp_api_catalog';
+        } else if (catalog.bsr === null) {
+          // Catalog returned null BSR - preserve existing BSR if available, don't overwrite with null
+          // Only set bsr_source if we actually got BSR data
         }
         if (catalog.title) {
           listing.title = catalog.title;
@@ -2012,6 +2040,8 @@ export async function fetchKeywordMarketSnapshot(
       }
       
       // SP-API Pricing overwrites: fulfillment, price, buy box
+      // CRITICAL: If pricing fails, fulfillment_source remains null (not set to rainforest)
+      // Only set fulfillment_source if SP-API pricing actually succeeded
       if (pricing) {
         if (pricing.fulfillment_channel) {
           listing.fulfillment = pricing.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
@@ -2032,6 +2062,14 @@ export async function fetchKeywordMarketSnapshot(
           (listing as any).offer_count = pricing.offer_count;
           (listing as any).offer_count_source = 'sp_api_pricing';
         }
+      } else {
+        // Pricing API failed or returned no data - mark price source as Rainforest fallback
+        // Only if we have a price from Rainforest and no SP-API price was set
+        if (listing.price !== null && listing.price !== undefined && !(listing as any).price_source) {
+          (listing as any).price_source = 'rainforest_serp';
+        }
+        // Do NOT set fulfillment_source to rainforest_serp here - only set it if we have Rainforest data
+        // and it wasn't already set by SP-API. This is handled in route.ts fallback logic.
       }
     }
 

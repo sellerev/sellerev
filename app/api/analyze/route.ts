@@ -1891,21 +1891,46 @@ export async function POST(req: NextRequest) {
           
           // Execute SP-API Catalog and Pricing enrichment in parallel
           // NO conditional gates - always executes
+          // CRITICAL: Pricing failures must NOT block catalog enrichment
+          let catalogResult: any = null;
+          let pricingResult: any = null;
+          
           try {
-            const [catalogResult, pricingResult] = await Promise.all([
-              batchEnrichCatalogItems(page1Asins, marketplaceId, 2000),
-              batchEnrichPricing(page1Asins, marketplaceId, 2000),
-            ]);
-            
-            // Create a map of ASIN to listing for efficient updates
-            const listingMap = new Map<string, any>();
-            rawListings.forEach((listing: any) => {
-              if (listing.asin) {
-                listingMap.set(listing.asin.toUpperCase(), listing);
-              }
+            // Execute catalog and pricing separately to handle failures independently
+            catalogResult = await batchEnrichCatalogItems(page1Asins, marketplaceId, 2000);
+          } catch (error) {
+            console.error("❌ SP_API_CATALOG_FAILURE", {
+              keyword: body.input_value,
+              error: error instanceof Error ? error.message : String(error),
+              asin_count: page1Asins.length,
+              message: "Catalog enrichment failed - continuing without catalog data",
             });
-            
-            // Apply SP-API Catalog enrichment (authoritative: brand, category, BSR)
+            catalogResult = { enriched: new Map(), failed: [], errors: [] };
+          }
+          
+          try {
+            pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000);
+          } catch (error) {
+            console.error("❌ SP_API_PRICING_FAILURE", {
+              keyword: body.input_value,
+              error: error instanceof Error ? error.message : String(error),
+              asin_count: page1Asins.length,
+              message: "Pricing enrichment failed - will fallback to Rainforest data",
+            });
+            pricingResult = { enriched: new Map(), failed: [], errors: [] };
+          }
+          
+          // Create a map of ASIN to listing for efficient updates
+          const listingMap = new Map<string, any>();
+          rawListings.forEach((listing: any) => {
+            if (listing.asin) {
+              listingMap.set(listing.asin.toUpperCase(), listing);
+            }
+          });
+          
+          // Apply SP-API Catalog enrichment (authoritative: brand, category, BSR)
+          // CRITICAL: This must run even if pricing failed
+          if (catalogResult && catalogResult.enriched) {
             for (const [asin, metadata] of catalogResult.enriched.entries()) {
               const listing = listingMap.get(asin.toUpperCase());
               if (listing) {
@@ -1918,7 +1943,9 @@ export async function POST(req: NextRequest) {
                   listing.main_category = metadata.category;
                   (listing as any).category_source = 'sp_api_catalog';
                 }
-                if (metadata.bsr !== null) {
+                // CRITICAL: BSR from catalog is authoritative and must be preserved
+                // Pricing failures must NOT affect BSR coverage
+                if (metadata.bsr !== null && metadata.bsr > 0) {
                   listing.bsr = metadata.bsr;
                   listing.main_category_bsr = metadata.bsr;
                   (listing as any).bsr_source = 'sp_api_catalog';
@@ -1934,7 +1961,16 @@ export async function POST(req: NextRequest) {
               }
             }
             
-            // Apply SP-API Pricing enrichment (authoritative: fulfillment, buy box)
+            console.log("✅ SP_API_CATALOG_ENRICHMENT_APPLIED", {
+              keyword: body.input_value,
+              enriched_count: catalogResult.enriched.size,
+              total_asins: page1Asins.length,
+            });
+          }
+          
+          // Apply SP-API Pricing enrichment (authoritative: fulfillment, buy box)
+          // CRITICAL: If pricing fails, fallback to Rainforest data and mark source
+          if (pricingResult && pricingResult.enriched && pricingResult.enriched.size > 0) {
             for (const [asin, metadata] of pricingResult.enriched.entries()) {
               const listing = listingMap.get(asin.toUpperCase());
               if (listing) {
@@ -1961,14 +1997,34 @@ export async function POST(req: NextRequest) {
                 }
               }
             }
-          } catch (error) {
-            // Log HARD ERROR but continue - SP-API enrichment failure is logged but non-fatal for UI
-            console.error("❌ SP_API_HARD_FAILURE", {
+            
+            console.log("✅ SP_API_PRICING_ENRICHMENT_APPLIED", {
               keyword: body.input_value,
-              error: error instanceof Error ? error.message : String(error),
-              asin_count: page1Asins.length,
-              message: "SP-API enrichment failed - this is a critical error but UI will continue",
+              enriched_count: pricingResult.enriched.size,
+              total_asins: page1Asins.length,
             });
+          } else {
+            // Pricing failed or returned no data - fallback to Rainforest and mark source
+            console.warn("⚠️ SP_API_PRICING_FALLBACK_TO_RAINFOREST", {
+              keyword: body.input_value,
+              pricing_enriched: pricingResult?.enriched?.size ?? 0,
+              total_asins: page1Asins.length,
+              message: "Pricing API failed or returned no data - using Rainforest price data",
+            });
+            
+            // Mark price source as Rainforest fallback for listings that don't have SP-API pricing
+            for (const listing of rawListings) {
+              if (listing.asin && !(listing as any).price_source) {
+                // Only set fallback if we have a price from Rainforest
+                if (listing.price !== null && listing.price !== undefined) {
+                  (listing as any).price_source = 'rainforest_serp';
+                }
+                // Mark fulfillment source if available from Rainforest
+                if (listing.fulfillment && !(listing as any).fulfillment_source) {
+                  (listing as any).fulfillment_source = 'rainforest_serp';
+                }
+              }
+            }
           }
         } else {
           // HARD ERROR: SP-API should have run but no ASINs were found
@@ -2440,6 +2496,13 @@ export async function POST(req: NextRequest) {
           
           const upsertData = canonicalProducts.map((p) => {
             const sourceTags = sourceTagMap.get(p.asin.toUpperCase()) || {};
+            
+            // Compute DB flags based on source tags
+            // spapi_brands = TRUE when brand comes from catalogItems
+            const spapi_brands = sourceTags.brand_source === 'sp_api_catalog';
+            // spapi_fulfillment = TRUE when fulfillment comes from pricing API
+            const spapi_fulfillment = sourceTags.fulfillment_source === 'sp_api_pricing';
+            
             return {
               keyword: normalizedKeyword,
               asin: p.asin,
@@ -2470,8 +2533,32 @@ export async function POST(req: NextRequest) {
               offer_count_source: sourceTags.offer_count_source || null,
               image_source: sourceTags.image_source || null,
               title_source: sourceTags.title_source || null,
+              // Computed DB flags (for verification queries)
+              // Note: These are computed from source tags, not stored as separate columns
+              // Query: SELECT COUNT(*) FROM keyword_products WHERE brand_source = 'sp_api_catalog';
               last_updated: new Date().toISOString(),
             };
+          });
+          
+          // Log DB flag statistics for verification
+          const spapiBrandsCount = upsertData.filter(d => d.brand_source === 'sp_api_catalog').length;
+          const spapiFulfillmentCount = upsertData.filter(d => d.fulfillment_source === 'sp_api_pricing').length;
+          console.log("✅ SP_API_DB_FLAGS_COMPUTED", {
+            keyword: normalizedKeyword,
+            total_products: upsertData.length,
+            spapi_brands_count: spapiBrandsCount,
+            spapi_fulfillment_count: spapiFulfillmentCount,
+            brand_source_breakdown: {
+              sp_api_catalog: spapiBrandsCount,
+              model_inferred: upsertData.filter(d => d.brand_source === 'model_inferred').length,
+              rainforest_serp: upsertData.filter(d => d.brand_source === 'rainforest_serp').length,
+              null: upsertData.filter(d => !d.brand_source).length,
+            },
+            fulfillment_source_breakdown: {
+              sp_api_pricing: spapiFulfillmentCount,
+              rainforest_serp: upsertData.filter(d => d.fulfillment_source === 'rainforest_serp').length,
+              null: upsertData.filter(d => !d.fulfillment_source).length,
+            },
           });
           
           const { error: upsertError } = await supabase
