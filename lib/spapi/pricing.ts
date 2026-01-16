@@ -183,10 +183,23 @@ async function fetchPricingBatch(
       try {
         const { getUserAmazonRefreshToken } = await import("@/lib/amazon/getUserToken");
         refreshToken = await getUserAmazonRefreshToken(userId) || undefined;
+        if (refreshToken) {
+          console.log("✅ Using user's Amazon refresh token for Pricing API", {
+            user_id: userId.substring(0, 8) + "...",
+            token_last4: refreshToken.substring(refreshToken.length - 4),
+          });
+        } else {
+          console.log("⚠️ User has no Amazon connection, falling back to env token", {
+            user_id: userId.substring(0, 8) + "...",
+          });
+        }
       } catch (error) {
+        console.warn("Failed to get user refresh token, falling back to env token:", error);
         // User hasn't connected - Pricing API will use env token (developer token)
         // This may still work if developer token has Pricing API access, but often requires seller OAuth
       }
+    } else {
+      console.log("⚠️ No userId provided to Pricing API, using env token (developer token)");
     }
 
     // If no user token and no env token, skip Pricing API

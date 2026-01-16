@@ -33,20 +33,41 @@ export async function getUserAmazonRefreshToken(
 
   const { data, error } = await supabase
     .from("amazon_connections")
-    .select("refresh_token_encrypted, status")
+    .select("refresh_token_encrypted, status, refresh_token_last4")
     .eq("user_id", userId)
     .eq("status", "connected")
     .single();
 
-  if (error || !data) {
+  if (error) {
+    if (error.code === "PGRST116") {
+      // No rows returned - user hasn't connected
+      console.log("⚠️ No Amazon connection found for user", {
+        user_id: userId.substring(0, 8) + "...",
+        error_code: error.code,
+      });
+    } else {
+      console.error("Error fetching Amazon connection:", error);
+    }
+    return null;
+  }
+
+  if (!data) {
+    console.log("⚠️ No Amazon connection data for user", {
+      user_id: userId.substring(0, 8) + "...",
+    });
     return null;
   }
 
   try {
     const decryptedToken = decryptToken(data.refresh_token_encrypted);
+    console.log("✅ Successfully retrieved user's Amazon refresh token", {
+      user_id: userId.substring(0, 8) + "...",
+      token_last4: data.refresh_token_last4,
+      status: data.status,
+    });
     return decryptedToken;
   } catch (error) {
-    console.error("Failed to decrypt user refresh token:", error);
+    console.error("❌ Failed to decrypt user refresh token:", error);
     return null;
   }
 }
