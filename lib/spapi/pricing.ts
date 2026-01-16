@@ -176,14 +176,24 @@ async function fetchPricingBatch(
 
   try {
     // Try to get user's refresh token if userId provided
+    // NOTE: Pricing API requires seller OAuth per Amazon's API design, even for "public" data
+    // If user hasn't connected, we'll skip Pricing API and rely on Rainforest data
     let refreshToken: string | undefined;
     if (userId) {
       try {
         const { getUserAmazonRefreshToken } = await import("@/lib/amazon/getUserToken");
         refreshToken = await getUserAmazonRefreshToken(userId) || undefined;
       } catch (error) {
-        console.warn("Failed to get user refresh token, falling back to env token:", error);
+        // User hasn't connected - Pricing API will use env token (developer token)
+        // This may still work if developer token has Pricing API access, but often requires seller OAuth
       }
+    }
+
+    // If no user token and no env token, skip Pricing API
+    const envToken = process.env.SP_API_REFRESH_TOKEN;
+    if (!refreshToken && !envToken) {
+      console.warn("No refresh token available for Pricing API, skipping enrichment");
+      return result; // Return empty result, will fallback to Rainforest data
     }
 
     const accessToken = await getSpApiAccessToken(
