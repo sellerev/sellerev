@@ -1494,31 +1494,73 @@ export async function fetchKeywordMarketSnapshot(
       throw new Error("SP_API_ABORTED_NO_ASINS");
     }
     
-    // Batch ASINs by 20 (SP-API hard limit)
-    const asinBatches: string[][] = [];
-    for (let i = 0; i < page1Asins.length; i += 20) {
-      asinBatches.push(page1Asins.slice(i, i + 20));
-    }
-    
     const marketplaceId = "ATVPDKIKX0DER"; // US marketplace
     let spApiExecuted = false;
     let spApiError: Error | null = null;
+    
+    // Check catalog cache before making API calls
+    let catalogCache: Map<string, any> = new Map();
+    let catalogCacheHitCount = 0;
+    let asinsToFetch: string[] = page1Asins;
+    
+    if (supabase) {
+      try {
+        const { bulkLookupCatalogCache } = await import("../spapi/catalogPersist");
+        catalogCache = await bulkLookupCatalogCache(supabase, page1Asins);
+        catalogCacheHitCount = catalogCache.size;
+        if (catalogCacheHitCount > 0) {
+          console.log("✅ CATALOG_CACHE_HIT", {
+            keyword,
+            cached_asins: catalogCacheHitCount,
+            total_asins: page1Asins.length,
+          });
+          // Merge cached data into results
+          for (const [asin, record] of catalogCache.entries()) {
+            // Convert cached record to CatalogItemMetadata format for backward compatibility
+            const metadata: any = {
+              asin: record.core.asin,
+              title: record.core.title,
+              brand: record.core.brand,
+              image_url: record.media.primary_image_url,
+              category: record.market.primary_category,
+              bsr: record.market.primary_rank,
+            };
+            spApiCatalogResults.set(asin, metadata);
+          }
+          // Filter out ASINs that were found in cache
+          asinsToFetch = page1Asins.filter(asin => !catalogCache.has(asin.toUpperCase()));
+        }
+      } catch (error) {
+        console.warn("CATALOG_CACHE_LOOKUP_ERROR", {
+          keyword,
+          error: error instanceof Error ? error.message : String(error),
+          message: "Continuing without cache",
+        });
+      }
+    }
+    
+    // Batch ASINs that need to be fetched from API
+    const asinBatchesToFetch: string[][] = [];
+    for (let i = 0; i < asinsToFetch.length; i += 20) {
+      asinBatchesToFetch.push(asinsToFetch.slice(i, i + 20));
+    }
     
     try {
       // --- SP-API CATALOG (Brand, Category, BSR) ---
       const { batchEnrichCatalogItems } = await import("../spapi/catalogItems");
       
-      for (let i = 0; i < asinBatches.length; i++) {
-        const batch = asinBatches[i];
+      for (let i = 0; i < asinBatchesToFetch.length; i++) {
+        const batch = asinBatchesToFetch[i];
         console.log("🔥 SP_API_CATALOG_BATCH_START", {
           batch_index: i,
           batch_size: batch.length,
           asins: batch,
           keyword,
+          cache_hits: catalogCacheHitCount,
         });
         
         try {
-          const catalogResponse = await batchEnrichCatalogItems(batch, marketplaceId, 2000);
+          const catalogResponse = await batchEnrichCatalogItems(batch, marketplaceId, 2000, keyword, supabase);
           
           if (!catalogResponse || !catalogResponse.enriched || catalogResponse.enriched.size === 0) {
             console.error("❌ SP_API_CATALOG_EMPTY_RESPONSE", { 
@@ -2682,6 +2724,31 @@ export async function fetchKeywordMarketSnapshot(
       pricing_api_used: pricingApiUsed,
       listings_with_bsr: finalListingsWithBSR,
       listings_with_reviews: finalListingsWithReviews,
+      timestamp: new Date().toISOString(),
+    });
+    
+    // ASIN Catalog Enrichment Summary
+    const catalogRecordsCount = spApiCatalogResults.size;
+    const attributesCount = listingsWithEstimates.filter(l => {
+      // Count listings that have at least one attribute (brand, title, or BSR)
+      return l.brand !== null || l.title !== null || l.main_category_bsr !== null;
+    }).length;
+    const attributesCoveragePercent = listingsWithEstimates.length > 0 
+      ? Math.round((attributesCount / listingsWithEstimates.length) * 100) 
+      : 0;
+    
+    // Calculate actual API calls made (excluding cache hits)
+    const asinsFetchedFromApi = page1Asins.length - catalogCacheHitCount;
+    const catalogApiCalls = Math.ceil(asinsFetchedFromApi / 20);
+    
+    console.log("ASIN_CATALOG_ENRICHMENT_SUMMARY", {
+      keyword,
+      asin_count: catalogRecordsCount,
+      catalog_calls: catalogApiCalls,
+      attributes_coverage_percent: `${attributesCoveragePercent}%`,
+      bsr_coverage_percent: `${finalBsrCoveragePercent}%`,
+      cache_hits: catalogCacheHitCount || 0,
+      api_calls: catalogApiCalls,
       timestamp: new Date().toISOString(),
     });
     

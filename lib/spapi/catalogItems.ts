@@ -15,6 +15,9 @@
 import { createHmac, createHash } from "crypto";
 import { getSpApiAccessToken } from "./auth";
 import { logSpApiEvent, extractSpApiHeaders } from "./logging";
+import { normalizeCatalogItem, extractBSRData } from "./catalogNormalize";
+import { bulkPersistCatalogRecords, bulkLookupCatalogCache, isCatalogDataFresh } from "./catalogPersist";
+import type { AsinCatalogRecord } from "./catalogModels";
 
 export interface CatalogItemMetadata {
   asin: string;
@@ -43,7 +46,8 @@ export async function batchEnrichCatalogItems(
   asins: string[],
   marketplaceId: string = "ATVPDKIKX0DER",
   timeoutMs: number = 4000,
-  keyword?: string
+  keyword?: string,
+  supabase?: any
 ): Promise<BatchEnrichmentResult> {
   const result: BatchEnrichmentResult = {
     enriched: new Map(),
@@ -180,7 +184,7 @@ async function fetchBatch(
     params.set("marketplaceIds", marketplaceId);
     params.set("identifiersType", "ASIN");
     params.set("identifiers", asins.join(","));
-    params.set("includedData", "attributes,identifiers,images,summaries,salesRanks");
+    params.set("includedData", "attributes,identifiers,images,summaries,salesRanks,relationships,classifications,dimensions");
     const queryString = params.toString();
 
     const path = "/catalog/2022-04-01/items";
@@ -294,11 +298,22 @@ async function fetchBatch(
 
     // Parse response (SP-API returns items array)
     const items = data?.items || [];
+    const normalizedRecords: AsinCatalogRecord[] = [];
+    
     for (const item of items) {
       const asin = item?.asin || item?.identifiers?.marketplaceIdentifiers?.[0]?.identifier;
       if (!asin) continue;
 
-      const bsr = extractBSR(item);
+      // Normalize to canonical model
+      const normalizedRecord = normalizeCatalogItem(item, asin);
+      if (normalizedRecord) {
+        normalizedRecords.push(normalizedRecord);
+      }
+
+      // Extract BSR for backward compatibility (existing code expects this)
+      const bsrData = extractBSRData(item);
+      const bsr = bsrData.primary_rank;
+      
       const metadata: CatalogItemMetadata = {
         asin,
         title: extractTitle(item),
@@ -315,12 +330,26 @@ async function fetchBatch(
         console.log("🔵 SP_API_BSR_EXTRACTED", {
           asin,
           bsr,
+          primary_category: bsrData.primary_category,
+          root_rank: bsrData.root_rank,
           has_salesRanks: Array.isArray(item?.salesRanks) && item.salesRanks.length > 0,
           salesRanks_count: item?.salesRanks?.length || 0,
           has_classificationRanks: Array.isArray(item?.salesRanks?.[0]?.classificationRanks) && item.salesRanks[0].classificationRanks.length > 0,
           classificationRanks_count: item?.salesRanks?.[0]?.classificationRanks?.length || 0,
         });
       }
+    }
+
+    // Persist normalized records to database (non-blocking)
+    if (supabase && normalizedRecords.length > 0) {
+      bulkPersistCatalogRecords(supabase, normalizedRecords).catch((error) => {
+        console.error("CATALOG_PERSISTENCE_ERROR", {
+          keyword: keyword || 'unknown',
+          error: error instanceof Error ? error.message : String(error),
+          record_count: normalizedRecords.length,
+          message: "Failed to persist catalog records - continuing without persistence",
+        });
+      });
     }
   } catch (error) {
     const duration = Date.now() - startTime;
