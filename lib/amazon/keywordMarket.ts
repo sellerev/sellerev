@@ -2231,6 +2231,57 @@ export async function fetchKeywordMarketSnapshot(
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 🔥 FORCED IN-MEMORY RECONCILIATION PASS
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Ensure BSR from SP-API catalog enrichment is patched into listings[]
+    // This happens AFTER both:
+    // 1) listings[] exists (created from search results)
+    // 2) SP-API catalog enrichment completes (spApiCatalogResults Map exists)
+    // 
+    // DO NOT rely on existing merge logic alone - force explicit patching here
+    // This ensures rawListings passed to buildKeywordPageOne() contains BSR
+    const normalizeAsin = (asin: string) => asin.trim().toUpperCase();
+    
+    const listingByAsin = new Map<string, any>();
+    for (const l of listings) {
+      if (!l?.asin) continue;
+      listingByAsin.set(normalizeAsin(l.asin), l);
+    }
+    
+    // spApiCatalogResults MUST be the authoritative Map<asin, catalogData>
+    // used earlier during enrichment. Do NOT create a new one.
+    let bsrPatched = 0;
+    
+    for (const [asin, catalog] of spApiCatalogResults.entries()) {
+      const target = listingByAsin.get(normalizeAsin(asin));
+      if (!target) continue;
+      
+      if (catalog?.bsr != null && catalog.bsr > 0) {
+        target.bsr = catalog.bsr;
+        target.main_category_bsr = catalog.bsr;
+        (target as any).bsr_source = "sp_api";
+        (target as any).had_sp_api_response = true;
+        bsrPatched++;
+      }
+    }
+    
+    console.log("SP_API_FORCED_RECONCILIATION_COMPLETE", {
+      keyword,
+      total_listings: listings.length,
+      catalog_entries: spApiCatalogResults.size,
+      bsr_patched: bsrPatched,
+      sample_patched: listings
+        .filter(l => (l as any).bsr_source === "sp_api" && l.bsr != null && l.bsr > 0)
+        .slice(0, 5)
+        .map(l => ({
+          asin: l.asin,
+          bsr: l.bsr,
+          main_category_bsr: l.main_category_bsr,
+          bsr_source: (l as any).bsr_source,
+        })),
+    });
+
     console.warn("PAGE1_LISTINGS_COUNT", listings.length); // Step 7: Debug log
     console.log(`Extracted ${listings.length} valid listings from ${parsedListings.length} total results`, {
       keyword,
