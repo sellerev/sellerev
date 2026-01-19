@@ -365,15 +365,20 @@ export async function processKeyword(
           });
         }
         
-        const enrichmentResult = await batchEnrichCatalogItems(
+        // CRITICAL: Create authoritative map for SP-API catalog results
+        const spApiCatalogResults = new Map<string, any>();
+        
+        await batchEnrichCatalogItems(
           asinsForSpApi,
+          spApiCatalogResults,
           marketplaceId,
-          2000 // 2 second timeout per batch
+          2000, // 2 second timeout per batch
+          keyword
         );
         const catalogDuration = Date.now() - catalogStart;
 
         // Convert enrichment result to map (SP-API is authoritative)
-        for (const [asin, metadata] of enrichmentResult.enriched.entries()) {
+        for (const [asin, metadata] of spApiCatalogResults.entries()) {
           spApiCatalogEnrichment.set(asin, {
             title: metadata.title,
             brand: metadata.brand,
@@ -385,8 +390,8 @@ export async function processKeyword(
         }
 
         // Calculate successful vs failed batches
-        const enrichedCount = enrichmentResult.enriched.size;
-        const failedCount = enrichmentResult.failed.length;
+        const enrichedCount = spApiCatalogResults.size;
+        const failedCount = asinsForSpApi.length - enrichedCount;
         const successRate = asinsForSpApi.length > 0 ? enrichedCount / asinsForSpApi.length : 0;
         const successfulBatches = successRate === 1 
           ? totalBatches 
