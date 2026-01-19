@@ -2073,7 +2073,6 @@ export async function fetchKeywordMarketSnapshot(
       
       const asin = listing.asin.toUpperCase();
       const catalog = spApiCatalogResults.get(asin);
-      const pricing = spApiPricingResults.get(asin);
       
       // SP-API Catalog overwrites: brand, category, BSR, title, image
       // CRITICAL: SP-API brand is authoritative - override title-parsed brands
@@ -2140,6 +2139,15 @@ export async function fetchKeywordMarketSnapshot(
             });
           }
         }
+        
+        if (catalog.title) {
+          listing.title = catalog.title;
+          (listing as any).title_source = 'sp_api_catalog';
+        }
+        if (catalog.image_url) {
+          listing.image_url = catalog.image_url;
+          (listing as any).image_source = 'sp_api_catalog';
+        }
       } else {
         catalogNotFoundCount++;
         // Debug: Log first few ASINs not found in catalog
@@ -2151,16 +2159,6 @@ export async function fetchKeywordMarketSnapshot(
           });
         }
       }
-        if (catalog.title) {
-          listing.title = catalog.title;
-          (listing as any).title_source = 'sp_api_catalog';
-        }
-        if (catalog.image_url) {
-          listing.image_url = catalog.image_url;
-          (listing as any).image_source = 'sp_api_catalog';
-        }
-      }
-      
     }
     
     // Debug: Log merge summary
