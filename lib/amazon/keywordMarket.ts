@@ -1498,6 +1498,16 @@ export async function fetchKeywordMarketSnapshot(
     let spApiExecuted = false;
     let spApiError: Error | null = null;
     
+    // Track ingestion metrics for final summary
+    let totalAttributesWritten = 0;
+    let totalClassificationsWritten = 0;
+    let totalImagesWritten = 0;
+    let totalRelationshipsWritten = 0;
+    let totalSkippedDueToCache = 0;
+    
+    // Collect ingestion promises to await before final summary
+    const ingestionPromises: Promise<any>[] = [];
+    
     // Check catalog cache before making API calls
     let catalogCache: Map<string, any> = new Map();
     let catalogCacheHitCount = 0;
@@ -1560,7 +1570,23 @@ export async function fetchKeywordMarketSnapshot(
         });
         
         try {
-          const catalogResponse = await batchEnrichCatalogItems(batch, marketplaceId, 2000, keyword, supabase);
+          // Pass ingestion metrics tracker to collect results
+          const ingestionMetrics = {
+            totalAttributesWritten: { value: totalAttributesWritten },
+            totalClassificationsWritten: { value: totalClassificationsWritten },
+            totalImagesWritten: { value: totalImagesWritten },
+            totalRelationshipsWritten: { value: totalRelationshipsWritten },
+            totalSkippedDueToCache: { value: totalSkippedDueToCache },
+          };
+          
+          const catalogResponse = await batchEnrichCatalogItems(batch, marketplaceId, 2000, keyword, supabase, ingestionMetrics);
+          
+          // Update aggregated metrics (updated synchronously in batchEnrichCatalogItems)
+          totalAttributesWritten = ingestionMetrics.totalAttributesWritten.value;
+          totalClassificationsWritten = ingestionMetrics.totalClassificationsWritten.value;
+          totalImagesWritten = ingestionMetrics.totalImagesWritten.value;
+          totalRelationshipsWritten = ingestionMetrics.totalRelationshipsWritten.value;
+          totalSkippedDueToCache = ingestionMetrics.totalSkippedDueToCache.value;
           
           if (!catalogResponse || !catalogResponse.enriched || catalogResponse.enriched.size === 0) {
             console.error("❌ SP_API_CATALOG_EMPTY_RESPONSE", { 
@@ -2738,7 +2764,7 @@ export async function fetchKeywordMarketSnapshot(
       : 0;
     
     // Calculate actual API calls made (excluding cache hits)
-    const asinsFetchedFromApi = page1Asins.length - catalogCacheHitCount;
+    const asinsFetchedFromApi = page1Asins.length - (catalogCacheHitCount || 0);
     const catalogApiCalls = Math.ceil(asinsFetchedFromApi / 20);
     
     console.log("ASIN_CATALOG_ENRICHMENT_SUMMARY", {
@@ -2750,6 +2776,24 @@ export async function fetchKeywordMarketSnapshot(
       cache_hits: catalogCacheHitCount || 0,
       api_calls: catalogApiCalls,
       timestamp: new Date().toISOString(),
+    });
+    
+    // ASIN Ingestion Summary - Aggregate metrics from catalog ingestion
+    const asinCountTotal = page1Asins.length;
+    const asinWrittenCore = spApiCatalogResults.size; // ASINs with core data (title/brand)
+    const skippedDueToCache = totalSkippedDueToCache + (catalogCacheHitCount || 0);
+    
+    console.log("ASIN_INGESTION_SUMMARY", {
+      keyword,
+      asin_count_total: asinCountTotal,
+      asin_written_core: asinWrittenCore,
+      attributes_written: totalAttributesWritten,
+      classifications_written: totalClassificationsWritten,
+      images_written: totalImagesWritten,
+      skipped_due_to_cache: skippedDueToCache,
+      rainforest_calls_used: rainforestCallCount,
+      spapi_catalog_calls_used: catalogApiCalls,
+      pricing_used: pricingApiUsed,
     });
     
     // TASK 3: Always populate market_snapshot.listings[] if listings exist

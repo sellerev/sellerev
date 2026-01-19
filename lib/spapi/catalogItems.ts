@@ -47,7 +47,14 @@ export async function batchEnrichCatalogItems(
   marketplaceId: string = "ATVPDKIKX0DER",
   timeoutMs: number = 4000,
   keyword?: string,
-  supabase?: any
+  supabase?: any,
+  ingestionMetrics?: { 
+    totalAttributesWritten: { value: number };
+    totalClassificationsWritten: { value: number };
+    totalImagesWritten: { value: number };
+    totalRelationshipsWritten: { value: number };
+    totalSkippedDueToCache: { value: number };
+  }
 ): Promise<BatchEnrichmentResult> {
   const result: BatchEnrichmentResult = {
     enriched: new Map(),
@@ -355,6 +362,7 @@ async function fetchBatch(
     }
 
     // Ingest raw SP-API data to new tables (asin_core, asin_attribute_kv, asin_classifications)
+    // Note: This is async but we track metrics for final summary
     if (supabase && items.length > 0) {
       const { bulkIngestCatalogItems } = await import("./catalogIngest");
       const ingestItems = items
@@ -365,29 +373,39 @@ async function fetchBatch(
         .filter((item: { asin: string; item: any } | null): item is { asin: string; item: any } => item !== null);
 
       if (ingestItems.length > 0) {
-        bulkIngestCatalogItems(supabase, ingestItems, marketplaceId)
-          .then((result) => {
-            // Individual ASIN logs are already logged in ingestCatalogItem()
-            // Log batch summary (optional, for debugging)
-            console.log("CATALOG_INGESTION_BATCH_SUMMARY", {
-              keyword: keyword || 'unknown',
-              batch_index: batchIndex,
-              asin_count: ingestItems.length,
-              total_attributes_written: result.total_attributes_written,
-              total_classifications_written: result.total_classifications_written,
-              total_images_written: result.total_images_written,
-              total_relationships_written: result.total_relationships_written,
-              total_skipped: result.total_skipped,
-            });
-          })
-          .catch((error) => {
-            console.error("CATALOG_INGESTION_ERROR", {
-              keyword: keyword || 'unknown',
-              batch_index: batchIndex,
-              error: error instanceof Error ? error.message : String(error),
-              message: "Failed to ingest catalog items - continuing without ingestion",
-            });
+        // Await ingestion to collect metrics synchronously
+        try {
+          const result = await bulkIngestCatalogItems(supabase, ingestItems, marketplaceId);
+          
+          // Individual ASIN logs are already logged in ingestCatalogItem()
+          // Log batch summary (optional, for debugging)
+          console.log("CATALOG_INGESTION_BATCH_SUMMARY", {
+            keyword: keyword || 'unknown',
+            batch_index: batchIndex,
+            asin_count: ingestItems.length,
+            total_attributes_written: result.total_attributes_written,
+            total_classifications_written: result.total_classifications_written,
+            total_images_written: result.total_images_written,
+            total_relationships_written: result.total_relationships_written,
+            total_skipped: result.total_skipped,
           });
+          
+          // Aggregate metrics for keyword-level summary
+          if (ingestionMetrics) {
+            ingestionMetrics.totalAttributesWritten.value += result.total_attributes_written;
+            ingestionMetrics.totalClassificationsWritten.value += result.total_classifications_written;
+            ingestionMetrics.totalImagesWritten.value += result.total_images_written;
+            ingestionMetrics.totalRelationshipsWritten.value += result.total_relationships_written;
+            ingestionMetrics.totalSkippedDueToCache.value += result.total_skipped;
+          }
+        } catch (error) {
+          console.error("CATALOG_INGESTION_ERROR", {
+            keyword: keyword || 'unknown',
+            batch_index: batchIndex,
+            error: error instanceof Error ? error.message : String(error),
+            message: "Failed to ingest catalog items - continuing without ingestion",
+          });
+        }
       }
     }
   } catch (error) {
