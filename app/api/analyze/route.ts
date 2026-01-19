@@ -2130,7 +2130,10 @@ export async function POST(req: NextRequest) {
               // Check if Rainforest tried to populate blocked fields
               const hasRainforestBrand = listing.brand && (listing as any).brand_source !== 'sp_api' && (listing as any).brand_source !== 'sp_api_catalog' && (listing as any).brand_source !== 'model_inferred';
               const hasRainforestCategory = listing.main_category && (listing as any).category_source !== 'sp_api_catalog';
-              const hasRainforestBsr = listing.bsr && (listing as any).bsr_source !== 'sp_api_catalog';
+              // CRITICAL: Check for both 'sp_api' and 'sp_api_catalog' to prevent nulling valid SP-API BSR
+              const hasRainforestBsr = listing.bsr && 
+                (listing as any).bsr_source !== 'sp_api' && 
+                (listing as any).bsr_source !== 'sp_api_catalog';
               const hasRainforestFulfillment = listing.fulfillment && (listing as any).fulfillment_source !== 'sp_api_pricing';
               
               if (hasRainforestBrand || hasRainforestCategory || hasRainforestBsr || hasRainforestFulfillment) {
@@ -2155,7 +2158,10 @@ export async function POST(req: NextRequest) {
                   listing.main_category = null;
                   (listing as any).category_source = null;
                 }
-                if (hasRainforestBsr && (listing as any).bsr_source !== 'sp_api_catalog') {
+                // CRITICAL: Only null BSR if it's NOT from SP-API (check both source tag values)
+                if (hasRainforestBsr && 
+                    (listing as any).bsr_source !== 'sp_api' && 
+                    (listing as any).bsr_source !== 'sp_api_catalog') {
                   listing.bsr = null;
                   listing.main_category_bsr = null;
                   (listing as any).bsr_source = null;
