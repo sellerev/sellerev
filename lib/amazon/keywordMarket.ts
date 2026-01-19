@@ -1722,16 +1722,28 @@ export async function fetchKeywordMarketSnapshot(
     const asinsForBSR = searchResults
       .slice(0, MAX_BSR_ASINS * 2) // Check more to account for duplicates/cached
       .map((item: any) => item.asin)
-      .filter((asin: string | null): asin is string => 
-        asin !== null && 
-        asin !== undefined && 
-        missingAsins.includes(asin) &&
-        !cacheMap.has(asin) && // Skip if already cached
-        !spApiCatalogResults.has(asin.toUpperCase()) || // Skip if SP-API Catalog provided BSR
-        (spApiCatalogResults.has(asin.toUpperCase()) && 
-         (!spApiCatalogResults.get(asin.toUpperCase())?.bsr || 
-          spApiCatalogResults.get(asin.toUpperCase())?.bsr === null)) // Only include if SP-API didn't provide BSR
-      )
+      .filter((asin: string | null): asin is string => {
+        // Type guard: must be non-null string
+        if (!asin || asin === null || asin === undefined) {
+          return false;
+        }
+        
+        // Must be in missing ASINs list and not already cached
+        if (!missingAsins.includes(asin) || cacheMap.has(asin)) {
+          return false;
+        }
+        
+        // Check if SP-API Catalog provided BSR
+        const upperAsin = asin.toUpperCase();
+        const catalogData = spApiCatalogResults.get(upperAsin);
+        
+        // Only include if SP-API didn't provide BSR (null or missing)
+        if (catalogData && catalogData.bsr !== null && catalogData.bsr > 0) {
+          return false; // Skip - SP-API already provided BSR
+        }
+        
+        return true; // Include - needs BSR enrichment
+      })
       .slice(0, MAX_BSR_ASINS); // Hard cap at 4
 
     // SKIP BSR FETCH HERE - Will be done async after Page-1 returns
