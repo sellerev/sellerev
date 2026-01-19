@@ -90,7 +90,7 @@ export async function batchEnrichCatalogItems(
 
   // Execute batches in parallel with timeout
   const batchPromises = batches.map((batch, batchIndex) =>
-    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase)
+    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase, ingestionMetrics)
   );
 
   const batchResults = await Promise.allSettled(batchPromises);
@@ -155,13 +155,20 @@ async function fetchBatchWithTimeout(
   batchIndex: number,
   totalBatches: number,
   keyword?: string,
-  supabase?: any
+  supabase?: any,
+  ingestionMetrics?: { 
+    totalAttributesWritten: { value: number };
+    totalClassificationsWritten: { value: number };
+    totalImagesWritten: { value: number };
+    totalRelationshipsWritten: { value: number };
+    totalSkippedDueToCache: { value: number };
+  }
 ): Promise<Map<string, CatalogItemMetadata>> {
   const timeoutPromise = new Promise<Map<string, CatalogItemMetadata>>((_, reject) => {
     setTimeout(() => reject(new Error("SP-API batch request timeout")), timeoutMs);
   });
 
-  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase);
+  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase, ingestionMetrics);
 
   return Promise.race([fetchPromise, timeoutPromise]);
 }
@@ -177,7 +184,14 @@ async function fetchBatch(
   batchIndex: number,
   totalBatches: number,
   keyword?: string,
-  supabase?: any
+  supabase?: any,
+  ingestionMetrics?: { 
+    totalAttributesWritten: { value: number };
+    totalClassificationsWritten: { value: number };
+    totalImagesWritten: { value: number };
+    totalRelationshipsWritten: { value: number };
+    totalSkippedDueToCache: { value: number };
+  }
 ): Promise<Map<string, CatalogItemMetadata>> {
   const result = new Map<string, CatalogItemMetadata>();
   const startTime = Date.now();
