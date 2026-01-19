@@ -2026,8 +2026,8 @@ export async function fetchKeywordMarketSnapshot(
           (listing as any).bsr_source = 'sp_api_catalog';
           
           // Debug log for BSR merge (first 5 ASINs only)
-          if ((listing as any)._bsr_merge_logged !== true && 
-              Object.keys(listingMap).length <= 5) {
+          const bsrMergeCount = (listings as any[]).filter((l: any) => (l as any).bsr_source === 'sp_api_catalog').length;
+          if (!(listing as any)._bsr_merge_logged && bsrMergeCount <= 5) {
             (listing as any)._bsr_merge_logged = true;
             console.log("🟢 SP_API_BSR_MERGED", {
               asin: listing.asin,
