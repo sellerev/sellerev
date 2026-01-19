@@ -2502,14 +2502,14 @@ export async function POST(req: NextRequest) {
         
         /**
          * Determines if SP-API was called for an ASIN based on multiple signals
-         * @param listing - The listing object
+         * @param listing - The listing object (with source tags as dynamic properties)
          * @returns boolean indicating if SP-API was called
          */
         const determineSpApiCalled = (listing: any): boolean => {
           if (!listing) return false;
           
           // Signal 1: BSR source indicates SP-API was called
-          const bsrSource = listing.bsr_source;
+          const bsrSource = (listing as any).bsr_source;
           if (bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog') {
             return true;
           }
@@ -2519,8 +2519,8 @@ export async function POST(req: NextRequest) {
           const hasSalesRanks = hasBsr && (bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog');
           
           // Signal 3: Other SP-API source tags
-          const titleSource = listing.title_source;
-          const categorySource = listing.category_source;
+          const titleSource = (listing as any).title_source;
+          const categorySource = (listing as any).category_source;
           if (titleSource === 'sp_api' || titleSource === 'sp_api_catalog' ||
               categorySource === 'sp_api' || categorySource === 'sp_api_catalog') {
             return true;
@@ -2554,13 +2554,13 @@ export async function POST(req: NextRequest) {
             // Determine if SP-API was called using multiple signals
             const spApiCalled = determineSpApiCalled(listing);
             
-            // Collect signals for debugging
+            // Collect signals for debugging (use type assertion for source tags)
             const signals = {
-              bsr_source: listing.bsr_source || null,
+              bsr_source: (listing as any).bsr_source || null,
               bsr: listing.bsr || listing.main_category_bsr || null,
-              title_source: listing.title_source || null,
-              category_source: listing.category_source || null,
-              brand_source: listing.brand_source || null,
+              title_source: (listing as any).title_source || null,
+              category_source: (listing as any).category_source || null,
+              brand_source: (listing as any).brand_source || null,
             };
             
             // Only fail if SP-API was NOT called at all (no SP-API signals detected)
