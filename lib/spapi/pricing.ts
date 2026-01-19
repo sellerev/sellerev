@@ -71,6 +71,7 @@ export async function batchEnrichPricing(
   // FEATURE FLAG: Pricing API requires seller OAuth token
   // Skip Pricing API calls unless seller OAuth token is present
   // Developer tokens (env SP_API_REFRESH_TOKEN) will get 403 Unauthorized
+  // CRITICAL: Return early - do NOT proceed to API calls if no OAuth
   let sellerOAuthToken: string | null = null;
   if (userId) {
     try {
@@ -78,6 +79,7 @@ export async function batchEnrichPricing(
       sellerOAuthToken = await getUserAmazonRefreshToken(userId);
     } catch (error) {
       // User hasn't connected - no seller OAuth token available
+      // CRITICAL: Return early - do NOT proceed to pricing API calls
       console.log("ℹ️ PRICING_API_SKIPPED_NO_OAUTH", {
         keyword: keyword || 'unknown',
         user_id: userId.substring(0, 8) + "...",
@@ -85,18 +87,21 @@ export async function batchEnrichPricing(
         timestamp: new Date().toISOString(),
       });
       result.failed = [...asins];
-      return result;
+      result.errors = []; // Explicitly mark no errors - this is an intentional skip
+      return result; // EARLY RETURN - pricing code below will NOT execute
     }
   }
 
   if (!sellerOAuthToken) {
+    // CRITICAL: Return early - do NOT proceed to pricing API calls
     console.log("ℹ️ PRICING_API_SKIPPED_NO_OAUTH", {
       keyword: keyword || 'unknown',
       message: "Pricing API requires seller OAuth token - no userId or token found, skipping (will use Rainforest fallback)",
       timestamp: new Date().toISOString(),
     });
     result.failed = [...asins];
-    return result;
+    result.errors = []; // Explicitly mark no errors - this is an intentional skip
+    return result; // EARLY RETURN - pricing code below will NOT execute
   }
 
   // Batch ASINs into groups of 20 (SP-API hard limit)

@@ -2012,6 +2012,19 @@ export async function fetchKeywordMarketSnapshot(
           listing.main_category_bsr = catalog.bsr;
           listing.bsr = catalog.bsr;
           (listing as any).bsr_source = 'sp_api_catalog';
+          
+          // Debug log for BSR merge (first 5 ASINs only)
+          if ((listing as any)._bsr_merge_logged !== true && 
+              Object.keys(listingMap).length <= 5) {
+            (listing as any)._bsr_merge_logged = true;
+            console.log("🟢 SP_API_BSR_MERGED", {
+              asin: listing.asin,
+              bsr: catalog.bsr,
+              main_category_bsr_set: listing.main_category_bsr === catalog.bsr,
+              bsr_set: listing.bsr === catalog.bsr,
+              bsr_source: (listing as any).bsr_source,
+            });
+          }
         } else if (catalog.bsr === null) {
           // Catalog returned null BSR - preserve existing BSR if available, don't overwrite with null
           // Only set bsr_source if we actually got BSR data
@@ -2638,11 +2651,11 @@ export async function fetchKeywordMarketSnapshot(
       avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
     });
     
-    // Calculate enrichment summary metrics
-    const listingsWithBSR = listingsWithEstimates.filter(l => l.main_category_bsr !== null && l.main_category_bsr > 0).length;
-    const listingsWithReviews = listingsWithEstimates.filter(l => l.reviews !== null && l.reviews > 0).length;
-    const bsrCoveragePercent = listingsWithEstimates.length > 0 ? Math.round((listingsWithBSR / listingsWithEstimates.length) * 100) : 0;
-    const reviewsCoveragePercent = listingsWithEstimates.length > 0 ? Math.round((listingsWithReviews / listingsWithEstimates.length) * 100) : 0;
+    // Calculate enrichment summary metrics for final log
+    const finalListingsWithBSR = listingsWithEstimates.filter(l => l.main_category_bsr !== null && l.main_category_bsr > 0).length;
+    const finalListingsWithReviews = listingsWithEstimates.filter(l => l.reviews !== null && l.reviews > 0).length;
+    const finalBsrCoveragePercent = listingsWithEstimates.length > 0 ? Math.round((finalListingsWithBSR / listingsWithEstimates.length) * 100) : 0;
+    const finalReviewsCoveragePercent = listingsWithEstimates.length > 0 ? Math.round((finalListingsWithReviews / listingsWithEstimates.length) * 100) : 0;
     const rainforestCallCount = apiCallCounter?.count || 0;
     const spApiCatalogCalls = Math.ceil(page1Asins.length / 20); // Catalog batches 20 ASINs per call
     const pricingApiUsed = spApiPricingResults.size > 0;
@@ -2650,13 +2663,13 @@ export async function fetchKeywordMarketSnapshot(
     console.log("FINAL_KEYWORD_ENRICHMENT_SUMMARY", {
       keyword,
       asin_count: listingsWithEstimates.length,
-      bsr_coverage_percent: `${bsrCoveragePercent}%`,
-      reviews_coverage_percent: `${reviewsCoveragePercent}%`,
+      bsr_coverage_percent: `${finalBsrCoveragePercent}%`,
+      reviews_coverage_percent: `${finalReviewsCoveragePercent}%`,
       rainforest_call_count: rainforestCallCount,
       spapi_catalog_calls: spApiCatalogCalls,
       pricing_api_used: pricingApiUsed,
-      listings_with_bsr: listingsWithBSR,
-      listings_with_reviews: listingsWithReviews,
+      listings_with_bsr: finalListingsWithBSR,
+      listings_with_reviews: finalListingsWithReviews,
       timestamp: new Date().toISOString(),
     });
     

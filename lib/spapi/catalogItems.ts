@@ -298,16 +298,29 @@ async function fetchBatch(
       const asin = item?.asin || item?.identifiers?.marketplaceIdentifiers?.[0]?.identifier;
       if (!asin) continue;
 
+      const bsr = extractBSR(item);
       const metadata: CatalogItemMetadata = {
         asin,
         title: extractTitle(item),
         brand: extractBrand(item),
         image_url: extractImageUrl(item),
         category: extractCategory(item),
-        bsr: extractBSR(item),
+        bsr,
       };
 
       result.set(asin, metadata);
+      
+      // Debug log for BSR extraction (first 5 ASINs only)
+      if (result.size <= 5 && bsr !== null) {
+        console.log("🔵 SP_API_BSR_EXTRACTED", {
+          asin,
+          bsr,
+          has_salesRanks: Array.isArray(item?.salesRanks) && item.salesRanks.length > 0,
+          salesRanks_count: item?.salesRanks?.length || 0,
+          has_classificationRanks: Array.isArray(item?.salesRanks?.[0]?.classificationRanks) && item.salesRanks[0].classificationRanks.length > 0,
+          classificationRanks_count: item?.salesRanks?.[0]?.classificationRanks?.length || 0,
+        });
+      }
     }
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -422,28 +435,36 @@ function extractCategory(item: any): string | null {
 
 /**
  * Extract BSR from SP-API Catalog Item
- * Uses main classification rank when available
+ * Robust extraction: finds best (lowest) rank from classificationRanks, fallbacks to displayRank/rank
  */
 function extractBSR(item: any): number | null {
   // Try salesRanks array with classification ranks
   const salesRanks = item?.salesRanks || [];
   if (Array.isArray(salesRanks) && salesRanks.length > 0) {
-    // Get first salesRank entry (typically main category)
-    const firstSalesRank = salesRanks[0];
-    
-    // Try classificationRanks[0].rank (main classification rank)
-    const classificationRanks = firstSalesRank?.classificationRanks || [];
-    if (Array.isArray(classificationRanks) && classificationRanks.length > 0) {
-      const rank = classificationRanks[0]?.rank;
-      if (typeof rank === "number" && rank > 0) {
-        return rank;
+    // Check all salesRank entries for classificationRanks
+    for (const salesRank of salesRanks) {
+      const classificationRanks = salesRank?.classificationRanks || [];
+      if (Array.isArray(classificationRanks) && classificationRanks.length > 0) {
+        // Find all valid ranks from classificationRanks
+        const validRanks = classificationRanks
+          .map((cr: any) => cr?.rank)
+          .filter((rank: any): rank is number => typeof rank === "number" && rank > 0);
+        
+        if (validRanks.length > 0) {
+          // Return the smallest (best) rank
+          return Math.min(...validRanks);
+        }
       }
     }
     
-    // Fallback to direct rank property if classificationRanks not available
-    const rank = firstSalesRank?.rank;
-    if (typeof rank === "number" && rank > 0) {
-      return rank;
+    // Fallback 1: Try displayRank from first salesRank
+    if (salesRanks[0]?.displayRank && typeof salesRanks[0].displayRank === "number" && salesRanks[0].displayRank > 0) {
+      return salesRanks[0].displayRank;
+    }
+    
+    // Fallback 2: Try direct rank property from first salesRank
+    if (salesRanks[0]?.rank && typeof salesRanks[0].rank === "number" && salesRanks[0].rank > 0) {
+      return salesRanks[0].rank;
     }
   }
 
