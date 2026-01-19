@@ -186,7 +186,7 @@ async function fetchBatch(
     params.set("marketplaceIds", marketplaceId);
     params.set("identifiersType", "ASIN");
     params.set("identifiers", asins.join(","));
-    params.set("includedData", "attributes,identifiers,images,summaries,salesRanks,relationships,classifications,dimensions");
+    params.set("includedData", "attributes,identifiers,images,summaries,salesRanks,relationships,classifications,dimensions,productTypes");
     const queryString = params.toString();
 
     const path = "/catalog/2022-04-01/items";
@@ -352,6 +352,52 @@ async function fetchBatch(
           message: "Failed to persist catalog records - continuing without persistence",
         });
       });
+    }
+
+    // Ingest raw SP-API data to new tables (asin_core, asin_attribute_kv, asin_classifications)
+    if (supabase && items.length > 0) {
+      const { bulkIngestCatalogItems } = await import("./catalogIngest");
+      const ingestItems = items
+        .map(item => {
+          const asin = item?.asin || item?.identifiers?.marketplaceIdentifiers?.[0]?.identifier;
+          return asin ? { asin, item } : null;
+        })
+        .filter((item): item is { asin: string; item: any } => item !== null);
+
+      if (ingestItems.length > 0) {
+        bulkIngestCatalogItems(supabase, ingestItems, marketplaceId)
+          .then((result) => {
+            // Log summary for this batch
+            console.log("CATALOG_INGESTION_SUMMARY", {
+              keyword: keyword || 'unknown',
+              batch_index,
+              asin_count: ingestItems.length,
+              attributes_written: result.total_attributes_written,
+              classifications_written: result.total_classifications_written,
+              skipped: result.total_skipped,
+            });
+
+            // Log first fully populated ASIN for verification
+            const firstPopulated = result.results.find(r => !r.skipped && r.attributes_written > 0 && r.classifications_written > 0);
+            if (firstPopulated) {
+              const asin = firstPopulated.asin;
+              console.log("✅ ASIN_FULLY_POPULATED_EXAMPLE", {
+                asin,
+                attributes_written: firstPopulated.attributes_written,
+                classifications_written: firstPopulated.classifications_written,
+                tables: ["asin_core", "asin_attribute_kv", "asin_classifications"],
+              });
+            }
+          })
+          .catch((error) => {
+            console.error("CATALOG_INGESTION_ERROR", {
+              keyword: keyword || 'unknown',
+              batch_index,
+              error: error instanceof Error ? error.message : String(error),
+              message: "Failed to ingest catalog items - continuing without ingestion",
+            });
+          });
+      }
     }
   } catch (error) {
     const duration = Date.now() - startTime;
