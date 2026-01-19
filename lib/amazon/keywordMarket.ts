@@ -1567,12 +1567,17 @@ export async function fetchKeywordMarketSnapshot(
           const pricingResponse = await batchEnrichPricing(batch, marketplaceId, 2000);
           
           if (!pricingResponse || !pricingResponse.enriched || pricingResponse.enriched.size === 0) {
-            // Check if this is a permission error (all ASINs failed with 403)
-            const hasPermissionError = pricingResponse?.errors?.some((e: any) => 
+            // Check if Pricing API was skipped (no OAuth) vs actual permission error (403)
+            // When skipped: failed array has all ASINs but errors array is empty
+            // When permission error: errors array has 403/Unauthorized errors
+            const hasActualErrors = pricingResponse?.errors && pricingResponse.errors.length > 0;
+            const hasPermissionError = hasActualErrors && pricingResponse.errors.some((e: any) => 
               e.error?.includes('Unauthorized') || e.error?.includes('403')
             );
+            const allFailed = pricingResponse?.failed?.length === batch.length;
             
-            if (hasPermissionError || pricingResponse?.failed?.length === batch.length) {
+            if (hasPermissionError) {
+              // Actual 403 permission error (rare - feature flag should prevent this)
               console.error("❌ SP_API_PRICING_PERMISSION_ERROR", { 
                 batch,
                 keyword,
@@ -1582,12 +1587,24 @@ export async function fetchKeywordMarketSnapshot(
                 message: "Pricing API permission denied - will fallback to Rainforest data",
                 suggestion: "Check IAM role policies and SP-API scope permissions for Pricing API",
               });
+            } else if (allFailed && !hasActualErrors) {
+              // Pricing API was skipped (no OAuth) - this is expected, not an error
+              console.log("ℹ️ SP_API_PRICING_SKIPPED_IN_KEYWORD_MARKET", {
+                batch,
+                keyword,
+                batch_index: i,
+                failed_count: pricingResponse?.failed?.length ?? 0,
+                total_asins: batch.length,
+                message: "Pricing API skipped - no seller OAuth token (will use Rainforest fallback)",
+              });
             } else {
+              // Other error (network, timeout, etc.)
               console.error("❌ SP_API_PRICING_EMPTY_RESPONSE", { 
                 batch,
                 keyword,
                 batch_index: i,
                 failed_count: pricingResponse?.failed?.length ?? 0,
+                error_count: pricingResponse?.errors?.length ?? 0,
               });
             }
           } else {

@@ -1917,9 +1917,26 @@ export async function POST(req: NextRequest) {
       // - Missing metadata checks
       // - Title-derived brands
       // This executes BEFORE canonicalization to ensure authoritative data
-      // NOTE: SP-API also runs in fetchKeywordMarketSnapshot, but this is a safety net
-      // to ensure SP-API data is always applied even if keywordMarket.ts path is skipped
-      if (body.input_type === "keyword" && rawListings.length > 0) {
+      // NOTE: SP-API already runs in fetchKeywordMarketSnapshot and data is merged into listings
+      // Skip duplicate SP-API calls here to avoid wasting API quota
+      // The SP-API data from fetchKeywordMarketSnapshot is already in rawListings
+      const hasSpApiData = rawListings.some((l: any) => 
+        (l as any).brand_source === 'sp_api_catalog' || 
+        (l as any).bsr_source === 'sp_api_catalog' ||
+        (l as any).title_source === 'sp_api_catalog' ||
+        (l as any).image_source === 'sp_api_catalog'
+      );
+      
+      if (hasSpApiData) {
+        console.log("ℹ️ SP_API_CATALOG_SKIPPED_DUPLICATE", {
+          keyword: body.input_value,
+          listings_count: rawListings.length,
+          message: "SP-API Catalog data already present from fetchKeywordMarketSnapshot - skipping duplicate call",
+          timestamp: new Date().toISOString(),
+        });
+      }
+      
+      if (body.input_type === "keyword" && rawListings.length > 0 && !hasSpApiData) {
         // Extract and deduplicate page-1 ASINs
         const page1Asins = Array.from(new Set(
           rawListings
