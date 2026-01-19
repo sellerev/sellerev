@@ -1272,7 +1272,8 @@ export async function POST(req: NextRequest) {
     });
     
     // 🚨 API SAFETY LIMIT: Create shared counter at route level (max 7 calls per analysis)
-    // Call budget: 1 search + 4 BSR + 2 metadata = 7 total
+    // Call budget: 1 search + 4 BSR + 0-2 metadata = 7 total (worst case)
+    // Note: Metadata calls now only for ratings/reviews (title/image/brand from SP-API Catalog)
     const apiCallCounter = { count: 0, max: 7 };
 
     // FIX 3: Lock enrichment per snapshot to avoid duplicate async re-runs in the same invocation

@@ -845,10 +845,13 @@ function resolveBrandFromSearchResult(
 }
 
 /**
- * Enriches ParsedListing objects with metadata (title, image_url, rating, reviews)
- * by fetching full product data from Rainforest API.
+ * Enriches ParsedListing objects with ratings and reviews by fetching full product data from Rainforest API.
  * 
- * CRITICAL: This function is decoupled from snapshot finalization.
+ * CRITICAL OPTIMIZATION: Only enriches ratings/reviews (SP-API cannot provide these).
+ * Title, image_url, brand, category, BSR are already provided by SP-API Catalog
+ * and merged into listings BEFORE this function runs.
+ * 
+ * This function is decoupled from snapshot finalization.
  * Metadata enrichment runs as soon as ASINs are discovered, regardless of:
  * - Snapshot stability
  * - Inferred state
@@ -883,43 +886,40 @@ export async function enrichListingsMetadata(
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 🚨 COST OPTIMIZATION: METADATA ENRICHMENT HARD CAP (MAX 2 ASINs, TOP RANKED ONLY)
+  // 🚨 COST OPTIMIZATION: METADATA ENRICHMENT FOR RATINGS/REVIEWS ONLY
   // ═══════════════════════════════════════════════════════════════════════════
-  // CRITICAL: Never skip enrichment if brand_name is undefined
+  // CRITICAL: SP-API Catalog already provides title, brand, image_url, category, BSR
+  // This enrichment ONLY fills ratings/reviews (SP-API cannot provide these)
   // Rules:
-  // - Only top 2 ranked listings (part of 7-call budget: 1 search + 4 BSR + 2 metadata)
-  // - Enrich if brand_name is undefined (even if we have title-extracted brand)
-  // - A guessed brand string (from title) ≠ resolved brand (from brand_name/by_line_name)
+  // - Only top 2 ranked listings (part of 7-call budget: 1 search + 4 BSR + 0-2 metadata)
+  //   Note: Metadata calls now only for ratings/reviews (title/image/brand from SP-API Catalog)
+  // - Enrich ONLY if ratings/reviews are missing (title/image/brand come from SP-API Catalog)
   // - Never enrich more than 2 ASINs per analysis
   const MAX_METADATA_ENRICHMENT = 2;
   
-  // Check which listings need enrichment
-  // CRITICAL: Never skip enrichment if brand_name is undefined
-  // A guessed brand string (from title) ≠ resolved brand (from brand_name/by_line_name)
+  // Check which listings need enrichment (ratings/reviews only)
+  // SP-API Catalog already provides title, brand, image_url, category, BSR
+  // We only enrich ratings/reviews which SP-API cannot provide
   const listingsNeedingEnrichment = listings
-    .slice(0, MAX_METADATA_ENRICHMENT) // Only top 2 (part of 7-call budget)
+    .slice(0, MAX_METADATA_ENRICHMENT) // Only top 2 (part of 7-call budget, now optional: only if ratings/reviews missing)
     .filter(l => {
       if (!l.asin) return false;
       
-      // Check if we have brand_name or by_line_name from raw item data
-      // If not, we need enrichment even if we have a title-extracted brand
-      const rawItem = (l as any)._rawItem;
-      const hasBrandName = rawItem?.brand_name && typeof rawItem.brand_name === 'string' && rawItem.brand_name.trim().length > 0;
-      const hasByLineName = rawItem?.by_line?.name && typeof rawItem.by_line.name === 'string' && rawItem.by_line.name.trim().length > 0;
+      // Only enrich if ratings or reviews are missing
+      // Title, image, brand come from SP-API Catalog (already merged before this function runs)
+      const needsRating = l.rating === null;
+      const needsReviews = l.reviews === null;
       
-      // Enrich if:
-      // 1. brand_name is undefined (CRITICAL: never skip)
-      // 2. by_line_name is undefined (CRITICAL: never skip)
-      // 3. Critical fields (title/image) are missing
-      return !hasBrandName || !hasByLineName || !l.title || !l.image_url;
+      return needsRating || needsReviews;
     });
 
   if (listingsNeedingEnrichment.length === 0) {
-    // All listings have brand_name/by_line_name from raw data - no enrichment needed
+    // All listings have ratings/reviews from search data - no enrichment needed
     console.log("✅ METADATA_ENRICHMENT_SKIPPED", {
       keyword: keyword || "unknown",
-      reason: "All listings have brand_name or by_line_name from raw data",
+      reason: "All listings have ratings and reviews from search data",
       total_listings: listings.length,
+      note: "Title, image, brand already provided by SP-API Catalog",
     });
     return listings;
   }
@@ -928,12 +928,11 @@ export async function enrichListingsMetadata(
     keyword: keyword || "unknown",
     listings_needing_enrichment: listingsNeedingEnrichment.length,
     total_listings: listings.length,
+    enrichment_scope: "ratings_and_reviews_only",
+    note: "Title, image, brand already provided by SP-API Catalog",
     missing_metadata_breakdown: {
-      missing_title: listingsNeedingEnrichment.filter(l => !l.title).length,
-      missing_image: listingsNeedingEnrichment.filter(l => !l.image_url).length,
       missing_rating: listingsNeedingEnrichment.filter(l => l.rating === null).length,
       missing_reviews: listingsNeedingEnrichment.filter(l => l.reviews === null).length,
-      missing_brand: listingsNeedingEnrichment.filter(l => !l.brand).length,
     },
   });
 
@@ -1121,41 +1120,10 @@ export async function enrichListingsMetadata(
       (enriched as any).raw_image_url = (listing as any).raw_image_url;
       let listingEnriched = false;
 
-      // Enrich title (only if missing)
-      if (!enriched.title && productData.title) {
-        enriched.title = productData.title;
-        enrichedFieldsCount++;
-        listingEnriched = true;
-        if (enrichedListingsCount < 5) {
-          console.log("🟡 TITLE ENRICHED", {
-            asin: listing.asin,
-            title_before: listing.title,
-            title_after: enriched.title,
-          });
-        }
-      }
-
-      // Enrich image_url (only if missing, check multiple sources)
-      if (!enriched.image_url) {
-        const imageUrl = productData.image || 
-                        productData.image_url || 
-                        productData.main_image ||
-                        (productData.images && Array.isArray(productData.images) && productData.images.length > 0 
-                          ? productData.images[0] 
-                          : null);
-        if (imageUrl) {
-          enriched.image_url = imageUrl;
-          enrichedFieldsCount++;
-          listingEnriched = true;
-          if (enrichedListingsCount < 5) {
-            console.log("🟡 IMAGE ENRICHED", {
-              asin: listing.asin,
-              image_before: listing.image_url,
-              image_after: enriched.image_url,
-            });
-          }
-        }
-      }
+      // NOTE: Title and image_url enrichment removed
+      // SP-API Catalog already provides authoritative title and image_url
+      // These are merged into listings BEFORE this function runs (see fetchKeywordMarketSnapshot)
+      // Only enrich ratings/reviews which SP-API cannot provide
 
       // Enrich rating (only if null)
       if (enriched.rating === null) {
@@ -2102,16 +2070,19 @@ export async function fetchKeywordMarketSnapshot(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // ASIN METADATA ENRICHMENT (DECOUPLED FROM SNAPSHOT FINALIZATION)
+    // ASIN METADATA ENRICHMENT (RATINGS/REVIEWS ONLY)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Enrich listings missing metadata (title, image_url, rating, reviews) by
-    // fetching full product data from Rainforest API.
-    // CRITICAL: This runs regardless of snapshot state - metadata must be populated
+    // Enrich listings missing ratings/reviews by fetching full product data from Rainforest API.
+    // CRITICAL: Title, image_url, brand, category, BSR already provided by SP-API Catalog
+    // (merged in previous step). This enrichment ONLY fills ratings/reviews which SP-API cannot provide.
+    // This runs regardless of snapshot state - metadata must be populated
     // as soon as ASINs are discovered, not gated behind snapshot finalization.
     // Only enriches missing fields - does NOT overwrite existing data.
     console.log("🔵 STARTING_METADATA_ENRICHMENT", {
       keyword,
       listings_count: listings.length,
+      enrichment_scope: "ratings_and_reviews_only",
+      note: "Title, image, brand already provided by SP-API Catalog",
       timestamp: new Date().toISOString(),
     });
     listings = await enrichListingsMetadata(listings, keyword, rainforestApiKey);

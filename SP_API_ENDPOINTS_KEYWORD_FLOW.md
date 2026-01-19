@@ -117,11 +117,12 @@
    - Fetches Amazon search results (Page 1 listings)
    - Extracts: ASIN, position, price, rating, reviews, sponsored status
    - **No OAuth required** (external API key only)
-   - **API Call Budget: Up to 7 calls per keyword search**
+   - **API Call Budget: Up to 7 calls per keyword search (worst case, typically 1-5)**
      - **1 Search call** - Initial keyword search (Page 1 results)
      - **Up to 4 BSR calls** - BSR enrichment for top 4 ASINs (if BSR missing)
-     - **Up to 2 Metadata calls** - Metadata enrichment for top 2 ASINs (if brand/title/image missing)
-     - **Total: Maximum 7 Rainforest API calls per keyword analysis**
+     - **0-2 Metadata calls** - Ratings/reviews enrichment for top 2 ASINs (only if ratings/reviews missing)
+     - **Note**: Title, image, brand already provided by SP-API Catalog (no Rainforest metadata calls needed)
+     - **Total: Maximum 7 Rainforest API calls per keyword analysis (worst case, typically 1-5)**
    - **Code Reference**: `app/api/analyze/route.ts:1274-1276` - `apiCallCounter = { count: 0, max: 7 }`
 
 2. **Catalog Items API** (SP-API, but OAuth-free)
@@ -197,18 +198,26 @@ if (!sellerOAuthToken) {
 
 ---
 
-## Rainforest API Call Count (Without OAuth for Pricing)
+## Rainforest API Call Count (Optimized)
 
-**Confirmed**: When Pricing API is skipped (no seller OAuth), the Rainforest API call count remains the same.
+**Confirmed**: Metadata enrichment optimized to reduce Rainforest API calls.
 
-**Total Rainforest API Calls per Keyword Search: Maximum 7 calls**
+**Total Rainforest API Calls per Keyword Search: Maximum 7 calls (worst case), typically 1-5 calls**
 - ✅ **1 Search call** - Initial keyword search (always made)
 - ✅ **Up to 4 BSR calls** - BSR enrichment for top 4 ASINs (if BSR missing from search results)
-- ✅ **Up to 2 Metadata calls** - Metadata enrichment for top 2 ASINs (if brand/title/image missing)
+- ✅ **0-2 Metadata calls** - Ratings/reviews enrichment for top 2 ASINs (if ratings/reviews missing)
 
-**Actual calls may be fewer** if:
-- BSR is already present in search results (no BSR calls needed)
-- Brand/title/image are already present in search results (no metadata calls needed)
+**Key Optimization**: Metadata enrichment now ONLY for ratings/reviews (SP-API cannot provide these).
+- ❌ **Title** - Already provided by SP-API Catalog (authoritative)
+- ❌ **Image URL** - Already provided by SP-API Catalog (authoritative)
+- ❌ **Brand** - Already provided by SP-API Catalog (authoritative)
+- ✅ **Ratings** - Only enriched if missing (SP-API cannot provide)
+- ✅ **Reviews** - Only enriched if missing (SP-API cannot provide)
+
+**Actual calls are typically fewer** because:
+- SP-API Catalog enriches all ASINs with title, brand, image_url, category, BSR (OAuth-free)
+- Metadata enrichment only needed if ratings/reviews are missing from search results
+- BSR is often present in search results or provided by SP-API Catalog (no BSR calls needed)
 
 **Pricing API skip does NOT affect Rainforest calls** because:
 - Price and fulfillment data are already extracted from the initial Rainforest search call
@@ -216,10 +225,10 @@ if (!sellerOAuthToken) {
 - The fallback simply uses data that was already fetched
 
 **Code References**:
-- API Call Budget: `app/api/analyze/route.ts:1274-1276` - `max: 7`
+- API Call Budget: `app/api/analyze/route.ts:1274-1276` - `max: 7` (worst case, typically fewer)
 - Search Call: `lib/amazon/keywordMarket.ts:1274-1276` - Increments counter
 - BSR Calls: `lib/amazon/asinBsrCache.ts:168` - Max 4 ASINs, `apiCallCounter.count++` at line 226
-- Metadata Calls: `lib/amazon/keywordMarket.ts:890-998` - Max 2 ASINs, `apiCallCounter.count++` at line 998
+- Metadata Calls: `lib/amazon/keywordMarket.ts:886-925` - Max 2 ASINs, only if ratings/reviews missing
 
 ## Verification Checklist
 
