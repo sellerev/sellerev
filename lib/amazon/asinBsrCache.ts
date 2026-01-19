@@ -167,18 +167,16 @@ export async function batchFetchBsrWithBackoff(
   // Remove duplicates and apply hard cap
   const uniqueAsins = Array.from(new Set(asins)).slice(0, 4); // 🚨 HARD CAP: Max 4 ASINs (part of 7-call budget: 1 search + 4 BSR + 2 metadata)
   
-  // 🚨 API SAFETY LIMIT: Check if we've exceeded max calls
+  // 🚨 RAINFOREST API HARD CAP: Check if we've exceeded max calls (MAX = 7)
   if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
     const skippedCount = uniqueAsins.length;
-    const remainingBudget = apiCallCounter.max - apiCallCounter.count;
-    console.warn("🚨 ENRICHMENT_SKIPPED_DUE_TO_BUDGET", {
-      enrichment_type: "BSR",
+    console.error("🚨 RAINFOREST_CALL_CAP_REACHED", {
       keyword,
       current_count: apiCallCounter.count,
       max_allowed: apiCallCounter.max,
-      remaining_budget: remainingBudget,
+      call_type: "BSR_enrichment",
       asins_skipped: skippedCount,
-      message: "BSR enrichment skipped - API call budget exhausted",
+      message: "Rainforest API call cap reached - BSR enrichment blocked. Continuing with available data.",
     });
     return null;
   }
@@ -202,19 +200,15 @@ export async function batchFetchBsrWithBackoff(
     
       // Fetch this batch in parallel
       const batchPromises = asinBatch.map(async (asin) => {
-        // 🚨 API SAFETY LIMIT: Check before each call
+        // 🚨 RAINFOREST API HARD CAP: Check before each call (MAX = 7)
         if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
-          const remainingBudget = apiCallCounter.max - apiCallCounter.count;
-          const skippedAsins = asinBatch.filter(a => a !== asin).length + 1; // Count this ASIN + remaining in batch
-          console.warn("🚨 ENRICHMENT_SKIPPED_DUE_TO_BUDGET", {
-            enrichment_type: "BSR",
-            asin,
+          console.error("🚨 RAINFOREST_CALL_CAP_REACHED", {
             keyword,
             current_count: apiCallCounter.count,
             max_allowed: apiCallCounter.max,
-            remaining_budget: remainingBudget,
-            asins_skipped: skippedAsins,
-            message: "BSR enrichment skipped for this ASIN - API call budget exhausted",
+            call_type: "BSR_enrichment",
+            asin,
+            message: "Rainforest API call cap reached - BSR enrichment blocked. Continuing with available data.",
           });
           return null;
         }

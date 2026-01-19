@@ -422,13 +422,26 @@ function extractCategory(item: any): string | null {
 
 /**
  * Extract BSR from SP-API Catalog Item
+ * Uses main classification rank when available
  */
 function extractBSR(item: any): number | null {
-  // Try salesRanks array
+  // Try salesRanks array with classification ranks
   const salesRanks = item?.salesRanks || [];
   if (Array.isArray(salesRanks) && salesRanks.length > 0) {
-    // Get first rank (typically main category)
-    const rank = salesRanks[0]?.rank;
+    // Get first salesRank entry (typically main category)
+    const firstSalesRank = salesRanks[0];
+    
+    // Try classificationRanks[0].rank (main classification rank)
+    const classificationRanks = firstSalesRank?.classificationRanks || [];
+    if (Array.isArray(classificationRanks) && classificationRanks.length > 0) {
+      const rank = classificationRanks[0]?.rank;
+      if (typeof rank === "number" && rank > 0) {
+        return rank;
+      }
+    }
+    
+    // Fallback to direct rank property if classificationRanks not available
+    const rank = firstSalesRank?.rank;
     if (typeof rank === "number" && rank > 0) {
       return rank;
     }

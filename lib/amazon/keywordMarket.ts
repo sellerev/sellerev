@@ -133,29 +133,29 @@ function parsePrice(item: any): number | null {
 /**
  * Safely parses review count from Rainforest API.
  * Checks all possible field names to match Amazon Page-1 review count.
- * Fallback order: reviews ?? review_count ?? ratings_total ?? null
+ * For search results, ratings_total is the primary source.
  */
 function parseReviews(item: any): number | null {
-  // Primary: reviews.count (most common in search results)
+  // Primary: ratings_total (most common in Rainforest search results)
+  if (item.ratings_total !== undefined && item.ratings_total !== null) {
+    const parsed = parseInt(item.ratings_total.toString().replace(/,/g, ""), 10);
+    if (!isNaN(parsed) && parsed >= 0) return parsed;
+  }
+  
+  // Secondary: reviews.count (used in some API responses)
   if (item.reviews?.count !== undefined && item.reviews.count !== null) {
     const parsed = parseInt(item.reviews.count.toString().replace(/,/g, ""), 10);
     if (!isNaN(parsed) && parsed >= 0) return parsed;
   }
   
-  // Secondary: reviews as direct number
+  // Tertiary: reviews as direct number
   if (typeof item.reviews === "number" && !isNaN(item.reviews) && item.reviews >= 0) {
     return item.reviews;
   }
   
-  // Tertiary: review_count (alternative field name)
+  // Quaternary: review_count (alternative field name)
   if (item.review_count !== undefined && item.review_count !== null) {
     const parsed = parseInt(item.review_count.toString().replace(/,/g, ""), 10);
-    if (!isNaN(parsed) && parsed >= 0) return parsed;
-  }
-  
-  // Quaternary: ratings_total (used in some API responses)
-  if (item.ratings_total !== undefined && item.ratings_total !== null) {
-    const parsed = parseInt(item.ratings_total.toString().replace(/,/g, ""), 10);
     if (!isNaN(parsed) && parsed >= 0) return parsed;
   }
   
@@ -975,19 +975,15 @@ export async function enrichListingsMetadata(
       
       // Fetch this batch in parallel
       const batchPromises = asinBatch.map(async (asin) => {
-        // 🚨 API SAFETY LIMIT: Check before each call
+        // 🚨 RAINFOREST API HARD CAP: Check before each call (MAX = 7)
         if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
-          const remainingBudget = apiCallCounter.max - apiCallCounter.count;
-          const skippedAsins = asinBatch.filter(a => a !== asin).length + 1; // Count this ASIN + remaining in batch
-          console.warn("🚨 ENRICHMENT_SKIPPED_DUE_TO_BUDGET", {
-            enrichment_type: "metadata",
-            asin,
+          console.error("🚨 RAINFOREST_CALL_CAP_REACHED", {
             keyword: keyword || "unknown",
             current_count: apiCallCounter.count,
             max_allowed: apiCallCounter.max,
-            remaining_budget: remainingBudget,
-            asins_skipped: skippedAsins,
-            message: "Metadata enrichment skipped - API call budget exhausted",
+            call_type: "metadata_enrichment",
+            asin,
+            message: "Rainforest API call cap reached - metadata enrichment blocked. Continuing with available data.",
           });
           return null;
         }
@@ -1227,13 +1223,14 @@ export async function fetchKeywordMarketSnapshot(
     // PAGE-1 ONLY: Hard-coded page=1 parameter ensures Page-1 results only
     // ═══════════════════════════════════════════════════════════════════════════
     
-    // 🚨 API SAFETY LIMIT: Check before search call
+    // 🚨 RAINFOREST API HARD CAP: Check before search call (MAX = 7)
     if (apiCallCounter && apiCallCounter.count >= apiCallCounter.max) {
-      console.warn("🚨 API_CALL_LIMIT_REACHED", {
+      console.error("🚨 RAINFOREST_CALL_CAP_REACHED", {
         keyword,
         current_count: apiCallCounter.count,
         max_allowed: apiCallCounter.max,
-        message: "Search request skipped - API call limit reached",
+        call_type: "search",
+        message: "Rainforest API call cap reached - search request blocked. Continuing with available data.",
       });
       return null;
     }
@@ -1721,6 +1718,7 @@ export async function fetchKeywordMarketSnapshot(
     
     // Get top-ranked ASINs that need BSR (prioritize by position)
     // NOTE: This is prepared but NOT executed here - will be done async
+    // CRITICAL: Skip ASINs that already have BSR from SP-API Catalog
     const asinsForBSR = searchResults
       .slice(0, MAX_BSR_ASINS * 2) // Check more to account for duplicates/cached
       .map((item: any) => item.asin)
@@ -1728,7 +1726,11 @@ export async function fetchKeywordMarketSnapshot(
         asin !== null && 
         asin !== undefined && 
         missingAsins.includes(asin) &&
-        !cacheMap.has(asin) // Skip if already cached
+        !cacheMap.has(asin) && // Skip if already cached
+        !spApiCatalogResults.has(asin.toUpperCase()) || // Skip if SP-API Catalog provided BSR
+        (spApiCatalogResults.has(asin.toUpperCase()) && 
+         (!spApiCatalogResults.get(asin.toUpperCase())?.bsr || 
+          spApiCatalogResults.get(asin.toUpperCase())?.bsr === null)) // Only include if SP-API didn't provide BSR
       )
       .slice(0, MAX_BSR_ASINS); // Hard cap at 4
 
@@ -2634,6 +2636,28 @@ export async function fetchKeywordMarketSnapshot(
       has_revenue_estimate: !!(snapshotWithEstimates.est_total_monthly_revenue_min || snapshotWithEstimates.est_total_monthly_revenue_max),
       bsr_extraction_success: finalBSRCount > 0,
       avg_bsr: avg_bsr !== null ? Math.round(avg_bsr) : null,
+    });
+    
+    // Calculate enrichment summary metrics
+    const listingsWithBSR = listingsWithEstimates.filter(l => l.main_category_bsr !== null && l.main_category_bsr > 0).length;
+    const listingsWithReviews = listingsWithEstimates.filter(l => l.reviews !== null && l.reviews > 0).length;
+    const bsrCoveragePercent = listingsWithEstimates.length > 0 ? Math.round((listingsWithBSR / listingsWithEstimates.length) * 100) : 0;
+    const reviewsCoveragePercent = listingsWithEstimates.length > 0 ? Math.round((listingsWithReviews / listingsWithEstimates.length) * 100) : 0;
+    const rainforestCallCount = apiCallCounter?.count || 0;
+    const spApiCatalogCalls = Math.ceil(page1Asins.length / 20); // Catalog batches 20 ASINs per call
+    const pricingApiUsed = spApiPricingResults.size > 0;
+    
+    console.log("FINAL_KEYWORD_ENRICHMENT_SUMMARY", {
+      keyword,
+      asin_count: listingsWithEstimates.length,
+      bsr_coverage_percent: `${bsrCoveragePercent}%`,
+      reviews_coverage_percent: `${reviewsCoveragePercent}%`,
+      rainforest_call_count: rainforestCallCount,
+      spapi_catalog_calls: spApiCatalogCalls,
+      pricing_api_used: pricingApiUsed,
+      listings_with_bsr: listingsWithBSR,
+      listings_with_reviews: listingsWithReviews,
+      timestamp: new Date().toISOString(),
     });
     
     // TASK 3: Always populate market_snapshot.listings[] if listings exist
