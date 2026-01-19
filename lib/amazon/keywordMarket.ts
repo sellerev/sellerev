@@ -1591,9 +1591,21 @@ export async function fetchKeywordMarketSnapshot(
           // Merge results into main map (always process, even if enriched map is empty)
           // In keyword mode, SP-API can return salesRanks/classificationRanks without items[]
           // So we cannot infer SP-API success/failure from enriched.size or items.length
+          // CRITICAL: Ensure BSR is merged even if it's the only extracted field
           if (catalogResponse && catalogResponse.enriched) {
             for (const [asin, metadata] of catalogResponse.enriched.entries()) {
               spApiCatalogResults.set(asin, metadata);
+              
+              // Log BSR extraction for immediate visibility
+              if (metadata.bsr !== null && metadata.bsr > 0) {
+                console.log("🔵 SP_API_BSR_EXTRACTED_IN_BATCH", {
+                  asin,
+                  bsr: metadata.bsr,
+                  batch_index: i,
+                  keyword,
+                  message: "BSR extracted and added to spApiCatalogResults map",
+                });
+              }
             }
           }
           
