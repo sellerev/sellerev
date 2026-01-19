@@ -1673,7 +1673,7 @@ export async function fetchKeywordMarketSnapshot(
       console.log("🟢 SP_API_FORCED_COMPLETE", {
         keyword,
         total_asins: page1Asins.length,
-        total_batches: asinBatches.length,
+        total_batches: asinBatchesToFetch.length,
         catalog_enriched: spApiCatalogResults.size,
         pricing_enriched: spApiPricingResults.size,
       });
@@ -1683,7 +1683,7 @@ export async function fetchKeywordMarketSnapshot(
         keyword,
         error: spApiError.message,
         total_asins: page1Asins.length,
-        total_batches: asinBatches.length,
+        total_batches: asinBatchesToFetch.length,
       });
       // Continue without SP-API data - non-fatal for UI, but log hard error
     }
