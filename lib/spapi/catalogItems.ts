@@ -371,7 +371,7 @@ async function fetchBatch(
             // Log batch summary (optional, for debugging)
             console.log("CATALOG_INGESTION_BATCH_SUMMARY", {
               keyword: keyword || 'unknown',
-              batch_index,
+              batch_index: batchIndex,
               asin_count: ingestItems.length,
               total_attributes_written: result.total_attributes_written,
               total_classifications_written: result.total_classifications_written,
@@ -383,7 +383,7 @@ async function fetchBatch(
           .catch((error) => {
             console.error("CATALOG_INGESTION_ERROR", {
               keyword: keyword || 'unknown',
-              batch_index,
+              batch_index: batchIndex,
               error: error instanceof Error ? error.message : String(error),
               message: "Failed to ingest catalog items - continuing without ingestion",
             });
