@@ -362,7 +362,7 @@ async function fetchBatch(
           const asin = item?.asin || item?.identifiers?.marketplaceIdentifiers?.[0]?.identifier;
           return asin ? { asin, item } : null;
         })
-        .filter((item): item is { asin: string; item: any } => item !== null);
+        .filter((item: { asin: string; item: any } | null): item is { asin: string; item: any } => item !== null);
 
       if (ingestItems.length > 0) {
         bulkIngestCatalogItems(supabase, ingestItems, marketplaceId)
