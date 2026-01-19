@@ -363,8 +363,146 @@ async function persistClassifications(
 }
 
 /**
+ * Persist media (images) to asin_media
+ */
+async function persistMedia(
+  supabase: any,
+  asin: string,
+  item: any
+): Promise<number> {
+  try {
+    const images = item?.images || [];
+    const primaryImage = images?.[0]?.images?.[0]?.link ||
+                        images?.[0]?.link ||
+                        item?.summaries?.[0]?.images?.[0]?.link ||
+                        null;
+
+    const additionalImages: string[] = [];
+    
+    // Extract from images array
+    if (Array.isArray(images)) {
+      for (const imageSet of images) {
+        if (Array.isArray(imageSet?.images)) {
+          for (const img of imageSet.images) {
+            if (img?.link && typeof img.link === "string" && img.link.trim()) {
+              const imgUrl = img.link.trim();
+              if (imgUrl !== primaryImage) {
+                additionalImages.push(imgUrl);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Extract from attributes (other_image_url_2, other_image_url_3, etc.)
+    const attributes = item?.attributes || {};
+    for (let i = 2; i <= 10; i++) {
+      const attrKey = `other_image_url_${i}`;
+      const imageUrl = attributes[attrKey]?.[0]?.value;
+      if (typeof imageUrl === "string" && imageUrl.trim() && imageUrl.trim() !== primaryImage) {
+        additionalImages.push(imageUrl.trim());
+      }
+    }
+
+    const totalImages = (primaryImage ? 1 : 0) + additionalImages.length;
+
+    await supabase
+      .from("asin_media")
+      .upsert({
+        asin: asin.toUpperCase(),
+        primary_image_url: typeof primaryImage === "string" ? primaryImage.trim() : null,
+        additional_images: additionalImages.slice(0, 10), // Limit to 10 additional images
+        last_enriched_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: "asin",
+      });
+
+    return totalImages;
+  } catch (error) {
+    console.warn("MEDIA_PERSIST_ERROR", {
+      asin,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  }
+}
+
+/**
+ * Persist relationships to asin_relationships
+ */
+async function persistRelationships(
+  supabase: any,
+  asin: string,
+  item: any
+): Promise<number> {
+  try {
+    const relationships = item?.relationships || [];
+    
+    let parentAsin: string | null = null;
+    let variationTheme: string | null = null;
+    let isParent = false;
+
+    if (Array.isArray(relationships)) {
+      for (const rel of relationships) {
+        // Check for parent relationship
+        if (rel?.type === "VARIATION" && rel?.parentIdentifiers) {
+          const parent = rel.parentIdentifiers?.[0]?.identifier;
+          if (typeof parent === "string" && parent.trim()) {
+            parentAsin = parent.trim().toUpperCase();
+          }
+        }
+
+        // Check for variation theme
+        if (rel?.variationTheme) {
+          variationTheme = typeof rel.variationTheme === "string" 
+            ? rel.variationTheme.trim() 
+            : null;
+        }
+
+        // Check if this ASIN is a parent (has variations)
+        if (rel?.type === "VARIATION" && rel?.childIdentifiers) {
+          const children = rel.childIdentifiers || [];
+          const hasChildren = children.some((child: any) => {
+            const childAsin = child?.identifier;
+            return typeof childAsin === "string" && childAsin.trim().toUpperCase() !== asin.toUpperCase();
+          });
+          if (hasChildren) {
+            isParent = true;
+          }
+        }
+      }
+    }
+
+    const hasRelationship = parentAsin !== null || variationTheme !== null || isParent;
+
+    await supabase
+      .from("asin_relationships")
+      .upsert({
+        asin: asin.toUpperCase(),
+        parent_asin: parentAsin,
+        variation_theme: variationTheme,
+        is_parent: isParent,
+        last_enriched_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: "asin",
+      });
+
+    return hasRelationship ? 1 : 0;
+  } catch (error) {
+    console.warn("RELATIONSHIPS_PERSIST_ERROR", {
+      asin,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  }
+}
+
+/**
  * Ingest SP-API Catalog Item into Supabase
- * Returns counts of attributes and classifications written
+ * Returns counts of attributes, classifications, images, and relationships written
  */
 export async function ingestCatalogItem(
   supabase: any,
@@ -372,18 +510,44 @@ export async function ingestCatalogItem(
   item: any,
   marketplaceId: string = "ATVPDKIKX0DER"
 ): Promise<{
+  asin: string;
   attributes_written: number;
   classifications_written: number;
-  skipped: boolean;
+  images_written: number;
+  relationships_written: number;
+  skipped_due_to_cache: boolean;
 }> {
   if (!supabase || !asin || !item) {
-    return { attributes_written: 0, classifications_written: 0, skipped: true };
+    return { 
+      asin: asin || 'unknown',
+      attributes_written: 0, 
+      classifications_written: 0, 
+      images_written: 0,
+      relationships_written: 0,
+      skipped_due_to_cache: true 
+    };
   }
 
   // Check if should skip (enriched within 24h)
   const skipped = await shouldSkipEnrichment(supabase, asin);
   if (skipped) {
-    return { attributes_written: 0, classifications_written: 0, skipped: true };
+    // Log skipped ASIN
+    console.log("CATALOG_INGESTION_SUMMARY", {
+      asin: asin.toUpperCase(),
+      attributes_written: 0,
+      classifications_written: 0,
+      images_written: 0,
+      relationships_written: 0,
+      skipped_due_to_cache: true,
+    });
+    return { 
+      asin: asin.toUpperCase(),
+      attributes_written: 0, 
+      classifications_written: 0,
+      images_written: 0,
+      relationships_written: 0,
+      skipped_due_to_cache: true 
+    };
   }
 
   try {
@@ -396,17 +560,38 @@ export async function ingestCatalogItem(
     // Persist classifications
     const classificationsWritten = await persistClassifications(supabase, asin, item, marketplaceId);
 
-    return {
+    // Persist media (images)
+    const imagesWritten = await persistMedia(supabase, asin, item);
+
+    // Persist relationships
+    const relationshipsWritten = await persistRelationships(supabase, asin, item);
+
+    const result = {
+      asin: asin.toUpperCase(),
       attributes_written: attributesWritten,
       classifications_written: classificationsWritten,
-      skipped: false,
+      images_written: imagesWritten,
+      relationships_written: relationshipsWritten,
+      skipped_due_to_cache: false,
     };
+
+    // Log single structured log per ASIN
+    console.log("CATALOG_INGESTION_SUMMARY", result);
+
+    return result;
   } catch (error) {
     console.error("CATALOG_INGESTION_ERROR", {
       asin,
       error: error instanceof Error ? error.message : String(error),
     });
-    return { attributes_written: 0, classifications_written: 0, skipped: false };
+    return { 
+      asin: asin.toUpperCase(),
+      attributes_written: 0, 
+      classifications_written: 0,
+      images_written: 0,
+      relationships_written: 0,
+      skipped_due_to_cache: false 
+    };
   }
 }
 
@@ -420,25 +605,47 @@ export async function bulkIngestCatalogItems(
 ): Promise<{
   total_attributes_written: number;
   total_classifications_written: number;
+  total_images_written: number;
+  total_relationships_written: number;
   total_skipped: number;
-  results: Array<{ asin: string; attributes_written: number; classifications_written: number; skipped: boolean }>;
+  results: Array<{
+    asin: string;
+    attributes_written: number;
+    classifications_written: number;
+    images_written: number;
+    relationships_written: number;
+    skipped_due_to_cache: boolean;
+  }>;
 }> {
   let totalAttributesWritten = 0;
   let totalClassificationsWritten = 0;
+  let totalImagesWritten = 0;
+  let totalRelationshipsWritten = 0;
   let totalSkipped = 0;
-  const results: Array<{ asin: string; attributes_written: number; classifications_written: number; skipped: boolean }> = [];
+  const results: Array<{
+    asin: string;
+    attributes_written: number;
+    classifications_written: number;
+    images_written: number;
+    relationships_written: number;
+    skipped_due_to_cache: boolean;
+  }> = [];
 
   for (const { asin, item } of items) {
     const result = await ingestCatalogItem(supabase, asin, item, marketplaceId);
     totalAttributesWritten += result.attributes_written;
     totalClassificationsWritten += result.classifications_written;
-    if (result.skipped) totalSkipped++;
-    results.push({ asin, ...result });
+    totalImagesWritten += result.images_written;
+    totalRelationshipsWritten += result.relationships_written;
+    if (result.skipped_due_to_cache) totalSkipped++;
+    results.push(result);
   }
 
   return {
     total_attributes_written: totalAttributesWritten,
     total_classifications_written: totalClassificationsWritten,
+    total_images_written: totalImagesWritten,
+    total_relationships_written: totalRelationshipsWritten,
     total_skipped: totalSkipped,
     results,
   };

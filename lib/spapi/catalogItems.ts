@@ -358,7 +358,7 @@ async function fetchBatch(
     if (supabase && items.length > 0) {
       const { bulkIngestCatalogItems } = await import("./catalogIngest");
       const ingestItems = items
-        .map(item => {
+        .map((item: any) => {
           const asin = item?.asin || item?.identifiers?.marketplaceIdentifiers?.[0]?.identifier;
           return asin ? { asin, item } : null;
         })
@@ -367,27 +367,18 @@ async function fetchBatch(
       if (ingestItems.length > 0) {
         bulkIngestCatalogItems(supabase, ingestItems, marketplaceId)
           .then((result) => {
-            // Log summary for this batch
-            console.log("CATALOG_INGESTION_SUMMARY", {
+            // Individual ASIN logs are already logged in ingestCatalogItem()
+            // Log batch summary (optional, for debugging)
+            console.log("CATALOG_INGESTION_BATCH_SUMMARY", {
               keyword: keyword || 'unknown',
               batch_index,
               asin_count: ingestItems.length,
-              attributes_written: result.total_attributes_written,
-              classifications_written: result.total_classifications_written,
-              skipped: result.total_skipped,
+              total_attributes_written: result.total_attributes_written,
+              total_classifications_written: result.total_classifications_written,
+              total_images_written: result.total_images_written,
+              total_relationships_written: result.total_relationships_written,
+              total_skipped: result.total_skipped,
             });
-
-            // Log first fully populated ASIN for verification
-            const firstPopulated = result.results.find(r => !r.skipped && r.attributes_written > 0 && r.classifications_written > 0);
-            if (firstPopulated) {
-              const asin = firstPopulated.asin;
-              console.log("✅ ASIN_FULLY_POPULATED_EXAMPLE", {
-                asin,
-                attributes_written: firstPopulated.attributes_written,
-                classifications_written: firstPopulated.classifications_written,
-                tables: ["asin_core", "asin_attribute_kv", "asin_classifications"],
-              });
-            }
           })
           .catch((error) => {
             console.error("CATALOG_INGESTION_ERROR", {
