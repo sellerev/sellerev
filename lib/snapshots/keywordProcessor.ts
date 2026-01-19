@@ -423,7 +423,6 @@ export async function processKeyword(
         }
 
         // Check for partial failures (ASINs requested but not enriched)
-        const failedCount = asinsForSpApi.length - enrichedCount;
         if (failedCount > 0) {
           console.warn('SP_API_CATALOG_CALL_PARTIAL_FAILURE', {
             keyword,
