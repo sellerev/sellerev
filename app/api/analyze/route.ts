@@ -2100,9 +2100,14 @@ export async function POST(req: NextRequest) {
           let catalogResult: any = null;
           let pricingResult: any = null;
           
+          // NOTE: This block is disabled (if false) - SP-API handled by fetchKeywordMarketSnapshot
+          // Updated signature for compilation but this code path is not executed
+          const dummySpApiCatalogResults = new Map<string, any>();
+          
           try {
             // Execute catalog and pricing separately to handle failures independently
-            catalogResult = await batchEnrichCatalogItems(page1Asins, marketplaceId, 2000, body.input_value);
+            await batchEnrichCatalogItems(page1Asins, dummySpApiCatalogResults, marketplaceId, 2000, body.input_value);
+            catalogResult = { enriched: dummySpApiCatalogResults, failed: [], errors: [] };
           } catch (err: any) {
             const errorMessage = err?.message || String(err) || 'Unknown error';
             console.error("❌ SP_API_CATALOG_FAILURE", {
