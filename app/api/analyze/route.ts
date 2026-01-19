@@ -1993,13 +1993,8 @@ export async function POST(req: NextRequest) {
           try {
             // Execute catalog and pricing separately to handle failures independently
             catalogResult = await batchEnrichCatalogItems(page1Asins, marketplaceId, 2000, body.input_value);
-          } catch (error: unknown) {
-            let errorMessage: string;
-            if (error instanceof Error) {
-              errorMessage = error.message;
-            } else {
-              errorMessage = String(error ?? 'Unknown error');
-            }
+          } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
             console.error("❌ SP_API_CATALOG_FAILURE", {
               keyword: body.input_value,
               error: errorMessage,
@@ -2011,13 +2006,8 @@ export async function POST(req: NextRequest) {
           
           try {
             pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000, body.input_value, user.id);
-          } catch (error: unknown) {
-            let errorMessage: string;
-            if (error instanceof Error) {
-              errorMessage = error.message;
-            } else {
-              errorMessage = String(error ?? 'Unknown error');
-            }
+          } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
             console.error("❌ SP_API_PRICING_FAILURE", {
               keyword: body.input_value,
               error: errorMessage,
