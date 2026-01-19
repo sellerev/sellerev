@@ -1927,26 +1927,35 @@ export async function POST(req: NextRequest) {
         for (const asin of page1Asins) {
           const listing = rawListings.find((l: any) => l.asin?.toUpperCase() === asin);
           if (listing) {
+            // Read directly from listing object (source of truth)
             const brand = listing.brand || null;
             const brandSource = (listing as any).brand_source || null;
             const bsr = listing.bsr || listing.main_category_bsr || null;
             const bsrSource = (listing as any).bsr_source || null;
             
-            // Determine if SP-API was called using multiple signals (same logic as validation)
-            const spApiCalled = !!(bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog' || 
-                                   (listing as any)?.title_source === 'sp_api' || 
-                                   (listing as any)?.title_source === 'sp_api_catalog' ||
-                                   (listing as any)?.category_source === 'sp_api' ||
-                                   (listing as any)?.category_source === 'sp_api_catalog');
+            // Determine if SP-API was called by checking source tags on listing object
+            // Do NOT infer from enriched_count, items.length, or batch-level counters
+            const hadSpApiResponse = !!(bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog' || 
+                                        (listing as any)?.title_source === 'sp_api' || 
+                                        (listing as any)?.title_source === 'sp_api_catalog' ||
+                                        (listing as any)?.category_source === 'sp_api' ||
+                                        (listing as any)?.category_source === 'sp_api_catalog' ||
+                                        (listing as any)?.brand_source === 'sp_api' ||
+                                        (listing as any)?.brand_source === 'sp_api_catalog');
             const hadBsr = !!(bsr !== null && bsr > 0);
+            
+            // Store on listing object for state machine
+            (listing as any).had_sp_api_response = hadSpApiResponse;
             
             console.log("SP_API_ENRICHMENT_RECONCILIATION", {
               asin,
               brand,
               brand_source: brandSource,
               bsr,
-              had_sp_api_response: spApiCalled,
+              bsr_source: bsrSource,
+              had_sp_api_response: hadSpApiResponse,
               had_bsr: hadBsr,
+              enrichment_state: (listing as any).enrichment_state || 'raw',
               timestamp: new Date().toISOString(),
             });
           }
@@ -2261,11 +2270,35 @@ export async function POST(req: NextRequest) {
           });
         }
       } else if (body.input_type === "keyword") {
-        // HARD ERROR: SP-API should have run but rawListings is empty
-        console.error("❌ SP_API_HARD_ERROR_NO_LISTINGS", {
-          keyword: body.input_value,
-          message: "SP-API MUST execute for all keyword searches. Raw listings is empty.",
-        });
+        // Check if SP-API enrichment happened by checking source tags on listings
+        // SP-API enrichment is handled by fetchKeywordMarketSnapshot, not the disabled block above
+        const hasSpApiEnrichment = rawListings.some((l: any) => 
+          (l as any).bsr_source === 'sp_api' || 
+          (l as any).bsr_source === 'sp_api_catalog' ||
+          (l as any).title_source === 'sp_api' ||
+          (l as any).title_source === 'sp_api_catalog' ||
+          (l as any).category_source === 'sp_api' ||
+          (l as any).category_source === 'sp_api_catalog' ||
+          (l as any).brand_source === 'sp_api' ||
+          (l as any).brand_source === 'sp_api_catalog'
+        );
+        
+        if (rawListings.length === 0) {
+          // HARD ERROR: No listings at all
+          console.error("❌ SP_API_HARD_ERROR_NO_LISTINGS", {
+            keyword: body.input_value,
+            message: "SP-API MUST execute for all keyword searches. Raw listings is empty.",
+          });
+        } else if (!hasSpApiEnrichment) {
+          // WARNING: Listings exist but no SP-API enrichment detected
+          // This could be valid if SP-API was called but returned no data
+          console.warn("⚠️ SP_API_ENRICHMENT_NOT_DETECTED", {
+            keyword: body.input_value,
+            raw_listings_count: rawListings.length,
+            message: "Listings exist but no SP-API source tags detected. SP-API may have been called but returned no data.",
+          });
+        }
+        // If listings exist and have SP-API enrichment, continue normally
       }
       
       // ═══════════════════════════════════════════════════════════════════════════
@@ -2281,6 +2314,14 @@ export async function POST(req: NextRequest) {
       
       if (body.input_type === "keyword") {
         // Keyword analysis: Use permissive canonical builder
+        // Finalize enrichment state before canonical page-1 build
+        // State machine: any state -> finalized
+        for (const listing of rawListings) {
+          if (!(listing as any).enrichment_state || (listing as any).enrichment_state !== 'finalized') {
+            (listing as any).enrichment_state = 'finalized';
+          }
+        }
+        
         console.log("🔵 CALLING_CANONICAL_BUILDER: keyword (buildKeywordPageOne)");
         console.log("✅ KEYWORD CANONICAL BUILD START", {
           keyword: body.input_value,
@@ -2511,20 +2552,28 @@ export async function POST(req: NextRequest) {
          * @param listing - The listing object (with source tags as dynamic properties)
          * @returns boolean indicating if SP-API was called
          */
+        /**
+         * Determines if SP-API was called for an ASIN using enrichment state machine
+         * @param listing - The listing object (with enrichment_state and source tags)
+         * @returns boolean indicating if SP-API was called
+         */
         const determineSpApiCalled = (listing: any): boolean => {
           if (!listing) return false;
           
-          // Signal 1: BSR source indicates SP-API was called
+          // Use enrichment state machine as source of truth
+          const enrichmentState = (listing as any).enrichment_state;
+          if (enrichmentState === 'sp_api_catalog_enriched' || 
+              enrichmentState === 'pricing_enriched' || 
+              enrichmentState === 'finalized') {
+            return true;
+          }
+          
+          // Fallback: Check source tags if state not set (backward compatibility)
           const bsrSource = (listing as any).bsr_source;
           if (bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog') {
             return true;
           }
           
-          // Signal 2: Has salesRanks (BSR exists from SP-API)
-          const hasBsr = !!(listing.bsr || listing.main_category_bsr);
-          const hasSalesRanks = hasBsr && (bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog');
-          
-          // Signal 3: Other SP-API source tags
           const titleSource = (listing as any).title_source;
           const categorySource = (listing as any).category_source;
           if (titleSource === 'sp_api' || titleSource === 'sp_api_catalog' ||
@@ -2532,15 +2581,10 @@ export async function POST(req: NextRequest) {
             return true;
           }
           
-          // Signal 4: Check for classificationRanks (indicates salesRanks were processed)
-          // This would require checking DB or tracking, but we can infer from BSR presence
-          // If BSR exists and has a source tag, we've already caught it above
-          
-          // Signal 5: SP_API_RESPONSE was logged (we can't check this directly here,
-          // but if any of the above signals are true, we know SP-API was called)
-          
-          // In keyword mode, empty items[] array is NORMAL if SP-API returned salesRanks/attributes
-          // So we need to check for the presence of SP-API-derived data, not just items.length
+          // Check had_sp_api_response flag (set during merge)
+          if ((listing as any).had_sp_api_response === true) {
+            return true;
+          }
           
           return false;
         };
@@ -2560,8 +2604,10 @@ export async function POST(req: NextRequest) {
             // Determine if SP-API was called using multiple signals
             const spApiCalled = determineSpApiCalled(listing);
             
-            // Collect signals for debugging (use type assertion for source tags)
+            // Collect signals for debugging (use enrichment state and source tags)
             const signals = {
+              enrichment_state: (listing as any).enrichment_state || 'raw',
+              had_sp_api_response: (listing as any).had_sp_api_response || false,
               bsr_source: (listing as any).bsr_source || null,
               bsr: listing.bsr || listing.main_category_bsr || null,
               title_source: (listing as any).title_source || null,

@@ -2050,6 +2050,14 @@ export async function fetchKeywordMarketSnapshot(
       // SP-API Catalog overwrites: brand, category, BSR, title, image
       // CRITICAL: SP-API brand is authoritative - override title-parsed brands
       if (catalog) {
+        // Mark that SP-API responded (even if no data was extracted)
+        (listing as any).had_sp_api_response = true;
+        
+        // Transition enrichment state when any SP-API catalog data is applied
+        if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
+          (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+        }
+        
         if (catalog.brand) {
           listing.brand = catalog.brand;
           (listing as any).brand_source = 'sp_api';
@@ -2071,6 +2079,13 @@ export async function fetchKeywordMarketSnapshot(
             listing.main_category_bsr = catalog.bsr;
             listing.bsr = catalog.bsr;
             (listing as any).bsr_source = 'sp_api_catalog';
+            (listing as any).had_sp_api_response = true;
+            
+            // Transition enrichment state immediately when BSR is extracted
+            // State machine: raw -> sp_api_catalog_enriched
+            if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
+              (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+            }
             
             // Debug log for BSR merge (first 5 ASINs only)
             const bsrMergeCount = (listings as any[]).filter((l: any) => (l as any).bsr_source === 'sp_api_catalog').length;
@@ -2082,6 +2097,7 @@ export async function fetchKeywordMarketSnapshot(
                 main_category_bsr_set: listing.main_category_bsr === catalog.bsr,
                 bsr_set: listing.bsr === catalog.bsr,
                 bsr_source: (listing as any).bsr_source,
+                enrichment_state: (listing as any).enrichment_state,
               });
             }
           }
@@ -2100,6 +2116,13 @@ export async function fetchKeywordMarketSnapshot(
       // CRITICAL: If pricing fails, fulfillment_source remains null (not set to rainforest)
       // Only set fulfillment_source if SP-API pricing actually succeeded
       if (pricing) {
+        // Transition enrichment state when pricing data is applied
+        if ((listing as any).enrichment_state === 'sp_api_catalog_enriched' || 
+            !(listing as any).enrichment_state || 
+            (listing as any).enrichment_state === 'raw') {
+          (listing as any).enrichment_state = 'pricing_enriched';
+        }
+        
         if (pricing.fulfillment_channel) {
           listing.fulfillment = pricing.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
           (listing as any).fulfillment_source = 'sp_api_pricing';
