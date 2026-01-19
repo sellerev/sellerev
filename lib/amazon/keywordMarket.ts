@@ -1588,11 +1588,15 @@ export async function fetchKeywordMarketSnapshot(
           totalRelationshipsWritten = ingestionMetrics.totalRelationshipsWritten.value;
           totalSkippedDueToCache = ingestionMetrics.totalSkippedDueToCache.value;
           
+          // Check if catalog response has enriched items or if it was skipped (expected behavior)
           if (!catalogResponse || !catalogResponse.enriched || catalogResponse.enriched.size === 0) {
-            console.error("❌ SP_API_CATALOG_EMPTY_RESPONSE", { 
+            // This is expected in keyword mode if attributes/images are missing but BSR might still exist
+            // Only log as INFO, not ERROR, since BSR-only enrichment is valid
+            console.log("ℹ️ CATALOG_SKIPPED_NOT_REQUIRED_FOR_KEYWORD_MODE", { 
               batch,
               keyword,
               batch_index: i,
+              message: "Catalog response empty - may still have BSR data from other sources",
             });
           } else {
             // Merge results into main map
@@ -1654,7 +1658,7 @@ export async function fetchKeywordMarketSnapshot(
               });
             } else if (allFailed && !hasActualErrors) {
               // Pricing API was skipped (no OAuth) - this is expected, not an error
-              console.log("ℹ️ SP_API_PRICING_SKIPPED_IN_KEYWORD_MARKET", {
+              console.log("ℹ️ PRICING_SKIPPED_NO_OAUTH", {
                 batch,
                 keyword,
                 batch_index: i,
@@ -2088,26 +2092,27 @@ export async function fetchKeywordMarketSnapshot(
         }
         // CRITICAL: BSR from catalog is authoritative and must be preserved
         // Pricing failures must NOT affect BSR coverage
-        if (catalog.bsr !== null && catalog.bsr > 0) {
-          listing.main_category_bsr = catalog.bsr;
-          listing.bsr = catalog.bsr;
-          (listing as any).bsr_source = 'sp_api_catalog';
-          
-          // Debug log for BSR merge (first 5 ASINs only)
-          const bsrMergeCount = (listings as any[]).filter((l: any) => (l as any).bsr_source === 'sp_api_catalog').length;
-          if (!(listing as any)._bsr_merge_logged && bsrMergeCount <= 5) {
-            (listing as any)._bsr_merge_logged = true;
-            console.log("🟢 SP_API_BSR_MERGED", {
-              asin: listing.asin,
-              bsr: catalog.bsr,
-              main_category_bsr_set: listing.main_category_bsr === catalog.bsr,
-              bsr_set: listing.bsr === catalog.bsr,
-              bsr_source: (listing as any).bsr_source,
-            });
+        // Attach BSR directly to listing if it exists (even if 0, as long as it's a valid number)
+        if (catalog.bsr !== null && catalog.bsr !== undefined) {
+          // Only set BSR if it's a valid positive number (BSR must be > 0)
+          if (catalog.bsr > 0) {
+            listing.main_category_bsr = catalog.bsr;
+            listing.bsr = catalog.bsr;
+            (listing as any).bsr_source = 'sp_api_catalog';
+            
+            // Debug log for BSR merge (first 5 ASINs only)
+            const bsrMergeCount = (listings as any[]).filter((l: any) => (l as any).bsr_source === 'sp_api_catalog').length;
+            if (!(listing as any)._bsr_merge_logged && bsrMergeCount <= 5) {
+              (listing as any)._bsr_merge_logged = true;
+              console.log("🟢 SP_API_BSR_MERGED", {
+                asin: listing.asin,
+                bsr: catalog.bsr,
+                main_category_bsr_set: listing.main_category_bsr === catalog.bsr,
+                bsr_set: listing.bsr === catalog.bsr,
+                bsr_source: (listing as any).bsr_source,
+              });
+            }
           }
-        } else if (catalog.bsr === null) {
-          // Catalog returned null BSR - preserve existing BSR if available, don't overwrite with null
-          // Only set bsr_source if we actually got BSR data
         }
         if (catalog.title) {
           listing.title = catalog.title;

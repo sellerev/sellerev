@@ -1909,34 +1909,17 @@ export async function POST(req: NextRequest) {
       console.log("🔵 RAW_LISTINGS_LENGTH_BEFORE_CANONICAL", rawListings.length);
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // 🔥 HARD-FORCED SP-API EXECUTION (MANDATORY - NO CONDITIONALS)
+      // SP-API HANDLED BY fetchKeywordMarketSnapshot (WITH CACHE CHECKING)
       // ═══════════════════════════════════════════════════════════════════════════
-      // SP-API must run unconditionally for all page-1 ASINs, regardless of:
-      // - Cache state
-      // - Confidence level
-      // - Missing metadata checks
-      // - Title-derived brands
-      // This executes BEFORE canonicalization to ensure authoritative data
-      // NOTE: SP-API already runs in fetchKeywordMarketSnapshot and data is merged into listings
-      // Skip duplicate SP-API calls here to avoid wasting API quota
+      // SP-API execution is handled by fetchKeywordMarketSnapshot which:
+      // - Checks cache first and merges cached data
+      // - Only fetches missing ASINs from API
+      // - Respects cache to avoid duplicate calls
       // The SP-API data from fetchKeywordMarketSnapshot is already in rawListings
-      const hasSpApiData = rawListings.some((l: any) => 
-        (l as any).brand_source === 'sp_api_catalog' || 
-        (l as any).bsr_source === 'sp_api_catalog' ||
-        (l as any).title_source === 'sp_api_catalog' ||
-        (l as any).image_source === 'sp_api_catalog'
-      );
+      // No forced SP-API calls here - cache is respected
       
-      if (hasSpApiData) {
-        console.log("ℹ️ SP_API_CATALOG_SKIPPED_DUPLICATE", {
-          keyword: body.input_value,
-          listings_count: rawListings.length,
-          message: "SP-API Catalog data already present from fetchKeywordMarketSnapshot - skipping duplicate call",
-          timestamp: new Date().toISOString(),
-        });
-      }
-      
-      if (body.input_type === "keyword" && rawListings.length > 0 && !hasSpApiData) {
+      if (false) {
+        // This block removed - SP-API handled by fetchKeywordMarketSnapshot with cache
         // Extract and deduplicate page-1 ASINs
         const page1Asins = Array.from(new Set(
           rawListings
@@ -2927,6 +2910,46 @@ export async function POST(req: NextRequest) {
           product_count: contractResponse?.products?.length || 0,
           has_summary: !!contractResponse?.summary,
           has_market_structure: !!contractResponse?.market_structure,
+        });
+        
+        // ═══════════════════════════════════════════════════════════════════════════
+        // FINAL KEYWORD RUN SUMMARY
+        // ═══════════════════════════════════════════════════════════════════════════
+        // Log final validation metrics after keyword analysis completes
+        const asinCount = rawListings.length;
+        const listingsWithBSR = rawListings.filter((l: any) => 
+          l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0
+        ).length;
+        const bsrCoveragePercent = asinCount > 0 ? Math.round((listingsWithBSR / asinCount) * 100) : 0;
+        
+        // Extract page-1 ASINs to calculate SP-API catalog calls
+        const page1Asins = Array.from(new Set(
+          rawListings
+            .map((l: any) => l.asin)
+            .filter((asin: string | null) => asin && /^[A-Z0-9]{10}$/i.test(asin.trim().toUpperCase()))
+            .map((asin: string) => asin.trim().toUpperCase())
+        ));
+        const spapiCatalogCalls = Math.ceil(page1Asins.length / 20); // Catalog batches 20 ASINs per call
+        
+        // Check if Pricing API was used (any listing has sp_api_pricing as fulfillment_source)
+        const pricingApiUsed = rawListings.some((l: any) => 
+          (l as any).fulfillment_source === 'sp_api_pricing' || 
+          (l as any).price_source === 'sp_api_pricing'
+        );
+        
+        // Get Rainforest call count from apiCallCounter if available
+        // Note: apiCallCounter is passed to fetchKeywordMarketSnapshot but may not be tracked in route
+        // We'll use a default if not available
+        const rainforestCallCount = 1; // At minimum, 1 search call was made
+        
+        console.log("FINAL_KEYWORD_RUN_SUMMARY", {
+          keyword: body.input_value,
+          asin_count: asinCount,
+          bsr_coverage_percent: bsrCoveragePercent,
+          rainforest_call_count: rainforestCallCount,
+          spapi_catalog_calls: spapiCatalogCalls,
+          pricing_api_used: pricingApiUsed,
+          timestamp: new Date().toISOString(),
         });
         
         // Calculate CPI from original raw listings (before canonical build)

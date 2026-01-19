@@ -337,6 +337,21 @@ async function fetchBatch(
       const bsrData = extractBSRData(item);
       const bsr = bsrData.primary_rank;
       
+      // Check if item has salesRanks (BSR data) - counts as enriched for keyword mode
+      const hasSalesRanks = Array.isArray(item?.salesRanks) && item.salesRanks.length > 0;
+      const hasClassificationRanks = hasSalesRanks && item.salesRanks.some((sr: any) => 
+        Array.isArray(sr?.classificationRanks) && sr.classificationRanks.length > 0
+      );
+      const hasDisplayGroupRanks = hasSalesRanks && item.salesRanks.some((sr: any) => 
+        sr?.displayGroupRanks && Array.isArray(sr.displayGroupRanks) && sr.displayGroupRanks.length > 0
+      );
+      
+      // Item is enriched if it has BSR data (classificationRanks OR displayGroupRanks)
+      // OR if it has other enrichment data (attributes, images, summaries)
+      const hasBSRData = hasClassificationRanks || hasDisplayGroupRanks || (bsr !== null && bsr > 0);
+      const hasOtherData = extractTitle(item) || extractBrand(item) || extractImageUrl(item);
+      const isEnriched = hasBSRData || hasOtherData;
+      
       const metadata: CatalogItemMetadata = {
         asin,
         title: extractTitle(item),
@@ -346,7 +361,10 @@ async function fetchBatch(
         bsr,
       };
 
-      result.set(asin, metadata);
+      // Only add to enriched if item has meaningful data (BSR counts as enrichment)
+      if (isEnriched) {
+        result.set(asin, metadata);
+      }
       
       // Debug log for BSR extraction (first 5 ASINs only)
       if (result.size <= 5 && bsr !== null) {
