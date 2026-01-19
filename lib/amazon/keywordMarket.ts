@@ -1588,27 +1588,22 @@ export async function fetchKeywordMarketSnapshot(
           totalRelationshipsWritten = ingestionMetrics.totalRelationshipsWritten.value;
           totalSkippedDueToCache = ingestionMetrics.totalSkippedDueToCache.value;
           
-          // Check if catalog response has enriched items or if it was skipped (expected behavior)
-          if (!catalogResponse || !catalogResponse.enriched || catalogResponse.enriched.size === 0) {
-            // This is expected in keyword mode if attributes/images are missing but BSR might still exist
-            // Only log as INFO, not ERROR, since BSR-only enrichment is valid
-            console.log("ℹ️ CATALOG_SKIPPED_NOT_REQUIRED_FOR_KEYWORD_MODE", { 
-              batch,
-              keyword,
-              batch_index: i,
-              message: "Catalog response empty - may still have BSR data from other sources",
-            });
-          } else {
-            // Merge results into main map
+          // Merge results into main map (always process, even if enriched map is empty)
+          // In keyword mode, SP-API can return salesRanks/classificationRanks without items[]
+          // So we cannot infer SP-API success/failure from enriched.size or items.length
+          if (catalogResponse && catalogResponse.enriched) {
             for (const [asin, metadata] of catalogResponse.enriched.entries()) {
               spApiCatalogResults.set(asin, metadata);
             }
           }
           
+          // Log batch completion (do not infer success/failure from enriched.size)
+          // SP-API was called if SP_API_RESPONSE event was logged, regardless of items.length
           console.log("✅ SP_API_CATALOG_BATCH_COMPLETE", {
             batch_index: i,
-            returned_items: catalogResponse?.enriched?.size ?? 0,
+            asins_in_batch: batch.length,
             keyword,
+            message: "SP-API batch completed. Enrichment status determined by source tags, not items.length",
           });
         } catch (error) {
           console.error("❌ SP_API_CATALOG_BATCH_ERROR", {
