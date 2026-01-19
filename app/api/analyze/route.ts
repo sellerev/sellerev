@@ -1393,11 +1393,12 @@ export async function POST(req: NextRequest) {
                 }
               }
             }
-          } catch (error) {
+          } catch (err) {
             // Log error but continue - SP-API enrichment is non-fatal
+            const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
             console.error("SP_API_ENRICHMENT_ERROR_AFTER_CACHE", {
               keyword: normalizedKeyword,
-              error: error instanceof Error ? error.message : String(error),
+              error: errorMessage,
             });
           }
         }
@@ -1475,10 +1476,11 @@ export async function POST(req: NextRequest) {
         });
         // Fall through to snapshot lookup
       }
-    } catch (error) {
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
       console.error("❌ MARKET_FETCH_ERROR", {
         keyword: body.input_value,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
         timestamp: new Date().toISOString(),
       });
       // Fall through to snapshot lookup
@@ -2585,10 +2587,11 @@ export async function POST(req: NextRequest) {
                 // TODO: Update snapshot in database with Tier-2 refinements
                 // This allows UI to re-hydrate refined snapshot via snapshot_id
               })
-              .catch((error) => {
+              .catch((err) => {
+                const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
                 console.error("❌ TIER2_REFINEMENT_ERROR", {
                   snapshot_id: snapshotId,
-                  error: error instanceof Error ? error.message : String(error),
+                  error: errorMessage,
                   timestamp: new Date().toISOString(),
                 });
                 // Fail silently - Tier-1 data is still usable
@@ -2660,10 +2663,11 @@ export async function POST(req: NextRequest) {
               confidence: calibrationResult.confidence,
               source: calibrationResult.source,
             });
-          } catch (error) {
+          } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
             console.warn("⚠️ KEYWORD CALIBRATION ERROR (NON-FATAL)", {
               keyword: body.input_value,
-              error: error instanceof Error ? error.message : String(error),
+              error: errorMessage,
             });
             // Continue with uncalibrated products if calibration fails
           }
