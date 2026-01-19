@@ -147,13 +147,24 @@ export async function batchEnrichCatalogItems(
   const totalDuration = Date.now() - totalStartTime;
   const avgDuration = totalBatches > 0 ? Math.round(totalDuration / totalBatches) : 0;
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DIAGNOSTIC: Verify aggregation worked before returning
+  // ═══════════════════════════════════════════════════════════════════════════
+  const enrichedAsins = Array.from(result.enriched.keys());
+  const enrichedBsrs = Array.from(result.enriched.entries())
+    .slice(0, 10)
+    .map(([asin, meta]) => ({ asin, bsr: meta.bsr }));
+  
   console.log('SP_API_BATCH_COMPLETE', {
     endpoint_name: 'catalogItems',
+    keyword: keyword || 'unknown',
     total_asins: asins.length,
     total_batches: totalBatches,
     batch_sizes: batchSizes,
     enriched_count: result.enriched.size,
     failed_count: result.failed.length,
+    enriched_asins_sample: enrichedAsins.slice(0, 10),
+    enriched_bsrs_sample: enrichedBsrs,
     total_duration_ms: totalDuration,
     avg_duration_ms: avgDuration,
     timestamp: new Date().toISOString(),
@@ -529,6 +540,21 @@ async function fetchBatch(
     // If we have any enrichment signals (BSR, attributes, images), enrichment was successful
     // This handles cases where items.length === 0 but salesRanks/attributes were processed
     // Note: Enrichment signals tracked above will be used for success determination
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DIAGNOSTIC: Log result map state before returning
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log('🔍 FETCH_BATCH_RETURNING', {
+      keyword: keyword || 'unknown',
+      batch_index: batchIndex,
+      result_map_size: result.size,
+      result_asins: Array.from(result.keys()),
+      result_bsrs: Array.from(result.entries()).map(([asin, meta]) => ({ asin, bsr: meta.bsr })),
+      hasAnyEnrichment,
+      hasBsrExtracted,
+      hasAttributes,
+      hasImages,
+    });
   } catch (error) {
     const duration = Date.now() - startTime;
     
@@ -545,6 +571,17 @@ async function fetchBatch(
       error: error instanceof Error ? error.message : String(error),
       batch_index: batchIndex,
       total_batches: totalBatches,
+    });
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DIAGNOSTIC: Log result map state even on error
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log('🔍 FETCH_BATCH_ERROR_RETURNING', {
+      keyword: keyword || 'unknown',
+      batch_index: batchIndex,
+      result_map_size: result.size,
+      result_asins: Array.from(result.keys()),
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 

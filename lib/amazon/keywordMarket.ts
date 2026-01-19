@@ -1588,13 +1588,31 @@ export async function fetchKeywordMarketSnapshot(
           totalRelationshipsWritten = ingestionMetrics.totalRelationshipsWritten.value;
           totalSkippedDueToCache = ingestionMetrics.totalSkippedDueToCache.value;
           
+          // ═══════════════════════════════════════════════════════════════════════════
+          // DIAGNOSTIC: Verify catalogResponse has data before merging
+          // ═══════════════════════════════════════════════════════════════════════════
+          console.log("🔍 CATALOG_RESPONSE_DIAGNOSTIC", {
+            batch_index: i,
+            keyword,
+            has_response: !!catalogResponse,
+            has_enriched: !!(catalogResponse && catalogResponse.enriched),
+            enriched_size: catalogResponse?.enriched?.size || 0,
+            enriched_keys: catalogResponse?.enriched ? Array.from(catalogResponse.enriched.keys()).slice(0, 5) : [],
+            enriched_bsrs: catalogResponse?.enriched ? Array.from(catalogResponse.enriched.entries())
+              .slice(0, 5)
+              .map(([asin, meta]) => ({ asin, bsr: meta.bsr })) : [],
+            spApiCatalogResults_size_before: spApiCatalogResults.size,
+          });
+          
           // Merge results into main map (always process, even if enriched map is empty)
           // In keyword mode, SP-API can return salesRanks/classificationRanks without items[]
           // So we cannot infer SP-API success/failure from enriched.size or items.length
           // CRITICAL: Ensure BSR is merged even if it's the only extracted field
           if (catalogResponse && catalogResponse.enriched) {
+            let mergedCount = 0;
             for (const [asin, metadata] of catalogResponse.enriched.entries()) {
               spApiCatalogResults.set(asin, metadata);
+              mergedCount++;
               
               // Log BSR extraction for immediate visibility
               if (metadata.bsr !== null && metadata.bsr > 0) {
@@ -1603,10 +1621,24 @@ export async function fetchKeywordMarketSnapshot(
                   bsr: metadata.bsr,
                   batch_index: i,
                   keyword,
+                  spApiCatalogResults_size_after: spApiCatalogResults.size,
                   message: "BSR extracted and added to spApiCatalogResults map - will be merged into listings immediately",
                 });
               }
             }
+            console.log("✅ CATALOG_RESPONSE_MERGED", {
+              batch_index: i,
+              keyword,
+              merged_count: mergedCount,
+              spApiCatalogResults_size_after: spApiCatalogResults.size,
+            });
+          } else {
+            console.warn("⚠️ CATALOG_RESPONSE_MERGE_SKIPPED", {
+              batch_index: i,
+              keyword,
+              has_response: !!catalogResponse,
+              has_enriched: !!(catalogResponse && catalogResponse.enriched),
+            });
           }
           
           // Log batch completion (do not infer success/failure from enriched.size)
@@ -2053,6 +2085,24 @@ export async function fetchKeywordMarketSnapshot(
     // SP-API data is foundational - merge it immediately after parsing
     // SP-API overwrites Rainforest data (authoritative source)
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 🔥 HARD ASSERTION LOG: CATALOG_MAP_DIAGNOSTIC (REQUIRED TO PREVENT REGRESSIONS)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // This MUST NEVER show size 0 if we logged SP_API_BSR_EXTRACTED earlier in the same request
+    // If size is 0 but BSR was extracted, the aggregation/persistence pipeline is broken
+    console.log('CATALOG_MAP_DIAGNOSTIC', {
+      keyword,
+      size: spApiCatalogResults.size,
+      sample: Array.from(spApiCatalogResults.keys()).slice(0, 5),
+      hasBsrSample: Array.from(spApiCatalogResults.values()).slice(0, 5).map(x => ({ 
+        asin: x.asin, 
+        bsr: x.bsr,
+        title: x.title,
+        brand: x.brand,
+      })),
+      timestamp: new Date().toISOString(),
+    });
+    
     // Debug: Log spApiCatalogResults state before merge
     console.log("🔵 SP_API_MERGE_START", {
       keyword,
@@ -2068,6 +2118,11 @@ export async function fetchKeywordMarketSnapshot(
     let bsrMergeCount = 0;
     let catalogNotFoundCount = 0;
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL MERGE: Patch listings directly from spApiCatalogResults Map
+    // ═══════════════════════════════════════════════════════════════════════════
+    // This ensures BSR and other catalog data from SP-API is merged into listings
+    // DO NOT rely on any other merge logic - this is the authoritative merge step
     for (const listing of listings) {
       if (!listing.asin) continue;
       
@@ -2085,6 +2140,12 @@ export async function fetchKeywordMarketSnapshot(
         if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
           (listing as any).enrichment_state = 'sp_api_catalog_enriched';
         }
+        
+        // Ensure enrichment_sources object exists
+        if (!(listing as any).enrichment_sources) {
+          (listing as any).enrichment_sources = {};
+        }
+        (listing as any).enrichment_sources.sp_api_catalog = true;
         
         if (catalog.brand) {
           listing.brand = catalog.brand;
@@ -2105,8 +2166,9 @@ export async function fetchKeywordMarketSnapshot(
         if (catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
           bsrMergeCount++;
           // Set BSR immediately when catalog data is available
-          listing.main_category_bsr = catalog.bsr;
-          listing.bsr = catalog.bsr;
+          // Use nullish coalescing to preserve existing BSR if catalog BSR is null/0
+          listing.main_category_bsr = listing.main_category_bsr ?? catalog.bsr;
+          listing.bsr = listing.bsr ?? catalog.bsr;
           (listing as any).bsr_source = 'sp_api_catalog';
           (listing as any).had_sp_api_response = true;
           
@@ -2121,8 +2183,8 @@ export async function fetchKeywordMarketSnapshot(
             console.log("🟢 SP_API_BSR_MERGED", {
               asin: listing.asin,
               bsr: catalog.bsr,
-              main_category_bsr_set: listing.main_category_bsr === catalog.bsr,
-              bsr_set: listing.bsr === catalog.bsr,
+              main_category_bsr_set: listing.main_category_bsr,
+              bsr_set: listing.bsr,
               bsr_source: (listing as any).bsr_source,
               enrichment_state: (listing as any).enrichment_state,
               catalog_bsr: catalog.bsr,
@@ -2156,6 +2218,7 @@ export async function fetchKeywordMarketSnapshot(
             asin: listing.asin,
             spApiCatalogResults_size: spApiCatalogResults.size,
             sample_catalog_asins: Array.from(spApiCatalogResults.keys()).slice(0, 3),
+            all_listing_asins: listings.slice(0, 5).map(l => l.asin),
           });
         }
       }
