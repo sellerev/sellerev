@@ -2080,7 +2080,7 @@ export async function fetchKeywordMarketSnapshot(
       if (catalog) {
         if (catalog.brand) {
           listing.brand = catalog.brand;
-          (listing as any).brand_source = 'sp_api_catalog';
+          (listing as any).brand_source = 'sp_api';
           // Update brand confidence to high when from SP-API (authoritative)
           (listing as any)._brand_confidence = 'high';
           (listing as any)._brand_entity = catalog.brand;

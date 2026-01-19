@@ -1911,6 +1911,48 @@ export async function POST(req: NextRequest) {
       console.log("🔵 RAW_LISTINGS_LENGTH_BEFORE_CANONICAL", rawListings.length);
       
       // ═══════════════════════════════════════════════════════════════════════════
+      // SP-API ENRICHMENT RECONCILIATION LOG
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Log reconciliation data to confirm frontend + backend are aligned before rendering
+      if (body.input_type === "keyword" && rawListings.length > 0) {
+        const page1Asins = Array.from(new Set(
+          rawListings
+            .slice(0, Math.min(20, rawListings.length)) // Log first 20 ASINs
+            .map((l: any) => l.asin)
+            .filter((asin: string | null) => asin && /^[A-Z0-9]{10}$/i.test(asin.trim().toUpperCase()))
+            .map((asin: string) => asin.trim().toUpperCase())
+        ));
+        
+        for (const asin of page1Asins) {
+          const listing = rawListings.find((l: any) => l.asin?.toUpperCase() === asin);
+          if (listing) {
+            const brand = listing.brand || null;
+            const brandSource = (listing as any).brand_source || null;
+            const bsr = listing.bsr || listing.main_category_bsr || null;
+            const bsrSource = (listing as any).bsr_source || null;
+            
+            // Check if SP-API was called by looking for BSR source or other SP-API tags
+            const hadSpApiResponse = !!(bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog' || 
+                                       (listing as any)?.title_source === 'sp_api' || 
+                                       (listing as any)?.title_source === 'sp_api_catalog' ||
+                                       (listing as any)?.category_source === 'sp_api' ||
+                                       (listing as any)?.category_source === 'sp_api_catalog');
+            const hadBsr = !!(bsr !== null && bsr > 0);
+            
+            console.log("SP_API_ENRICHMENT_RECONCILIATION", {
+              asin,
+              brand,
+              brand_source: brandSource,
+              bsr,
+              had_sp_api_response: hadSpApiResponse,
+              had_bsr: hadBsr,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }
+      }
+      
+      // ═══════════════════════════════════════════════════════════════════════════
       // SP-API HANDLED BY fetchKeywordMarketSnapshot (WITH CACHE CHECKING)
       // ═══════════════════════════════════════════════════════════════════════════
       // SP-API execution is handled by fetchKeywordMarketSnapshot which:
@@ -2044,11 +2086,11 @@ export async function POST(req: NextRequest) {
               if (listing) {
                 // SP-API overwrites: brand, category, BSR
                 // ═══════════════════════════════════════════════════════════════════════════
-                // SOURCE-TAGGING ENFORCEMENT: Throw if field populated without source
+                // SOURCE-TAGGING ENFORCEMENT: Always set brand_source when brand comes from SP-API
                 // ═══════════════════════════════════════════════════════════════════════════
                 if (metadata.brand) {
                   listing.brand = metadata.brand;
-                  (listing as any).brand_source = 'sp_api_catalog';
+                  (listing as any).brand_source = 'sp_api';
                 }
                 if (metadata.category) {
                   listing.main_category = metadata.category;
@@ -2085,7 +2127,7 @@ export async function POST(req: NextRequest) {
               if (!asin) continue;
               
               // Check if Rainforest tried to populate blocked fields
-              const hasRainforestBrand = listing.brand && (listing as any).brand_source !== 'sp_api_catalog' && (listing as any).brand_source !== 'model_inferred';
+              const hasRainforestBrand = listing.brand && (listing as any).brand_source !== 'sp_api' && (listing as any).brand_source !== 'sp_api_catalog' && (listing as any).brand_source !== 'model_inferred';
               const hasRainforestCategory = listing.main_category && (listing as any).category_source !== 'sp_api_catalog';
               const hasRainforestBsr = listing.bsr && (listing as any).bsr_source !== 'sp_api_catalog';
               const hasRainforestFulfillment = listing.fulfillment && (listing as any).fulfillment_source !== 'sp_api_pricing';
@@ -2104,7 +2146,7 @@ export async function POST(req: NextRequest) {
                 });
                 
                 // Clear blocked fields if Rainforest populated them
-                if (hasRainforestBrand && (listing as any).brand_source !== 'sp_api_catalog') {
+                if (hasRainforestBrand && (listing as any).brand_source !== 'sp_api' && (listing as any).brand_source !== 'sp_api_catalog') {
                   listing.brand = null;
                   (listing as any).brand_source = null;
                 }
@@ -2449,34 +2491,69 @@ export async function POST(req: NextRequest) {
         }
         
         // ═══════════════════════════════════════════════════════════════════════════
-        // HARD-FAIL: SP-API VERIFICATION (MANDATORY)
+        // SP-API VERIFICATION (MANDATORY)
         // ═══════════════════════════════════════════════════════════════════════════
-        // If any page-1 ASIN exits canonicalization with:
-        // - brand = null OR
-        // - brand_source != 'sp_api_catalog'
-        // → Throw a hard error
+        // If any page-1 ASIN exits canonicalization without SP-API data:
+        // - Check if SP-API was called by looking for bsr_source or other SP-API source tags
+        // - If SP-API was called (bsr_source exists) but brand_source is missing, log as INFO (not error)
+        // - Only throw error if SP-API was not called at all (no bsr_source, no other SP-API tags)
         if (body.input_type === "keyword" && pageOneProducts.length > 0) {
-          const failedAsins: Array<{ asin: string; brand: string | null; brand_source: string | null }> = [];
+          const failedAsins: Array<{ asin: string; brand: string | null; brand_source: string | null; bsr_source: string | null; had_sp_api_response: boolean; had_bsr: boolean }> = [];
+          const warningAsins: Array<{ asin: string; brand: string | null; brand_source: string | null; bsr_source: string | null }> = [];
           
           for (const product of pageOneProducts) {
             const asin = product.asin;
             const listing = rawListings.find((l: any) => l.asin?.toUpperCase() === asin.toUpperCase());
             const brandSource = listing ? (listing as any).brand_source : null;
+            const bsrSource = listing ? (listing as any).bsr_source : null;
             const brand = product.brand;
+            const bsr = listing?.bsr || listing?.main_category_bsr || null;
             
-            // Hard-fail if brand_source is not 'sp_api_catalog'
-            // Note: brand can be null even when SP-API was called successfully (some products legitimately have no brand)
-            if (brandSource !== 'sp_api_catalog') {
+            // Check if SP-API was called by looking for BSR source or other SP-API tags
+            const hadSpApiResponse = !!(bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog' || 
+                                       (listing as any)?.title_source === 'sp_api' || 
+                                       (listing as any)?.title_source === 'sp_api_catalog' ||
+                                       (listing as any)?.category_source === 'sp_api' ||
+                                       (listing as any)?.category_source === 'sp_api_catalog');
+            const hadBsr = !!(bsr !== null && bsr > 0);
+            
+            // If SP-API was called but brand_source is missing, log as INFO (not error)
+            if (hadSpApiResponse && brandSource !== 'sp_api' && brandSource !== 'sp_api_catalog') {
+              warningAsins.push({
+                asin,
+                brand,
+                brand_source: brandSource,
+                bsr_source: bsrSource,
+              });
+            }
+            
+            // Only fail if SP-API was NOT called at all (no BSR source, no other SP-API tags)
+            if (!hadSpApiResponse) {
               failedAsins.push({
                 asin,
                 brand,
                 brand_source: brandSource,
+                bsr_source: bsrSource,
+                had_sp_api_response: false,
+                had_bsr: hadBsr,
               });
             }
           }
           
+          // Log warnings for ASINs where SP-API was called but brand_source is missing
+          if (warningAsins.length > 0) {
+            console.log("ℹ️ SP_API_BRAND_SOURCE_MISSING", {
+              keyword: body.input_value,
+              warning_count: warningAsins.length,
+              total_asins: pageOneProducts.length,
+              warning_asins: warningAsins,
+              message: "SP-API was called but brand_source is missing. This is expected if SP-API did not return brand data.",
+            });
+          }
+          
+          // Only throw error if SP-API was truly not called
           if (failedAsins.length > 0) {
-            const errorMessage = `SP_API_EXPECTED_BUT_NOT_CALLED: ${failedAsins.length} page-1 ASIN(s) missing SP-API brand_source. Failed ASINs: ${failedAsins.map(f => `${f.asin}(brand=${f.brand},source=${f.brand_source})`).join(', ')}`;
+            const errorMessage = `SP_API_EXPECTED_BUT_NOT_CALLED: ${failedAsins.length} page-1 ASIN(s) missing SP-API response. Failed ASINs: ${failedAsins.map(f => `${f.asin}(brand=${f.brand},brand_source=${f.brand_source},bsr_source=${f.bsr_source})`).join(', ')}`;
             console.error("❌ SP_API_EXPECTED_BUT_NOT_CALLED", {
               keyword: body.input_value,
               failed_count: failedAsins.length,
