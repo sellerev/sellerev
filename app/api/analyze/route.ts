@@ -2007,7 +2007,7 @@ export async function POST(req: NextRequest) {
           }
           
           try {
-            pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000, body.input_value, user.id);
+            pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000, body.input_value, user?.id);
           } catch (err: any) {
             const errorMessage = err?.message || String(err) || 'Unknown error';
             console.error("❌ SP_API_PRICING_FAILURE", {
