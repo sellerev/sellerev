@@ -44,6 +44,7 @@ export interface BatchEnrichmentResult {
  */
 export async function batchEnrichCatalogItems(
   asins: string[],
+  spApiCatalogResults: Map<string, any>,
   marketplaceId: string = "ATVPDKIKX0DER",
   timeoutMs: number = 4000,
   keyword?: string,
@@ -55,15 +56,9 @@ export async function batchEnrichCatalogItems(
     totalRelationshipsWritten: { value: number };
     totalSkippedDueToCache: { value: number };
   }
-): Promise<BatchEnrichmentResult> {
-  const result: BatchEnrichmentResult = {
-    enriched: new Map(),
-    failed: [],
-    errors: [],
-  };
-
+): Promise<void> {
   if (!asins || asins.length === 0) {
-    return result;
+    return;
   }
 
   // Check credentials
@@ -72,8 +67,7 @@ export async function batchEnrichCatalogItems(
 
   if (!awsAccessKeyId || !awsSecretAccessKey) {
     console.warn("SP-API credentials not configured, skipping catalog enrichment");
-    result.failed = [...asins];
-    return result;
+    return;
   }
 
   // Batch ASINs into groups of 20 (SP-API limit)
@@ -89,71 +83,16 @@ export async function batchEnrichCatalogItems(
   const totalStartTime = Date.now();
 
   // Execute batches in parallel with timeout
+  // CRITICAL: Pass spApiCatalogResults directly so it's mutated in place
   const batchPromises = batches.map((batch, batchIndex) =>
-    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase, ingestionMetrics)
+    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase, ingestionMetrics, spApiCatalogResults)
   );
 
-  const batchResults = await Promise.allSettled(batchPromises);
-
-  // Aggregate results
-  for (let i = 0; i < batchResults.length; i++) {
-    const batchResult = batchResults[i];
-    const batch = batches[i];
-
-    if (batchResult.status === "fulfilled") {
-      const batchData = batchResult.value;
-      const batchDataSize = batchData.size;
-      
-      // Debug log to verify aggregation is working
-      if (batchDataSize > 0) {
-        console.log("🟢 AGGREGATING_BATCH_RESULTS", {
-          batch_index: i,
-          batch_size: batch.length,
-          enriched_map_size: batchDataSize,
-          result_enriched_size_before: result.enriched.size,
-        });
-      }
-      
-      for (const [asin, metadata] of batchData.entries()) {
-        result.enriched.set(asin, metadata);
-      }
-      
-      // Debug log after aggregation
-      if (batchDataSize > 0) {
-        console.log("🟢 BATCH_RESULTS_AGGREGATED", {
-          batch_index: i,
-          result_enriched_size_after: result.enriched.size,
-          added_count: batchDataSize,
-        });
-      }
-    } else {
-      // Mark all ASINs in failed batch as failed
-      for (const asin of batch) {
-        result.failed.push(asin);
-        result.errors.push({
-          asin,
-          error: batchResult.reason?.message || "Batch request failed",
-        });
-      }
-    }
-  }
-
-  // CRITICAL: Do NOT mark ASINs as failed based solely on enriched map
-  // Enrichment success is determined by actual data written (attributes, BSR, images)
-  // NOT by whether ASIN appears in enriched map
-  // This logic is now handled per-batch above, based on enrichment signals
+  await Promise.allSettled(batchPromises);
 
   // Emit batch summary log
   const totalDuration = Date.now() - totalStartTime;
   const avgDuration = totalBatches > 0 ? Math.round(totalDuration / totalBatches) : 0;
-  
-  // ═══════════════════════════════════════════════════════════════════════════
-  // DIAGNOSTIC: Verify aggregation worked before returning
-  // ═══════════════════════════════════════════════════════════════════════════
-  const enrichedAsins = Array.from(result.enriched.keys());
-  const enrichedBsrs = Array.from(result.enriched.entries())
-    .slice(0, 10)
-    .map(([asin, meta]) => ({ asin, bsr: meta.bsr }));
   
   console.log('SP_API_BATCH_COMPLETE', {
     endpoint_name: 'catalogItems',
@@ -161,16 +100,11 @@ export async function batchEnrichCatalogItems(
     total_asins: asins.length,
     total_batches: totalBatches,
     batch_sizes: batchSizes,
-    enriched_count: result.enriched.size,
-    failed_count: result.failed.length,
-    enriched_asins_sample: enrichedAsins.slice(0, 10),
-    enriched_bsrs_sample: enrichedBsrs,
+    enriched_count: spApiCatalogResults.size,
     total_duration_ms: totalDuration,
     avg_duration_ms: avgDuration,
     timestamp: new Date().toISOString(),
   });
-
-  return result;
 }
 
 /**
@@ -192,13 +126,14 @@ async function fetchBatchWithTimeout(
     totalImagesWritten: { value: number };
     totalRelationshipsWritten: { value: number };
     totalSkippedDueToCache: { value: number };
-  }
-): Promise<Map<string, CatalogItemMetadata>> {
-  const timeoutPromise = new Promise<Map<string, CatalogItemMetadata>>((_, reject) => {
+  },
+  spApiCatalogResults?: Map<string, any>
+): Promise<void> {
+  const timeoutPromise = new Promise<void>((_, reject) => {
     setTimeout(() => reject(new Error("SP-API batch request timeout")), timeoutMs);
   });
 
-  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase, ingestionMetrics);
+  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase, ingestionMetrics, spApiCatalogResults);
 
   return Promise.race([fetchPromise, timeoutPromise]);
 }
@@ -221,9 +156,15 @@ async function fetchBatch(
     totalImagesWritten: { value: number };
     totalRelationshipsWritten: { value: number };
     totalSkippedDueToCache: { value: number };
+  },
+  spApiCatalogResults?: Map<string, any>
+): Promise<void> {
+  if (!spApiCatalogResults) {
+    throw new Error("spApiCatalogResults map must be provided");
   }
-): Promise<Map<string, CatalogItemMetadata>> {
-  const result = new Map<string, CatalogItemMetadata>();
+  
+  const normalizeAsin = (a: string) => a.trim().toUpperCase();
+  let didExtractAnyBsr = false;
   const startTime = Date.now();
   
   // Track enrichment signals (independent of items.length or enriched map)
@@ -317,15 +258,8 @@ async function fetchBatch(
         total_batches: totalBatches,
       });
 
-      // HTTP error - mark all ASINs as failed
-      for (const asin of asins) {
-        if (!result.has(asin)) {
-          // ASIN not in enriched map, mark as failed
-          // Note: result is Map, not result.enriched/failed structure
-          // This will be handled at batch level
-        }
-      }
-      return result; // Return empty map on failure
+      // HTTP error - return void, no data added to map
+      return;
     }
 
     const data = await response.json();
@@ -540,21 +474,6 @@ async function fetchBatch(
     // If we have any enrichment signals (BSR, attributes, images), enrichment was successful
     // This handles cases where items.length === 0 but salesRanks/attributes were processed
     // Note: Enrichment signals tracked above will be used for success determination
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // DIAGNOSTIC: Log result map state before returning
-    // ═══════════════════════════════════════════════════════════════════════════
-    console.log('🔍 FETCH_BATCH_RETURNING', {
-      keyword: keyword || 'unknown',
-      batch_index: batchIndex,
-      result_map_size: result.size,
-      result_asins: Array.from(result.keys()),
-      result_bsrs: Array.from(result.entries()).map(([asin, meta]) => ({ asin, bsr: meta.bsr })),
-      hasAnyEnrichment,
-      hasBsrExtracted,
-      hasAttributes,
-      hasImages,
-    });
   } catch (error) {
     const duration = Date.now() - startTime;
     
@@ -572,20 +491,7 @@ async function fetchBatch(
       batch_index: batchIndex,
       total_batches: totalBatches,
     });
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // DIAGNOSTIC: Log result map state even on error
-    // ═══════════════════════════════════════════════════════════════════════════
-    console.log('🔍 FETCH_BATCH_ERROR_RETURNING', {
-      keyword: keyword || 'unknown',
-      batch_index: batchIndex,
-      result_map_size: result.size,
-      result_asins: Array.from(result.keys()),
-      error: error instanceof Error ? error.message : String(error),
-    });
   }
-
-  return result;
 }
 
 /**

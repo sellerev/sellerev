@@ -1477,8 +1477,11 @@ export async function fetchKeywordMarketSnapshot(
     // This must run for EVERY keyword search.
     // No confidence checks. No cache skips.
     // SP-API is PRIMARY DATA. Not enrichment.
-    let spApiCatalogResults: Map<string, any> = new Map();
+    // CRITICAL: Single authoritative map - must be in same scope as merge step
+    const normalizeAsin = (a: string) => a.trim().toUpperCase();
+    const spApiCatalogResults = new Map<string, any>();
     let spApiPricingResults: Map<string, any> = new Map();
+    let didExtractAnyBsr = false;
     
     console.log("🔥 SP_API_FORCED_START", {
       keyword,
@@ -1524,18 +1527,25 @@ export async function fetchKeywordMarketSnapshot(
             cached_asins: catalogCacheHitCount,
             total_asins: page1Asins.length,
           });
-          // Merge cached data into results
+          // Merge cached data into results - write directly to authoritative map
           for (const [asin, record] of catalogCache.entries()) {
+            const asinKey = normalizeAsin(asin);
             // Convert cached record to CatalogItemMetadata format for backward compatibility
             const metadata: any = {
-              asin: record.core.asin,
+              asin: asinKey,
               title: record.core.title,
               brand: record.core.brand,
               image_url: record.media.primary_image_url,
               category: record.market.primary_category,
               bsr: record.market.primary_rank,
+              primaryCategory: record.market.primary_category,
             };
-            spApiCatalogResults.set(asin, metadata);
+            spApiCatalogResults.set(asinKey, metadata);
+            
+            // Track BSR extraction from cache
+            if (metadata.bsr != null && metadata.bsr > 0) {
+              didExtractAnyBsr = true;
+            }
           }
           // Filter out ASINs that were found in cache
           asinsToFetch = page1Asins.filter(asin => !catalogCache.has(asin.toUpperCase()));
@@ -1559,6 +1569,7 @@ export async function fetchKeywordMarketSnapshot(
       // --- SP-API CATALOG (Brand, Category, BSR) ---
       const { batchEnrichCatalogItems } = await import("../spapi/catalogItems");
       
+      // CRITICAL: Ensure all batches are awaited before merge runs
       for (let i = 0; i < asinBatchesToFetch.length; i++) {
         const batch = asinBatchesToFetch[i];
         console.log("🔥 SP_API_CATALOG_BATCH_START", {
@@ -1579,7 +1590,9 @@ export async function fetchKeywordMarketSnapshot(
             totalSkippedDueToCache: { value: totalSkippedDueToCache },
           };
           
-          const catalogResponse = await batchEnrichCatalogItems(batch, marketplaceId, 2000, keyword, supabase, ingestionMetrics);
+          // CRITICAL: Pass spApiCatalogResults map to be mutated directly
+          // Function now mutates the map instead of returning a new one
+          await batchEnrichCatalogItems(batch, spApiCatalogResults, marketplaceId, 2000, keyword, supabase, ingestionMetrics);
           
           // Update aggregated metrics (updated synchronously in batchEnrichCatalogItems)
           totalAttributesWritten = ingestionMetrics.totalAttributesWritten.value;
@@ -1588,57 +1601,14 @@ export async function fetchKeywordMarketSnapshot(
           totalRelationshipsWritten = ingestionMetrics.totalRelationshipsWritten.value;
           totalSkippedDueToCache = ingestionMetrics.totalSkippedDueToCache.value;
           
-          // ═══════════════════════════════════════════════════════════════════════════
-          // DIAGNOSTIC: Verify catalogResponse has data before merging
-          // ═══════════════════════════════════════════════════════════════════════════
-          console.log("🔍 CATALOG_RESPONSE_DIAGNOSTIC", {
-            batch_index: i,
-            keyword,
-            has_response: !!catalogResponse,
-            has_enriched: !!(catalogResponse && catalogResponse.enriched),
-            enriched_size: catalogResponse?.enriched?.size || 0,
-            enriched_keys: catalogResponse?.enriched ? Array.from(catalogResponse.enriched.keys()).slice(0, 5) : [],
-            enriched_bsrs: catalogResponse?.enriched ? Array.from(catalogResponse.enriched.entries())
-              .slice(0, 5)
-              .map(([asin, meta]) => ({ asin, bsr: meta.bsr })) : [],
-            spApiCatalogResults_size_before: spApiCatalogResults.size,
-          });
-          
-          // Merge results into main map (always process, even if enriched map is empty)
-          // In keyword mode, SP-API can return salesRanks/classificationRanks without items[]
-          // So we cannot infer SP-API success/failure from enriched.size or items.length
-          // CRITICAL: Ensure BSR is merged even if it's the only extracted field
-          if (catalogResponse && catalogResponse.enriched) {
-            let mergedCount = 0;
-            for (const [asin, metadata] of catalogResponse.enriched.entries()) {
-              spApiCatalogResults.set(asin, metadata);
-              mergedCount++;
-              
-              // Log BSR extraction for immediate visibility
-              if (metadata.bsr !== null && metadata.bsr > 0) {
-                console.log("🔵 SP_API_BSR_EXTRACTED_IN_BATCH", {
-                  asin,
-                  bsr: metadata.bsr,
-                  batch_index: i,
-                  keyword,
-                  spApiCatalogResults_size_after: spApiCatalogResults.size,
-                  message: "BSR extracted and added to spApiCatalogResults map - will be merged into listings immediately",
-                });
+          // Track if any BSR was extracted (check map size change or scan for BSR)
+          if (spApiCatalogResults.size > 0) {
+            for (const [asin, catalog] of spApiCatalogResults.entries()) {
+              if (catalog?.bsr != null && catalog.bsr > 0) {
+                didExtractAnyBsr = true;
+                break;
               }
             }
-            console.log("✅ CATALOG_RESPONSE_MERGED", {
-              batch_index: i,
-              keyword,
-              merged_count: mergedCount,
-              spApiCatalogResults_size_after: spApiCatalogResults.size,
-            });
-          } else {
-            console.warn("⚠️ CATALOG_RESPONSE_MERGE_SKIPPED", {
-              batch_index: i,
-              keyword,
-              has_response: !!catalogResponse,
-              has_enriched: !!(catalogResponse && catalogResponse.enriched),
-            });
           }
           
           // Log batch completion (do not infer success/failure from enriched.size)
@@ -2103,6 +2073,13 @@ export async function fetchKeywordMarketSnapshot(
       timestamp: new Date().toISOString(),
     });
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // HARD ASSERTION: BSR extracted but map empty = BUG
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (didExtractAnyBsr && spApiCatalogResults.size === 0) {
+      throw new Error("BUG: BSR extracted but spApiCatalogResults is empty before merge");
+    }
+    
     // Debug: Log spApiCatalogResults state before merge
     console.log("🔵 SP_API_MERGE_START", {
       keyword,
@@ -2126,8 +2103,8 @@ export async function fetchKeywordMarketSnapshot(
     for (const listing of listings) {
       if (!listing.asin) continue;
       
-      const asin = listing.asin.toUpperCase();
-      const catalog = spApiCatalogResults.get(asin);
+      const asinKey = normalizeAsin(listing.asin);
+      const catalog = spApiCatalogResults.get(asinKey);
       
       // SP-API Catalog overwrites: brand, category, BSR, title, image
       // CRITICAL: SP-API brand is authoritative - override title-parsed brands
@@ -2304,7 +2281,7 @@ export async function fetchKeywordMarketSnapshot(
     // 
     // DO NOT rely on existing merge logic alone - force explicit patching here
     // This ensures rawListings passed to buildKeywordPageOne() contains BSR
-    const normalizeAsin = (asin: string) => asin.trim().toUpperCase();
+    // normalizeAsin is already defined in outer scope
     
     const listingByAsin = new Map<string, any>();
     for (const l of listings) {
@@ -2317,7 +2294,8 @@ export async function fetchKeywordMarketSnapshot(
     let bsrPatched = 0;
     
     for (const [asin, catalog] of spApiCatalogResults.entries()) {
-      const target = listingByAsin.get(normalizeAsin(asin));
+      const asinKey = normalizeAsin(asin);
+      const target = listingByAsin.get(asinKey);
       if (!target) continue;
       
       if (catalog?.bsr != null && catalog.bsr > 0) {
