@@ -83,7 +83,7 @@ export async function batchEnrichCatalogItems(
 
   // Execute batches in parallel with timeout
   const batchPromises = batches.map((batch, batchIndex) =>
-    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword)
+    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase)
   );
 
   const batchResults = await Promise.allSettled(batchPromises);
@@ -147,13 +147,14 @@ async function fetchBatchWithTimeout(
   awsSecretAccessKey: string,
   batchIndex: number,
   totalBatches: number,
-  keyword?: string
+  keyword?: string,
+  supabase?: any
 ): Promise<Map<string, CatalogItemMetadata>> {
   const timeoutPromise = new Promise<Map<string, CatalogItemMetadata>>((_, reject) => {
     setTimeout(() => reject(new Error("SP-API batch request timeout")), timeoutMs);
   });
 
-  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword);
+  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase);
 
   return Promise.race([fetchPromise, timeoutPromise]);
 }
@@ -168,7 +169,8 @@ async function fetchBatch(
   awsSecretAccessKey: string,
   batchIndex: number,
   totalBatches: number,
-  keyword?: string
+  keyword?: string,
+  supabase?: any
 ): Promise<Map<string, CatalogItemMetadata>> {
   const result = new Map<string, CatalogItemMetadata>();
   const startTime = Date.now();
