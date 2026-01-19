@@ -1395,7 +1395,12 @@ export async function POST(req: NextRequest) {
             }
           } catch (err) {
             // Log error but continue - SP-API enrichment is non-fatal
-            const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+            let errorMessage: string;
+            if (err instanceof Error) {
+              errorMessage = err.message;
+            } else {
+              errorMessage = String(err ?? 'Unknown error');
+            }
             console.error("SP_API_ENRICHMENT_ERROR_AFTER_CACHE", {
               keyword: normalizedKeyword,
               error: errorMessage,
@@ -1477,7 +1482,12 @@ export async function POST(req: NextRequest) {
         // Fall through to snapshot lookup
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+      let errorMessage: string;
+      if (err instanceof Error) {
+        errorMessage = err.message;
+      } else {
+        errorMessage = String(err ?? 'Unknown error');
+      }
       console.error("❌ MARKET_FETCH_ERROR", {
         keyword: body.input_value,
         error: errorMessage,
@@ -1996,7 +2006,12 @@ export async function POST(req: NextRequest) {
             // Execute catalog and pricing separately to handle failures independently
             catalogResult = await batchEnrichCatalogItems(page1Asins, marketplaceId, 2000, body.input_value);
           } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+            let errorMessage: string;
+            if (err instanceof Error) {
+              errorMessage = err.message;
+            } else {
+              errorMessage = String(err ?? 'Unknown error');
+            }
             console.error("❌ SP_API_CATALOG_FAILURE", {
               keyword: body.input_value,
               error: errorMessage,
@@ -2009,7 +2024,12 @@ export async function POST(req: NextRequest) {
           try {
             pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000, body.input_value, user.id);
           } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+            let errorMessage: string;
+            if (err instanceof Error) {
+              errorMessage = err.message;
+            } else {
+              errorMessage = String(err ?? 'Unknown error');
+            }
             console.error("❌ SP_API_PRICING_FAILURE", {
               keyword: body.input_value,
               error: errorMessage,
@@ -2588,7 +2608,12 @@ export async function POST(req: NextRequest) {
                 // This allows UI to re-hydrate refined snapshot via snapshot_id
               })
               .catch((err) => {
-                const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+                let errorMessage: string;
+                if (err instanceof Error) {
+                  errorMessage = err.message;
+                } else {
+                  errorMessage = String(err ?? 'Unknown error');
+                }
                 console.error("❌ TIER2_REFINEMENT_ERROR", {
                   snapshot_id: snapshotId,
                   error: errorMessage,
@@ -2664,7 +2689,12 @@ export async function POST(req: NextRequest) {
               source: calibrationResult.source,
             });
           } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+            let errorMessage: string;
+            if (err instanceof Error) {
+              errorMessage = err.message;
+            } else {
+              errorMessage = String(err ?? 'Unknown error');
+            }
             console.warn("⚠️ KEYWORD CALIBRATION ERROR (NON-FATAL)", {
               keyword: body.input_value,
               error: errorMessage,
