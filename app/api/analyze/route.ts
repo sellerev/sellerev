@@ -1994,9 +1994,10 @@ export async function POST(req: NextRequest) {
             // Execute catalog and pricing separately to handle failures independently
             catalogResult = await batchEnrichCatalogItems(page1Asins, marketplaceId, 2000, body.input_value);
           } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
             console.error("❌ SP_API_CATALOG_FAILURE", {
               keyword: body.input_value,
-              error: error instanceof Error ? error.message : String(error),
+              error: errorMessage,
               asin_count: page1Asins.length,
               message: "Catalog enrichment failed - continuing without catalog data",
             });
@@ -2006,9 +2007,10 @@ export async function POST(req: NextRequest) {
           try {
             pricingResult = await batchEnrichPricing(page1Asins, marketplaceId, 2000, body.input_value, user.id);
           } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
             console.error("❌ SP_API_PRICING_FAILURE", {
               keyword: body.input_value,
-              error: error instanceof Error ? error.message : String(error),
+              error: errorMessage,
               asin_count: page1Asins.length,
               message: "Pricing enrichment failed - will fallback to Rainforest data",
             });
