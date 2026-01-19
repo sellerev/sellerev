@@ -2142,18 +2142,21 @@ export async function fetchKeywordMarketSnapshot(
         // This happens IMMEDIATELY when SP-API results are merged - no delay, no DB queries
         if (catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
           bsrMergeCount++;
-          // Set BSR immediately when catalog data is available
-          // Use nullish coalescing to preserve existing BSR if catalog BSR is null/0
-          listing.main_category_bsr = listing.main_category_bsr ?? catalog.bsr;
-          listing.bsr = listing.bsr ?? catalog.bsr;
-          (listing as any).bsr_source = 'sp_api_catalog';
+          // 🔴 REQUIRED: Set BSR AND provenance at merge time (not inferred later)
+          listing.main_category_bsr = catalog.bsr;
+          listing.bsr = catalog.bsr;
+          (listing as any).bsr_source = 'sp_api';
           (listing as any).had_sp_api_response = true;
+          
+          // Ensure enrichment_sources object exists
+          if (!(listing as any).enrichment_sources) {
+            (listing as any).enrichment_sources = {};
+          }
+          (listing as any).enrichment_sources.sp_api_catalog = true;
           
           // Transition enrichment state immediately when BSR is extracted
           // State machine: raw -> sp_api_catalog_enriched
-          if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
-            (listing as any).enrichment_state = 'sp_api_catalog_enriched';
-          }
+          (listing as any).enrichment_state = 'sp_api_catalog_enriched';
           
           // Debug log for BSR merge (first 5 ASINs only)
           if (bsrMergeCount <= 5) {
@@ -2299,10 +2302,19 @@ export async function fetchKeywordMarketSnapshot(
       if (!target) continue;
       
       if (catalog?.bsr != null && catalog.bsr > 0) {
+        // 🔴 REQUIRED: Set BSR AND provenance at merge time (not inferred later)
         target.bsr = catalog.bsr;
         target.main_category_bsr = catalog.bsr;
         (target as any).bsr_source = "sp_api";
         (target as any).had_sp_api_response = true;
+        
+        // Ensure enrichment_sources object exists
+        if (!(target as any).enrichment_sources) {
+          (target as any).enrichment_sources = {};
+        }
+        (target as any).enrichment_sources.sp_api_catalog = true;
+        (target as any).enrichment_state = 'sp_api_catalog_enriched';
+        
         bsrPatched++;
       }
     }
@@ -2734,24 +2746,28 @@ export async function fetchKeywordMarketSnapshot(
       const catalog = spApiCatalogResults.get(asin);
       
       if (catalog && catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
-        // Merge BSR if it exists in catalog but not in listing
-        if ((listing.main_category_bsr === null || listing.main_category_bsr === undefined || listing.main_category_bsr <= 0) &&
-            (listing.bsr === null || listing.bsr === undefined || listing.bsr <= 0)) {
-          listing.main_category_bsr = catalog.bsr;
-          listing.bsr = catalog.bsr;
-          (listing as any).bsr_source = 'sp_api_catalog';
-          (listing as any).had_sp_api_response = true;
-          if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
-            (listing as any).enrichment_state = 'sp_api_catalog_enriched';
-          }
-          
-          console.log("🟢 SAFETY_MERGE_BSR_APPLIED", {
-            asin: listing.asin,
-            bsr: catalog.bsr,
-            keyword,
-            message: "BSR merged via safety merge - this should not happen if initial merge worked",
-          });
+        // 🔴 REQUIRED: Set BSR AND provenance at merge time when catalog has BSR
+        // Do NOT gate behind listing BSR check - if catalog has BSR, it's from SP-API
+        listing.main_category_bsr = catalog.bsr;
+        listing.bsr = catalog.bsr;
+        (listing as any).bsr_source = 'sp_api';
+        (listing as any).had_sp_api_response = true;
+        
+        // Ensure enrichment_sources object exists
+        if (!(listing as any).enrichment_sources) {
+          (listing as any).enrichment_sources = {};
         }
+        (listing as any).enrichment_sources.sp_api_catalog = true;
+        (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+        
+        console.log("🟢 SAFETY_MERGE_BSR_APPLIED", {
+          asin: listing.asin,
+          bsr: catalog.bsr,
+          keyword,
+          bsr_source: (listing as any).bsr_source,
+          had_sp_api_response: (listing as any).had_sp_api_response,
+          message: "BSR merged via safety merge - this should not happen if initial merge worked",
+        });
       }
     }
 

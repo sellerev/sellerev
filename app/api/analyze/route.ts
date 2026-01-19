@@ -1315,6 +1315,10 @@ export async function POST(req: NextRequest) {
           const asins = cachedProducts.map((p: any) => p.asin).filter(Boolean);
           const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER';
           
+          // CRITICAL: Create authoritative map (same pattern as fetchKeywordMarketSnapshot)
+          const normalizeAsin = (a: string) => a.trim().toUpperCase();
+          const spApiCatalogResults = new Map<string, any>();
+          
           // REQUIRED LOG: SP_API_ENRICHMENT_FORCED_AFTER_CACHE
           console.log("SP_API_ENRICHMENT_FORCED_AFTER_CACHE", {
             keyword: normalizedKeyword,
@@ -1326,44 +1330,70 @@ export async function POST(req: NextRequest) {
           // Execute SP-API Catalog and Pricing enrichment in parallel
           // NO conditional gates - always executes
           try {
-            const [catalogResult, pricingResult] = await Promise.all([
-              batchEnrichCatalogItems(asins, marketplaceId, 2000),
+            const [_, pricingResult] = await Promise.all([
+              batchEnrichCatalogItems(asins, spApiCatalogResults, marketplaceId, 2000, normalizedKeyword),
               batchEnrichPricing(asins, marketplaceId, 2000, undefined, user.id),
             ]);
-            
-            // Update listings with SP-API Catalog data (brand, category, BSR, title, image)
-            const catalogEnrichment = catalogResult.enriched;
-            const pricingEnrichment = pricingResult.enriched;
             
             // Create a map of ASIN to listing for efficient updates
             const listingMap = new Map<string, ParsedListing>();
             realMarketData.listings.forEach((listing: ParsedListing) => {
               if (listing.asin) {
-                listingMap.set(listing.asin.toUpperCase(), listing);
+                listingMap.set(normalizeAsin(listing.asin), listing);
               }
             });
             
             // Apply SP-API Catalog enrichment (authoritative: brand, category, BSR)
-            for (const [asin, metadata] of catalogEnrichment.entries()) {
-              const listing = listingMap.get(asin.toUpperCase());
+            // CRITICAL: Set source tags so enrichment is detected
+            for (const [asin, metadata] of spApiCatalogResults.entries()) {
+              const asinKey = normalizeAsin(asin);
+              const listing = listingMap.get(asinKey);
               if (listing) {
+                // Mark SP-API response
+                (listing as any).had_sp_api_response = true;
+                if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
+                  (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+                }
+                
                 // SP-API overwrites: brand, category, BSR
-                if (metadata.brand) listing.brand = metadata.brand;
-                if (metadata.category) listing.main_category = metadata.category;
-                if (metadata.bsr !== null) {
+                if (metadata.brand) {
+                  listing.brand = metadata.brand;
+                  (listing as any).brand_source = 'sp_api';
+                }
+                if (metadata.category) {
+                  listing.main_category = metadata.category;
+                  (listing as any).category_source = 'sp_api_catalog';
+                }
+                // 🔴 REQUIRED: Set BSR AND provenance at merge time (not inferred later)
+                if (metadata.bsr != null && metadata.bsr > 0) {
                   listing.bsr = metadata.bsr;
                   listing.main_category_bsr = metadata.bsr;
+                  (listing as any).bsr_source = 'sp_api';
+                  (listing as any).had_sp_api_response = true;
+                  
+                  // Ensure enrichment_sources object exists
+                  if (!(listing as any).enrichment_sources) {
+                    (listing as any).enrichment_sources = {};
+                  }
+                  (listing as any).enrichment_sources.sp_api_catalog = true;
+                  (listing as any).enrichment_state = 'sp_api_catalog_enriched';
                 }
-                if (metadata.title) listing.title = metadata.title;
-                if (metadata.image_url) listing.image_url = metadata.image_url;
+                if (metadata.title) {
+                  listing.title = metadata.title;
+                  (listing as any).title_source = 'sp_api_catalog';
+                }
+                if (metadata.image_url) {
+                  listing.image_url = metadata.image_url;
+                  (listing as any).image_source = 'sp_api_catalog';
+                }
               }
             }
             
             // Apply SP-API Pricing enrichment (authoritative: fulfillment, buy box)
             // If pricing enrichment is empty (no seller OAuth), Rainforest data is already in listings
-            if (pricingEnrichment.size > 0) {
-              for (const [asin, metadata] of pricingEnrichment.entries()) {
-                const listing = listingMap.get(asin.toUpperCase());
+            if (pricingResult && pricingResult.enriched && pricingResult.enriched.size > 0) {
+              for (const [asin, metadata] of pricingResult.enriched.entries()) {
+                const listing = listingMap.get(normalizeAsin(asin));
                 if (listing) {
                   // SP-API overwrites: fulfillment
                   if (metadata.fulfillment_channel) {
