@@ -1603,7 +1603,7 @@ export async function fetchKeywordMarketSnapshot(
                   bsr: metadata.bsr,
                   batch_index: i,
                   keyword,
-                  message: "BSR extracted and added to spApiCatalogResults map",
+                  message: "BSR extracted and added to spApiCatalogResults map - will be merged into listings immediately",
                 });
               }
             }
@@ -2052,6 +2052,22 @@ export async function fetchKeywordMarketSnapshot(
     // ═══════════════════════════════════════════════════════════════════════════
     // SP-API data is foundational - merge it immediately after parsing
     // SP-API overwrites Rainforest data (authoritative source)
+    
+    // Debug: Log spApiCatalogResults state before merge
+    console.log("🔵 SP_API_MERGE_START", {
+      keyword,
+      listings_count: listings.length,
+      spApiCatalogResults_size: spApiCatalogResults.size,
+      sample_catalog_asins: Array.from(spApiCatalogResults.keys()).slice(0, 5),
+      sample_catalog_bsrs: Array.from(spApiCatalogResults.entries())
+        .slice(0, 5)
+        .map(([asin, metadata]) => ({ asin, bsr: metadata.bsr })),
+    });
+    
+    let mergeCount = 0;
+    let bsrMergeCount = 0;
+    let catalogNotFoundCount = 0;
+    
     for (const listing of listings) {
       if (!listing.asin) continue;
       
@@ -2062,6 +2078,7 @@ export async function fetchKeywordMarketSnapshot(
       // SP-API Catalog overwrites: brand, category, BSR, title, image
       // CRITICAL: SP-API brand is authoritative - override title-parsed brands
       if (catalog) {
+        mergeCount++;
         // Mark that SP-API responded (even if no data was extracted)
         (listing as any).had_sp_api_response = true;
         
@@ -2085,35 +2102,55 @@ export async function fetchKeywordMarketSnapshot(
         // CRITICAL: BSR from catalog is authoritative and must be preserved
         // Pricing failures must NOT affect BSR coverage
         // Attach BSR directly to listing if it exists (even if 0, as long as it's a valid number)
-        if (catalog.bsr !== null && catalog.bsr !== undefined) {
-          // Only set BSR if it's a valid positive number (BSR must be > 0)
-          if (catalog.bsr > 0) {
-            listing.main_category_bsr = catalog.bsr;
-            listing.bsr = catalog.bsr;
-            (listing as any).bsr_source = 'sp_api_catalog';
-            (listing as any).had_sp_api_response = true;
-            
-            // Transition enrichment state immediately when BSR is extracted
-            // State machine: raw -> sp_api_catalog_enriched
-            if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
-              (listing as any).enrichment_state = 'sp_api_catalog_enriched';
-            }
-            
-            // Debug log for BSR merge (first 5 ASINs only)
-            const bsrMergeCount = (listings as any[]).filter((l: any) => (l as any).bsr_source === 'sp_api_catalog').length;
-            if (!(listing as any)._bsr_merge_logged && bsrMergeCount <= 5) {
-              (listing as any)._bsr_merge_logged = true;
-              console.log("🟢 SP_API_BSR_MERGED", {
-                asin: listing.asin,
-                bsr: catalog.bsr,
-                main_category_bsr_set: listing.main_category_bsr === catalog.bsr,
-                bsr_set: listing.bsr === catalog.bsr,
-                bsr_source: (listing as any).bsr_source,
-                enrichment_state: (listing as any).enrichment_state,
-              });
-            }
+        // This happens IMMEDIATELY when SP-API results are merged - no delay, no DB queries
+        if (catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
+          bsrMergeCount++;
+          // Set BSR immediately when catalog data is available
+          listing.main_category_bsr = catalog.bsr;
+          listing.bsr = catalog.bsr;
+          (listing as any).bsr_source = 'sp_api_catalog';
+          (listing as any).had_sp_api_response = true;
+          
+          // Transition enrichment state immediately when BSR is extracted
+          // State machine: raw -> sp_api_catalog_enriched
+          if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
+            (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+          }
+          
+          // Debug log for BSR merge (first 5 ASINs only)
+          if (bsrMergeCount <= 5) {
+            console.log("🟢 SP_API_BSR_MERGED", {
+              asin: listing.asin,
+              bsr: catalog.bsr,
+              main_category_bsr_set: listing.main_category_bsr === catalog.bsr,
+              bsr_set: listing.bsr === catalog.bsr,
+              bsr_source: (listing as any).bsr_source,
+              enrichment_state: (listing as any).enrichment_state,
+              catalog_bsr: catalog.bsr,
+              listing_bsr_before: listing.bsr,
+            });
+          }
+        } else if (catalog.bsr === null || catalog.bsr === undefined || catalog.bsr <= 0) {
+          // Debug: Log when catalog exists but BSR is missing
+          if (bsrMergeCount < 3) {
+            console.warn("⚠️ CATALOG_EXISTS_BUT_NO_BSR", {
+              asin: listing.asin,
+              catalog_bsr: catalog.bsr,
+              catalog_keys: Object.keys(catalog),
+            });
           }
         }
+      } else {
+        catalogNotFoundCount++;
+        // Debug: Log first few ASINs not found in catalog
+        if (catalogNotFoundCount <= 3) {
+          console.warn("⚠️ ASIN_NOT_IN_CATALOG_RESULTS", {
+            asin: listing.asin,
+            spApiCatalogResults_size: spApiCatalogResults.size,
+            sample_catalog_asins: Array.from(spApiCatalogResults.keys()).slice(0, 3),
+          });
+        }
+      }
         if (catalog.title) {
           listing.title = catalog.title;
           (listing as any).title_source = 'sp_api_catalog';
@@ -2124,9 +2161,27 @@ export async function fetchKeywordMarketSnapshot(
         }
       }
       
-      // SP-API Pricing overwrites: fulfillment, price, buy box
-      // CRITICAL: If pricing fails, fulfillment_source remains null (not set to rainforest)
-      // Only set fulfillment_source if SP-API pricing actually succeeded
+    }
+    
+    // Debug: Log merge summary
+    console.log("🔵 SP_API_MERGE_COMPLETE", {
+      keyword,
+      total_listings: listings.length,
+      catalog_found: mergeCount,
+      catalog_not_found: catalogNotFoundCount,
+      bsr_merged: bsrMergeCount,
+      listings_with_bsr_after_merge: listings.filter(l => l.bsr !== null && l.bsr > 0).length,
+    });
+    
+    // SP-API Pricing overwrites: fulfillment, price, buy box
+    // CRITICAL: If pricing fails, fulfillment_source remains null (not set to rainforest)
+    // Only set fulfillment_source if SP-API pricing actually succeeded
+    for (const listing of listings) {
+      if (!listing.asin) continue;
+      
+      const asin = listing.asin.toUpperCase();
+      const pricing = spApiPricingResults.get(asin);
+      
       if (pricing) {
         // Transition enrichment state when pricing data is applied
         if ((listing as any).enrichment_state === 'sp_api_catalog_enriched' || 

@@ -102,8 +102,29 @@ export async function batchEnrichCatalogItems(
 
     if (batchResult.status === "fulfilled") {
       const batchData = batchResult.value;
+      const batchDataSize = batchData.size;
+      
+      // Debug log to verify aggregation is working
+      if (batchDataSize > 0) {
+        console.log("🟢 AGGREGATING_BATCH_RESULTS", {
+          batch_index: i,
+          batch_size: batch.length,
+          enriched_map_size: batchDataSize,
+          result_enriched_size_before: result.enriched.size,
+        });
+      }
+      
       for (const [asin, metadata] of batchData.entries()) {
         result.enriched.set(asin, metadata);
+      }
+      
+      // Debug log after aggregation
+      if (batchDataSize > 0) {
+        console.log("🟢 BATCH_RESULTS_AGGREGATED", {
+          batch_index: i,
+          result_enriched_size_after: result.enriched.size,
+          added_count: batchDataSize,
+        });
       }
     } else {
       // Mark all ASINs in failed batch as failed
@@ -395,24 +416,37 @@ async function fetchBatch(
         bsr,
       };
 
-      // Only add to enriched if item has meaningful data (BSR counts as enrichment)
-      if (isEnriched) {
+      // CRITICAL: Always add to enriched if BSR was extracted, even if other data is missing
+      // BSR is the most important enrichment data and must be preserved
+      const shouldAddToEnriched = isEnriched || (bsr !== null && bsr > 0);
+      if (shouldAddToEnriched) {
         result.set(asin, metadata);
-      }
-      
-      // Debug log for BSR extraction (first 5 ASINs only)
-      if (result.size <= 5 && bsr !== null) {
-        console.log("🔵 SP_API_BSR_EXTRACTED", {
+        
+        // Debug log for BSR extraction - log immediately when BSR is found and added
+        if (bsr !== null && bsr > 0) {
+          console.log("🔵 SP_API_BSR_EXTRACTED", {
+            asin,
+            bsr,
+            primary_category: bsrData.primary_category,
+            root_rank: bsrData.root_rank,
+            has_salesRanks: Array.isArray(item?.salesRanks) && item.salesRanks.length > 0,
+            salesRanks_count: item?.salesRanks?.length || 0,
+            has_classificationRanks: Array.isArray(item?.salesRanks?.[0]?.classificationRanks) && item.salesRanks[0].classificationRanks.length > 0,
+            classificationRanks_count: item?.salesRanks?.[0]?.classificationRanks?.length || 0,
+            added_to_enriched: true,
+            result_map_size: result.size,
+          });
+          hasBsrExtracted = true; // Track that BSR was extracted
+        }
+      } else if (bsr !== null && bsr > 0) {
+        // Log warning if BSR was extracted but NOT added (should never happen with our fix)
+        console.warn("⚠️ BSR_EXTRACTED_BUT_NOT_ADDED", {
           asin,
           bsr,
-          primary_category: bsrData.primary_category,
-          root_rank: bsrData.root_rank,
-          has_salesRanks: Array.isArray(item?.salesRanks) && item.salesRanks.length > 0,
-          salesRanks_count: item?.salesRanks?.length || 0,
-          has_classificationRanks: Array.isArray(item?.salesRanks?.[0]?.classificationRanks) && item.salesRanks[0].classificationRanks.length > 0,
-          classificationRanks_count: item?.salesRanks?.[0]?.classificationRanks?.length || 0,
+          isEnriched,
+          bsr_check: bsr !== null && bsr > 0,
+          shouldAddToEnriched,
         });
-        hasBsrExtracted = true; // Track that BSR was extracted
       }
     }
 
