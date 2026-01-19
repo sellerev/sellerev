@@ -1841,16 +1841,7 @@ export async function fetchKeywordMarketSnapshot(
     });
 
     // NOTE: BSR coverage logging moved to after listings are parsed and merged with SP-API data
-    // See below after listings are created (around line 2100+)
-
-    if (stillMissingAsins.length > 0) {
-      console.log("BSR_MISSING_AFTER_FETCH", {
-        keyword,
-        missing_count: stillMissingAsins.length,
-        missing_asins: stillMissingAsins,
-        message: "These ASINs will be excluded from BSR-based calculations",
-      });
-    }
+    // See below after listings are created (around line 2190+)
 
     // Step 4: Parse and normalize each search result item
     // Normalize using single helper - all fields except ASIN are optional
