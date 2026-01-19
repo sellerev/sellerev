@@ -1840,21 +1840,58 @@ export async function fetchKeywordMarketSnapshot(
       timestamp: new Date().toISOString(),
     });
 
-    // STEP E: Log final BSR coverage
-    const listingsWithBSR = Object.values(bsrDataMap).filter(Boolean).length;
+    // STEP E: Log final BSR coverage (check source tags, not in-memory objects)
+    // CRITICAL: BSR coverage must be computed from source tags or persisted state
+    // NOT from in-memory bsrDataMap which may be modified by later phases
+    // Safety invariant: If BSR was ever observed, it must remain present
+    const listingsWithBSR = listings.filter((l: any) => {
+      // Check source tags (authoritative) instead of in-memory BSR
+      return (l as any).bsr_source === 'sp_api' || 
+             (l as any).bsr_source === 'sp_api_catalog' ||
+             (l.main_category_bsr !== null && l.main_category_bsr > 0);
+    }).length;
+    
     const bsrCoveragePercent = page1Asins.length > 0 
       ? ((listingsWithBSR / page1Asins.length) * 100).toFixed(1)
       : "0.0";
     
-    const stillMissingAsins = page1Asins.filter(asin => !bsrDataMap[asin] || bsrDataMap[asin] === null);
+    // Safety invariant: Verify all ASINs with BSR source tags have BSR value
+    const bsrObservedAsins = new Set<string>();
+    for (const listing of listings) {
+      const asin = listing.asin?.toUpperCase();
+      if (!asin) continue;
+      
+      if ((listing as any).bsr_source === 'sp_api' || 
+          (listing as any).bsr_source === 'sp_api_catalog' ||
+          (listing.main_category_bsr !== null && listing.main_category_bsr > 0)) {
+        bsrObservedAsins.add(asin);
+        
+        // Verify invariant: BSR source tag present but BSR value is null
+        if (((listing as any).bsr_source === 'sp_api' || (listing as any).bsr_source === 'sp_api_catalog') &&
+            listing.main_category_bsr === null) {
+          console.error("⚠️ BSR_INVARIANT_VIOLATION", {
+            asin,
+            keyword,
+            bsr_source: (listing as any).bsr_source,
+            main_category_bsr: listing.main_category_bsr,
+            message: "BSR source tag present but BSR value is null - invariant violation",
+          });
+        }
+      }
+    }
+    
+    // Still track missing ASINs for logging (but use source tags, not bsrDataMap)
+    const stillMissingAsins = page1Asins.filter(asin => !bsrObservedAsins.has(asin.toUpperCase()));
     
     console.log("FINAL_BSR_COVERAGE_PERCENT", {
       keyword,
       total_asins: page1Asins.length,
       asins_with_bsr: listingsWithBSR,
       coverage_percent: `${bsrCoveragePercent}%`,
+      bsr_observed_count: bsrObservedAsins.size,
       missing_after_fetch: stillMissingAsins.length,
       bsr_missing_asins: stillMissingAsins.slice(0, 5), // Log first 5
+      message: "BSR coverage computed from source tags, not in-memory objects",
     });
 
     if (stillMissingAsins.length > 0) {

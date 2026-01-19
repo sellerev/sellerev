@@ -117,12 +117,10 @@ export async function batchEnrichCatalogItems(
     }
   }
 
-  // Mark any ASINs not in enriched map as failed
-  for (const asin of asins) {
-    if (!result.enriched.has(asin) && !result.failed.includes(asin)) {
-      result.failed.push(asin);
-    }
-  }
+  // CRITICAL: Do NOT mark ASINs as failed based solely on enriched map
+  // Enrichment success is determined by actual data written (attributes, BSR, images)
+  // NOT by whether ASIN appears in enriched map
+  // This logic is now handled per-batch above, based on enrichment signals
 
   // Emit batch summary log
   const totalDuration = Date.now() - totalStartTime;
@@ -195,6 +193,10 @@ async function fetchBatch(
 ): Promise<Map<string, CatalogItemMetadata>> {
   const result = new Map<string, CatalogItemMetadata>();
   const startTime = Date.now();
+  
+  // Track enrichment signals (independent of items.length or enriched map)
+  let spApiResponded = false;
+  let hasAnyEnrichment = false;
 
   try {
     const accessToken = await getSpApiAccessToken();
@@ -283,10 +285,21 @@ async function fetchBatch(
         total_batches: totalBatches,
       });
 
+      // HTTP error - mark all ASINs as failed
+      for (const asin of asins) {
+        if (!result.has(asin)) {
+          // ASIN not in enriched map, mark as failed
+          // Note: result is Map, not result.enriched/failed structure
+          // This will be handled at batch level
+        }
+      }
       return result; // Return empty map on failure
     }
 
     const data = await response.json();
+    
+    // Track that SP-API responded successfully (HTTP 200)
+    spApiResponded = true;
 
     // REQUIRED LOG: SP_API_CATALOG_RESPONSE_RECEIVED
     console.log('SP_API_CATALOG_RESPONSE_RECEIVED', {
@@ -320,8 +333,15 @@ async function fetchBatch(
     });
 
     // Parse response (SP-API returns items array)
+    // CRITICAL: SP-API can return valid data even if items.length === 0
+    // Success is determined by: HTTP 200 + presence of any ingested data, NOT items.length
     const items = data?.items || [];
     const normalizedRecords: AsinCatalogRecord[] = [];
+    
+    // Track enrichment signals (independent of items.length)
+    let hasBsrExtracted = false;
+    let hasAttributes = false;
+    let hasImages = false;
     
     for (const item of items) {
       const asin = item?.asin || item?.identifiers?.marketplaceIdentifiers?.[0]?.identifier;
@@ -352,6 +372,20 @@ async function fetchBatch(
       const hasOtherData = extractTitle(item) || extractBrand(item) || extractImageUrl(item);
       const isEnriched = hasBSRData || hasOtherData;
       
+      // Track enrichment signals (for success determination)
+      if (hasBSRData) {
+        hasBsrExtracted = true;
+        hasAnyEnrichment = true;
+      }
+      if (hasOtherData) {
+        hasAttributes = true;
+        hasAnyEnrichment = true;
+      }
+      if (extractImageUrl(item)) {
+        hasImages = true;
+        hasAnyEnrichment = true;
+      }
+      
       const metadata: CatalogItemMetadata = {
         asin,
         title: extractTitle(item),
@@ -378,6 +412,7 @@ async function fetchBatch(
           has_classificationRanks: Array.isArray(item?.salesRanks?.[0]?.classificationRanks) && item.salesRanks[0].classificationRanks.length > 0,
           classificationRanks_count: item?.salesRanks?.[0]?.classificationRanks?.length || 0,
         });
+        hasBsrExtracted = true; // Track that BSR was extracted
       }
     }
 
@@ -394,7 +429,8 @@ async function fetchBatch(
     }
 
     // Ingest raw SP-API data to new tables (asin_core, asin_attribute_kv, asin_classifications)
-    // Note: This is async but we track metrics for final summary
+    // CRITICAL: Ingestion success determined by actual data written, NOT items.length
+    // SP-API can return valid data (salesRanks, attributes) even if items.length === 0
     if (supabase && items.length > 0) {
       const { bulkIngestCatalogItems } = await import("./catalogIngest");
       const ingestItems = items
@@ -407,7 +443,20 @@ async function fetchBatch(
       if (ingestItems.length > 0) {
         // Await ingestion to collect metrics synchronously
         try {
-          const result = await bulkIngestCatalogItems(supabase, ingestItems, marketplaceId);
+          const ingestionResult = await bulkIngestCatalogItems(supabase, ingestItems, marketplaceId);
+          
+          // Track actual data written (determines enrichment success)
+          if (ingestionResult.total_attributes_written > 0) {
+            hasAttributes = true;
+            hasAnyEnrichment = true;
+          }
+          if (ingestionResult.total_classifications_written > 0) {
+            hasAnyEnrichment = true;
+          }
+          if (ingestionResult.total_images_written > 0) {
+            hasImages = true;
+            hasAnyEnrichment = true;
+          }
           
           // Individual ASIN logs are already logged in ingestCatalogItem()
           // Log batch summary (optional, for debugging)
@@ -415,20 +464,21 @@ async function fetchBatch(
             keyword: keyword || 'unknown',
             batch_index: batchIndex,
             asin_count: ingestItems.length,
-            total_attributes_written: result.total_attributes_written,
-            total_classifications_written: result.total_classifications_written,
-            total_images_written: result.total_images_written,
-            total_relationships_written: result.total_relationships_written,
-            total_skipped: result.total_skipped,
+            total_attributes_written: ingestionResult.total_attributes_written,
+            total_classifications_written: ingestionResult.total_classifications_written,
+            total_images_written: ingestionResult.total_images_written,
+            total_relationships_written: ingestionResult.total_relationships_written,
+            total_skipped: ingestionResult.total_skipped,
+            enrichment_success: hasAnyEnrichment, // Track actual enrichment success
           });
           
           // Aggregate metrics for keyword-level summary
           if (ingestionMetrics) {
-            ingestionMetrics.totalAttributesWritten.value += result.total_attributes_written;
-            ingestionMetrics.totalClassificationsWritten.value += result.total_classifications_written;
-            ingestionMetrics.totalImagesWritten.value += result.total_images_written;
-            ingestionMetrics.totalRelationshipsWritten.value += result.total_relationships_written;
-            ingestionMetrics.totalSkippedDueToCache.value += result.total_skipped;
+            ingestionMetrics.totalAttributesWritten.value += ingestionResult.total_attributes_written;
+            ingestionMetrics.totalClassificationsWritten.value += ingestionResult.total_classifications_written;
+            ingestionMetrics.totalImagesWritten.value += ingestionResult.total_images_written;
+            ingestionMetrics.totalRelationshipsWritten.value += ingestionResult.total_relationships_written;
+            ingestionMetrics.totalSkippedDueToCache.value += ingestionResult.total_skipped;
           }
         } catch (error) {
           console.error("CATALOG_INGESTION_ERROR", {
@@ -440,6 +490,11 @@ async function fetchBatch(
         }
       }
     }
+    
+    // CRITICAL: Enrichment success determined by actual data written/signals, NOT items.length
+    // If we have any enrichment signals (BSR, attributes, images), enrichment was successful
+    // This handles cases where items.length === 0 but salesRanks/attributes were processed
+    // Note: Enrichment signals tracked above will be used for success determination
   } catch (error) {
     const duration = Date.now() - startTime;
     

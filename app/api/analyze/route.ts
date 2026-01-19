@@ -3028,11 +3028,30 @@ export async function POST(req: NextRequest) {
         // FINAL KEYWORD RUN SUMMARY
         // ═══════════════════════════════════════════════════════════════════════════
         // Log final validation metrics after keyword analysis completes
+        // CRITICAL: BSR coverage computed from source tags (authoritative), not in-memory objects
+        // This ensures coverage reflects persisted state, not objects modified by later phases
         const asinCount = rawListings.length;
-        const listingsWithBSR = rawListings.filter((l: any) => 
-          l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0
-        ).length;
+        const listingsWithBSR = rawListings.filter((l: any) => {
+          // Check source tags (authoritative) instead of in-memory BSR
+          return (l as any).bsr_source === 'sp_api' || 
+                 (l as any).bsr_source === 'sp_api_catalog' ||
+                 (l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0);
+        }).length;
         const bsrCoveragePercent = asinCount > 0 ? Math.round((listingsWithBSR / asinCount) * 100) : 0;
+        
+        // Safety invariant: If BSR source tag is set, BSR value must be present
+        for (const listing of rawListings) {
+          if (((listing as any).bsr_source === 'sp_api' || (listing as any).bsr_source === 'sp_api_catalog') &&
+              listing.main_category_bsr === null) {
+            console.error("⚠️ BSR_INVARIANT_VIOLATION_ROUTE", {
+              asin: listing.asin,
+              keyword: body.input_value,
+              bsr_source: (listing as any).bsr_source,
+              main_category_bsr: listing.main_category_bsr,
+              message: "BSR source tag present but BSR value is null - invariant violation",
+            });
+          }
+        }
         
         // Extract page-1 ASINs to calculate SP-API catalog calls
         const page1Asins = Array.from(new Set(
