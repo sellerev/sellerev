@@ -365,7 +365,12 @@ async function fetchBatch(
       // BSR is the most important enrichment data and must be preserved
       const shouldAddToEnriched = isEnriched || (bsr !== null && bsr > 0);
       if (shouldAddToEnriched) {
-        result.set(asin, metadata);
+        const asinKey = normalizeAsin(asin);
+        spApiCatalogResults!.set(asinKey, {
+          ...(spApiCatalogResults!.get(asinKey) ?? {}), // Preserve existing data
+          ...metadata,
+          asin: asinKey, // Ensure normalized ASIN is used as key
+        });
         
         // Debug log for BSR extraction - log immediately when BSR is found and added
         if (bsr !== null && bsr > 0) {
@@ -379,7 +384,7 @@ async function fetchBatch(
             has_classificationRanks: Array.isArray(item?.salesRanks?.[0]?.classificationRanks) && item.salesRanks[0].classificationRanks.length > 0,
             classificationRanks_count: item?.salesRanks?.[0]?.classificationRanks?.length || 0,
             added_to_enriched: true,
-            result_map_size: result.size,
+            result_map_size: spApiCatalogResults!.size,
           });
           hasBsrExtracted = true; // Track that BSR was extracted
         }
