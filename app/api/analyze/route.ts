@@ -1359,18 +1359,36 @@ export async function POST(req: NextRequest) {
             }
             
             // Apply SP-API Pricing enrichment (authoritative: fulfillment, buy box)
-            for (const [asin, metadata] of pricingEnrichment.entries()) {
-              const listing = listingMap.get(asin.toUpperCase());
-              if (listing) {
-                // SP-API overwrites: fulfillment
-                if (metadata.fulfillment_channel) {
-                  listing.fulfillment = metadata.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
+            // If pricing enrichment is empty (no seller OAuth), Rainforest data is already in listings
+            if (pricingEnrichment.size > 0) {
+              for (const [asin, metadata] of pricingEnrichment.entries()) {
+                const listing = listingMap.get(asin.toUpperCase());
+                if (listing) {
+                  // SP-API overwrites: fulfillment
+                  if (metadata.fulfillment_channel) {
+                    listing.fulfillment = metadata.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
+                    (listing as any).fulfillment_source = 'sp_api_pricing';
+                  }
+                  // Update price if available from SP-API
+                  if (metadata.buy_box_price !== null) {
+                    listing.price = metadata.buy_box_price;
+                    (listing as any).price_source = 'sp_api_pricing';
+                  } else if (metadata.lowest_price !== null) {
+                    listing.price = metadata.lowest_price;
+                    (listing as any).price_source = 'sp_api_pricing';
+                  }
                 }
-                // Update price if available from SP-API
-                if (metadata.buy_box_price !== null) {
-                  listing.price = metadata.buy_box_price;
-                } else if (metadata.lowest_price !== null) {
-                  listing.price = metadata.lowest_price;
+              }
+            } else {
+              // Pricing API skipped (no seller OAuth) - mark Rainforest data sources
+              for (const listing of realMarketData.listings) {
+                if (listing.asin) {
+                  if (listing.price !== null && listing.price !== undefined && !(listing as any).price_source) {
+                    (listing as any).price_source = 'rainforest_serp';
+                  }
+                  if (listing.fulfillment && !(listing as any).fulfillment_source) {
+                    (listing as any).fulfillment_source = 'rainforest_serp';
+                  }
                 }
               }
             }
@@ -1996,6 +2014,15 @@ export async function POST(req: NextRequest) {
             pricingResult = { enriched: new Map(), failed: [], errors: [] };
           }
           
+          // Log if Pricing API was skipped (no seller OAuth)
+          if (pricingResult.enriched.size === 0 && pricingResult.failed.length === page1Asins.length) {
+            console.log("ℹ️ PRICING_API_SKIPPED_NO_OAUTH_IN_ANALYZE", {
+              keyword: body.input_value,
+              asin_count: page1Asins.length,
+              message: "Pricing API skipped - no seller OAuth token (using Rainforest fallback)",
+            });
+          }
+          
           // Create a map of ASIN to listing for efficient updates
           const listingMap = new Map<string, any>();
           rawListings.forEach((listing: any) => {
@@ -2100,7 +2127,7 @@ export async function POST(req: NextRequest) {
           }
           
           // Apply SP-API Pricing enrichment (authoritative: fulfillment, buy box)
-          // CRITICAL: If pricing fails, fallback to Rainforest data and mark source
+          // CRITICAL: If pricing fails or skipped (no OAuth), fallback to Rainforest data and mark source
           if (pricingResult && pricingResult.enriched && pricingResult.enriched.size > 0) {
             for (const [asin, metadata] of pricingResult.enriched.entries()) {
               const listing = listingMap.get(asin.toUpperCase());
@@ -2135,25 +2162,31 @@ export async function POST(req: NextRequest) {
               total_asins: page1Asins.length,
             });
           } else {
-            // Pricing failed or returned no data - fallback to Rainforest and mark source
-            console.warn("⚠️ SP_API_PRICING_FALLBACK_TO_RAINFOREST", {
+            // Pricing API skipped (no seller OAuth) or failed - use Rainforest fallback
+            console.log("ℹ️ SP_API_PRICING_FALLBACK_TO_RAINFOREST", {
               keyword: body.input_value,
               pricing_enriched: pricingResult?.enriched?.size ?? 0,
               total_asins: page1Asins.length,
-              message: "Pricing API failed or returned no data - using Rainforest price data",
+              reason: pricingResult?.enriched?.size === 0 && pricingResult?.failed.length === page1Asins.length 
+                ? "no_seller_oauth_token" 
+                : "pricing_api_failed_or_no_data",
+              message: "Using Rainforest price and fulfillment data as fallback",
             });
             
-            // Mark price source as Rainforest fallback for listings that don't have SP-API pricing
+            // Mark all listings with Rainforest data source (clean fallback)
+            // Preserve existing price/fulfillment from Rainforest and mark source
             for (const listing of rawListings) {
-              if (listing.asin && !(listing as any).price_source) {
-                // Only set fallback if we have a price from Rainforest
-                if (listing.price !== null && listing.price !== undefined) {
+              if (listing.asin) {
+                // Mark price source as Rainforest if not already set
+                if (listing.price !== null && listing.price !== undefined && !(listing as any).price_source) {
                   (listing as any).price_source = 'rainforest_serp';
                 }
-                // Mark fulfillment source if available from Rainforest
+                // Mark fulfillment source as Rainforest if not already set and available
                 if (listing.fulfillment && !(listing as any).fulfillment_source) {
                   (listing as any).fulfillment_source = 'rainforest_serp';
                 }
+                // Note: buy_box_owner and offer_count are not available from Rainforest
+                // These will remain null/undefined when Pricing API is skipped
               }
             }
           }

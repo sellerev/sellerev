@@ -68,6 +68,37 @@ export async function batchEnrichPricing(
     return result;
   }
 
+  // FEATURE FLAG: Pricing API requires seller OAuth token
+  // Skip Pricing API calls unless seller OAuth token is present
+  // Developer tokens (env SP_API_REFRESH_TOKEN) will get 403 Unauthorized
+  let sellerOAuthToken: string | null = null;
+  if (userId) {
+    try {
+      const { getUserAmazonRefreshToken } = await import("@/lib/amazon/getUserToken");
+      sellerOAuthToken = await getUserAmazonRefreshToken(userId);
+    } catch (error) {
+      // User hasn't connected - no seller OAuth token available
+      console.log("ℹ️ PRICING_API_SKIPPED_NO_OAUTH", {
+        keyword: keyword || 'unknown',
+        user_id: userId.substring(0, 8) + "...",
+        message: "Pricing API requires seller OAuth token - skipping (will use Rainforest fallback)",
+        timestamp: new Date().toISOString(),
+      });
+      result.failed = [...asins];
+      return result;
+    }
+  }
+
+  if (!sellerOAuthToken) {
+    console.log("ℹ️ PRICING_API_SKIPPED_NO_OAUTH", {
+      keyword: keyword || 'unknown',
+      message: "Pricing API requires seller OAuth token - no userId or token found, skipping (will use Rainforest fallback)",
+      timestamp: new Date().toISOString(),
+    });
+    result.failed = [...asins];
+    return result;
+  }
+
   // Batch ASINs into groups of 20 (SP-API hard limit)
   const batchSize = 20; // SP-API maximum batch size
   const batches: string[][] = [];
@@ -175,9 +206,9 @@ async function fetchPricingBatch(
   const result = new Map<string, PricingMetadata>();
 
   try {
-    // Try to get user's refresh token if userId provided
-    // NOTE: Pricing API requires seller OAuth per Amazon's API design, even for "public" data
-    // If user hasn't connected, we'll skip Pricing API and rely on Rainforest data
+    // Get seller OAuth refresh token (already verified in batchEnrichPricing)
+    // NOTE: Pricing API requires seller OAuth per Amazon's API design
+    // Feature flag check ensures we only call this if seller OAuth token exists
     let refreshToken: string | undefined;
     if (userId) {
       try {
@@ -187,25 +218,31 @@ async function fetchPricingBatch(
           console.log("✅ Using user's Amazon refresh token for Pricing API", {
             user_id: userId.substring(0, 8) + "...",
             token_last4: refreshToken.substring(refreshToken.length - 4),
+            keyword: keyword || 'unknown',
           });
         } else {
-          console.log("⚠️ User has no Amazon connection, falling back to env token", {
+          // This shouldn't happen if feature flag worked, but handle gracefully
+          console.warn("⚠️ Seller OAuth token not found for Pricing API, skipping batch", {
             user_id: userId.substring(0, 8) + "...",
+            keyword: keyword || 'unknown',
           });
+          return result; // Return empty result, will fallback to Rainforest data
         }
       } catch (error) {
-        console.warn("Failed to get user refresh token, falling back to env token:", error);
-        // User hasn't connected - Pricing API will use env token (developer token)
-        // This may still work if developer token has Pricing API access, but often requires seller OAuth
+        console.warn("Failed to get seller OAuth token for Pricing API, skipping batch:", error);
+        return result; // Return empty result, will fallback to Rainforest data
       }
     } else {
-      console.log("⚠️ No userId provided to Pricing API, using env token (developer token)");
+      // This shouldn't happen if feature flag worked, but handle gracefully
+      console.warn("⚠️ No userId provided to Pricing API, skipping batch", {
+        keyword: keyword || 'unknown',
+      });
+      return result; // Return empty result, will fallback to Rainforest data
     }
 
-    // If no user token and no env token, skip Pricing API
-    const envToken = process.env.SP_API_REFRESH_TOKEN;
-    if (!refreshToken && !envToken) {
-      console.warn("No refresh token available for Pricing API, skipping enrichment");
+    if (!refreshToken) {
+      // This shouldn't happen if feature flag worked, but handle gracefully
+      console.warn("No seller OAuth token available for Pricing API, skipping batch");
       return result; // Return empty result, will fallback to Rainforest data
     }
 
@@ -348,12 +385,15 @@ async function fetchItemOffers(
       });
       
       // Log specific message for 403 errors (permission issue)
+      // Note: With feature flag, this should rarely happen (we skip if no seller OAuth)
+      // But handle gracefully if it does occur
       if (isPermissionError) {
         console.error("❌ SP_API_PRICING_PERMISSION_DENIED", {
           asin,
           marketplace_id: marketplaceId,
-          message: "Pricing API returned 403 - check IAM role policies and SP-API scope permissions",
-          suggestion: "Verify that the selling partner app has Pricing API access enabled",
+          keyword: keyword || 'unknown',
+          message: "Pricing API returned 403 - seller OAuth token may lack Pricing API permissions",
+          suggestion: "Verify seller has granted Pricing API access during OAuth consent",
         });
       }
       
