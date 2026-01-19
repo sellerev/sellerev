@@ -1593,8 +1593,8 @@ export async function fetchKeywordMarketSnapshot(
       // --- SP-API PRICING (FBA / FBM / Buy Box) ---
       const { batchEnrichPricing } = await import("../spapi/pricing");
       
-      for (let i = 0; i < asinBatches.length; i++) {
-        const batch = asinBatches[i];
+      for (let i = 0; i < asinBatchesToFetch.length; i++) {
+        const batch = asinBatchesToFetch[i];
         console.log("🔥 SP_API_PRICING_BATCH_START", {
           batch_index: i,
           batch_size: batch.length,
