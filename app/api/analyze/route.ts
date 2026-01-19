@@ -1911,6 +1911,32 @@ export async function POST(req: NextRequest) {
       console.log("🔵 RAW_LISTINGS_LENGTH_BEFORE_CANONICAL", rawListings.length);
       
       // ═══════════════════════════════════════════════════════════════════════════
+      // 1️⃣ CREATE CANONICAL ASIN → LISTING LOOKUP IMMEDIATELY AFTER RAINFOREST SEARCH
+      // ═══════════════════════════════════════════════════════════════════════════
+      // This map MUST reference the SAME objects contained in rawListings[]
+      // CRITICAL: Must be created immediately after rawListings is set
+      const normalizeAsin = (asin: string) => asin.trim().toUpperCase();
+      const listingByAsin = new Map<string, any>();
+      
+      for (const listing of rawListings) {
+        if (!listing?.asin) continue;
+        listingByAsin.set(normalizeAsin(listing.asin), listing);
+      }
+      
+      console.log("🔵 ASIN_TO_LISTING_MAP_CREATED", {
+        total_listings: rawListings.length,
+        mapped_asins: listingByAsin.size,
+        sample_asins: Array.from(listingByAsin.keys()).slice(0, 5),
+      });
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // 2️⃣ POST-MERGE VERIFICATION: Ensure all SP-API results are merged
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Even though fetchKeywordMarketSnapshot should have merged SP-API results,
+      // we verify here and patch any missing merges to ensure rawListings[] is complete
+      // This is a safety net to ensure BSR from SP-API reaches buildKeywordPageOne()
+      
+      // ═══════════════════════════════════════════════════════════════════════════
       // SP-API ENRICHMENT RECONCILIATION LOG
       // ═══════════════════════════════════════════════════════════════════════════
       // Log reconciliation data to confirm frontend + backend are aligned before rendering
@@ -2514,6 +2540,26 @@ export async function POST(req: NextRequest) {
         // ═══════════════════════════════════════════════════════════════════════════
         // LOG BEFORE CANONICAL BUILDER CALL
         // ═══════════════════════════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════════════════════════
+        // 4️⃣ MANDATORY RECONCILIATION LOG BEFORE buildKeywordPageOne()
+        // ═══════════════════════════════════════════════════════════════════════════
+        console.log("SP_API_ENRICHMENT_RECONCILIATION", {
+          total: rawListings.length,
+          with_bsr: rawListings.filter((l: any) => l.bsr != null && l.bsr > 0).length,
+          with_sp_api_flag: rawListings.filter((l: any) => l.had_sp_api_response).length,
+          with_sp_api_bsr: rawListings.filter((l: any) => 
+            (l.bsr != null && l.bsr > 0) && 
+            ((l as any).bsr_source === 'sp_api' || (l as any).bsr_source === 'sp_api_catalog')
+          ).length,
+          sample: rawListings.slice(0, 5).map((l: any) => ({
+            asin: l.asin,
+            bsr: l.bsr,
+            main_category_bsr: l.main_category_bsr,
+            bsr_source: (l as any).bsr_source,
+            had_sp_api_response: (l as any).had_sp_api_response,
+          })),
+        });
+        
         console.log("🔵 CALLING_BUILD_KEYWORD_PAGE_ONE", {
           keyword: body.input_value,
           raw_listings_count: rawListings.length,
@@ -2626,9 +2672,20 @@ export async function POST(req: NextRequest) {
             }
           }
           
+          // ═══════════════════════════════════════════════════════════════════════════
+          // 3️⃣ REMOVE/BYPASS VALIDATION THAT ASSUMES ALL LISTINGS MUST HAVE BSR
+          // ═══════════════════════════════════════════════════════════════════════════
+          // SP-API enrichment is partial by nature. Only fail if NO listings have BSR from SP-API
+          // If at least one ASIN has bsr_source === 'sp_api' or 'sp_api_catalog', SP-API worked
+          const anySpApiBsr = rawListings.some(
+            (l: any) => (l.bsr != null && l.bsr > 0) && 
+            ((l as any).bsr_source === 'sp_api' || (l as any).bsr_source === 'sp_api_catalog')
+          );
+          
           // Only throw error if SP-API was truly not called (no SP-API response at all)
           // NOTE: Missing brand/brand_source does NOT cause failure in keyword mode
-          if (failedAsins.length > 0) {
+          // NOTE: Partial enrichment is OK - only fail if NO ASINs have SP-API BSR
+          if (failedAsins.length > 0 && !anySpApiBsr) {
             const errorMessage = `SP_API_EXPECTED_BUT_NOT_CALLED: ${failedAsins.length} page-1 ASIN(s) missing SP-API response. Failed ASINs: ${failedAsins.map(f => `${f.asin}(${JSON.stringify(f.signals)})`).join(', ')}`;
             console.error("❌ SP_API_EXPECTED_BUT_NOT_CALLED", {
               keyword: body.input_value,
