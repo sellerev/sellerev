@@ -2162,13 +2162,26 @@ export async function fetchKeywordMarketSnapshot(
     }
     
     // Debug: Log merge summary
+    const listingsWithBSRAfterMerge = listings.filter(l => 
+      (l.bsr !== null && l.bsr > 0) || (l.main_category_bsr !== null && l.main_category_bsr > 0)
+    ).length;
+    
     console.log("🔵 SP_API_MERGE_COMPLETE", {
       keyword,
       total_listings: listings.length,
       catalog_found: mergeCount,
       catalog_not_found: catalogNotFoundCount,
       bsr_merged: bsrMergeCount,
-      listings_with_bsr_after_merge: listings.filter(l => l.bsr !== null && l.bsr > 0).length,
+      listings_with_bsr_after_merge: listingsWithBSRAfterMerge,
+      sample_listings_with_bsr: listings
+        .filter(l => (l.bsr !== null && l.bsr > 0) || (l.main_category_bsr !== null && l.main_category_bsr > 0))
+        .slice(0, 5)
+        .map(l => ({
+          asin: l.asin,
+          bsr: l.bsr,
+          main_category_bsr: l.main_category_bsr,
+          bsr_source: (l as any).bsr_source,
+        })),
     });
     
     // SP-API Pricing overwrites: fulfillment, price, buy box
@@ -2619,6 +2632,35 @@ export async function fetchKeywordMarketSnapshot(
         est_monthly_units: null,
         revenue_confidence: "low" as const,
       }));
+    }
+
+    // CRITICAL SAFETY MERGE: Ensure BSR from spApiCatalogResults is merged into listingsWithEstimates
+    // This handles cases where the merge at line 2055-2163 didn't work or was lost during .map()
+    for (const listing of listingsWithEstimates) {
+      if (!listing.asin) continue;
+      const asin = listing.asin.toUpperCase();
+      const catalog = spApiCatalogResults.get(asin);
+      
+      if (catalog && catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
+        // Merge BSR if it exists in catalog but not in listing
+        if ((listing.main_category_bsr === null || listing.main_category_bsr === undefined || listing.main_category_bsr <= 0) &&
+            (listing.bsr === null || listing.bsr === undefined || listing.bsr <= 0)) {
+          listing.main_category_bsr = catalog.bsr;
+          listing.bsr = catalog.bsr;
+          (listing as any).bsr_source = 'sp_api_catalog';
+          (listing as any).had_sp_api_response = true;
+          if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
+            (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+          }
+          
+          console.log("🟢 SAFETY_MERGE_BSR_APPLIED", {
+            asin: listing.asin,
+            bsr: catalog.bsr,
+            keyword,
+            message: "BSR merged via safety merge - this should not happen if initial merge worked",
+          });
+        }
+      }
     }
 
     // FIX #2: Aggregate BSR-based revenue and units estimates with market dampening
