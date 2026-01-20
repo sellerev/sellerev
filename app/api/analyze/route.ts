@@ -3392,6 +3392,62 @@ export async function POST(req: NextRequest) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // 🛡️ MARKET DATA VALIDATION GUARD
+    // ═══════════════════════════════════════════════════════════════════════════
+    const hasRenderableMarketData =
+      marketSnapshot?.listings?.length > 0 &&
+      marketSnapshot?.avg_price != null &&
+      marketSnapshot?.total_page1_revenue != null;
+
+    const decisionData = contractResponse?.decision;
+    if (!decisionData || (typeof decisionData === 'object' && Object.keys(decisionData).length === 0)) {
+      if (hasRenderableMarketData) {
+        console.warn("DECISION_DATA_MISSING_BUT_MARKET_VALID", {
+          keyword: body.input_value,
+          bsr_coverage: marketSnapshot?.bsr_coverage_percent,
+          listings: marketSnapshot?.listings?.length,
+        });
+        // Return success with reduced confidence - market data is renderable
+        return NextResponse.json(
+          {
+            success: true,
+            status: "processing",
+            warning: "Decision confidence reduced due to partial enrichment",
+            analysisRunId: insertedRun?.id,
+            data_quality: dataQuality,
+            dataSource: dataSource,
+            snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
+            snapshot_last_updated: snapshotLastUpdated,
+            page_one_listings: canonicalProducts,
+            products: canonicalProducts,
+            aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
+            ...(contractResponse ? contractResponse : {}),
+            snapshot: marketSnapshot,
+            decision: null,
+            confidence: "reduced",
+            message: "Market data is ready. Strategic decision is being processed.",
+          },
+          { 
+            status: 200,
+            headers: res.headers,
+          }
+        );
+      }
+      // No renderable market data - fail
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Analysis failed: insufficient market data",
+          message: "Unable to generate market snapshot with sufficient data",
+        },
+        { 
+          status: 400,
+          headers: res.headers,
+        }
+      );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // STEP 6: Return listings immediately (before AI completes)
     // ═══════════════════════════════════════════════════════════════════════════
     return NextResponse.json(
