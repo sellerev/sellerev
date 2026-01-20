@@ -708,8 +708,11 @@ export default function AnalyzeForm({
       setBrandDropdownOpen(false);
     } else {
       // No initialAnalysis means no run param - reset to blank state
-      // Only reset if we currently have an analysis loaded (avoid resetting on initial mount)
-      if (analysis !== null) {
+      // CRITICAL: Only reset if we don't have a valid analysisRunIdForChat set (which means
+      // we just got analysis from API and router.replace() is updating URL, but server hasn't
+      // re-rendered yet with initialAnalysis). If we have analysisRunIdForChat, we're in the
+      // middle of an API response and should NOT clear the analysis - server will catch up.
+      if (analysis !== null && !analysisRunIdForChat) {
         setAnalysis(null);
         setAnalysisRunIdForChat(null);
         setInputValue("");
