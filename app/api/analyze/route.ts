@@ -3395,17 +3395,20 @@ export async function POST(req: NextRequest) {
     // 🛡️ MARKET DATA VALIDATION GUARD
     // ═══════════════════════════════════════════════════════════════════════════
     const hasRenderableMarketData =
-      marketSnapshot?.listings?.length > 0 &&
+      canonicalProducts.length > 0 &&
       marketSnapshot?.avg_price != null &&
-      marketSnapshot?.total_page1_revenue != null;
+      (marketSnapshot?.est_total_monthly_revenue_min != null || 
+       marketSnapshot?.est_total_monthly_revenue_max != null ||
+       contractResponse?.aggregates_derived_from_page_one?.total_page1_revenue != null);
 
     const decisionData = contractResponse?.decision;
     if (!decisionData || (typeof decisionData === 'object' && Object.keys(decisionData).length === 0)) {
       if (hasRenderableMarketData) {
         console.warn("DECISION_DATA_MISSING_BUT_MARKET_VALID", {
           keyword: body.input_value,
-          bsr_coverage: marketSnapshot?.bsr_coverage_percent,
-          listings: marketSnapshot?.listings?.length,
+          bsr_coverage: marketSnapshot?.bsr_sample_size,
+          listings: canonicalProducts.length,
+          total_page1_listings: marketSnapshot?.total_page1_listings,
         });
         // Return success with reduced confidence - market data is renderable
         return NextResponse.json(
