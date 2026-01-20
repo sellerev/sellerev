@@ -2219,6 +2219,7 @@ export async function POST(req: NextRequest) {
                 }
               }
             }
+            // End of if (catalogResult && catalogResult.enriched)
             
             // ═══════════════════════════════════════════════════════════════════════════
             // RAINFOREST METADATA BLOCKING GUARDRAIL
