@@ -71,21 +71,44 @@ ${message}
 
 Submitted at: ${timestamp}`;
 
-    // Send internal email to support@sellerev.com
-    await resend.emails.send({
-      from: "Sellerev Support <noreply@sellerev.com>",
-      to: "support@sellerev.com",
-      subject: "New Sellerev Support Request",
-      text: emailBody,
-    });
+    // Send internal email to support@sellerev.com (CRITICAL - must succeed)
+    let supportEmailSent = false;
+    try {
+      const supportEmailResult = await resend.emails.send({
+        from: "Sellerev Support <noreply@sellerev.com>",
+        to: "support@sellerev.com",
+        replyTo: email, // Allow support to reply directly to the user
+        subject: "New Sellerev Support Request",
+        text: emailBody,
+      });
+      supportEmailSent = true;
+      console.log("Support email sent successfully to support@sellerev.com:", {
+        id: supportEmailResult.id,
+        to: supportEmailResult.to,
+      });
+    } catch (error) {
+      console.error("CRITICAL: Failed to send email to support@sellerev.com:", error);
+      // Re-throw to fail the request - support email MUST be sent
+      throw new Error(`Failed to send support email: ${error instanceof Error ? error.message : "Unknown error"}`);
+    }
 
-    // Send auto-reply confirmation email to user
-    await resend.emails.send({
-      from: "Sellerev Support <support@sellerev.com>",
-      to: email,
-      subject: "Thanks for contacting Sellerev",
-      text: `Thanks for reaching out to Sellerev.\n\nWe've received your message and will respond within 24 hours.\n\n— Sellerev Support`,
-    });
+    // Send auto-reply confirmation email to user (non-critical - log but don't fail)
+    try {
+      const confirmationEmailResult = await resend.emails.send({
+        from: "Sellerev Support <support@sellerev.com>",
+        to: email,
+        subject: "Thanks for contacting Sellerev",
+        text: `Thanks for reaching out to Sellerev.\n\nWe've received your message and will respond within 24 hours.\n\n— Sellerev Support`,
+      });
+      console.log("Confirmation email sent successfully:", confirmationEmailResult);
+    } catch (error) {
+      // Log but don't fail - confirmation email failure shouldn't block support email
+      console.error("Warning: Failed to send confirmation email to user:", error);
+    }
+
+    if (!supportEmailSent) {
+      throw new Error("Support email was not sent successfully");
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
