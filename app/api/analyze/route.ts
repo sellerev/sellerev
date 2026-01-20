@@ -2269,7 +2269,8 @@ export async function POST(req: NextRequest) {
                     };
                   } else if (listing.brand_resolution) {
                     // Update source to rainforest if brand was from Rainforest
-                    listing.brand_resolution.brand_source = 'rainforest';
+                    // TypeScript: we already checked brand_resolution exists in the condition
+                    listing.brand_resolution!.brand_source = 'rainforest';
                   }
                   // Keep brand field for backward compatibility
                   // Don't set to null - preserve the brand string
