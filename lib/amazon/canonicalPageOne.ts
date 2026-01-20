@@ -2064,7 +2064,7 @@ export function buildKeywordPageOne(
   const minUnits = Math.min(
     ...scaledProducts.map(p => p.estimated_monthly_units ?? 0)
   );
-  const maxUnits = Math.max(
+  const maxProductUnits = Math.max(
     ...scaledProducts.map(p => p.estimated_monthly_units ?? 0)
   );
 
@@ -2072,7 +2072,7 @@ export function buildKeywordPageOne(
     total_units: summaryTotalUnits,
     total_revenue: summaryTotalRevenue,
     min_units: minUnits,
-    max_units: maxUnits,
+    max_units: maxProductUnits,
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
