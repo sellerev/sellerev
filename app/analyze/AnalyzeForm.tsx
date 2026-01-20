@@ -1347,14 +1347,15 @@ export default function AnalyzeForm({
                       : null;
                     
                     // Average Rating - calculate from page_one_listings (canonical products) or aggregates
-                    let avgRating = 0;
+                    // Filter to listings with numeric ratings only (typeof rating === 'number')
+                    let avgRating: number | null = null;
                     if (hasListings) {
                       // Priority 1: Use aggregates.avg_rating (from canonical products)
-                      if (aggregates?.avg_rating && aggregates.avg_rating > 0) {
+                      if (aggregates?.avg_rating !== null && aggregates?.avg_rating !== undefined && !isNaN(aggregates.avg_rating) && aggregates.avg_rating > 0) {
                         avgRating = aggregates.avg_rating;
                       } else {
                         // Priority 2: Calculate from page_one_listings (they have rating field directly)
-                        const ratingsList = pageOneListings.filter((l: any) => l.rating !== null && l.rating !== undefined && l.rating > 0);
+                        const ratingsList = pageOneListings.filter((l: any) => typeof l.rating === 'number' && !isNaN(l.rating) && l.rating > 0);
                         if (ratingsList.length > 0) {
                           avgRating = ratingsList.reduce((sum: number, l: any) => sum + (l.rating || 0), 0) / ratingsList.length;
                         }
@@ -1490,10 +1491,19 @@ export default function AnalyzeForm({
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Rating</div>
                             <div className="text-lg font-semibold text-gray-900">
-                              {hasListings && !isNaN(avgRating) && avgRating > 0 
+                              {avgRating !== null && avgRating !== undefined && !isNaN(avgRating) && avgRating > 0
                                 ? `${avgRating.toFixed(1)} ★` 
                                 : "Estimating…"}
                             </div>
+                            {avgRating !== null && avgRating !== undefined && !isNaN(avgRating) && avgRating > 0 && (
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                {(() => {
+                                  // Count listings with numeric ratings
+                                  const ratedListings = pageOneListings.filter((l: any) => typeof l.rating === 'number' && !isNaN(l.rating) && l.rating > 0);
+                                  return ratedListings.length > 0 ? `Based on ${ratedListings.length} ${ratedListings.length === 1 ? 'listing' : 'listings'}` : null;
+                                })()}
+                              </div>
+                            )}
                           </div>
                           
                           {/* 8. Top 5 Brands Control */}

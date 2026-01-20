@@ -3413,8 +3413,8 @@ export async function fetchKeywordMarketSnapshot(
     const { computeAvgReviews } = await import("./marketAggregates");
     const avg_reviews = computeAvgReviews(listings); // Always returns a number (0 if none)
 
-    // TASK 3: Average rating (only over listings with rating != null) - do NOT fall back when real listings exist
-    const listingsWithRating = listings.filter((l) => l.rating !== null && l.rating !== undefined);
+    // TASK 3: Average rating (only over listings with numeric rating) - do NOT fall back when real listings exist
+    const listingsWithRating = listings.filter((l) => typeof l.rating === 'number' && !isNaN(l.rating) && l.rating > 0);
     const avg_rating =
       listingsWithRating.length > 0
         ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length

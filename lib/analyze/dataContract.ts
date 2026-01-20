@@ -62,7 +62,8 @@ export interface KeywordAnalyzeResponse {
     search_volume_est: number | null;
     search_volume_confidence: Confidence;
     avg_price: number;
-    avg_rating: number;
+    avg_rating: number | null;
+    avg_rating_source: 'observed' | 'estimated' | null;
     avg_bsr: number | null;
     total_monthly_units_est: number;
     total_monthly_revenue_est: number;
@@ -133,7 +134,8 @@ export interface KeywordAnalyzeResponse {
   // B-3) Aggregates Derived from Page-1 (explicit for UI)
   aggregates_derived_from_page_one: {
     avg_price: number;
-    avg_rating: number;
+    avg_rating: number | null;
+    avg_rating_source: 'observed' | 'estimated' | null;
     avg_bsr: number | null;
     total_monthly_units_est: number;
     total_monthly_revenue_est: number;
@@ -757,12 +759,14 @@ export async function buildKeywordAnalyzeResponse(
     ? pageOnePrices.reduce((sum, p) => sum + p, 0) / pageOnePrices.length 
     : 0;
   
+  // Average rating: filter to listings with numeric ratings only
   const pageOneRatings = pageOneListings
     .map(p => p.rating)
-    .filter((r): r is number => r !== null && r > 0);
+    .filter((r): r is number => typeof r === 'number' && !isNaN(r) && r > 0);
   const avg_rating = pageOneRatings.length > 0
     ? pageOneRatings.reduce((sum, r) => sum + r, 0) / pageOneRatings.length
-    : 0;
+    : null;
+  const avg_rating_source = pageOneRatings.length >= 3 ? 'observed' : (pageOneRatings.length > 0 ? 'estimated' : null);
   
   const pageOneBsrs = pageOneListings
     .map(p => p.bsr)
@@ -793,6 +797,7 @@ export async function buildKeywordAnalyzeResponse(
     search_volume_confidence: "low" as Confidence,
     avg_price,
     avg_rating,
+    avg_rating_source,
     avg_bsr,
     total_monthly_units_est,
     total_monthly_revenue_est,
@@ -1042,6 +1047,7 @@ export async function buildKeywordAnalyzeResponse(
   const aggregates_derived_from_page_one = {
     avg_price: summary.avg_price,
     avg_rating: summary.avg_rating,
+    avg_rating_source: summary.avg_rating_source,
     avg_bsr: summary.avg_bsr,
     total_monthly_units_est: summary.total_monthly_units_est,
     total_monthly_revenue_est: summary.total_monthly_revenue_est,
@@ -1098,7 +1104,8 @@ async function blendWithKeywordHistory(
     search_volume_est: null;
     search_volume_confidence: Confidence;
     avg_price: number;
-    avg_rating: number;
+    avg_rating: number | null;
+    avg_rating_source: 'observed' | 'estimated' | null;
     avg_bsr: number | null;
     total_monthly_units_est: number;
     total_monthly_revenue_est: number;

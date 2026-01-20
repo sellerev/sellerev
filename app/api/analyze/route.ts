@@ -1230,8 +1230,8 @@ export async function POST(req: NextRequest) {
       // Average reviews
       const avg_reviews = computeAvgReviews(listings);
 
-      // Average rating
-      const listingsWithRating = listings.filter((l) => l.rating !== null && l.rating !== undefined);
+      // Average rating: filter to listings with numeric ratings only
+      const listingsWithRating = listings.filter((l) => typeof l.rating === 'number' && !isNaN(l.rating) && l.rating > 0);
       const avg_rating =
         listingsWithRating.length > 0
           ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length
@@ -1720,8 +1720,8 @@ export async function POST(req: NextRequest) {
         amazon: Math.round((fulfillmentCounts.amazon / totalFulfillment) * 100),
       } : { fba: 0, fbm: 0, amazon: 0 };
       
-      // Compute avg_rating from cached products
-      const productsWithRating = products.filter((p: any) => p.rating !== null && p.rating !== undefined && p.rating > 0);
+      // Compute avg_rating from cached products: filter to products with numeric ratings only
+      const productsWithRating = products.filter((p: any) => typeof p.rating === 'number' && !isNaN(p.rating) && p.rating > 0);
       const avgRating = productsWithRating.length > 0
         ? productsWithRating.reduce((sum: number, p: any) => sum + (p.rating || 0), 0) / productsWithRating.length
         : null;
