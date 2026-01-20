@@ -2228,74 +2228,185 @@ export async function fetchKeywordMarketSnapshot(
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // H10-STYLE ESTIMATION: Fill missing BSRs using position-based inference
+    // H10-STYLE ESTIMATION: Comprehensive BSR estimation + unit allocation
     // ═══════════════════════════════════════════════════════════════════════════
-    const MIN_REAL_BSR_COUNT = 5;
+    // Helper function for median calculation
+    const median = (values: number[]): number => {
+      if (values.length === 0) return 0;
+      const sorted = [...values].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
+    };
 
-    // Step 1: collect real BSR anchors
-    const bsrAnchors = listings.filter(
-      l => l.bsr != null && l.position != null
+    // Helper function for clamping
+    const clamp = (value: number, min: number, max: number): number => {
+      return Math.max(min, Math.min(max, value));
+    };
+
+    // 1. CATEGORY BASE VELOCITY (H10-style bootstrap)
+    const CATEGORY_BASE_UNITS: Record<string, number> = {
+      electronics_tv: 80000,
+      electronics_general: 60000,
+      kitchen_appliance: 25000,
+      kitchen_display_on_website: 22000,
+      home_decor: 18000,
+      tools: 12000,
+      industrial: 4000,
+    };
+
+    // Map main_category to category_key
+    const mapCategoryToKey = (category: string | null): string => {
+      if (!category) return "default";
+      const lower = category.toLowerCase();
+      if (lower.includes("television") || lower.includes("tv") || lower.includes("display")) return "electronics_tv";
+      if (lower.includes("electronics") || lower.includes("electronic")) return "electronics_general";
+      if (lower.includes("appliance")) return "kitchen_appliance";
+      if (lower.includes("kitchen") || lower.includes("dining")) return "kitchen_display_on_website";
+      if (lower.includes("home") || lower.includes("decor")) return "home_decor";
+      if (lower.includes("tool")) return "tools";
+      if (lower.includes("industrial")) return "industrial";
+      return "default";
+    };
+
+    // Determine category_key from listings
+    const categories = listings
+      .map(l => l.main_category)
+      .filter((c): c is string => c !== null && c !== undefined);
+    const primaryCategory = categories.length > 0 ? categories[0] : null;
+    const categoryKey = mapCategoryToKey(primaryCategory);
+    const categoryBaseUnits = CATEGORY_BASE_UNITS[categoryKey] ?? 20000;
+
+    // 2. PAGE-1 CTR CURVE (industry standard)
+    const page1Ctr = (rank: number): number => {
+      if (rank === 1) return 0.28;
+      if (rank === 2) return 0.17;
+      if (rank === 3) return 0.12;
+      if (rank === 4) return 0.09;
+      if (rank === 5) return 0.07;
+      if (rank <= 10) return 0.035;
+      if (rank <= 20) return 0.012;
+      return 0.004;
+    };
+
+    // 3. BUILD BSR CALIBRATION MODEL (ONLY if enough real BSR exists)
+    const listingsWithRealBsr = listings.filter(
+      l => typeof l.main_category_bsr === 'number' && l.main_category_bsr > 0 && l.position != null
     );
 
-    if (bsrAnchors.length >= MIN_REAL_BSR_COUNT) {
-      // Helper function for median calculation
-      const median = (values: number[]): number => {
-        if (values.length === 0) return 0;
-        const sorted = [...values].sort((a, b) => a - b);
-        const mid = Math.floor(sorted.length / 2);
-        return sorted.length % 2 === 0
-          ? (sorted[mid - 1] + sorted[mid]) / 2
-          : sorted[mid];
-      };
+    let bsrCalibrationFactor = 1.0;
 
-      // Step 2: infer category velocity from real BSRs
-      const inferredCategoryUnits = median(
-        bsrAnchors.map(l =>
-          Math.exp(12.3 - 0.85 * Math.log(l.bsr!))
-        )
+    if (listingsWithRealBsr.length >= 5) {
+      const medianRealBsr = median(
+        listingsWithRealBsr.map(l => l.main_category_bsr!)
       );
 
-      // Step 3: CTR curve (H10-style)
-      const positionShare = (pos: number): number => {
-        if (pos === 1) return 0.28;
-        if (pos === 2) return 0.17;
-        if (pos === 3) return 0.12;
-        if (pos === 4) return 0.09;
-        if (pos === 5) return 0.07;
-        if (pos <= 10) return 0.035;
-        if (pos <= 20) return 0.012;
-        return 0.004;
-      };
+      const medianPosition = median(
+        listingsWithRealBsr.map(l => l.position!)
+      );
 
-      for (const listing of listings) {
-        if (listing.bsr == null && listing.position != null) {
-          // Step 4: estimate monthly units
-          const estimatedUnits =
-            inferredCategoryUnits *
-            positionShare(listing.position) *
-            Math.min(1.5, Math.log10((listing.reviews ?? 0) + 10));
+      const medianExpectedUnits =
+        categoryBaseUnits *
+        page1Ctr(medianPosition);
 
-          // Step 5: invert units → implied BSR
-          const estimatedBsr =
-            Math.round(Math.exp(12.3 - Math.log(estimatedUnits)));
+      // Lower BSR → higher units, logarithmic dampening
+      bsrCalibrationFactor =
+        Math.log10(medianExpectedUnits + 10) /
+        Math.log10(medianRealBsr + 10);
+    }
 
-          (listing as any).estimated_units = Math.round(estimatedUnits);
-          (listing as any).estimated_bsr = estimatedBsr;
+    // Clamp calibration factor
+    bsrCalibrationFactor = clamp(bsrCalibrationFactor, 0.6, 1.4);
 
-          listing.bsr = estimatedBsr;
-          listing.main_category_bsr = estimatedBsr;
-          (listing as any).bsr_source = 'estimated';
-          (listing as any).had_sp_api_response = false;
+    // 4. ESTIMATE MISSING BSRs (DETERMINISTIC, NOT RANDOM)
+    for (const listing of listings) {
+      if (listing.main_category_bsr == null && listing.position != null) {
+        const estimatedBsr = Math.round(
+          (1 / page1Ctr(listing.position)) *
+          100 *
+          bsrCalibrationFactor
+        );
+
+        (listing as any).estimated_bsr = estimatedBsr;
+        listing.bsr = estimatedBsr;
+        listing.main_category_bsr = estimatedBsr;
+        (listing as any).bsr_source = 'estimated';
+        (listing as any).had_sp_api_response = false;
+      } else if (listing.main_category_bsr != null) {
+        // Real BSR exists - tag as SP-API (unless already tagged)
+        if (!(listing as any).bsr_source) {
+          (listing as any).bsr_source = 'sp_api';
+          (listing as any).had_sp_api_response = true;
         }
       }
-
-      console.log("📊 H10_STYLE_ESTIMATION_APPLIED", {
-        keyword,
-        real_bsr_count: bsrAnchors.length,
-        inferred_category_units: Math.round(inferredCategoryUnits),
-        estimated_listings: listings.filter(l => (l as any).bsr_source === 'estimated').length,
-      });
     }
+
+    // 5. CALCULATE MONTHLY UNITS (PRIMARY OUTPUT)
+    const medianPrice = median(
+      listings
+        .map(l => l.price)
+        .filter((p): p is number => p !== null && p !== undefined && p > 0)
+    );
+    const medianReviewCount = median(
+      listings
+        .map(l => l.reviews ?? 1)
+        .filter((r): r is number => r !== null && r !== undefined && r >= 0)
+    );
+
+    for (const listing of listings) {
+      if (listing.position == null || listing.price == null || listing.price <= 0) {
+        continue; // Skip listings without position or price
+      }
+
+      const ctrUnits =
+        categoryBaseUnits *
+        page1Ctr(listing.position) *
+        bsrCalibrationFactor;
+
+      const priceMultiplier = clamp(
+        medianPrice / listing.price,
+        0.7,
+        1.3
+      );
+
+      const reviewMultiplier = clamp(
+        Math.log10((listing.reviews ?? 1) + 1) /
+        Math.log10(medianReviewCount + 1),
+        0.8,
+        1.25
+      );
+
+      const estimatedUnits = Math.round(
+        ctrUnits * priceMultiplier * reviewMultiplier
+      );
+
+      const estimatedRevenue = estimatedUnits * listing.price;
+
+      listing.est_monthly_units = estimatedUnits;
+      listing.est_monthly_revenue = Math.round(estimatedRevenue * 100) / 100;
+      (listing as any).estimated_units = estimatedUnits; // Keep for backward compatibility
+      (listing as any).estimated_monthly_revenue = estimatedRevenue; // Keep for backward compatibility
+    }
+
+    // 6. MARKET SNAPSHOT TOTALS (calculated later in aggregation step)
+    const totalMonthlyUnits = listings
+      .filter(l => l.est_monthly_units != null)
+      .reduce((sum, l) => sum + (l.est_monthly_units || 0), 0);
+    const totalMonthlyRevenue = listings
+      .filter(l => l.est_monthly_revenue != null)
+      .reduce((sum, l) => sum + (l.est_monthly_revenue || 0), 0);
+
+    console.log("📊 H10_STYLE_ESTIMATION_COMPLETE", {
+      keyword,
+      category_key: categoryKey,
+      category_base_units: categoryBaseUnits,
+      real_bsr_count: listingsWithRealBsr.length,
+      bsr_calibration_factor: bsrCalibrationFactor.toFixed(3),
+      estimated_listings: listings.filter(l => (l as any).bsr_source === 'estimated').length,
+      total_monthly_units: totalMonthlyUnits,
+      total_monthly_revenue: Math.round(totalMonthlyRevenue),
+    });
     
     // SP-API Pricing overwrites: fulfillment, price, buy box
     // CRITICAL: If pricing fails, fulfillment_source remains null (not set to rainforest)
