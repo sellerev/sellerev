@@ -13,16 +13,9 @@ interface ProductCardProps {
   monthlyRevenue: number | null;
   monthlyUnits: number | null;
   /**
-   * Optional: Lazy refinement control (e.g. fetch BSR/product data on demand).
-   * If provided, the card can render a small "Refine" action that does NOT affect market totals.
+   * BSR source to determine prefix (~ for estimated, no prefix for sp_api)
    */
-  onRefineEstimates?: () => void;
-  refineStatus?: "idle" | "loading" | "refined" | "error";
-  refineMeta?: {
-    served_from_cache?: boolean;
-    cache_age_seconds?: number | null;
-    credits_charged?: number | null;
-  };
+  bsrSource?: string | null;
   fulfillment: "FBA" | "FBM" | "AMZ";
   isSponsored: boolean;
   imageUrl?: string | null;
@@ -40,9 +33,7 @@ export function ProductCard({
   reviews,
   monthlyRevenue,
   monthlyUnits,
-  onRefineEstimates,
-  refineStatus = "idle",
-  refineMeta,
+  bsrSource,
   fulfillment,
   isSponsored,
   imageUrl,
@@ -80,13 +71,8 @@ export function ProductCard({
     e.stopPropagation();
   };
 
-  const handleRefineClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onRefineEstimates?.();
-  };
-
-  const isLoading = refineStatus === "loading";
-  const isRefined = refineStatus === "refined";
+  // Determine if we should show ~ prefix (for estimated, not for sp_api)
+  const showEstimatePrefix = bsrSource === 'estimated' || bsrSource === null || bsrSource === undefined;
 
   return (
     <div
@@ -220,90 +206,54 @@ export function ProductCard({
       {/* Spacer to push revenue section to bottom */}
       <div className="flex-1" />
 
-      {/* Revenue Section - Prominent */}
+      {/* Revenue Section - Always shows monthly units and revenue */}
       <div className="bg-[#F9FAFB] -mx-4 -mb-4 px-4 py-3 mt-3 rounded-b-xl border-t border-[#E5E7EB]">
-        {/* DEFAULT STATE (no placeholders): show only "Load Sales Data" block until enrichment is ready */}
-        {asin && onRefineEstimates && !isRefined && (
-          <div className="flex items-center justify-between">
-            <div className="text-[11px] text-[#6B7280] pr-3 flex items-center gap-2">
-              {isLoading && (
-                <span
-                  className="inline-block w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-gray-600 animate-spin"
-                  aria-hidden="true"
-                />
-              )}
-              <span>
-                {isLoading
-                  ? "Loading Sales Data…"
-                  : refineStatus === "error"
-                  ? "Load failed. Try again."
-                  : "Load 30-day sales signal for higher accuracy."}
+        {/* Tooltip explaining estimates */}
+        <div className="mb-2 flex items-center gap-1 group relative">
+          <div className="text-[11px] text-[#6B7280]">
+            These figures are estimates based on category demand and ranking signals.
+            {asin && (
+              <span className="ml-1 text-[#3B82F6] underline cursor-help" title="Connect seller data for higher accuracy.">
+                Learn more
               </span>
-            </div>
-            <button
-              type="button"
-              onClick={handleRefineClick}
-              disabled={refineStatus === "loading"}
-              className={`text-[11px] font-medium underline ${
-                refineStatus === "loading"
-                  ? "text-gray-400 cursor-not-allowed"
-                  : "text-gray-700 hover:text-gray-900"
-              }`}
-              title="Load sales data for this ASIN to refine this card's estimates"
-            >
-              {refineStatus === "loading" ? "Loading…" : "Load Sales Data"}
-            </button>
+            )}
           </div>
-        )}
+        </div>
 
-        {/* READY STATE: render numbers only after enrichment */}
-        {refineStatus === "refined" && (
-          <>
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-[11px] font-medium text-[#374151]">
-                Refined (live product data)
-                <span className="ml-2 text-[11px] font-normal text-[#6B7280]">
-                  {refineMeta?.served_from_cache ? "Loaded from cache" : "Live fetch"}
-                  {typeof refineMeta?.cache_age_seconds === "number" && refineMeta.cache_age_seconds > 30
-                    ? ` • ${Math.round(refineMeta.cache_age_seconds / 60)}m old`
-                    : ""}
-                </span>
-              </div>
-              {asin && onRefineEstimates && (
-                <button
-                  type="button"
-                  onClick={handleRefineClick}
-                  disabled={isLoading}
-                  className="text-[11px] font-medium underline text-gray-700 hover:text-gray-900"
-                  title="Reload sales data for this ASIN"
-                >
-                  Reload Sales Data
-                </button>
-              )}
-            </div>
+        {/* Monthly Revenue - Always shown */}
+        <div className="mb-2">
+          <div className="text-xs text-[#6B7280] mb-1 flex items-center gap-1">
+            Monthly Revenue
+            {showEstimatePrefix && (
+              <span className="text-[10px] text-[#9CA3AF]">(~estimate)</span>
+            )}
+          </div>
+          <div className="text-xl font-bold text-[#111827]">
+            {monthlyRevenue !== null && monthlyRevenue !== undefined && monthlyRevenue >= 0
+              ? (
+                  <>
+                    {showEstimatePrefix ? '~' : ''}${(monthlyRevenue / 1000).toFixed(1)}K
+                    <span className="text-sm font-normal text-[#6B7280]"> / mo</span>
+                  </>
+                )
+              : "—"}
+          </div>
+        </div>
 
-            <div className="mb-2">
-              <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Revenue</div>
-              <div className="text-xl font-bold text-[#111827]">
-                {monthlyRevenue && monthlyRevenue > 0
-                  ? (
-                      <>
-                        ${(monthlyRevenue / 1000).toFixed(1)}K
-                        <span className="text-sm font-normal text-[#6B7280]"> / mo</span>
-                      </>
-                    )
-                  : "—"}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-xs text-[#6B7280] mb-1">Est. Monthly Units</div>
-              <div className="text-sm font-medium text-[#111827]">
-                {monthlyUnits && monthlyUnits > 0 ? `${monthlyUnits.toLocaleString()} units` : "—"}
-              </div>
-            </div>
-          </>
-        )}
+        {/* Monthly Units - Always shown */}
+        <div>
+          <div className="text-xs text-[#6B7280] mb-1 flex items-center gap-1">
+            Monthly Units
+            {showEstimatePrefix && (
+              <span className="text-[10px] text-[#9CA3AF]">(~estimate)</span>
+            )}
+          </div>
+          <div className="text-sm font-medium text-[#111827]">
+            {monthlyUnits !== null && monthlyUnits !== undefined && monthlyUnits >= 0
+              ? `${showEstimatePrefix ? '~' : ''}${monthlyUnits.toLocaleString()} units`
+              : "—"}
+          </div>
+        </div>
 
         {/* Badges Row */}
         <div className="flex gap-2 mt-3">

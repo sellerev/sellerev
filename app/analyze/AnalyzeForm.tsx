@@ -476,113 +476,6 @@ export default function AnalyzeForm({
   const [showRefiningBadge, setShowRefiningBadge] = useState(false);
   const [nextUpdateExpectedSec, setNextUpdateExpectedSec] = useState<number | null>(null);
 
-  // Per-ASIN lazy refinement cache (client-side overlay; server caches in asin_refinement_cache)
-  type AsinRefinementOverlay = {
-    refined_units_range: { min: number; max: number };
-    refined_estimated_revenue: number;
-    current_price: number;
-    current_bsr: number | null;
-    confidence: "high" | "medium" | "low";
-    expires_at?: string | null;
-    data_source?: "rainforest_bought_last_month" | "bsr_curve";
-    signals_used?: string[];
-    data_timestamp?: string | null;
-    stale?: boolean;
-    served_from_cache?: boolean;
-    cache_age_seconds?: number | null;
-    credits_charged?: 0 | 1;
-  };
-  const [asinRefinements, setAsinRefinements] = useState<Record<string, AsinRefinementOverlay>>({});
-  const [asinRefineStatus, setAsinRefineStatus] = useState<Record<string, "idle" | "loading" | "refined" | "error">>({});
-
-  // Credit confirmation modal (UI-only gate before any Rainforest-triggering call)
-  const [creditConfirm, setCreditConfirm] = useState<{
-    open: boolean;
-    asins: string[];
-    cost: number;
-    onConfirm: (() => void) | null;
-  }>({ open: false, asins: [], cost: 0, onConfirm: null });
-
-  const requestCreditConfirmation = useCallback((opts: {
-    asins: string[];
-    cost: number;
-    onConfirm: () => void;
-  }) => {
-    setCreditConfirm({ open: true, asins: opts.asins, cost: opts.cost, onConfirm: opts.onConfirm });
-  }, []);
-
-  const refineAsinEstimates = useCallback(async (asin: string, currentPrice: number) => {
-    if (!asin || !analysisRunIdForChat) return;
-    if (asinRefineStatus[asin] === "loading") return;
-
-    setAsinRefineStatus((prev) => ({ ...prev, [asin]: "loading" }));
-    try {
-      const res = await fetch("/api/asin/enrich", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          asin,
-          analysisRunId: analysisRunIdForChat,
-          currentPrice,
-        }),
-      });
-
-      const json = await res.json();
-      if (!res.ok || !json?.success) {
-        throw new Error(json?.error || `Refine failed (${res.status})`);
-      }
-
-      const status = (json.status as "ready" | "pending" | "insufficient_data" | undefined) || "ready";
-      if (status !== "ready") {
-        // If provider is slow, backend may return pending and refresh in background.
-        // Do a single quick retry to improve perceived performance.
-        if (status === "pending") {
-          setTimeout(() => {
-            // Best effort retry; no await
-            refineAsinEstimates(asin, currentPrice);
-          }, 1500);
-          return;
-        }
-        throw new Error(json?.error || "Insufficient data");
-      }
-
-      const data = json.data as AsinRefinementOverlay | undefined;
-      if (!data) throw new Error("Refine failed (missing data)");
-
-      // Attach response metadata for future UI/analytics use
-      const overlay: AsinRefinementOverlay = {
-        ...data,
-        data_source: json?.data?.data_source,
-        signals_used: json?.signals_used,
-        data_timestamp: json?.data_timestamp ?? null,
-        stale: !!json?.stale,
-        served_from_cache: !!json?.served_from_cache,
-        cache_age_seconds: typeof json?.cache_age_seconds === "number" ? json.cache_age_seconds : null,
-        credits_charged: json?.credits_charged === 1 ? 1 : 0,
-      };
-
-      setAsinRefinements((prev) => ({ ...prev, [asin]: overlay }));
-      setAsinRefineStatus((prev) => ({ ...prev, [asin]: "refined" }));
-    } catch (e) {
-      console.error("ASIN_REFINE_FAILED", { asin, error: e instanceof Error ? e.message : String(e) });
-      setAsinRefineStatus((prev) => ({ ...prev, [asin]: "error" }));
-    }
-  }, [analysisRunIdForChat, asinRefineStatus]);
-
-  // UI-only gate: always confirm before triggering /api/asin/enrich (Rainforest-backed)
-  const requestLoadSalesData = useCallback((asin: string, currentPrice: number) => {
-    // Avoid double-confirm when already loading/refined
-    const status = asinRefineStatus[asin];
-    if (status === "loading") return;
-    if (status === "refined") {
-      // Reload still requires confirmation (explicit credit safety)
-    }
-    requestCreditConfirmation({
-      asins: [asin],
-      cost: 1,
-      onConfirm: () => refineAsinEstimates(asin, currentPrice),
-    });
-  }, [asinRefineStatus, requestCreditConfirmation, refineAsinEstimates]);
 
 
   // Handler for margin snapshot updates from chat (Part G structure)
@@ -1148,48 +1041,6 @@ export default function AnalyzeForm({
 
   return (
     <div className="h-full bg-[#F7F9FC] flex flex-col">
-      {/* Credit confirmation modal (UI-only gate before any Rainforest-triggering call) */}
-      {creditConfirm.open && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-md rounded-xl bg-white border border-gray-200 shadow-xl p-5">
-            <div className="text-sm font-semibold text-gray-900 mb-2">
-              Confirm credit usage
-            </div>
-            <div className="text-sm text-gray-700 leading-relaxed">
-              This will use <span className="font-medium">{creditConfirm.cost}</span>{" "}
-              Seller Credit{creditConfirm.cost === 1 ? "" : "s"} to load live product data for{" "}
-              {creditConfirm.asins.length === 1 ? (
-                <span className="font-mono font-medium">{creditConfirm.asins[0]}</span>
-              ) : (
-                <>
-                  <span className="font-medium">{creditConfirm.asins.length}</span> ASINs
-                </>
-              )}
-              . Continue?
-            </div>
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setCreditConfirm({ open: false, asins: [], cost: 0, onConfirm: null })}
-                className="px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const fn = creditConfirm.onConfirm;
-                  setCreditConfirm({ open: false, asins: [], cost: 0, onConfirm: null });
-                  fn?.();
-                }}
-                className="px-3 py-2 text-sm font-medium text-white bg-[#3B82F6] rounded-lg hover:bg-[#2563EB]"
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* MAIN CONTENT: TWO-COLUMN FLEXBOX LAYOUT                             */}
       {/* ─────────────────────────────────────────────────────────────────── */}
@@ -2024,9 +1875,6 @@ export default function AnalyzeForm({
                         )}
                       </div>
                     </div>
-                    <div className="mb-3 text-xs text-gray-500 italic">
-                      Product cards hide sales estimates until you click “Load Sales Data” on a specific ASIN.
-                    </div>
                     {/* Selection Count Indicator */}
                     {selectedAsins.length > 0 && (
                       <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
@@ -2088,19 +1936,14 @@ export default function AnalyzeForm({
                           // Reviews: page_one_listings uses review_count, ProductCard expects reviews prop
                           const reviews = listing.review_count ?? listing.reviews ?? 0;
                           
-                          // Revenue and units: EXPLICIT extraction - ONLY use estimated_monthly_revenue/estimated_monthly_units
+                          // Revenue and units: ALWAYS use estimated_monthly_revenue/estimated_monthly_units from listing
+                          // These are FINAL and authoritative - produced during H10-style estimation, BSR override, or rank-weighted allocation
                           // Do NOT use legacy fields (revenue, units, est_monthly_revenue, est_monthly_units)
                           // Explicit check: preserve value if it exists (including 0), set null if undefined/null
-                          const monthlyRevenueRaw = (listing as any).estimated_monthly_revenue;
-                          // Only show estimates AFTER enrichment returns.
-                          // Do NOT pass modeled snapshot estimates into cards (blank until enriched).
-                          const refinement = asin ? asinRefinements[asin] : undefined;
-                          const isEnriched = asin ? (asinRefineStatus[asin] === "refined" && !!refinement) : false;
-                          const refinedAvgUnits = isEnriched && refinement?.refined_units_range
-                            ? Math.round((refinement.refined_units_range.min + refinement.refined_units_range.max) / 2)
-                            : null;
-                          const monthlyRevenue = isEnriched ? (refinement?.refined_estimated_revenue ?? null) : null;
-                          const monthlyUnits = isEnriched ? refinedAvgUnits : null;
+                          const monthlyRevenue = (listing as any).estimated_monthly_revenue ?? null;
+                          const monthlyUnits = (listing as any).estimated_monthly_units ?? null;
+                          // BSR source determines prefix (~ for estimated, no prefix for sp_api)
+                          const bsrSource = (listing as any).bsr_source ?? (listing as any).bsrSource ?? null;
                           
                           // Sponsored: check both fields
                           const isSponsored = listing.is_sponsored ?? listing.sponsored ?? false;
@@ -2116,13 +1959,7 @@ export default function AnalyzeForm({
                               reviews={reviews}
                               monthlyRevenue={monthlyRevenue}
                               monthlyUnits={monthlyUnits}
-                              onRefineEstimates={
-                                asin && price > 0
-                                  ? () => requestLoadSalesData(asin, price)
-                                  : undefined
-                              }
-                              refineStatus={asin ? (asinRefineStatus[asin] ?? "idle") : "idle"}
-                              refineMeta={asin ? asinRefinements[asin] : undefined}
+                              bsrSource={bsrSource}
                               fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
                               isSponsored={isSponsored}
                               imageUrl={imageUrl}

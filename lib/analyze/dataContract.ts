@@ -536,14 +536,13 @@ export async function buildKeywordAnalyzeResponse(
   // MARKET SNAPSHOT AGGREGATION FROM CANONICAL PRODUCTS
   // ═══════════════════════════════════════════════════════════════════════════
   // If canonical products are provided, aggregate totals for market snapshot
+  // CRITICAL: Snapshot totals MUST equal sum of all products (including 0s)
+  // This ensures per-product math adds up exactly to Market Snapshot totals
   if (canonicalProducts && canonicalProducts.length > 0) {
-    // HELIUM-10 STYLE: Use Page-1 totals directly (products are allocated from total)
+    // SUM ALL PRODUCTS: Include products with 0 units/revenue to ensure exact match
     // The sum of allocated units/revenue equals the Page-1 total estimate
-    const productsWithUnits = canonicalProducts.filter(p => p.estimated_monthly_units > 0);
-    const totalMonthlyUnits = productsWithUnits.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-    
-    const productsWithRevenue = canonicalProducts.filter(p => p.estimated_monthly_revenue > 0);
-    const totalMonthlyRevenue = productsWithRevenue.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    const totalMonthlyUnits = canonicalProducts.reduce((sum, p) => sum + (p.estimated_monthly_units || 0), 0);
+    const totalMonthlyRevenue = canonicalProducts.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
     
     const productsWithBSR = canonicalProducts.filter(p => p.bsr !== null && p.bsr > 0);
     // Helium-10 style representative BSR:
@@ -601,9 +600,13 @@ export async function buildKeywordAnalyzeResponse(
       : 0;
     
     // Step 4: Attach brand_stats to snapshot
+    // CRITICAL: Snapshot totals MUST equal sum of all products (guaranteed by calculation above)
     if (snapshot) {
       (snapshot as any).monthly_units = totalMonthlyUnits;
       (snapshot as any).monthly_revenue = totalMonthlyRevenue;
+      // Also set total_monthly_units and total_monthly_revenue for consistency
+      (snapshot as any).total_monthly_units = totalMonthlyUnits;
+      (snapshot as any).total_monthly_revenue = totalMonthlyRevenue;
       if (averageBSR !== null) {
         snapshot.avg_bsr = averageBSR;
       }
