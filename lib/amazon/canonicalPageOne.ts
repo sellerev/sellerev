@@ -1343,7 +1343,10 @@ export function buildKeywordPageOne(
     competitionLevel = "medium_competition";
   }
   
-  // Get plausible ceiling from competition level
+  // TEMPORARY DEBUG CAP: Lower ceiling to 20k for inspection
+  const MAX_PAGE1_UNITS = 20_000;
+  
+  // Get plausible ceiling from competition level (temporarily overridden with debug cap)
   // Use the same ranges as calibration for consistency
   const MARKET_RANGES = {
     low_competition: { units_max: 6000, revenue_max: 150000 },
@@ -1352,8 +1355,23 @@ export function buildKeywordPageOne(
   };
   
   const ceiling = MARKET_RANGES[competitionLevel];
-  const unitsCeiling = ceiling.units_max;
+  // TEMPORARY: Override with debug cap
+  const unitsCeiling = MAX_PAGE1_UNITS;
   const revenueCeiling = ceiling.revenue_max;
+  
+  // DEBUG LOG: Log cap check before clamp
+  console.log('DEBUG_UNIT_CAP_CHECK', {
+    total_units_before: sumUnitsBefore,
+    cap: MAX_PAGE1_UNITS,
+    scale_factor: sumUnitsBefore > MAX_PAGE1_UNITS
+      ? MAX_PAGE1_UNITS / sumUnitsBefore
+      : 1,
+    applied: sumUnitsBefore > MAX_PAGE1_UNITS,
+    competition_level: competitionLevel,
+    original_ceiling: ceiling.units_max,
+    revenue_before: sumRevenueBefore,
+    revenue_ceiling: revenueCeiling,
+  });
   
   // Check if totals exceed ceiling
   const unitsExceedsCeiling = sumUnitsBefore > unitsCeiling;
@@ -1408,8 +1426,10 @@ export function buildKeywordPageOne(
       },
       scale_factor: clampedScale.toFixed(3),
       reason: unitsExceedsCeiling || revenueExceedsCeiling 
-        ? "Totals exceeded plausible ceiling, scaled proportionally"
+        ? "temporary_debug_cap_20k"
         : "No scaling needed",
+      calibration_applied: true,
+      calibration_reason: "temporary_debug_cap_20k",
     });
   } else {
     // No normalization needed - totals are within plausible range
@@ -1485,6 +1505,41 @@ export function buildKeywordPageOne(
     rank1_units_before: rank1Units,
     rank1_units_after: rank1Product ? rank1Product.estimated_monthly_units : 0,
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TEMPORARY DEBUG CAP: Apply final 20k cap after expansion
+  // ═══════════════════════════════════════════════════════════════════════════
+  const MAX_PAGE1_UNITS_FINAL = 20_000;
+  const finalTotalAfterExpansion = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+  
+  console.log('DEBUG_UNIT_CAP_CHECK_AFTER_EXPANSION', {
+    total_units_before: finalTotalAfterExpansion,
+    cap: MAX_PAGE1_UNITS_FINAL,
+    scale_factor: finalTotalAfterExpansion > MAX_PAGE1_UNITS_FINAL
+      ? MAX_PAGE1_UNITS_FINAL / finalTotalAfterExpansion
+      : 1,
+    applied: finalTotalAfterExpansion > MAX_PAGE1_UNITS_FINAL,
+  });
+  
+  if (finalTotalAfterExpansion > MAX_PAGE1_UNITS_FINAL) {
+    const scaleFactor = MAX_PAGE1_UNITS_FINAL / finalTotalAfterExpansion;
+    
+    for (const product of products) {
+      product.estimated_monthly_units = Math.round(product.estimated_monthly_units * scaleFactor);
+      product.estimated_monthly_revenue = Math.round(product.estimated_monthly_units * product.price);
+    }
+    
+    totalPage1Units = MAX_PAGE1_UNITS_FINAL;
+    totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    
+    console.log("🔧 TEMPORARY_DEBUG_CAP_APPLIED", {
+      total_units_before: finalTotalAfterExpansion,
+      total_units_after: totalPage1Units,
+      scale_factor: scaleFactor.toFixed(4),
+      calibration_applied: true,
+      calibration_reason: 'temporary_debug_cap_20k',
+    });
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // RANK ABSORPTION CAP: Prevent top ranks from absorbing too much demand
@@ -1619,25 +1674,43 @@ export function buildKeywordPageOne(
   // ═══════════════════════════════════════════════════════════════════════════
   // CATEGORY-SCALED CAPS: Re-apply total cap and rank-1 cap after expansion
   // ═══════════════════════════════════════════════════════════════════════════
+  // TEMPORARY DEBUG: Override maxUnits with debug cap
+  const MAX_PAGE1_UNITS_DEBUG = 20_000;
+  const effectiveMaxUnits = MAX_PAGE1_UNITS_DEBUG; // Override category-scaled cap temporarily
+  
   // Market expansion may have pushed totals over category-scaled limits - re-apply caps
   // Re-apply total cap if market expansion pushed it over
   const currentTotalAfterExpansion = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  if (currentTotalAfterExpansion > maxUnits) {
-    const scaleDownFactor = maxUnits / currentTotalAfterExpansion;
+  
+  console.log('DEBUG_UNIT_CAP_CHECK_CATEGORY_SCALED', {
+    total_units_before: currentTotalAfterExpansion,
+    cap: MAX_PAGE1_UNITS_DEBUG,
+    original_category_cap: maxUnits,
+    scale_factor: currentTotalAfterExpansion > MAX_PAGE1_UNITS_DEBUG
+      ? MAX_PAGE1_UNITS_DEBUG / currentTotalAfterExpansion
+      : 1,
+    applied: currentTotalAfterExpansion > MAX_PAGE1_UNITS_DEBUG,
+  });
+  
+  if (currentTotalAfterExpansion > effectiveMaxUnits) {
+    const scaleDownFactor = effectiveMaxUnits / currentTotalAfterExpansion;
     products.forEach(p => {
       p.estimated_monthly_units = Math.round(p.estimated_monthly_units * scaleDownFactor);
       p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
     });
     
     // Update totals
-    totalPage1Units = maxUnits;
+    totalPage1Units = effectiveMaxUnits;
     totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
     console.log("📊 CATEGORY_SCALED_CAP_REAPPLIED_AFTER_EXPANSION", {
       category: categoryKey,
       multiplier: categoryMultiplier,
-      max_units: maxUnits,
+      max_units: effectiveMaxUnits,
+      original_category_max: maxUnits,
       original_units: currentTotalAfterExpansion,
       capped_units: totalPage1Units,
+      calibration_applied: true,
+      calibration_reason: 'temporary_debug_cap_20k',
     });
   }
   
@@ -1667,16 +1740,22 @@ export function buildKeywordPageOne(
       }
     }
     
-    // Re-normalize total after rank-1 redistribution (maintain category-scaled total cap)
+    // Re-normalize total after rank-1 redistribution (maintain debug cap)
     const afterRank1Redistribution = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-    if (afterRank1Redistribution > maxUnits) {
-      const renormalizeFactor = maxUnits / afterRank1Redistribution;
+    if (afterRank1Redistribution > effectiveMaxUnits) {
+      const renormalizeFactor = effectiveMaxUnits / afterRank1Redistribution;
       products.forEach(p => {
         p.estimated_monthly_units = Math.round(p.estimated_monthly_units * renormalizeFactor);
         p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
       });
-      totalPage1Units = maxUnits;
+      totalPage1Units = effectiveMaxUnits;
       totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+      console.log("🔧 TEMPORARY_DEBUG_CAP_AFTER_RANK1_REDISTRIBUTION", {
+        total_units_before: afterRank1Redistribution,
+        total_units_after: totalPage1Units,
+        scale_factor: renormalizeFactor.toFixed(4),
+        calibration_reason: 'temporary_debug_cap_20k',
+      });
     }
   }
   
