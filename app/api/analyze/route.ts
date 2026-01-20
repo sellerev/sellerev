@@ -17,8 +17,9 @@ import { TieredAnalyzeResponse } from "@/types/tierContracts";
 import { batchEnrichCatalogItems } from "@/lib/spapi/catalogItems";
 import { batchEnrichPricing } from "@/lib/spapi/pricing";
 
+// TODO: AI PROMPTS DISABLED - Re-enable when AI processing is needed
 // PASS 1: Decision Brain - Plain text verdict and reasoning
-const DECISION_BRAIN_PROMPT = `You are a senior Amazon seller allocating capital to product opportunities.
+// const DECISION_BRAIN_PROMPT = `You are a senior Amazon seller allocating capital to product opportunities.
 
 Your role: Make a clear, decisive verdict about whether this keyword opportunity is viable for the seller.
 
@@ -121,9 +122,10 @@ The review barrier is too high for new sellers. Page 1 shows an average of 2,800
 
 ACTIONABLE GUIDANCE:
 Do not proceed unless you can commit to 6+ months of PPC spend and have a unique value proposition that breaks brand loyalty. Entry is only viable for existing sellers with established review velocity and clear differentiation strategy.`;
+// `;
 
-// PASS 2: Structuring Brain - Converts plain text decision into JSON contract
-const STRUCTURING_BRAIN_PROMPT = `You are a structuring assistant that converts plain text decisions into structured JSON contracts.
+// PASS 2: Structuring Brain - Converts plain text decision into JSON contract (DISABLED)
+// const STRUCTURING_BRAIN_PROMPT = `You are a structuring assistant that converts plain text decisions into structured JSON contracts.
 
 Your role: Convert the Decision Brain's plain text verdict and reasoning into the required JSON decision contract format.
 
@@ -217,9 +219,10 @@ No additional keys.
 No missing keys.
 No markdown.
 No commentary outside JSON.`;
+// `;
 
-// Legacy system prompt (kept for reference, not used in two-pass system)
-const SYSTEM_PROMPT = `You are Sellerev, a seller decision engine for Amazon FBA.
+// Legacy system prompt (kept for reference, not used in two-pass system) (DISABLED)
+// const SYSTEM_PROMPT = `You are Sellerev, a seller decision engine for Amazon FBA.
 
 You are a senior Amazon seller making real capital allocation decisions. You think and speak like someone who risks time and money on every product decision, even when data is imperfect.
 
@@ -532,8 +535,9 @@ Before returning your answer, verify:
 - Confidence reflects decision certainty based on market structure signals, not data completeness
 
 Output should read like a senior Amazon operator making a real decision about whether to risk time and capital, even when data is imperfect.`;
+// `;
 
-// Decision contract keys that must be present in the OpenAI response
+// Decision contract keys that must be present in the OpenAI response (DISABLED - AI not used)
 const REQUIRED_DECISION_KEYS = [
   "decision",
   "executive_summary",
@@ -788,6 +792,11 @@ function validateDecisionContract(data: any): data is DecisionContract {
 }
 
 export async function POST(req: NextRequest) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TIMING: Start total analyze time
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.time("ANALYZE_TOTAL");
+  
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: Top-level execution log
   // ═══════════════════════════════════════════════════════════════════════════
@@ -3390,15 +3399,15 @@ export async function POST(req: NextRequest) {
     const cleanedListingsResponse = cleanForJSON(listingsResponse);
     const serializedListingsResponse = JSON.stringify(cleanedListingsResponse);
 
-    // Create analysis_run with status: "processing"
+    // Create analysis_run with status: "complete" (no AI processing)
     const { data: insertedRun, error: insertError } = await supabase
       .from("analysis_runs")
       .insert({
         user_id: user.id,
         input_type: "keyword",
         input_value: body.input_value,
-        ai_verdict: null, // Will be updated by async AI processing
-        ai_confidence: null, // Will be updated by async AI processing
+        ai_verdict: null, // AI disabled - always null
+        ai_confidence: null, // AI disabled - always null
         seller_stage: sellerProfile.stage,
         seller_experience_months: sellerProfile.experience_months,
         seller_monthly_revenue_range: sellerProfile.monthly_revenue_range,
@@ -3422,56 +3431,46 @@ export async function POST(req: NextRequest) {
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 🛡️ DECISION FALLBACK GUARD
+    // AI PROCESSING: DISABLED
     // ═══════════════════════════════════════════════════════════════════════════
-    // If market data exists but async decision brain has not returned yet,
-    // inject a safe INSIGHT_ONLY decision so the UI never errors.
-    if (
-      contractResponse &&
-      contractResponse.has_products === true &&
-      (!contractResponse.decision || Object.keys(contractResponse.decision).length === 0)
-    ) {
-      contractResponse.decision = {
-        status: 'INSIGHT_ONLY',
-        decision_available: false,
-        reason: 'Decision intentionally deferred or not required for this analysis',
-        confidence_level: contractResponse.confidence_level ?? 'unknown',
-        ui_message: 'Market data is ready. Strategic decision is intentionally omitted for this analysis.',
-      };
-      console.info('🟡 DECISION_FALLBACK_INJECTED', {
-        keyword: body.input_value,
-        analysis_run_id: insertedRun?.id,
-        reason: 'Async decision not yet returned',
-      });
-    }
+    // TODO: Re-enable AI processing when needed (currently disabled for speed)
+    // All AI-related logic has been removed/disabled to return results immediately
+    
+    // // 🛡️ DECISION FALLBACK GUARD (DISABLED)
+    // // If market data exists but async decision brain has not returned yet,
+    // // inject a safe INSIGHT_ONLY decision so the UI never errors.
+    // if (
+    //   contractResponse &&
+    //   contractResponse.has_products === true &&
+    //   (!contractResponse.decision || Object.keys(contractResponse.decision).length === 0)
+    // ) {
+    //   contractResponse.decision = {
+    //     status: 'INSIGHT_ONLY',
+    //     decision_available: false,
+    //     reason: 'Decision intentionally deferred or not required for this analysis',
+    //     confidence_level: contractResponse.confidence_level ?? 'unknown',
+    //     ui_message: 'Market data is ready. Strategic decision is intentionally omitted for this analysis.',
+    //   };
+    // }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 5: Trigger async AI processing (fire-and-forget)
-    // ═══════════════════════════════════════════════════════════════════════════
-    if (insertedRun?.id) {
-      const { processAiAsync } = await import("@/lib/analyze/asyncAiProcessing");
-      
-      // Fire-and-forget: Process AI in background
-      processAiAsync({
-        analysisRunId: insertedRun.id,
-        keyword: body.input_value,
-        sellerProfile: {
-          stage: sellerProfile.stage,
-          experience_months: sellerProfile.experience_months,
-          monthly_revenue_range: sellerProfile.monthly_revenue_range,
-        },
-        marketSnapshot,
-        contractResponse,
-        supabase,
-      }).catch((error) => {
-        console.error("Async AI processing failed (non-blocking):", error);
-      });
-
-      console.log("ASYNC_AI_PROCESSING_TRIGGERED", {
-        analysis_run_id: insertedRun.id,
-        keyword: body.input_value,
-      });
-    }
+    // // STEP 5: Trigger async AI processing (fire-and-forget) - DISABLED
+    // if (insertedRun?.id) {
+    //   const { processAiAsync } = await import("@/lib/analyze/asyncAiProcessing");
+    //   processAiAsync({
+    //     analysisRunId: insertedRun.id,
+    //     keyword: body.input_value,
+    //     sellerProfile: {
+    //       stage: sellerProfile.stage,
+    //       experience_months: sellerProfile.experience_months,
+    //       monthly_revenue_range: sellerProfile.monthly_revenue_range,
+    //     },
+    //     marketSnapshot,
+    //     contractResponse,
+    //     supabase,
+    //   }).catch((error) => {
+    //     console.error("Async AI processing failed (non-blocking):", error);
+    //   });
+    // }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // 🛡️ MARKET DATA VALIDATION GUARD (FINAL GATE - MINIMAL STRICTNESS)
@@ -3507,22 +3506,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Build response with required shape - always include listings and snapshot
-    const decisionData = contractResponse?.decision;
-    const hasDecisionData = decisionData && (typeof decisionData !== 'object' || Object.keys(decisionData).length > 0);
+    // AI decision data is disabled - all decision fields will be null
     const warnings: string[] = [];
-    
-    if (!hasDecisionData) {
-      warnings.push('DECISION_DATA_PENDING');
-      console.warn("DECISION_DATA_MISSING_BUT_MARKET_VALID", {
-        keyword: body.input_value,
-        listings: canonicalProducts.length,
-        bsr_coverage_percent: marketSnapshot?.bsr_sample_size 
-          ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
-          : null,
-        avg_price: marketSnapshot?.avg_price,
-        message: "Partial enrichment is valid - returning success with listings",
-      });
-    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // 🛡️ HARD VALIDATION: Sponsored flag preservation check
@@ -3580,14 +3565,17 @@ export async function POST(req: NextRequest) {
     });
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 6: Return listings immediately (before AI completes)
+    // STEP 6: Return listings immediately (no AI blocking)
     // ═══════════════════════════════════════════════════════════════════════════
     // CRITICAL: Always return success with listings if listings.length > 0
-    // Response shape MUST always include listings and snapshot, even if decision data is missing
+    // Response shape MUST always include listings and snapshot
+    // AI-related fields will be null (decision, summary, insights, etc.)
+    console.timeEnd("ANALYZE_TOTAL");
+    
     return NextResponse.json(
       {
         success: true,
-        status: "processing", // AI is processing in background
+        status: "complete", // Data-only processing complete (no AI)
         analysisRunId: insertedRun?.id,
         data_quality: dataQuality,
         dataSource: dataSource,
@@ -3598,7 +3586,14 @@ export async function POST(req: NextRequest) {
         products: canonicalProducts,
         listings: canonicalProducts, // Ensure listings field is always present
         aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
-        ...(contractResponse ? contractResponse : {}),
+        // Spread contractResponse but ensure AI fields are null if not present
+        ...(contractResponse ? {
+          ...contractResponse,
+          // Explicitly null out AI-related fields if not present
+          decision: contractResponse.decision || null,
+          summary: contractResponse.summary || null,
+          insights: contractResponse.insights || null,
+        } : {}),
         // CRITICAL: Always include snapshot with required fields, even if some are null
         snapshot: {
           ...marketSnapshot,
@@ -3614,13 +3609,9 @@ export async function POST(req: NextRequest) {
             ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
             : null,
         },
-        // Include warnings if decision data is missing
+        // Include warnings if any
         ...(warnings.length > 0 ? { warnings } : {}),
-        // Decision is set by fallback guard above if async AI hasn't returned yet
-        // If contractResponse has decision, it's already spread above; otherwise it will be null
-        message: hasDecisionData 
-          ? "Listings loaded. AI insights processing..." 
-          : "Market data loaded. Strategic decision is being processed.",
+        message: "Market data loaded. Product cards ready.",
       },
       { 
         status: 200,
@@ -3628,6 +3619,9 @@ export async function POST(req: NextRequest) {
       }
     );
   } catch (err) {
+    // TIMING: End total analyze time (error case)
+    console.timeEnd("ANALYZE_TOTAL");
+    
     // TASK 2: Classify error - processing_error vs other errors
     const errorMessage = err instanceof Error ? err.message : String(err);
     const isProcessingError = errorMessage.includes("Processing error") && errorMessage.includes("extracted");
