@@ -83,8 +83,7 @@ Submitted at: ${timestamp}`;
       });
       supportEmailSent = true;
       console.log("Support email sent successfully to support@sellerev.com:", {
-        id: supportEmailResult.id,
-        to: supportEmailResult.to,
+        result: supportEmailResult,
       });
     } catch (error) {
       console.error("CRITICAL: Failed to send email to support@sellerev.com:", error);
@@ -94,13 +93,13 @@ Submitted at: ${timestamp}`;
 
     // Send auto-reply confirmation email to user (non-critical - log but don't fail)
     try {
-      const confirmationEmailResult = await resend.emails.send({
+      await resend.emails.send({
         from: "Sellerev Support <support@sellerev.com>",
         to: email,
         subject: "Thanks for contacting Sellerev",
         text: `Thanks for reaching out to Sellerev.\n\nWe've received your message and will respond within 24 hours.\n\n— Sellerev Support`,
       });
-      console.log("Confirmation email sent successfully:", confirmationEmailResult);
+      console.log("Confirmation email sent successfully to user");
     } catch (error) {
       // Log but don't fail - confirmation email failure shouldn't block support email
       console.error("Warning: Failed to send confirmation email to user:", error);
