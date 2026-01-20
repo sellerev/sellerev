@@ -734,7 +734,7 @@ export default function AnalyzeForm({
         console.log("FRONTEND_PRESERVE_STATE_NO_INITIAL", {
           has_listings: true,
           has_analysis_run_id: !!analysisRunIdForChat,
-          listings_count: analysis.page_one_listings.length,
+          listings_count: analysis?.page_one_listings?.length || 0,
           reason: "Preserving valid listings - initialAnalysis is null but listings exist",
         });
         // DO NOT clear - keep the state
