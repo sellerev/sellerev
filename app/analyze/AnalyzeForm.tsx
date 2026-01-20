@@ -691,13 +691,33 @@ export default function AnalyzeForm({
     if (initialAnalysis) {
       const incomingProducts = initialAnalysis.page_one_listings || initialAnalysis.products || [];
       const incomingHasProducts = incomingProducts.length > 0;
+      const incomingRunId = initialAnalysis.analysis_run_id;
+      
+      // Current state check
+      const currentProducts = analysis?.page_one_listings || analysis?.products || [];
+      const currentHasProducts = currentProducts.length > 0;
+      const currentRunId = analysis?.analysis_run_id;
+      const isSameRunId = currentRunId === incomingRunId;
+      
+      // GUARD: If same run ID and current state has products but incoming doesn't,
+      // preserve current state (handles race condition after router.replace())
+      if (isSameRunId && currentHasProducts && !incomingHasProducts) {
+        console.log("FRONTEND_SKIP_SYNC_SAME_RUN_NO_INCOMING", {
+          run_id: incomingRunId,
+          current_products: currentProducts.length,
+          incoming_products: incomingProducts.length,
+          reason: "Same run ID, current has products but incoming doesn't - preserving client state",
+        });
+        return;
+      }
       
       if (incomingHasProducts) {
         // Incoming has products - always sync (this is the source of truth)
         console.log("FRONTEND_SYNC_FROM_INITIAL", {
-          prev_run_id: analysis?.analysis_run_id,
-          new_run_id: initialAnalysis.analysis_run_id,
-          has_prev_listings: !!(analysis?.page_one_listings && analysis.page_one_listings.length > 0),
+          prev_run_id: currentRunId,
+          new_run_id: incomingRunId,
+          has_prev_listings: currentHasProducts,
+          prev_listings_count: currentProducts.length,
           has_incoming_listings: incomingHasProducts,
           incoming_count: incomingProducts.length,
         });
@@ -720,7 +740,7 @@ export default function AnalyzeForm({
         setSponsoredFilter(null);
         setBrandDropdownOpen(false);
       }
-      // If incoming has no products, don't overwrite (preserve existing state)
+      // If incoming has no products and different run ID, don't overwrite (preserve existing state)
       // This handles edge cases where server hasn't loaded data yet
     } else {
       // No initialAnalysis means no run param - reset to blank state
