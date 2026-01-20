@@ -10,6 +10,30 @@ import { ProductCard } from "@/app/components/ProductCard";
 import SearchBar from "@/app/components/SearchBar";
 import ResultsLoadingState from "./components/ResultsLoadingState";
 
+// Hard safety check: Prevent localhost calls in production
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'production') {
+  const originalFetch = window.fetch;
+  window.fetch = function(...args: Parameters<typeof fetch>) {
+    let url = '';
+    const firstArg = args[0];
+    if (typeof firstArg === 'string') {
+      url = firstArg;
+    } else if (firstArg instanceof Request) {
+      url = firstArg.url;
+    } else if (firstArg instanceof URL) {
+      url = firstArg.toString();
+    } else if (firstArg && typeof firstArg === 'object' && 'url' in firstArg) {
+      url = String((firstArg as { url: unknown }).url);
+    }
+    if (url && (url.includes('127.0.0.1') || url.includes('localhost'))) {
+      console.error('❌ Frontend is calling localhost in production:', url);
+      console.assert(false, 'Frontend must not call localhost in production');
+      return Promise.reject(new Error('Localhost calls forbidden in production'));
+    }
+    return originalFetch.apply(this, args);
+  };
+}
+
 /**
  * Sellerev Analyze Page - Core Product Component
  * 
@@ -589,9 +613,6 @@ export default function AnalyzeForm({
   // This handles URL navigation between different analyses (browser back/forward, refresh, direct URL entry)
   // Note: When creating new analysis via router.replace(), props won't change, so state is updated directly in analyze()
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:591',message:'SYNC_USEFFECT_ENTRY',data:{clientRunId,hasInitialAnalysis:!!initialAnalysis,initialRunId:initialAnalysis?.analysis_run_id,currentRunId:analysis?.analysis_run_id,currentHasProducts:!!(analysis?.page_one_listings?.length||analysis?.products?.length),loading},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A,B,C'})}).catch(()=>{});
-    // #endregion
     // CRITICAL: NEVER sync from initialAnalysis if this is a user-triggered Analyze action
     // When user clicks Analyze, we set state directly in analyze() function
     // The router.replace() causes a re-render with initialAnalysis, but we must NOT overwrite
@@ -599,9 +620,6 @@ export default function AnalyzeForm({
     if (clientRunId) {
       // This is a user-triggered action - don't sync from initialAnalysis
       // The state was already set in analyze() function from the API response
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:603',message:'SYNC_SKIP_USER_ACTION',data:{clientRunId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       console.log("FRONTEND_SKIP_SYNC_USER_ACTION", {
         client_run_id: clientRunId,
         reason: "User-triggered Analyze action - preserving state from API response, not initialAnalysis prop",
@@ -655,9 +673,6 @@ export default function AnalyzeForm({
       // Only sync if different run ID or current state has no products
       if (incomingHasProducts) {
         // Incoming has products and different run ID - sync (this is the source of truth)
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:651',message:'SYNC_OVERWRITE_STATE',data:{prevRunId:currentRunId,newRunId:incomingRunId,prevListings:currentProducts.length,incomingListings:incomingProducts.length,isSameRun:isSameRunId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B,C'})}).catch(()=>{});
-        // #endregion
         console.log("FRONTEND_SYNC_FROM_INITIAL", {
           prev_run_id: currentRunId,
           new_run_id: incomingRunId,
@@ -762,9 +777,6 @@ export default function AnalyzeForm({
     const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     
     // Set client_run_id FIRST - this tracks the current search lifecycle
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:736',message:'SET_CLIENT_RUN_ID',data:{clientRunId:newClientRunId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     setClientRunId(newClientRunId);
     activeClientRunIdRef.current = newClientRunId; // Update ref immediately (synchronous)
     setCurrentAnalysisRunId(newRunId);
@@ -1037,9 +1049,6 @@ export default function AnalyzeForm({
       setAnalysis((prev) => {
         const newAnalysis = normalizeAnalysis(analysisData);
         
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:1025',message:'SET_ANALYSIS_CALLED',data:{clientRunId:newClientRunId,backendRunId:data.analysisRunId,prevListings:prev?.page_one_listings?.length||0,newListings:newAnalysis?.page_one_listings?.length||0,newProducts:newAnalysis?.products?.length||0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B,C'})}).catch(()=>{});
-        // #endregion
         // Log the state update for debugging
         console.log("FRONTEND_STATE_UPDATE", {
           client_run_id: newClientRunId,
@@ -1081,24 +1090,12 @@ export default function AnalyzeForm({
       // Use replace() to avoid adding to history stack
       // CRITICAL: This happens AFTER state is set, so useEffect guard can check analysisRunIdForChat
       if (data.analysisRunId) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:1068',message:'ROUTER_REPLACE_CALLED',data:{clientRunId:newClientRunId,backendRunId:data.analysisRunId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-        // #endregion
         router.replace(`/analyze?run=${data.analysisRunId}`, { scroll: false });
       }
       
-      // CRITICAL: Clear clientRunId AFTER a short delay to allow state to settle
-      // This prevents the sync useEffect from overwriting the state we just set
-      // We keep clientRunId set during the sync window to block overwrites
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:1075',message:'SET_TIMEOUT_CLEAR_CLIENT_RUN_ID',data:{clientRunId:newClientRunId,delay:100},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
-      setTimeout(() => {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:1078',message:'CLEAR_CLIENT_RUN_ID',data:{clientRunId:newClientRunId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-        setClientRunId(null);
-      }, 100);
+      // CRITICAL: Do NOT clear clientRunId here - keep it set to prevent sync overwrites
+      // clientRunId will be cleared when the next search starts (which sets a new one)
+      // This ensures the sync useEffect always sees clientRunId and skips overwriting state
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Analysis failed";
       console.error("ANALYZE_EXCEPTION", { 
@@ -1229,11 +1226,6 @@ export default function AnalyzeForm({
 
           {analysis ? (
             /* CRITICAL: ALWAYS render results when analysis exists - animation does NOT block rendering */
-            (() => {
-              // #region agent log
-              fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:1189',message:'RENDER_RESULTS_BRANCH',data:{hasAnalysis:!!analysis,listings:analysis?.page_one_listings?.length||0,products:analysis?.products?.length||0,loading},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-              // #endregion
-              return (
             <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6 relative">
               {/* Show loading animation OVERLAY if loading (does not block results) */}
               {loading && (
@@ -2128,8 +2120,6 @@ export default function AnalyzeForm({
                 </>
               ) : null}
             </div>
-              );
-            })()
           ) : loading ? (
             /* Show loading animation when analyzing and no analysis yet */
             <div>
