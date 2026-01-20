@@ -143,7 +143,7 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
         products: products.length > 0 ? products as AnalysisResponse['products'] : undefined,
         // Extract aggregates if present
         aggregates_derived_from_page_one: aggregates,
-      };
+      } as AnalysisResponse;
 
       // Fetch chat history for this analysis
       const { data: chatMessages } = await supabase

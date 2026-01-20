@@ -124,7 +124,8 @@ interface AnalysisResponse {
   // Aggregates derived from canonical Page-1 array (explicit for UI)
   aggregates_derived_from_page_one?: {
     avg_price: number;
-    avg_rating: number;
+    avg_rating: number | null;
+    avg_rating_source: 'observed' | 'estimated' | null;
     avg_bsr: number | null;
     total_monthly_units_est: number;
     total_monthly_revenue_est: number;
