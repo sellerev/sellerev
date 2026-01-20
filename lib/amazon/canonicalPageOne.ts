@@ -50,7 +50,10 @@ export interface CanonicalProduct {
   organic_rank: number | null; // Position among organic listings only (1, 2, 3...) or null if sponsored
   page_position: number; // Actual Page-1 position including sponsored listings (1, 2, 3...)
   // Sponsored visibility (for clarity, not estimation changes)
-  is_sponsored: boolean; // Explicit flag for sponsored listings
+  // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
+  is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown (Rainforest SERP only)
+  sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
+  sponsored_source: 'rainforest' | 'unknown'; // Source of sponsored data
 }
 
 /**
@@ -796,17 +799,26 @@ export function buildKeywordPageOne(
     // Apply conservative demand floors to prevent under-reported sales
     // Scope: Page-1 + Sponsored listings ONLY (already true in this function)
     const rank = pw.pagePosition; // Use page_position for floor calculation
-    const isSponsored = !!l.is_sponsored;
     const reviewCount = pw.reviewCount;
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SPONSORED DATA: Preserve from Rainforest SERP (SP-API has no ad data)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Preserve is_sponsored as-is (true/false/null), don't coerce null to false
+    const isSponsored = l.is_sponsored; // Preserve null (unknown) state
+    const sponsoredPosition = l.sponsored_position ?? null;
+    const sponsoredSource = l.sponsored_source ?? 'unknown';
+    
     // Apply demand floor (use 0 if reviewCount is null for floor calculation)
+    // For floor calculation, treat null sponsored as false (conservative)
     const reviewCountForFloor = reviewCount ?? 0;
+    const isSponsoredForFloor = isSponsored === true; // Only true counts as sponsored for floor
     let finalUnits = applyDemandFloors({
       estimatedUnits: allocatedUnits,
       price: pw.price,
       reviewCount: reviewCountForFloor,
       rank,
-      isSponsored,
+      isSponsored: isSponsoredForFloor,
       fulfillment,
     });
     
@@ -1057,7 +1069,10 @@ export function buildKeywordPageOne(
       organic_rank: pw.organicRank, // Position among organic listings only (null for sponsored)
       page_position: pw.pagePosition, // Actual Page-1 position including sponsored
       // Sponsored visibility (for clarity, not estimation changes)
-      is_sponsored: isSponsored, // Explicit flag for sponsored listings
+      // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
+      is_sponsored: isSponsored, // true = sponsored, false = organic, null = unknown
+      sponsored_position: sponsoredPosition, // Ad position from Rainforest (null if not sponsored)
+      sponsored_source: sponsoredSource, // Source of sponsored data ('rainforest' | 'unknown')
     };
     
     // Store mapping for parent-child normalization (use ASIN as key)

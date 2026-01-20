@@ -184,7 +184,7 @@ interface AnalysisResponse {
       bsr?: number | null;
       organic_rank?: number | null;
       fulfillment?: "FBA" | "FBM" | "Amazon" | null;
-      is_sponsored: boolean;
+      is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown
       position: number;
       // brand removed (Phase 4: brand not in public product types)
       image_url?: string | null;
@@ -1359,7 +1359,17 @@ export default function AnalyzeForm({
                             </div>
                           </div>
                           
-                          {/* 5. Monthly Units */}
+                          {/* 5. Sponsored Density (only show if sponsored_pct > 0) */}
+                          {(snapshot as any)?.sponsored_pct !== null && (snapshot as any)?.sponsored_pct !== undefined && (snapshot as any)?.sponsored_pct > 0 && (
+                            <div>
+                              <div className="text-xs text-gray-500 mb-1">Sponsored on Page 1</div>
+                              <div className="text-lg font-semibold text-gray-900">
+                                {(snapshot as any).sponsored_pct.toFixed(1)}%
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* 6. Monthly Units */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
                             <div className="text-lg font-semibold text-gray-900">
@@ -1369,7 +1379,7 @@ export default function AnalyzeForm({
                             </div>
                           </div>
                           
-                          {/* 6. Monthly Revenue */}
+                          {/* 7. Monthly Revenue */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
                             <div className="text-lg font-semibold text-gray-900">
@@ -1684,14 +1694,21 @@ export default function AnalyzeForm({
                         }
                       }
                       
-                      // Sponsored filter
+                      // Sponsored filter: exact match only (no inference)
+                      // CRITICAL: Use exact is_sponsored value (true/false/null), no coercion
                       if (sponsoredFilter !== null) {
-                        const isSponsored = listing.is_sponsored ?? listing.sponsored ?? false;
-                        if (sponsoredFilter === "only" && !isSponsored) {
-                          return false;
+                        const isSponsored = listing.is_sponsored; // Preserve null state
+                        if (sponsoredFilter === "only") {
+                          // Sponsored only: show only listings with is_sponsored === true
+                          if (isSponsored !== true) {
+                            return false;
+                          }
                         }
-                        if (sponsoredFilter === "exclude" && isSponsored) {
-                          return false;
+                        if (sponsoredFilter === "exclude") {
+                          // Exclude sponsored: show all except is_sponsored === true (includes null)
+                          if (isSponsored === true) {
+                            return false;
+                          }
                         }
                       }
                       
@@ -1940,8 +1957,9 @@ export default function AnalyzeForm({
                           // BSR source determines prefix (~ for estimated, no prefix for sp_api)
                           const bsrSource = (listing as any).bsr_source ?? (listing as any).bsrSource ?? null;
                           
-                          // Sponsored: check both fields
-                          const isSponsored = listing.is_sponsored ?? listing.sponsored ?? false;
+                          // Sponsored: preserve exact value from listing (true/false/null)
+                          // CRITICAL: Do NOT coerce null to false - null means unknown
+                          const isSponsored = listing.is_sponsored ?? listing.sponsored ?? null;
                           
                           return (
                             <ProductCard

@@ -17,7 +17,7 @@ interface ProductCardProps {
    */
   bsrSource?: string | null;
   fulfillment: "FBA" | "FBM" | "AMZ";
-  isSponsored: boolean;
+  isSponsored: boolean | null; // true = sponsored, false = organic, null = unknown
   imageUrl?: string | null;
   asin?: string | null;
   isSelected?: boolean;
@@ -262,9 +262,23 @@ export function ProductCard({
               {fulfillment}
             </span>
           )}
-          {isSponsored && (
-            <span className="px-2 py-1 rounded-full text-[11px] font-medium bg-[#FED7AA] text-[#9A3412]">
+          {/* Sponsored/Organic/Unknown badge */}
+          {isSponsored === true && (
+            <span className="px-2 py-1 rounded-full text-[11px] font-medium bg-[#FED7AA] text-[#9A3412]" title="This listing is sponsored">
               Sponsored
+            </span>
+          )}
+          {isSponsored === false && (
+            <span className="px-2 py-1 rounded-full text-[11px] font-medium bg-gray-100 text-gray-700">
+              Organic
+            </span>
+          )}
+          {isSponsored === null && (
+            <span 
+              className="px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-500"
+              title="Sponsored status not detected for this listing."
+            >
+              Unknown
             </span>
           )}
         </div>

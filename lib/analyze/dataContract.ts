@@ -94,7 +94,10 @@ export interface KeywordAnalyzeResponse {
     organic_rank: number | null; // Position among organic listings only (null for sponsored)
     page_position: number; // Actual Page-1 position including sponsored listings
     // Sponsored visibility (for clarity, not estimation changes)
-    is_sponsored: boolean; // Explicit flag for sponsored listings
+    // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
+    is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown
+    sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
+    sponsored_source: 'rainforest' | 'unknown'; // Source of sponsored data
   }>;
   
   // B-2) Canonical Page-1 Array (explicit for UI)
@@ -121,7 +124,10 @@ export interface KeywordAnalyzeResponse {
     organic_rank: number | null; // Position among organic listings only (null for sponsored)
     page_position: number; // Actual Page-1 position including sponsored listings
     // Sponsored visibility (for clarity, not estimation changes)
-    is_sponsored: boolean; // Explicit flag for sponsored listings
+    // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
+    is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown
+    sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
+    sponsored_source: 'rainforest' | 'unknown'; // Source of sponsored data
   }>;
   
   // B-3) Aggregates Derived from Page-1 (explicit for UI)
@@ -421,7 +427,10 @@ export async function buildKeywordAnalyzeResponse(
         organic_rank: p.organic_rank ?? null, // Position among organic listings only
         page_position: p.page_position ?? p.rank ?? 0, // Actual Page-1 position including sponsored
         // Sponsored visibility (for clarity, not estimation changes)
-        is_sponsored: p.is_sponsored ?? false, // Explicit flag for sponsored listings
+        // CRITICAL: Preserve sponsored fields from Rainforest SERP (SP-API has no ad data)
+        is_sponsored: p.is_sponsored ?? null, // true = sponsored, false = organic, null = unknown
+        sponsored_position: p.sponsored_position ?? null, // Ad position from Rainforest
+        sponsored_source: p.sponsored_source ?? 'unknown', // Source of sponsored data
       };
     }) as any; // Type assertion to bypass interface requirement (Phase 2: brand removed at API boundary)
   } else if (canonicalProducts && canonicalProducts.length === 0) {
@@ -478,10 +487,13 @@ export async function buildKeywordAnalyzeResponse(
         is_algorithm_boosted: false, // true if appearances >= 2
         appeared_multiple_times: false, // true if appearances > 1
         // Helium-10 style rank semantics (fallback path - approximate)
-        organic_rank: listing.is_sponsored ? null : (listing.position || index + 1), // Approximate for fallback
+        organic_rank: listing.is_sponsored === true ? null : (listing.position || index + 1), // Approximate for fallback
         page_position: listing.position || index + 1, // Actual Page-1 position
         // Sponsored visibility (for clarity, not estimation changes)
-        is_sponsored: listing.is_sponsored ?? false, // Explicit flag for sponsored listings
+        // CRITICAL: Preserve sponsored fields from Rainforest SERP (SP-API has no ad data)
+        is_sponsored: listing.is_sponsored ?? null, // true = sponsored, false = organic, null = unknown
+        sponsored_position: listing.sponsored_position ?? null, // Ad position from Rainforest
+        sponsored_source: listing.sponsored_source ?? 'unknown', // Source of sponsored data
       };
     }) as any; // Type assertion to bypass interface requirement (Phase 2: brand removed at API boundary)
   }
@@ -612,7 +624,18 @@ export async function buildKeywordAnalyzeResponse(
     }
     const page_one_brands = Array.from(pageOneBrandsSet).sort();
 
-    // Step 5: Attach brand_stats and page_one_brands to snapshot
+    // Step 4.5: Compute sponsored metrics from canonical products
+    // CRITICAL: Use exact is_sponsored values (true/false/null), no inference
+    const sponsoredListings = canonicalProducts.filter(p => p.is_sponsored === true);
+    const organicListings = canonicalProducts.filter(p => p.is_sponsored === false);
+    const unknownSponsoredCount = canonicalProducts.filter(p => p.is_sponsored === null).length;
+    const sponsoredCount = sponsoredListings.length;
+    const organicCount = organicListings.length;
+    const sponsoredPct = canonicalProducts.length > 0
+      ? Number(((sponsoredCount / canonicalProducts.length) * 100).toFixed(1))
+      : 0;
+
+    // Step 5: Attach brand_stats, page_one_brands, and sponsored metrics to snapshot
     // CRITICAL: Snapshot totals MUST equal sum of all products (guaranteed by calculation above)
     if (snapshot) {
       (snapshot as any).monthly_units = totalMonthlyUnits;
@@ -635,6 +658,11 @@ export async function buildKeywordAnalyzeResponse(
       };
       // Add page_one_brands array (single source of truth for brand dropdown)
       (snapshot as any).page_one_brands = page_one_brands;
+      // Add sponsored metrics (Rainforest SERP only)
+      (snapshot as any).sponsored_count = sponsoredCount;
+      (snapshot as any).organic_count = organicCount;
+      (snapshot as any).unknown_sponsored_count = unknownSponsoredCount;
+      (snapshot as any).sponsored_pct = sponsoredPct;
     }
     
     // Step 6: Logging

@@ -18,7 +18,9 @@ export interface ParsedListing {
   price: number | null;
   rating: number | null;
   reviews: number | null;
-  is_sponsored: boolean;
+  is_sponsored: boolean | null; // Sponsored status from Rainforest SERP (null = unknown)
+  sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
+  sponsored_source: 'rainforest' | 'unknown'; // Source of sponsored data (Rainforest SERP only)
   position: number; // Organic rank (1-indexed position on Page 1)
   brand: string | null;
   image_url: string | null; // Rainforest search_results[].image
@@ -48,7 +50,10 @@ export interface KeywordMarketSnapshot {
   bsr_sample_method?: "top4_bottom2" | "all_available" | "none";
   bsr_sample_size?: number; // How many BSRs were used to compute avg_bsr
   total_page1_listings: number; // Only Page 1 listings
-  sponsored_count: number;
+  sponsored_count: number; // Count of listings with is_sponsored === true
+  organic_count: number; // Count of listings with is_sponsored === false
+  unknown_sponsored_count: number; // Count of listings with is_sponsored === null
+  sponsored_pct: number; // Percentage of sponsored listings (0-100, 1 decimal)
   dominance_score: number; // 0-100, % of listings belonging to top brand
   total_page1_brands?: number; // Total distinct brands on Page-1 (includes "Generic")
   top_brands_by_frequency?: Array<{ brand: string; count: number }>; // Top brands by listing count
@@ -1911,7 +1916,30 @@ export async function fetchKeywordMarketSnapshot(
       const price = parsePrice(item); // Nullable
       const rating = parseRating(item); // Nullable
       const reviews = parseReviews(item); // Nullable
-      const is_sponsored = item.is_sponsored ?? false; // Boolean, default false
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SPONSORED DETECTION: Rainforest SERP is the ONLY source of truth
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: Do NOT infer sponsored from rank, reviews, price, or BSR
+      // SP-API MUST NOT be used for sponsored detection (has no ad data)
+      let is_sponsored: boolean | null = null;
+      let sponsored_position: number | null = null;
+      let sponsored_source: 'rainforest' | 'unknown' = 'unknown';
+      
+      // Use Rainforest SERP data ONLY
+      if (item.is_sponsored === true) {
+        is_sponsored = true;
+        sponsored_position = item.ad_position ?? null;
+        sponsored_source = 'rainforest';
+      } else if (item.is_sponsored === false) {
+        is_sponsored = false;
+        sponsored_source = 'rainforest';
+      } else {
+        // Rainforest did not provide flag - set to null (unknown)
+        is_sponsored = null;
+        sponsored_source = 'unknown';
+      }
+      
       const position = item.position ?? index + 1; // Organic rank (1-indexed)
       
       // STEP 3: Multi-source BSR extraction (robust, checks multiple sources)
@@ -2011,7 +2039,9 @@ export async function fetchKeywordMarketSnapshot(
         price, // Optional (nullable)
         rating, // Optional (nullable)
         reviews, // Optional (nullable)
-        is_sponsored, // Boolean
+        is_sponsored, // Boolean | null (null = unknown, Rainforest SERP only)
+        sponsored_position, // Number | null (ad position from Rainforest)
+        sponsored_source, // 'rainforest' | 'unknown' (source of sponsored data)
         position,
         brand, // Optional (nullable)
         image_url, // Optional (nullable) - NEVER empty string, only null if missing
@@ -2108,10 +2138,15 @@ export async function fetchKeywordMarketSnapshot(
       
       // SP-API Catalog overwrites: brand, category, BSR, title, image
       // CRITICAL: SP-API brand is authoritative - override title-parsed brands
+      // CRITICAL: SP-API MUST NOT touch sponsored fields (has no ad data)
+      // DO NOT overwrite: is_sponsored, sponsored_position, sponsored_source
       if (catalog) {
         mergeCount++;
         // Mark that SP-API responded (even if no data was extracted)
         (listing as any).had_sp_api_response = true;
+        
+        // GUARD: SP-API must never overwrite sponsored flags (no ad data)
+        // is_sponsored, sponsored_position, and sponsored_source are RAINFOREST SERP ONLY
         
         // Transition enrichment state when any SP-API catalog data is applied
         if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
@@ -2624,8 +2659,13 @@ export async function fetchKeywordMarketSnapshot(
 
     // Aggregate metrics from Page 1 listings only (using canonical `listings` variable)
     const total_page1_listings = listings.length;
-    const sponsored_count = listings.filter((l) => l.is_sponsored).length;
-    const organic_count = total_page1_listings - sponsored_count;
+    // Sponsored metrics: Use exact is_sponsored values (true = sponsored, false = organic, null = unknown)
+    const sponsored_count = listings.filter((l) => l.is_sponsored === true).length;
+    const organic_count = listings.filter((l) => l.is_sponsored === false).length;
+    const unknown_sponsored_count = listings.filter((l) => l.is_sponsored === null).length;
+    const sponsored_pct = total_page1_listings > 0
+      ? Number(((sponsored_count / total_page1_listings) * 100).toFixed(1))
+      : 0;
     
     // ═══════════════════════════════════════════════════════════════════════════
     // PAGE-1 SCOPE VERIFICATION (REQUIRED)
@@ -2800,6 +2840,9 @@ export async function fetchKeywordMarketSnapshot(
       bsr_sample_size: sample.length,
       total_page1_listings,
       sponsored_count,
+      organic_count,
+      unknown_sponsored_count,
+      sponsored_pct,
       dominance_score,
       total_page1_brands, // Total distinct brands (includes "Generic")
       top_brands_by_frequency: top_brands.slice(0, 10), // Top 10 brands by frequency
