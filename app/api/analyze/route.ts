@@ -1170,7 +1170,7 @@ export async function POST(req: NextRequest) {
           reviews: row.review_count !== null && row.review_count !== undefined ? parseInt(row.review_count) : null,
           is_sponsored: null, // Unknown (not stored in keyword_products cache)
           sponsored_position: null, // Not stored in keyword_products cache
-          sponsored_source: 'unknown', // Not stored in keyword_products cache
+          sponsored_source: 'organic_serp', // Default to organic_serp for cached data (not stored in keyword_products cache)
           position: row.rank || 1, // Organic rank
           brand: null, // Not stored in keyword_products
           image_url: null, // Not stored in keyword_products
@@ -1625,7 +1625,7 @@ export async function POST(req: NextRequest) {
         reviews: p.review_count || null, // From cache (mapped from review_count)
         is_sponsored: p.is_sponsored ?? null, // From cache (null if unknown)
         sponsored_position: p.sponsored_position ?? null, // From cache (null if unknown)
-        sponsored_source: p.sponsored_source ?? 'unknown', // From cache ('unknown' if not stored)
+        sponsored_source: p.sponsored_source ?? 'organic_serp', // From cache ('organic_serp' if not stored)
         position: p.rank,
         brand: p.brand || null, // From cache
         image_url: p.image_url || null, // From cache

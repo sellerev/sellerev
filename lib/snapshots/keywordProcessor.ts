@@ -605,7 +605,7 @@ export async function processKeyword(
       estimated_monthly_revenue: number | null;
       is_sponsored: boolean | null;
       sponsored_position: number | null;
-      sponsored_source: 'rainforest' | 'unknown' | null;
+      sponsored_source: 'rainforest_serp' | 'organic_serp' | null;
       last_enriched_at: string | null;
       // SP-API Pricing fields
       buy_box_owner: "Amazon" | "Merchant" | "Unknown" | null;
@@ -827,7 +827,7 @@ export async function processKeyword(
         estimated_monthly_revenue: monthlyRevenue ? Math.round(monthlyRevenue * 100) / 100 : null, // Model authority
         is_sponsored: rf?.sponsored ?? canonical.is_sponsored ?? null,
         sponsored_position: rf?.ad_position ?? null,
-        sponsored_source: rf?.sponsored !== null && rf?.sponsored !== undefined ? 'rainforest' : 'unknown',
+        sponsored_source: rf?.sponsored !== null && rf?.sponsored !== undefined ? 'rainforest_serp' : 'organic_serp',
         last_enriched_at: lastEnrichedAt,
         // SP-API Pricing fields
         buy_box_owner: buyBoxOwner,

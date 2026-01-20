@@ -97,7 +97,7 @@ export interface KeywordAnalyzeResponse {
     // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
     is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown
     sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
-    sponsored_source: 'rainforest' | 'unknown'; // Source of sponsored data
+    sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data
   }>;
   
   // B-2) Canonical Page-1 Array (explicit for UI)
@@ -127,7 +127,7 @@ export interface KeywordAnalyzeResponse {
     // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
     is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown
     sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
-    sponsored_source: 'rainforest' | 'unknown'; // Source of sponsored data
+    sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data
   }>;
   
   // B-3) Aggregates Derived from Page-1 (explicit for UI)
@@ -430,7 +430,7 @@ export async function buildKeywordAnalyzeResponse(
         // CRITICAL: Preserve sponsored fields from Rainforest SERP (SP-API has no ad data)
         is_sponsored: p.is_sponsored ?? null, // true = sponsored, false = organic, null = unknown
         sponsored_position: p.sponsored_position ?? null, // Ad position from Rainforest
-        sponsored_source: p.sponsored_source ?? 'unknown', // Source of sponsored data
+        sponsored_source: p.sponsored_source ?? 'organic_serp', // Source of sponsored data
       };
     }) as any; // Type assertion to bypass interface requirement (Phase 2: brand removed at API boundary)
   } else if (canonicalProducts && canonicalProducts.length === 0) {
@@ -493,7 +493,7 @@ export async function buildKeywordAnalyzeResponse(
         // CRITICAL: Preserve sponsored fields from Rainforest SERP (SP-API has no ad data)
         is_sponsored: listing.is_sponsored ?? null, // true = sponsored, false = organic, null = unknown
         sponsored_position: listing.sponsored_position ?? null, // Ad position from Rainforest
-        sponsored_source: listing.sponsored_source ?? 'unknown', // Source of sponsored data
+        sponsored_source: listing.sponsored_source ?? 'organic_serp', // Source of sponsored data
       };
     }) as any; // Type assertion to bypass interface requirement (Phase 2: brand removed at API boundary)
   }
