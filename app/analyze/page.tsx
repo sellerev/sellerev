@@ -79,14 +79,16 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
       const products = Array.isArray(response.products) ? response.products : [];
       
       // Extract aggregates if present
-      const aggregates = (response.aggregates_derived_from_page_one && typeof response.aggregates_derived_from_page_one === 'object' && !Array.isArray(response.aggregates_derived_from_page_one))
-        ? response.aggregates_derived_from_page_one as {
-            avg_price: number;
-            avg_rating: number;
-            avg_bsr: number | null;
-            total_monthly_units_est: number;
-            total_monthly_revenue_est: number;
-            page1_product_count: number;
+      const aggregatesRaw = response.aggregates_derived_from_page_one;
+      const aggregates = (aggregatesRaw && typeof aggregatesRaw === 'object' && !Array.isArray(aggregatesRaw))
+        ? {
+            avg_price: aggregatesRaw.avg_price as number,
+            avg_rating: aggregatesRaw.avg_rating as number | null | undefined ?? null,
+            avg_rating_source: (aggregatesRaw.avg_rating_source ?? null) as 'observed' | 'estimated' | null,
+            avg_bsr: aggregatesRaw.avg_bsr as number | null,
+            total_monthly_units_est: aggregatesRaw.total_monthly_units_est as number,
+            total_monthly_revenue_est: aggregatesRaw.total_monthly_revenue_est as number,
+            page1_product_count: aggregatesRaw.page1_product_count as number,
           }
         : undefined;
       
