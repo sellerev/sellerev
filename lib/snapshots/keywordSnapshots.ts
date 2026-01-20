@@ -39,7 +39,9 @@ export interface KeywordProduct {
   review_count: number | null;
   image_url: string | null;
   brand: string | null;
-  is_sponsored: boolean;
+  is_sponsored: boolean | null; // Sponsored status from Rainforest SERP (null = unknown)
+  sponsored_position?: number | null; // Ad position from Rainforest (null if not sponsored, optional for backward compatibility)
+  sponsored_source?: 'rainforest' | 'unknown' | null; // Source of sponsored data (null if not stored, optional for backward compatibility)
   fulfillment: "FBA" | "FBM" | "AMZ" | null;
   // SP-API enrichment fields
   category: string | null; // Product category from SP-API
