@@ -82,13 +82,13 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
       const aggregatesRaw = response.aggregates_derived_from_page_one;
       const aggregates = (aggregatesRaw && typeof aggregatesRaw === 'object' && !Array.isArray(aggregatesRaw))
         ? {
-            avg_price: aggregatesRaw.avg_price as number,
-            avg_rating: aggregatesRaw.avg_rating as number | null | undefined ?? null,
-            avg_rating_source: (aggregatesRaw.avg_rating_source ?? null) as 'observed' | 'estimated' | null,
-            avg_bsr: aggregatesRaw.avg_bsr as number | null,
-            total_monthly_units_est: aggregatesRaw.total_monthly_units_est as number,
-            total_monthly_revenue_est: aggregatesRaw.total_monthly_revenue_est as number,
-            page1_product_count: aggregatesRaw.page1_product_count as number,
+            avg_price: (aggregatesRaw as Record<string, unknown>).avg_price as number,
+            avg_rating: ((aggregatesRaw as Record<string, unknown>).avg_rating as number | null | undefined) ?? null,
+            avg_rating_source: ((aggregatesRaw as Record<string, unknown>).avg_rating_source ?? null) as 'observed' | 'estimated' | null,
+            avg_bsr: (aggregatesRaw as Record<string, unknown>).avg_bsr as number | null,
+            total_monthly_units_est: (aggregatesRaw as Record<string, unknown>).total_monthly_units_est as number,
+            total_monthly_revenue_est: (aggregatesRaw as Record<string, unknown>).total_monthly_revenue_est as number,
+            page1_product_count: (aggregatesRaw as Record<string, unknown>).page1_product_count as number,
           }
         : undefined;
       
