@@ -3410,12 +3410,12 @@ export async function POST(req: NextRequest) {
           listings: canonicalProducts.length,
           total_page1_listings: marketSnapshot?.total_page1_listings,
         });
-        // Return success with reduced confidence - market data is renderable
+        // Return success with DECISION_DATA_PENDING warning - market data is renderable
         return NextResponse.json(
           {
             success: true,
             status: "processing",
-            warning: "Decision confidence reduced due to partial enrichment",
+            warnings: ['DECISION_DATA_PENDING'],
             analysisRunId: insertedRun?.id,
             data_quality: dataQuality,
             dataSource: dataSource,
@@ -3426,8 +3426,14 @@ export async function POST(req: NextRequest) {
             aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
             ...(contractResponse ? contractResponse : {}),
             snapshot: marketSnapshot,
-            decision: null,
-            confidence: "reduced",
+            market: {
+              listings: canonicalProducts,
+              avg_price: marketSnapshot?.avg_price,
+              total_page1_revenue: contractResponse?.aggregates_derived_from_page_one?.total_page1_revenue || 
+                                  marketSnapshot?.est_total_monthly_revenue_min ||
+                                  marketSnapshot?.est_total_monthly_revenue_max,
+            },
+            decisionData: null,
             message: "Market data is ready. Strategic decision is being processed.",
           },
           { 

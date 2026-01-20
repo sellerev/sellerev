@@ -885,14 +885,25 @@ export default function AnalyzeForm({
         return;
       }
 
-      // ✅ Decision is OPTIONAL - log warning if missing but continue
-      if (!data.decision) {
+      // ✅ Decision is OPTIONAL - check for DECISION_DATA_PENDING warning
+      const warnings = (data as any).warnings || [];
+      const hasDecisionPending = warnings.includes('DECISION_DATA_PENDING');
+      
+      if (!data.decision && hasDecisionPending) {
         console.warn("ANALYZE_MISSING_DECISION_BUT_MARKET_VALID", {
           listings: pageOneListings.length,
           has_snapshot: !!snapshot,
           has_aggregates: !!aggregates,
+          warning: "DECISION_DATA_PENDING - allowing market view render",
         });
-        // Continue without decision - market data is sufficient
+        // Continue without decision - market data is sufficient to render
+      } else if (!data.decision && !hasDecisionPending) {
+        // Legacy case - no warning but also no decision, allow rendering if market data exists
+        console.warn("ANALYZE_MISSING_DECISION_NO_WARNING", {
+          listings: pageOneListings.length,
+          message: "No decision but market data exists - allowing render",
+        });
+        // Continue - market data is sufficient
       }
 
       // Transform response to match AnalysisResponse interface
