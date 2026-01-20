@@ -171,7 +171,8 @@ export async function processKeyword(
     const rainforestData = new Map<string, {
       asin: string;
       rank: number;
-      sponsored: boolean;
+      sponsored: boolean | null; // null = unknown
+      ad_position: number | null; // Ad position from Rainforest (null if not sponsored)
       page_position: number;
       price: number | null;
       fulfillment_hint: 'FBA' | 'FBM' | 'AMZ' | null;
@@ -217,10 +218,15 @@ export async function processKeyword(
         }
       }
 
+      // Extract sponsored status and ad position from Rainforest
+      const isSponsored = item.is_sponsored === true || item.sponsored === true;
+      const adPosition = isSponsored ? (item.ad_position ?? null) : null;
+      
       rainforestData.set(asin, {
         asin,
         rank: i + 1, // Page position (1-indexed)
-        sponsored: item.sponsored === true || item.is_sponsored === true,
+        sponsored: isSponsored ? true : (item.is_sponsored === false ? false : null), // true, false, or null
+        ad_position: adPosition,
         page_position: i + 1,
         price,
         fulfillment_hint: fulfillmentHint,
@@ -516,6 +522,11 @@ export async function processKeyword(
         ? (pricingEnriched.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM')
         : (rf.fulfillment_hint === 'AMZ' ? 'Amazon' : rf.fulfillment_hint);
       
+      // Extract sponsored fields from Rainforest
+      const isSponsored = rf.sponsored === true;
+      const sponsoredPosition = isSponsored ? rf.ad_position : null;
+      const sponsoredSource = rf.sponsored !== null ? 'rainforest' : 'unknown';
+      
       return {
         asin: rf.asin,
         position: rf.rank,
@@ -524,7 +535,9 @@ export async function processKeyword(
         image_url: catalogEnriched?.image_url || cached?.image_url || rf.image_hint || null,
         rating: rf.rating,
         reviews: rf.reviews,
-        is_sponsored: rf.sponsored,
+        is_sponsored: rf.sponsored, // boolean | null
+        sponsored_position: sponsoredPosition,
+        sponsored_source: sponsoredSource,
         fulfillment: fulfillment,
         brand: catalogEnriched?.brand || cached?.brand || null, // SP-API only (no Rainforest inference)
         main_category: catalogEnriched?.category || cached?.category || null, // SP-API only
@@ -554,7 +567,9 @@ export async function processKeyword(
       main_category_bsr: number | null;
       estimated_monthly_units: number | null;
       estimated_monthly_revenue: number | null;
-      is_sponsored: boolean;
+      is_sponsored: boolean | null;
+      sponsored_position: number | null;
+      sponsored_source: 'rainforest' | 'unknown' | null;
       last_enriched_at: string | null;
       // SP-API Pricing fields
       buy_box_owner: "Amazon" | "Merchant" | "Unknown" | null;
@@ -774,7 +789,9 @@ export async function processKeyword(
         main_category_bsr: finalBsr,
         estimated_monthly_units: monthlyUnits, // Model authority - never overwritten
         estimated_monthly_revenue: monthlyRevenue ? Math.round(monthlyRevenue * 100) / 100 : null, // Model authority
-        is_sponsored: rf?.sponsored || canonical.is_sponsored || false,
+        is_sponsored: rf?.sponsored ?? canonical.is_sponsored ?? null,
+        sponsored_position: rf?.ad_position ?? null,
+        sponsored_source: rf?.sponsored !== null && rf?.sponsored !== undefined ? 'rainforest' : 'unknown',
         last_enriched_at: lastEnrichedAt,
         // SP-API Pricing fields
         buy_box_owner: buyBoxOwner,
