@@ -464,6 +464,9 @@ export default function AnalyzeForm({
     normalizeAnalysis(initialAnalysis)
   );
   
+  // Unique run ID generated on each Analyze click - used to force component remounts
+  const [currentAnalysisRunId, setCurrentAnalysisRunId] = useState<string | null>(null);
+  
   // Store the actual analysisRunId (UUID) from API response for chat
   // This is separate from analysis.analysis_run_id which may be snapshot_id for Tier-1
   const [analysisRunIdForChat, setAnalysisRunIdForChat] = useState<string | null>(
@@ -697,9 +700,16 @@ export default function AnalyzeForm({
   const analyze = async () => {
     if (!validateInput()) return;
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // HARD RESET: Generate unique run ID and clear ALL state before new search
+    // ═══════════════════════════════════════════════════════════════════════════
+    const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    setCurrentAnalysisRunId(newRunId);
+    
+    // Hard reset all analyze-related state
     setLoading(true);
     setError(null);
-    setAnalysis(null);
+    setAnalysis(null); // Clear previous results
     setAnalysisRunIdForChat(null); // Clear analysisRunId for chat
     setChatMessages([]); // Clear previous chat
     setIsEstimated(false); // Reset estimated flag
@@ -1107,49 +1117,46 @@ export default function AnalyzeForm({
             )}
           </div>
 
-          {!analysis ? (
-            /* PRE-ANALYSIS STATE */
-            loading ? (
-              /* Show loading animation when analyzing */
-              <div>
-                <div className="flex items-center justify-between mb-4 px-6 pt-6">
-                  <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
-                </div>
-                <div className="px-6">
-                  <ResultsLoadingState />
-                </div>
+          {loading ? (
+            /* ALWAYS show loading animation when analyzing - regardless of previous results */
+            <div>
+              <div className="flex items-center justify-between mb-4 px-6 pt-6">
+                <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
               </div>
-            ) : (
-              /* Show ready state when not loading */
-              <div className="flex items-center justify-center min-h-[calc(100vh-16rem)] py-20 px-6">
-                <div className="text-center max-w-md">
-                  <div className="w-20 h-20 mx-auto mb-6 bg-gray-100/60 backdrop-blur-sm rounded-full flex items-center justify-center">
-                    <svg
-                      className="w-10 h-10 text-gray-400"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                      />
-                    </svg>
-                  </div>
-                  <h2 className="text-2xl font-semibold text-gray-900 mb-3">
-                    Ready to Search
-                  </h2>
-                  <p className="text-gray-500 text-sm leading-relaxed">
-                    Enter a product keyword above to see Page 1 results with market intelligence.
-                    Click any product to ask questions about it.
-                  </p>
-                </div>
+              <div className="px-6">
+                <ResultsLoadingState key={currentAnalysisRunId} />
               </div>
-            )
+            </div>
+          ) : !analysis ? (
+            /* Show ready state when not loading and no analysis */
+            <div className="flex items-center justify-center min-h-[calc(100vh-16rem)] py-20 px-6">
+              <div className="text-center max-w-md">
+                <div className="w-20 h-20 mx-auto mb-6 bg-gray-100/60 backdrop-blur-sm rounded-full flex items-center justify-center">
+                  <svg
+                    className="w-10 h-10 text-gray-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1.5}
+                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                    />
+                  </svg>
+                </div>
+                <h2 className="text-2xl font-semibold text-gray-900 mb-3">
+                  Ready to Search
+                </h2>
+                <p className="text-gray-500 text-sm leading-relaxed">
+                  Enter a product keyword above to see Page 1 results with market intelligence.
+                  Click any product to ask questions about it.
+                </p>
+              </div>
+            </div>
           ) : (
-            <div className="px-6 py-6 space-y-6">
+            <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6">
               {/* KEYWORD ANALYSIS: Interactive Amazon-style search */}
               {analysis.market_snapshot ? (
                 <>
@@ -1565,14 +1572,14 @@ export default function AnalyzeForm({
                     // CRITICAL: Do NOT assign empty array if pageOneListings already has data (prevent data loss on re-render)
                     // If none of the above match, pageOneListings remains empty [] (intentional)
                     
-                    // Show loading state when analyzing and no listings yet
-                    if (loading && pageOneListings.length === 0) {
+                    // Show loading state when analyzing - ALWAYS show when loading, regardless of previous results
+                    if (loading) {
                       return (
-                        <div>
+                        <div key={currentAnalysisRunId || 'loading'}>
                           <div className="flex items-center justify-between mb-4">
                             <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
                           </div>
-                          <ResultsLoadingState />
+                          <ResultsLoadingState key={currentAnalysisRunId} />
                         </div>
                       );
                     }
