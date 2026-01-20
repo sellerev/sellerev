@@ -1198,6 +1198,11 @@ export async function POST(req: NextRequest) {
 
       const total_page1_listings = listings.length;
       const sponsored_count = listings.filter((l) => l.is_sponsored === true).length;
+      const organic_count = listings.filter((l) => l.is_sponsored === false).length;
+      const unknown_sponsored_count = listings.filter((l) => l.is_sponsored === null).length;
+      const sponsored_pct = listings.length > 0 
+        ? Number(((sponsored_count / listings.length) * 100).toFixed(1))
+        : 0;
 
       // Average price
       const listingsWithPrice = listings.filter((l) => l.price !== null && l.price !== undefined);
@@ -1255,6 +1260,9 @@ export async function POST(req: NextRequest) {
         avg_bsr,
         total_page1_listings,
         sponsored_count,
+        organic_count,
+        unknown_sponsored_count,
+        sponsored_pct,
         dominance_score,
         fulfillment_mix: fulfillmentMix,
         ppc: ppcIndicators,
@@ -1660,6 +1668,11 @@ export async function POST(req: NextRequest) {
       
       // Compute sponsored_count and fulfillment_mix from cached products
       const sponsoredCount = products.filter((p: any) => p.is_sponsored === true).length;
+      const organicCount = products.filter((p: any) => p.is_sponsored === false).length;
+      const unknownSponsoredCount = products.filter((p: any) => p.is_sponsored === null || p.is_sponsored === undefined).length;
+      const sponsoredPct = products.length > 0 
+        ? Number(((sponsoredCount / products.length) * 100).toFixed(1))
+        : 0;
       const fulfillmentCounts = {
         fba: products.filter((p: any) => p.fulfillment === 'FBA').length,
         fbm: products.filter((p: any) => p.fulfillment === 'FBM').length,
@@ -1693,6 +1706,9 @@ export async function POST(req: NextRequest) {
           avg_bsr: snapshot.average_bsr,
           total_page1_listings: snapshot.product_count,
           sponsored_count: sponsoredCount, // Computed from cached products
+          organic_count: organicCount, // Computed from cached products
+          unknown_sponsored_count: unknownSponsoredCount, // Computed from cached products
+          sponsored_pct: sponsoredPct, // Computed from cached products
           dominance_score: 0, // Not stored in snapshot (would need brand breakdown)
           fulfillment_mix: fulfillmentMix, // Computed from cached products
           est_total_monthly_revenue_min: revenueMin,
