@@ -409,7 +409,8 @@ export async function buildKeywordAnalyzeResponse(
         estimated_monthly_revenue: p.estimated_monthly_revenue,
         revenue_share_pct: p.revenue_share_pct,
         fulfillment: p.fulfillment,
-        // brand removed at API boundary (Phase 2)
+        // Brand: normalize (trim whitespace, convert empty to null, preserve casing)
+        brand: p.brand?.trim() || null,
         seller_country: p.seller_country,
         // Algorithm boost tracking (Sellerev-only insight for AI/Spellbook)
         // Hidden metadata for AI reasoning - not displayed in UI
@@ -469,7 +470,8 @@ export async function buildKeywordAnalyzeResponse(
         estimated_monthly_revenue: revenue,
         revenue_share_pct: Math.round(revenueShare * 100) / 100,
         fulfillment: normalizeFulfillment(listing.fulfillment),
-        // brand removed at API boundary (Phase 2)
+        // Brand: normalize (trim whitespace, convert empty to null, preserve casing)
+        brand: listing.brand?.trim() || null,
         seller_country: inferSellerCountry(listing),
         // Algorithm boost tracking (default to 1 appearance for fallback path)
         page_one_appearances: 1, // appearance_count
@@ -599,7 +601,18 @@ export async function buildKeywordAnalyzeResponse(
       ? Math.round((top5Revenue / totalRevenue) * 100 * 10) / 10 // Round to 1 decimal place
       : 0;
     
-    // Step 4: Attach brand_stats to snapshot
+    // Step 4: Compute page_one_brands array (unique brands, sorted, excluding null)
+    // This is the single source of truth for the brand dropdown
+    const pageOneBrandsSet = new Set<string>();
+    for (const product of canonicalProducts) {
+      const brand = product.brand?.trim() || null;
+      if (brand) {
+        pageOneBrandsSet.add(brand);
+      }
+    }
+    const page_one_brands = Array.from(pageOneBrandsSet).sort();
+
+    // Step 5: Attach brand_stats and page_one_brands to snapshot
     // CRITICAL: Snapshot totals MUST equal sum of all products (guaranteed by calculation above)
     if (snapshot) {
       (snapshot as any).monthly_units = totalMonthlyUnits;
@@ -620,15 +633,18 @@ export async function buildKeywordAnalyzeResponse(
         page1_brand_count,
         top_5_brand_share_pct,
       };
+      // Add page_one_brands array (single source of truth for brand dropdown)
+      (snapshot as any).page_one_brands = page_one_brands;
     }
     
-    // Step 5: Logging
+    // Step 6: Logging
     console.log("📊 BRAND_STATS_COMPUTED", {
       page1_brand_count,
       top_5_brand_share_pct,
       total_revenue: totalRevenue,
       top_5_revenue: top5Revenue,
       brand_buckets: Array.from(brandBuckets),
+      page_one_brands: page_one_brands,
     });
     
     console.log("📈 MARKET SNAPSHOT AGGREGATED", {

@@ -1343,10 +1343,10 @@ export default function AnalyzeForm({
                           
                           {/* 3. Brands on Page 1 */}
                           <div>
-                            <div className="text-xs text-gray-500 mb-1">Page-1 Brands</div>
+                            <div className="text-xs text-gray-500 mb-1">Brands</div>
                             <div className="text-lg font-semibold text-gray-900">
                               {page1BrandCount !== null 
-                                ? `Page-1 contains ${page1BrandCount} ${page1BrandCount === 1 ? 'brand' : 'brands'}`
+                                ? `${page1BrandCount} ${page1BrandCount === 1 ? 'brand' : 'brands'}`
                                 : "—"}
                             </div>
                           </div>
@@ -1631,50 +1631,34 @@ export default function AnalyzeForm({
                       }
                     });
                     
-                    // Extract brands from listings with counts for filter dropdown
-                    // Normalize brand names (trim, lowercase) for grouping
-                    const brandCounts = new Map<string, { normalized: string; display: string; count: number }>();
+                    // Use page_one_brands from snapshot as single source of truth
+                    // This ensures ALL page-1 brands appear in dropdown
+                    const brandOptions = (snapshot as any)?.page_one_brands || [];
+                    
+                    // Count brands for display (only show counts if needed)
+                    const brandCounts = new Map<string, number>();
                     pageOneListings.forEach((listing: any) => {
-                      const brand = listing.brand;
-                      let brandKey: string;
-                      let brandDisplay: string;
-                      
-                      if (brand === null || brand === undefined || brand.trim() === '') {
-                        brandKey = "unknown";
-                        brandDisplay = "Unknown";
-                      } else {
-                        brandDisplay = brand.trim();
-                        brandKey = brandDisplay.toLowerCase();
+                      const brand = listing.brand; // Already normalized (trimmed, null if empty)
+                      if (brand) {
+                        brandCounts.set(brand, (brandCounts.get(brand) || 0) + 1);
                       }
-                      
-                      if (!brandCounts.has(brandKey)) {
-                        brandCounts.set(brandKey, { normalized: brandKey, display: brandDisplay, count: 0 });
-                      }
-                      const entry = brandCounts.get(brandKey)!;
-                      entry.count += 1;
                     });
                     
-                    // Convert to array and sort by count (descending), then by name
-                    const brandsList = Array.from(brandCounts.values()).sort((a, b) => {
-                      if (b.count !== a.count) {
-                        return b.count - a.count;
-                      }
-                      return a.display.localeCompare(b.display);
-                    });
+                    // Build brands list from snapshot.page_one_brands (sorted alphabetically)
+                    // Only show "Unknown" if at least one listing has null brand
+                    const hasUnknownBrand = pageOneListings.some((listing: any) => listing.brand === null || listing.brand === undefined);
+                    const brandsList = [
+                      ...brandOptions,
+                      ...(hasUnknownBrand ? ["Unknown"] : [])
+                    ].sort();
                     
                     // Apply filters to sorted listings
                     // Filtering composes with sorting (filter after sort)
                     let filteredListings = sortedListings.filter((listing: any) => {
-                      // Brand filter
+                      // Brand filter: exact match only (no normalization)
                       if (selectedBrands.size > 0) {
-                        const listingBrand = listing.brand;
-                        let brandKey: string;
-                        
-                        if (listingBrand === null || listingBrand === undefined || listingBrand.trim() === '') {
-                          brandKey = "unknown";
-                        } else {
-                          brandKey = listingBrand.trim().toLowerCase();
-                        }
+                        const listingBrand = listing.brand; // Already normalized (trimmed, null if empty)
+                        const brandKey = listingBrand === null || listingBrand === undefined ? "Unknown" : listingBrand;
                         
                         if (!selectedBrands.has(brandKey)) {
                           return false;
@@ -1734,49 +1718,60 @@ export default function AnalyzeForm({
                         {pageOneListings.length > 0 && (
                           <div className="flex items-center gap-3 flex-wrap">
                             {/* Brand Filter - Button with dropdown */}
-                            <div className="relative" ref={brandDropdownRef}>
-                              <button
-                                type="button"
-                                onClick={() => setBrandDropdownOpen(!brandDropdownOpen)}
-                                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 flex items-center gap-1.5"
-                              >
-                                <span>Brand</span>
-                                {selectedBrands.size > 0 && (
-                                  <span className="bg-blue-500 text-white rounded-full px-1.5 py-0.5 text-[10px] font-medium">
-                                    {selectedBrands.size}
-                                  </span>
-                                )}
-                                <svg className={`w-3 h-3 transition-transform ${brandDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                </svg>
-                              </button>
-                              {brandDropdownOpen && (
+                            {brandOptions.length > 0 && (
+                              <div className="relative" ref={brandDropdownRef}>
+                                <button
+                                  type="button"
+                                  onClick={() => setBrandDropdownOpen(!brandDropdownOpen)}
+                                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 flex items-center gap-1.5"
+                                >
+                                  <span>Brand</span>
+                                  {selectedBrands.size > 0 && (
+                                    <span className="bg-blue-500 text-white rounded-full px-1.5 py-0.5 text-[10px] font-medium">
+                                      {selectedBrands.size}
+                                    </span>
+                                  )}
+                                  <svg className={`w-3 h-3 transition-transform ${brandDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                </button>
+                                {brandDropdownOpen && (
                                 <div className="absolute top-full left-0 mt-1 z-20 bg-white border border-gray-300 rounded shadow-lg max-h-64 overflow-y-auto min-w-[200px]">
                                   <div className="p-2 space-y-1">
-                                    {brandsList.map((brand) => (
-                                      <label key={brand.normalized} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded cursor-pointer text-xs">
-                                        <input
-                                          type="checkbox"
-                                          checked={selectedBrands.has(brand.normalized)}
-                                          onChange={(e) => {
-                                            const newSelected = new Set(selectedBrands);
-                                            if (e.target.checked) {
-                                              newSelected.add(brand.normalized);
-                                            } else {
-                                              newSelected.delete(brand.normalized);
-                                            }
-                                            setSelectedBrands(newSelected);
-                                          }}
-                                          className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                                        />
-                                        <span className="flex-1 text-gray-900">{brand.display}</span>
-                                        <span className="text-gray-500 text-[10px]">({brand.count})</span>
-                                      </label>
-                                    ))}
+                                    {brandsList.length === 0 ? (
+                                      <div className="text-xs text-gray-500 px-2 py-1.5">No brands available</div>
+                                    ) : (
+                                      brandsList.map((brand) => {
+                                        const count = brandCounts.get(brand) || (brand === "Unknown" ? pageOneListings.filter((l: any) => !l.brand).length : 0);
+                                        return (
+                                          <label key={brand} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded cursor-pointer text-xs">
+                                            <input
+                                              type="checkbox"
+                                              checked={selectedBrands.has(brand)}
+                                              onChange={(e) => {
+                                                const newSelected = new Set(selectedBrands);
+                                                if (e.target.checked) {
+                                                  newSelected.add(brand);
+                                                } else {
+                                                  newSelected.delete(brand);
+                                                }
+                                                setSelectedBrands(newSelected);
+                                              }}
+                                              className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                            />
+                                            <span className="flex-1 text-gray-900">{brand}</span>
+                                            {count > 0 && (
+                                              <span className="text-gray-500 text-[10px]">({count})</span>
+                                            )}
+                                          </label>
+                                        );
+                                      })
+                                    )}
                                   </div>
                                 </div>
                               )}
-                            </div>
+                              </div>
+                            )}
                             
                             {/* Fulfillment Filter */}
                             <div className="flex items-center gap-2">
