@@ -7,12 +7,9 @@ import { Resend } from "resend";
  */
 export async function POST(req: NextRequest) {
   try {
-    const apiKey = process.env.RESEND_API_KEY;
+    const apiKey = process.env.RESEND_SUPPORT_API_KEY;
     if (!apiKey) {
-      console.error("RESEND_API_KEY is not configured. Available env vars:", {
-        hasKey: !!process.env.RESEND_API_KEY,
-        keyLength: process.env.RESEND_API_KEY?.length || 0,
-      });
+      console.error("RESEND_SUPPORT_API_KEY is not configured");
       return NextResponse.json(
         { success: false, error: "Email service is not configured" },
         { status: 500 }
