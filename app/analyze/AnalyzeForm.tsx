@@ -708,11 +708,17 @@ export default function AnalyzeForm({
       setBrandDropdownOpen(false);
     } else {
       // No initialAnalysis means no run param - reset to blank state
-      // CRITICAL: Only reset if we don't have a valid analysisRunIdForChat set (which means
-      // we just got analysis from API and router.replace() is updating URL, but server hasn't
-      // re-rendered yet with initialAnalysis). If we have analysisRunIdForChat, we're in the
-      // middle of an API response and should NOT clear the analysis - server will catch up.
-      if (analysis !== null && !analysisRunIdForChat) {
+      // CRITICAL: Only reset if we don't have a valid analysisRunIdForChat set AND no valid listings
+      // If we have analysisRunIdForChat OR valid listings, we just got analysis from API and 
+      // router.replace() is updating URL, but server hasn't re-rendered yet with initialAnalysis.
+      // In this case, DO NOT clear the analysis - server will catch up.
+      const hasValidListings = analysis?.page_one_listings && analysis.page_one_listings.length > 0;
+      const shouldClear = analysis !== null && !analysisRunIdForChat && !hasValidListings;
+      
+      if (shouldClear) {
+        console.log("FRONTEND_RESET_TO_BLANK", {
+          reason: "No initialAnalysis, no analysisRunIdForChat, and no valid listings",
+        });
         setAnalysis(null);
         setAnalysisRunIdForChat(null);
         setInputValue("");
@@ -728,10 +734,19 @@ export default function AnalyzeForm({
       setSelectedFulfillment(new Set());
       setSponsoredFilter(null);
       setBrandDropdownOpen(false);
+      } else if (analysis !== null && (!analysisRunIdForChat || hasValidListings)) {
+        // We have valid listings but no initialAnalysis (URL navigation in progress)
+        // Keep the state - don't clear it
+        console.log("FRONTEND_PRESERVE_STATE", {
+          has_listings: hasValidListings,
+          has_analysis_run_id: !!analysisRunIdForChat,
+          listings_count: analysis?.page_one_listings?.length || 0,
+          reason: "Preserving valid listings during URL navigation",
+        });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialAnalysis?.analysis_run_id]); // Sync when analysis_run_id changes (different analysis loaded)
+  }, [initialAnalysis?.analysis_run_id, analysisRunIdForChat]); // Sync when analysis_run_id changes (different analysis loaded)
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -875,8 +890,24 @@ export default function AnalyzeForm({
       
       // CRITICAL: Only check if listings exist - price/revenue are optional
       // Partial BSR coverage (e.g. 40/68 ASINs) is valid and should render
+      console.log("ANALYZE_RESPONSE_CHECK", {
+        page_one_listings: (data as any).page_one_listings?.length || 0,
+        products: (data as any).products?.length || 0,
+        listings: (data as any).listings?.length || 0,
+        extracted_listings: pageOneListings.length,
+        has_snapshot: !!snapshot,
+        has_aggregates: !!aggregates,
+        success: data.success,
+        warnings: (data as any).warnings,
+      });
+      
       if (pageOneListings.length === 0) {
-        console.error("ANALYZE_NO_LISTINGS", { data });
+        console.error("ANALYZE_NO_LISTINGS", { 
+          data,
+          page_one_listings_count: (data as any).page_one_listings?.length || 0,
+          products_count: (data as any).products?.length || 0,
+          listings_count: (data as any).listings?.length || 0,
+        });
         setError("Analysis failed: no listings returned");
         setLoading(false);
         return;
@@ -966,9 +997,14 @@ export default function AnalyzeForm({
         has_analysis: !!analysisData,
         estimated: data.estimated || false,
         dataSource: data.dataSource || 'snapshot',
+        page_one_listings_count: analysisData.page_one_listings?.length || 0,
+        products_count: analysisData.products?.length || 0,
+        has_snapshot: !!analysisData.market_snapshot,
+        has_decision: !!analysisData.decision,
       });
 
-      // Store the actual analysisRunId (UUID) for chat
+      // CRITICAL: Set analysisRunIdForChat FIRST before any state updates or router calls
+      // This prevents the useEffect from clearing state when router.replace() is called
       if (data.analysisRunId) {
         setAnalysisRunIdForChat(data.analysisRunId);
       }
@@ -979,28 +1015,46 @@ export default function AnalyzeForm({
       // Store snapshot last_updated for freshness badge
       setSnapshotLastUpdated(data.snapshot_last_updated || null);
 
-      // CRITICAL: Guard against clearing valid listings
-      // Only update if we're setting listings OR if previous state has no listings
-      // This prevents router.replace() from triggering a state clear
+      // CRITICAL: Set analysis state - guard against clearing valid listings
+      // This prevents router.replace() from triggering a state clear via useEffect
       setAnalysis((prev) => {
         const newAnalysis = normalizeAnalysis(analysisData);
+        
+        // Log the state update for debugging
+        console.log("FRONTEND_STATE_UPDATE", {
+          prev_listings: prev?.page_one_listings?.length || 0,
+          new_listings: newAnalysis?.page_one_listings?.length || 0,
+          new_products: newAnalysis?.products?.length || 0,
+          prev_has_listings: !!(prev?.page_one_listings && prev.page_one_listings.length > 0),
+          new_has_listings: !!(newAnalysis?.page_one_listings && newAnalysis.page_one_listings.length > 0),
+          has_analysis_run_id: !!data.analysisRunId,
+        });
+        
         // If previous analysis has listings and new one doesn't, keep previous
+        // BUT: Only do this if we're NOT setting a valid analysis (guard against empty updates)
         if (prev?.page_one_listings && prev.page_one_listings.length > 0) {
           if (!newAnalysis?.page_one_listings || newAnalysis.page_one_listings.length === 0) {
-            console.warn("FRONTEND_GUARD: Preventing clearing of valid listings", {
-              prev_listings: prev.page_one_listings.length,
-              new_listings: newAnalysis?.page_one_listings?.length || 0,
-              message: "Keeping previous analysis with listings",
-            });
-            return prev;
+            // Only prevent update if this looks like an accidental clear
+            // If we have a valid analysisRunId, we're setting new data - allow it
+            if (!data.analysisRunId) {
+              console.warn("FRONTEND_GUARD: Preventing clearing of valid listings", {
+                prev_listings: prev.page_one_listings.length,
+                new_listings: newAnalysis?.page_one_listings?.length || 0,
+                message: "Keeping previous analysis with listings",
+              });
+              return prev;
+            }
           }
         }
+        
+        // Always return new analysis - it has listings and we have a valid run ID
         return newAnalysis;
       });
       setError(null);
 
       // Update URL with the new analysis run ID for persistence (legacy contract)
       // Use replace() to avoid adding to history stack
+      // CRITICAL: This happens AFTER state is set, so useEffect guard can check analysisRunIdForChat
       if (data.analysisRunId) {
         router.replace(`/analyze?run=${data.analysisRunId}`, { scroll: false });
       }
