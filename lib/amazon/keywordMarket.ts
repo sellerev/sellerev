@@ -13,6 +13,38 @@
 import { computePPCIndicators } from "./ppcIndicators";
 
 /**
+ * PHASE 1 - COLLECT: Raw Market Truth Types
+ * 
+ * These types represent raw, unprocessed data from Amazon Page 1.
+ * No judgment, no estimation, no filtering (except hard invalids).
+ */
+
+export interface RawListing {
+  asin: string;
+  title: string;
+  price: number | null;
+  image: string | null;
+  raw_position: number;
+  rainforest_rank: number;
+  raw_badges: any[];
+  raw_block_type?: string;
+  raw_sponsored_flag?: boolean;
+}
+
+export interface RawSnapshot {
+  keyword: string;
+  marketplace: string;
+  fetched_at: string;
+  listings: RawListing[];
+  rainforest_metadata: {
+    request_id: string;
+    page: number;
+    total_results?: number;
+  };
+  warnings?: string[];
+}
+
+/**
  * Brand resolution structure - preserves all detected brands
  */
 export interface BrandResolution {
@@ -1211,6 +1243,185 @@ export async function enrichListingsMetadata(
 }
 
 /**
+ * PHASE 1 - COLLECT: Parse Raw Rainforest Search Results
+ * 
+ * "What does Amazon show on Page 1?"
+ * 
+ * Goals:
+ * - Get everything
+ * - Do no judgment
+ * - Do no estimation
+ * - Do no filtering except hard invalids
+ * 
+ * Rules:
+ * ✅ Allowed:
+ * - Missing sponsored flag
+ * - Missing price
+ * - Duplicate ASINs
+ * - Duplicate BSRs
+ * - Weird categories
+ * 
+ * ❌ Forbidden:
+ * - Estimations
+ * - Deduplication
+ * - "Invalid" logic
+ * - Coverage checks
+ * 
+ * @param raw - Raw Rainforest API response
+ * @param keyword - Search keyword
+ * @param marketplace - Marketplace identifier
+ * @returns RawSnapshot with listings (empty array if no results, never null)
+ */
+export function parseRainforestSearchResults(
+  raw: any,
+  keyword: string,
+  marketplace: string = "US"
+): RawSnapshot {
+  const warnings: string[] = [];
+  
+  // Extract search_results array (contains both sponsored and organic)
+  const searchResults: any[] = [];
+  
+  if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
+    searchResults.push(...raw.search_results);
+  }
+  
+  // Fallback to results array if search_results is not present
+  if (searchResults.length === 0 && Array.isArray(raw.results) && raw.results.length > 0) {
+    searchResults.push(...raw.results);
+  }
+  
+  // CRITICAL CHANGE: Never throw, only return empty with warning
+  if (searchResults.length === 0) {
+    return {
+      keyword,
+      marketplace,
+      fetched_at: new Date().toISOString(),
+      listings: [],
+      rainforest_metadata: {
+        request_id: raw.request_info?.request_id || "unknown",
+        page: 1,
+        total_results: undefined,
+      },
+      warnings: ["NO_RESULTS_RETURNED"],
+    };
+  }
+  
+  // Parse each search result into RawListing
+  const rawListings: RawListing[] = [];
+  
+  for (let i = 0; i < searchResults.length; i++) {
+    const item = searchResults[i];
+    
+    // Only require ASIN - everything else can be missing
+    if (!item?.asin) {
+      continue; // Skip items without ASIN (hard invalid)
+    }
+    
+    // Extract price (can be null)
+    let price: number | null = null;
+    if (item.price?.value) {
+      const parsed = parseFloat(item.price.value);
+      price = isNaN(parsed) ? null : parsed;
+    } else if (item.price?.raw) {
+      const parsed = parseFloat(item.price.raw);
+      price = isNaN(parsed) ? null : parsed;
+    } else if (typeof item.price === "number") {
+      price = isNaN(item.price) ? null : item.price;
+    } else if (typeof item.price === "string") {
+      const parsed = parseFloat(item.price.replace(/[^0-9.]/g, ""));
+      price = isNaN(parsed) ? null : parsed;
+    }
+    
+    // Extract title (can be empty string, but we'll use null for missing)
+    const title = item.title || item.product_title || "";
+    
+    // Extract image (can be null)
+    const image = item.image || item.image_url || null;
+    
+    // Extract sponsored flag (can be undefined)
+    let rawSponsoredFlag: boolean | undefined = undefined;
+    if (item.sponsored === true || item.is_sponsored === true) {
+      rawSponsoredFlag = true;
+    } else if (item.sponsored === false || item.is_sponsored === false) {
+      rawSponsoredFlag = false;
+    } else {
+      // Check link patterns for sponsored detection
+      const link = item.link || item.url || '';
+      if (typeof link === 'string') {
+        if (link.includes('/sspa/') || link.includes('sp_csd=') || 
+            (link.includes('sr=') && link.includes('-spons'))) {
+          rawSponsoredFlag = true;
+        }
+      }
+    }
+    
+    // Extract BSR/rank from bestsellers_rank (can be null)
+    let rainforestRank: number = 0;
+    if (item.bestsellers_rank) {
+      if (Array.isArray(item.bestsellers_rank) && item.bestsellers_rank.length > 0) {
+        const firstRank = item.bestsellers_rank[0];
+        const rankValue = firstRank?.rank ?? firstRank?.Rank ?? firstRank?.rank_value ?? firstRank?.value;
+        if (rankValue !== undefined && rankValue !== null) {
+          const parsed = parseInt(rankValue.toString().replace(/,/g, ""), 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            rainforestRank = parsed;
+          }
+        }
+      } else if (typeof item.bestsellers_rank === "number") {
+        rainforestRank = item.bestsellers_rank;
+      }
+    }
+    
+    // Extract badges (can be empty array)
+    const rawBadges = item.badges || item.prime_badge || [];
+    const badgesArray = Array.isArray(rawBadges) ? rawBadges : (rawBadges ? [rawBadges] : []);
+    
+    // Extract block type if available
+    const rawBlockType = item.block_type || item.type || undefined;
+    
+    rawListings.push({
+      asin: item.asin,
+      title,
+      price,
+      image,
+      raw_position: i + 1, // 1-indexed position
+      rainforest_rank: rainforestRank,
+      raw_badges: badgesArray,
+      raw_block_type: rawBlockType,
+      raw_sponsored_flag: rawSponsoredFlag,
+    });
+  }
+  
+  // Extract search_information.total_results
+  const searchInformation = raw.search_information || {};
+  let totalResults: number | undefined = undefined;
+  if (searchInformation.total_results) {
+    const totalResultsStr = searchInformation.total_results.toString();
+    const match = totalResultsStr.match(/([\d,]+)/);
+    if (match) {
+      const parsed = parseInt(match[1].replace(/,/g, ''), 10);
+      if (!isNaN(parsed)) {
+        totalResults = parsed;
+      }
+    }
+  }
+  
+  return {
+    keyword,
+    marketplace,
+    fetched_at: new Date().toISOString(),
+    listings: rawListings,
+    rainforest_metadata: {
+      request_id: raw.request_info?.request_id || "unknown",
+      page: 1,
+      total_results: totalResults,
+    },
+    warnings: warnings.length > 0 ? warnings : undefined,
+  };
+}
+
+/**
  * Fetches Amazon search results for a keyword and computes aggregated market signals.
  * 
  * @param keyword - The search keyword
@@ -1386,95 +1597,62 @@ export async function fetchKeywordMarketSnapshot(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // PART 1: REMOVE INVALID ASSUMPTIONS
+    // PHASE 1 - COLLECT: Parse Raw Market Truth
     // ═══════════════════════════════════════════════════════════════════════════
-    // CRITICAL: Rainforest type=search responses place BOTH sponsored and organic
-    // listings inside search_results[]. Do NOT read from ads[] or sponsored_products[]
-    // as these are NOT populated for Rainforest search.
-    // Step 2: Collect listings ONLY from search_results[] array
-    const searchResults: any[] = [];
+    // Use parseRainforestSearchResults() to extract raw data without judgment
+    const rawSnapshot = parseRainforestSearchResults(raw, keyword, marketplace);
     
-    // ONLY use search_results array (contains both sponsored and organic)
-    if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
-      searchResults.push(...raw.search_results);
-    }
+    // Track for error classification
+    extractedAsinCount = rawSnapshot.listings.length;
+    apiReturnedResults = rawSnapshot.listings.length > 0;
     
-    // Fallback to results array if search_results is not present
-    if (searchResults.length === 0 && Array.isArray(raw.results) && raw.results.length > 0) {
-      searchResults.push(...raw.results);
-    }
-    
-    console.log("COLLECTED_LISTINGS_FROM_SEARCH_RESULTS", {
+    // Log Phase 1 results
+    console.log("PHASE_1_COLLECT_COMPLETE", {
       keyword,
-      search_results_count: Array.isArray(raw.search_results) ? raw.search_results.length : 0,
-      results_count: Array.isArray(raw.results) ? raw.results.length : 0,
-      total_collected: searchResults.length,
-      note: "Only using search_results[] array (contains both sponsored and organic)",
+      listings_count: rawSnapshot.listings.length,
+      warnings: rawSnapshot.warnings || [],
+      has_results: rawSnapshot.listings.length > 0,
     });
-
-    // Step 5: Only return null if ZERO ASINs exist
-    if (searchResults.length === 0) {
-      console.log("No search results found", {
+    
+    // If no listings found, return null (Phase 1 returns empty array with warning, but Phase 2/3 can't proceed)
+    if (rawSnapshot.listings.length === 0) {
+      console.log("PHASE_1_NO_LISTINGS", {
         keyword,
-        has_raw: !!raw,
-        raw_keys: raw ? Object.keys(raw) : [],
-        checked_locations: ["search_results", "results"],
+        warnings: rawSnapshot.warnings || [],
+        message: "Phase 1 completed but no listings found - cannot proceed to Phase 2/3",
       });
       return null;
     }
     
-    // Count ASINs to verify we have valid listings
-    const asinCount = searchResults.filter((item: any) => item?.asin).length;
-    extractedAsinCount = asinCount; // TASK 2: Track for error classification
-    apiReturnedResults = searchResults.length > 0; // TASK 2: Track if API returned results
-    
-    if (asinCount === 0) {
-      console.log("No ASINs found in search results", {
-        keyword,
-        total_items: searchResults.length,
-        sample_item: searchResults[0] ? Object.keys(searchResults[0]) : null,
-      });
-      return null; // TASK 2: This is genuine "zero_asins" case
-    }
-
-    // DEBUG TASK: Log one full product object for inspection (Step 1 & 2)
-    if (searchResults.length > 0) {
-      const sampleProduct = searchResults[0];
-      console.log("SAMPLE_PRODUCT_FULL_OBJECT", {
-        keyword,
-        asin: sampleProduct.asin,
-        has_bestsellers_rank: !!sampleProduct.bestsellers_rank,
-        bestsellers_rank_type: typeof sampleProduct.bestsellers_rank,
-        bestsellers_rank_is_array: Array.isArray(sampleProduct.bestsellers_rank),
-        bestsellers_rank_length: Array.isArray(sampleProduct.bestsellers_rank) ? sampleProduct.bestsellers_rank.length : null,
-        bestsellers_rank_value: sampleProduct.bestsellers_rank,
-        full_product_object: JSON.stringify(sampleProduct, null, 2),
-        product_keys: Object.keys(sampleProduct),
-      });
+    // Convert RawSnapshot listings back to searchResults format for Phase 2/3 compatibility
+    // This preserves backward compatibility while using Phase 1 structure
+    // We need to reconstruct the original raw API format for downstream processing
+    const searchResults: any[] = rawSnapshot.listings.map((listing) => {
+      // Reconstruct the original item structure that Phase 2/3 expects
+      const reconstructed: any = {
+        asin: listing.asin,
+        title: listing.title,
+        image: listing.image,
+      };
       
-      // Specifically inspect bestsellers_rank structure
-      if (sampleProduct.bestsellers_rank) {
-        console.log("BESTSELLERS_RANK_STRUCTURE", {
-          keyword,
-          bestsellers_rank: sampleProduct.bestsellers_rank,
-          is_array: Array.isArray(sampleProduct.bestsellers_rank),
-          first_element: Array.isArray(sampleProduct.bestsellers_rank) && sampleProduct.bestsellers_rank.length > 0
-            ? sampleProduct.bestsellers_rank[0]
-            : null,
-          all_elements: Array.isArray(sampleProduct.bestsellers_rank)
-            ? sampleProduct.bestsellers_rank.map((r: any, i: number) => ({
-                index: i,
-                element: r,
-                has_rank: r?.rank !== undefined,
-                rank_value: r?.rank,
-                has_category: r?.category !== undefined,
-                category_value: r?.category,
-                keys: r ? Object.keys(r) : [],
-              }))
-            : null,
-        });
+      // Reconstruct price in the format Phase 2/3 expects
+      if (listing.price !== null) {
+        reconstructed.price = { value: listing.price };
       }
-    }
+      
+      // Reconstruct bestsellers_rank if available
+      if (listing.rainforest_rank > 0) {
+        reconstructed.bestsellers_rank = listing.rainforest_rank;
+      }
+      
+      // Reconstruct sponsored flags
+      if (listing.raw_sponsored_flag !== undefined) {
+        reconstructed.sponsored = listing.raw_sponsored_flag;
+        reconstructed.is_sponsored = listing.raw_sponsored_flag;
+      }
+      
+      return reconstructed;
+    });
 
     // STEP B: Extract all Page-1 ASINs (all listings, not just top 20)
     const page1Asins = searchResults

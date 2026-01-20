@@ -3476,26 +3476,31 @@ export async function POST(req: NextRequest) {
     // ═══════════════════════════════════════════════════════════════════════════
     // 🛡️ MARKET DATA VALIDATION GUARD (FINAL GATE - MINIMAL STRICTNESS)
     // ═══════════════════════════════════════════════════════════════════════════
-    // CRITICAL: Only block if listings.length === 0
+    // CRITICAL: Phase 1 never throws - only downgrades confidence
+    // If baseListings.length === 0, return success with warnings (not error)
     // Partial BSR coverage, missing decision data, or missing revenue estimates are ALLOWED
     // ═══════════════════════════════════════════════════════════════════════════
-    // 🔒 VALIDATION: ONLY throw NO_RENDERABLE_MARKET_DATA if baseListings.length === 0
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Market validity is determined by baseListings (from Rainforest search_results[])
-    // NOT by SP-API enrichment, decision engine, aggregates, BSR, or catalog data
-    // If baseListings exist, market is ALWAYS renderable - return listings even if:
-    // - SP-API partially fails
-    // - some ASINs have no BSR
-    // - decision engine has not completed
+    // PHASE 1 RULE: Never delete data early, only downgrade confidence later
+    // If no listings found, return with warning instead of error
     if (!hasRenderableMarket || baseListings.length === 0) {
+      console.warn("PHASE_1_NO_LISTINGS_WARNING", {
+        keyword: body.input_value,
+        baseListings_count: baseListings.length,
+        hasRenderableMarket,
+        message: "Phase 1 completed but no listings found - returning with warning",
+      });
+      
+      // Return success with warnings instead of error
       return NextResponse.json(
         {
-          success: false,
-          error: "NO_RENDERABLE_MARKET_DATA",
+          success: true,
+          warnings: ["NO_RESULTS_RETURNED"],
           message: "No listings found in Rainforest search results",
+          listings: [],
+          snapshot: null,
         },
         { 
-          status: 400,
+          status: 200,
           headers: res.headers,
         }
       );
