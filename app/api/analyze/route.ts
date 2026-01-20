@@ -3483,6 +3483,39 @@ export async function POST(req: NextRequest) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // 🛡️ HARD VALIDATION: Sponsored flag preservation check
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TEMP: Keep until stable - validates sponsored flags are preserved through pipeline
+    const sponsoredCount = canonicalProducts.filter((p: any) => p.is_sponsored === true).length;
+    const organicCount = canonicalProducts.filter((p: any) => p.is_sponsored === false).length;
+    const missingCount = canonicalProducts.filter((p: any) => p.is_sponsored === undefined || p.is_sponsored === null).length;
+    
+    console.log('FINAL_SPONSORED_CHECK', {
+      total: canonicalProducts.length,
+      sponsored: sponsoredCount,
+      organic: organicCount,
+      missing: missingCount,
+    });
+    
+    // FAIL THE REQUEST if sponsored flags are missing (indicates pipeline bug)
+    if (missingCount > 0) {
+      console.error('🚨 SPONSORED_FLAG_MISSING', {
+        total: canonicalProducts.length,
+        missing: missingCount,
+        message: 'Sponsored flags were dropped during pipeline processing',
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          status: "error",
+          error: "Data processing error",
+          details: `Sponsored flags missing for ${missingCount} listings`,
+        },
+        { status: 500, headers: res.headers }
+      );
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
     // STEP 6: Return listings immediately (before AI completes)
     // ═══════════════════════════════════════════════════════════════════════════
     // CRITICAL: Always return success with listings if listings.length > 0

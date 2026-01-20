@@ -1965,11 +1965,12 @@ export async function fetchKeywordMarketSnapshot(
         return false;
       }
       
-      // Determine sponsored status
-      const isSponsoredResult = isSponsored(item);
-      let is_sponsored: boolean | null = isSponsoredResult ? true : false;
-      let sponsored_position: number | null = isSponsoredResult ? (item.ad_position ?? null) : null;
-      let sponsored_source: 'rainforest_serp' | 'organic_serp' = isSponsoredResult ? 'rainforest_serp' : 'organic_serp';
+      // 🔒 LOCK SPONSORED FLAG AT INGESTION (single source of truth)
+      // Use ONLY item.sponsored === true from Rainforest - NEVER recompute later
+      // This is the authoritative source - preserve it through all merges
+      const is_sponsored: boolean | null = item.sponsored === true ? true : (item.sponsored === false ? false : null);
+      const sponsored_position: number | null = is_sponsored === true ? (item.ad_position ?? null) : null;
+      const sponsored_source: 'rainforest_serp' | 'organic_serp' = 'rainforest_serp'; // Always from Rainforest SERP
       
       const position = item.position ?? index + 1; // Organic rank (1-indexed)
       
