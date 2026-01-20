@@ -76,6 +76,21 @@ export interface MarketQuality {
 }
 
 /**
+ * PHASE 3 - REASON: Estimate & Explain Types
+ */
+
+export interface MarketSnapshot {
+  total_monthly_units: number;
+  total_monthly_revenue: number;
+  avg_price: number;
+  sponsored_pct: number;
+  top_brand_share_pct: number;
+  competition_score: number;
+  confidence: "high" | "medium" | "low";
+  warnings: string[];
+}
+
+/**
  * Brand resolution structure - preserves all detected brands
  */
 export interface BrandResolution {
@@ -1649,6 +1664,258 @@ export function calculateMarketQuality(enriched: EnrichedListing[]): MarketQuali
     sponsored_detection_confidence: Math.round(sponsoredDetectionConfidence * 10) / 10,
     price_coverage_pct: Math.round(priceCoveragePct * 10) / 10,
     overall_confidence: overallConfidence,
+  };
+}
+
+/**
+ * PHASE 3A - DEMAND ESTIMATION: Clean Math
+ * 
+ * "What does this market mean?"
+ * 
+ * Steps:
+ * 1. Convert each BSR → units
+ * 2. Apply rank weighting
+ * 3. Aggregate totals
+ * 4. Apply ONE dampener
+ * 
+ * ❌ No per-listing dampening
+ * ❌ No double normalization
+ * 
+ * @param enriched - Enriched listings from Phase 2B
+ * @param marketQuality - Market quality metrics from Phase 2C
+ * @returns Estimated monthly units and revenue
+ */
+export async function estimateDemand(
+  enriched: EnrichedListing[],
+  marketQuality: MarketQuality
+): Promise<{ total_monthly_units: number; total_monthly_revenue: number }> {
+  // Import BSR calculator
+  const { estimateMonthlySalesFromBSR } = await import("@/lib/revenue/bsr-calculator");
+  
+  // Step 1: Convert each BSR → units
+  const listingEstimates: Array<{
+    asin: string;
+    raw_units: number;
+    raw_revenue: number;
+    organic_rank?: number;
+    price: number;
+  }> = [];
+  
+  for (const listing of enriched) {
+    // Only estimate if we have BSR, price, and category
+    if (
+      listing.bsr === undefined ||
+      listing.bsr === null ||
+      listing.bsr <= 0 ||
+      listing.price === null ||
+      listing.price <= 0 ||
+      !listing.bsr_category
+    ) {
+      continue; // Skip listings without required data
+    }
+    
+    // Convert BSR → units
+    const rawUnits = estimateMonthlySalesFromBSR(listing.bsr, listing.bsr_category);
+    
+    // Calculate raw revenue
+    const rawRevenue = rawUnits * listing.price;
+    
+    listingEstimates.push({
+      asin: listing.asin,
+      raw_units: rawUnits,
+      raw_revenue: rawRevenue,
+      organic_rank: listing.organic_rank,
+      price: listing.price,
+    });
+  }
+  
+  if (listingEstimates.length === 0) {
+    return {
+      total_monthly_units: 0,
+      total_monthly_revenue: 0,
+    };
+  }
+  
+  // Step 2: Apply rank weighting
+  // Organic rank 1 gets full weight, rank 2 gets 0.85x, rank 3 gets 0.72x, etc.
+  // Exponential decay: weight = exp(-0.15 * (rank - 1))
+  // Sponsored listings (no organic_rank) get 0.5x weight
+  const weightedEstimates = listingEstimates.map((est) => {
+    let rankWeight = 1.0;
+    
+    if (est.organic_rank !== undefined && est.organic_rank !== null) {
+      // Exponential decay based on organic rank
+      rankWeight = Math.exp(-0.15 * (est.organic_rank - 1));
+    } else {
+      // Sponsored listings get reduced weight
+      rankWeight = 0.5;
+    }
+    
+    return {
+      ...est,
+      weighted_units: est.raw_units * rankWeight,
+      weighted_revenue: est.raw_revenue * rankWeight,
+    };
+  });
+  
+  // Step 3: Aggregate totals
+  const rawTotalUnits = weightedEstimates.reduce((sum, est) => sum + est.weighted_units, 0);
+  const rawTotalRevenue = weightedEstimates.reduce((sum, est) => sum + est.weighted_revenue, 0);
+  
+  // Step 4: Apply ONE dampener (market confidence multiplier)
+  // Based on market quality metrics
+  let marketConfidenceMultiplier = 1.0;
+  
+  if (marketQuality.overall_confidence === "high") {
+    marketConfidenceMultiplier = 0.95; // High confidence = minimal dampening
+  } else if (marketQuality.overall_confidence === "medium") {
+    marketConfidenceMultiplier = 0.80; // Medium confidence = moderate dampening
+  } else {
+    marketConfidenceMultiplier = 0.65; // Low confidence = significant dampening
+  }
+  
+  // Apply BSR coverage adjustment (if BSR coverage is low, reduce confidence further)
+  if (marketQuality.bsr_coverage_pct < 50) {
+    marketConfidenceMultiplier *= 0.85; // Additional dampening for low BSR coverage
+  }
+  
+  const finalUnits = Math.round(rawTotalUnits * marketConfidenceMultiplier);
+  const finalRevenue = Math.round(rawTotalRevenue * marketConfidenceMultiplier);
+  
+  return {
+    total_monthly_units: finalUnits,
+    total_monthly_revenue: finalRevenue,
+  };
+}
+
+/**
+ * PHASE 3B - MARKET SNAPSHOT: Build Complete Market View
+ * 
+ * @param enriched - Enriched listings from Phase 2B
+ * @param marketQuality - Market quality metrics from Phase 2C
+ * @param demandEstimate - Demand estimate from Phase 3A
+ * @returns Complete market snapshot
+ */
+
+/**
+ * PHASE 3C - AI INTERPRETATION: Clean Data Enables Honest Communication
+ * 
+ * Because data is clean, AI can now:
+ * - Cite confidence properly
+ * - Explain uncertainty honestly
+ * - Never hallucinate reasons
+ * 
+ * Example prompt improvements:
+ * 
+ * ❌ OLD (hallucinated reasons):
+ * "Market shows high competition due to established brands."
+ * 
+ * ✅ NEW (cites actual data):
+ * "BSR data was available for 58% of listings, which is sufficient for 
+ * directional estimates but not precise forecasting. Top brand controls 
+ * 42% of Page-1 listings, indicating moderate brand concentration."
+ * 
+ * Key metrics to cite in AI responses:
+ * - marketQuality.bsr_coverage_pct: "BSR data available for X% of listings"
+ * - marketQuality.sponsored_detection_confidence: "Sponsored detection confidence: X%"
+ * - marketQuality.price_coverage_pct: "Price data available for X% of listings"
+ * - marketQuality.overall_confidence: "Overall data quality: high/medium/low"
+ * - marketSnapshot.warnings: List any data quality warnings
+ * 
+ * This builds trust, not doubt.
+ */
+export function buildMarketSnapshot(
+  enriched: EnrichedListing[],
+  marketQuality: MarketQuality,
+  demandEstimate: { total_monthly_units: number; total_monthly_revenue: number }
+): MarketSnapshot {
+  const warnings: string[] = [];
+  
+  // Calculate average price
+  const pricesWithValues = enriched
+    .map(l => l.price)
+    .filter((p): p is number => p !== null && p !== undefined && p > 0);
+  
+  const avgPrice = pricesWithValues.length > 0
+    ? pricesWithValues.reduce((sum, p) => sum + p, 0) / pricesWithValues.length
+    : 0;
+  
+  if (pricesWithValues.length === 0) {
+    warnings.push("NO_PRICE_DATA");
+  }
+  
+  // Calculate sponsored percentage
+  const sponsoredCount = enriched.filter(l => l.sponsored === true).length;
+  const sponsoredPct = enriched.length > 0 ? (sponsoredCount / enriched.length) * 100 : 0;
+  
+  // Calculate top brand share percentage
+  const brandCounts: Record<string, number> = {};
+  enriched.forEach(l => {
+    if (l.brand) {
+      brandCounts[l.brand] = (brandCounts[l.brand] || 0) + 1;
+    }
+  });
+  
+  const topBrand = Object.entries(brandCounts)
+    .sort(([, a], [, b]) => b - a)[0];
+  
+  const topBrandSharePct = topBrand && enriched.length > 0
+    ? (topBrand[1] / enriched.length) * 100
+    : 0;
+  
+  // Calculate competition score (0-100)
+  // Based on: brand concentration, sponsored saturation, price spread
+  let competitionScore = 50; // Base score
+  
+  // Brand concentration: higher = more competitive
+  if (topBrandSharePct >= 40) {
+    competitionScore += 20; // High brand concentration
+  } else if (topBrandSharePct >= 25) {
+    competitionScore += 10;
+  }
+  
+  // Sponsored saturation: higher = more competitive
+  if (sponsoredPct >= 50) {
+    competitionScore += 20;
+  } else if (sponsoredPct >= 30) {
+    competitionScore += 10;
+  }
+  
+  // Price spread: tighter = more competitive
+  if (pricesWithValues.length >= 3) {
+    const sortedPrices = [...pricesWithValues].sort((a, b) => a - b);
+    const priceRange = sortedPrices[sortedPrices.length - 1] - sortedPrices[0];
+    const priceSpreadPct = avgPrice > 0 ? (priceRange / avgPrice) * 100 : 100;
+    
+    if (priceSpreadPct < 30) {
+      competitionScore += 10; // Tight price competition
+    }
+  }
+  
+  competitionScore = Math.min(100, Math.max(0, competitionScore));
+  
+  // Add warnings based on market quality
+  if (marketQuality.bsr_coverage_pct < 50) {
+    warnings.push(`BSR_COVERAGE_LOW:${Math.round(marketQuality.bsr_coverage_pct)}%`);
+  }
+  
+  if (marketQuality.sponsored_detection_confidence < 70) {
+    warnings.push(`SPONSORED_DETECTION_LOW:${Math.round(marketQuality.sponsored_detection_confidence)}%`);
+  }
+  
+  if (marketQuality.price_coverage_pct < 70) {
+    warnings.push(`PRICE_COVERAGE_LOW:${Math.round(marketQuality.price_coverage_pct)}%`);
+  }
+  
+  return {
+    total_monthly_units: demandEstimate.total_monthly_units,
+    total_monthly_revenue: demandEstimate.total_monthly_revenue,
+    avg_price: Math.round(avgPrice * 100) / 100,
+    sponsored_pct: Math.round(sponsoredPct * 10) / 10,
+    top_brand_share_pct: Math.round(topBrandSharePct * 10) / 10,
+    competition_score: Math.round(competitionScore),
+    confidence: marketQuality.overall_confidence,
+    warnings: warnings.length > 0 ? warnings : [],
   };
 }
 
