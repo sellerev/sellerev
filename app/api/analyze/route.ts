@@ -2372,8 +2372,8 @@ export async function POST(req: NextRequest) {
                 timestamp: new Date().toISOString(),
               });
             }
-            })
-            .catch((err: any) => {
+          })
+          .catch((err: any) => {
             console.warn("SP_API_ENRICHMENT_ERROR (non-blocking)", {
               keyword: body.input_value,
               error: err?.message || String(err),
