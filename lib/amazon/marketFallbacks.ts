@@ -35,6 +35,9 @@ export function buildFallbackMarketSnapshot(
     avg_bsr: null,
     total_page1_listings: 0,
     sponsored_count: 0,
+    organic_count: 0,
+    unknown_sponsored_count: 0,
+    sponsored_pct: 0,
     dominance_score: 0,
     fulfillment_mix: {
       fba: 65, // Default distribution
