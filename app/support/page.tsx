@@ -8,6 +8,7 @@ export default function SupportPage() {
   const [formData, setFormData] = useState({
     name: "",
     email: "",
+    subject: "",
     message: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -36,7 +37,7 @@ export default function SupportPage() {
       }
 
       setSubmitStatus("success");
-      setFormData({ name: "", email: "", message: "" });
+      setFormData({ name: "", email: "", subject: "", message: "" });
     } catch (error) {
       setSubmitStatus("error");
       setErrorMessage(error instanceof Error ? error.message : "Failed to send message. Please try again.");
@@ -115,6 +116,21 @@ export default function SupportPage() {
                   name="email"
                   required
                   value={formData.email}
+                  onChange={handleChange}
+                  disabled={isSubmitting}
+                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-black disabled:bg-gray-100 disabled:cursor-not-allowed"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="subject" className="block text-sm font-medium text-gray-700 mb-2">
+                  Subject (Optional)
+                </label>
+                <input
+                  type="text"
+                  id="subject"
+                  name="subject"
+                  value={formData.subject}
                   onChange={handleChange}
                   disabled={isSubmitting}
                   className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-black disabled:bg-gray-100 disabled:cursor-not-allowed"

@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
 
     const resend = new Resend(apiKey);
     const body = await req.json();
-    const { name, email, message } = body;
+    const { name, email, subject, message } = body;
 
     // Validate required fields
     if (!name || !email || !message) {
@@ -37,12 +37,46 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Format timestamp in UTC
+    const now = new Date();
+    const utcDate = new Date(now.toISOString());
+    const formattedDate = utcDate.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+    const formattedTime = utcDate.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+      timeZone: "UTC",
+    });
+    const timestamp = `${formattedDate} at ${formattedTime} UTC`;
+
+    // Format email body
+    const emailBody = `New Sellerev Support Request
+
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Name: ${name}
+Email: ${email}${subject ? `\nSubject: ${subject}` : ""}
+Message:
+
+${message}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Submitted at: ${timestamp}`;
+
     // Send internal email to support@sellerev.com
     await resend.emails.send({
       from: "Sellerev Support <noreply@sellerev.com>",
       to: "support@sellerev.com",
-      subject: `New Support Request from ${name}`,
-      text: `Name: ${name}\nEmail: ${email}\n\nMessage:\n${message}`,
+      subject: "New Sellerev Support Request",
+      text: emailBody,
     });
 
     // Send auto-reply confirmation email to user
