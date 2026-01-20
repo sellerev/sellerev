@@ -595,54 +595,9 @@ export function buildKeywordPageOne(
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CATEGORY-SCALED DEMAND CAPS: Prevent inflation with category-aware multipliers
+  // CATEGORY-SCALED DEMAND CAPS: REMOVED
   // ═══════════════════════════════════════════════════════════════════════════
-  // Apply category-scaled caps on total Page-1 units (replaces hard 30K cap)
-  // Caps applied AFTER market calibration but BEFORE allocation
-  // Constants defined at function scope for use in both pre-allocation and post-expansion caps
-  const CATEGORY_UNIT_MULTIPLIER: Record<string, number> = {
-    electronics: 3.5,
-    tvs: 4.0,
-    appliances: 2.5,
-    default: 1.0,
-  };
-  
-  // Map category string to multiplier key (normalize category name)
-  const normalizeCategory = (cat: string | null): string => {
-    if (!cat) return "default";
-    const lower = cat.toLowerCase();
-    if (lower.includes("electronics") || lower.includes("electronic")) return "electronics";
-    if (lower.includes("tv") || lower.includes("television")) return "tvs";
-    if (lower.includes("appliance") || lower.includes("kitchen")) return "appliances";
-    return "default";
-  };
-  
-  const categoryKey = normalizeCategory(category);
-  const categoryMultiplier = CATEGORY_UNIT_MULTIPLIER[categoryKey] ?? CATEGORY_UNIT_MULTIPLIER.default;
-  
-  // Base units for scaling (was 30000 hard cap)
-  const BASE_CATEGORY_UNITS = 30000;
-  const BASE_RANK1_UNITS = 6000;
-  
-  // Calculate category-scaled max units
-  const maxUnits = Math.round(BASE_CATEGORY_UNITS * categoryMultiplier);
-  const maxRank1Units = Math.round(BASE_RANK1_UNITS * categoryMultiplier);
-  
-  // Cap total Page-1 units if exceeds category-scaled limit (before allocation)
-  if (totalPage1Units > maxUnits) {
-    const scaleDownFactor = maxUnits / totalPage1Units;
-    totalPage1Units = maxUnits;
-    totalPage1Revenue = Math.round(totalPage1Revenue * scaleDownFactor);
-    console.log("📊 CATEGORY_SCALED_CAP_APPLIED", {
-      category: categoryKey,
-      multiplier: categoryMultiplier,
-      max_units: maxUnits,
-      original_units: Math.round(totalPage1Units / scaleDownFactor),
-      capped_units: totalPage1Units,
-    });
-  }
-  
-  // Note: Rank-1 cap will be applied after allocation (we'll find rank-1 product then)
+  // Keyword-level caps removed - per-ASIN decay and limits applied instead (H10-style)
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: ALLOCATE DEMAND ACROSS PRODUCTS
@@ -846,7 +801,7 @@ export function buildKeywordPageOne(
     
     // Apply demand floor (use 0 if reviewCount is null for floor calculation)
     const reviewCountForFloor = reviewCount ?? 0;
-    const finalUnits = applyDemandFloors({
+    let finalUnits = applyDemandFloors({
       estimatedUnits: allocatedUnits,
       price: pw.price,
       reviewCount: reviewCountForFloor,
@@ -855,7 +810,36 @@ export function buildKeywordPageOne(
       fulfillment,
     });
     
-    // Recalculate revenue after floor application
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PER-ASIN DECAY AND LIMITS (H10-style, replaces keyword-level caps)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Apply per-ASIN decay based on BSR to prevent tail inflation
+    // This replaces keyword-level unit caps with per-ASIN limits
+    const MAX_UNITS_PER_ASIN = 4000;
+    const BSR_CUTOFF = 300;
+    
+    function decayWeight(bsr: number): number {
+      // Exponential decay, prevents tail inflation
+      return Math.exp(-bsr / 120);
+    }
+    
+    const bsr = pw.bsr ?? l.bsr ?? l.main_category_bsr ?? null;
+    
+    if (bsr != null) {
+      if (bsr > BSR_CUTOFF) {
+        // BSR too high - zero out this ASIN's units
+        finalUnits = 0;
+      } else {
+        // Apply decay weight and per-ASIN cap
+        const weight = decayWeight(bsr);
+        finalUnits = Math.min(
+          Math.round(finalUnits * weight),
+          MAX_UNITS_PER_ASIN
+        );
+      }
+    }
+    
+    // Recalculate revenue after decay and limits
     const finalRevenue = Math.round(finalUnits * pw.price);
 
     // Debug log for top 3 products
@@ -1321,130 +1305,9 @@ export function buildKeywordPageOne(
   // No post-allocation reshaping is allowed (only safety clamps in STEP 2.5).
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 2.5: SOFT NORMALIZATION (Helium-10 Style)
+  // STEP 2.5: SOFT NORMALIZATION (Helium-10 Style) - REMOVED
   // ═══════════════════════════════════════════════════════════════════════════
-  // Normalize Page-1 totals to feel consistent with Helium 10
-  // Apply soft scaling if totals exceed plausible ceilings
-  // Preserves relative ordering and revenue share percentages
-  const sumUnitsBefore = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  const sumRevenueBefore = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  
-  // Determine competition level for ceiling calculation
-  // Reuse reviewDispersion and sponsoredDensity already calculated above for calibration
-  const organicCount = cappedListings.filter(l => !l.is_sponsored).length;
-  
-  // Determine competition level (same logic as calibration)
-  let competitionLevel: "low_competition" | "medium_competition" | "high_competition";
-  if (organicCount < 8 || (reviewDispersion < 500 && sponsoredDensity < 20)) {
-    competitionLevel = "low_competition";
-  } else if (organicCount >= 15 && (reviewDispersion > 2000 || sponsoredDensity > 40)) {
-    competitionLevel = "high_competition";
-  } else {
-    competitionLevel = "medium_competition";
-  }
-  
-  // TEMPORARY DEBUG CAP: Lower ceiling to 20k for inspection
-  const MAX_PAGE1_UNITS = 20_000;
-  
-  // Get plausible ceiling from competition level (temporarily overridden with debug cap)
-  // Use the same ranges as calibration for consistency
-  const MARKET_RANGES = {
-    low_competition: { units_max: 6000, revenue_max: 150000 },
-    medium_competition: { units_max: 15000, revenue_max: 375000 },
-    high_competition: { units_max: 35000, revenue_max: 875000 },
-  };
-  
-  const ceiling = MARKET_RANGES[competitionLevel];
-  // TEMPORARY: Override with debug cap
-  const unitsCeiling = MAX_PAGE1_UNITS;
-  const revenueCeiling = ceiling.revenue_max;
-  
-  // DEBUG LOG: Log cap check before clamp
-  console.log('DEBUG_UNIT_CAP_CHECK', {
-    total_units_before: sumUnitsBefore,
-    cap: MAX_PAGE1_UNITS,
-    scale_factor: sumUnitsBefore > MAX_PAGE1_UNITS
-      ? MAX_PAGE1_UNITS / sumUnitsBefore
-      : 1,
-    applied: sumUnitsBefore > MAX_PAGE1_UNITS,
-    competition_level: competitionLevel,
-    original_ceiling: ceiling.units_max,
-    revenue_before: sumRevenueBefore,
-    revenue_ceiling: revenueCeiling,
-  });
-  
-  // Check if totals exceed ceiling
-  const unitsExceedsCeiling = sumUnitsBefore > unitsCeiling;
-  const revenueExceedsCeiling = sumRevenueBefore > revenueCeiling;
-  
-  if (unitsExceedsCeiling || revenueExceedsCeiling) {
-    // Calculate scaling factor (use the more restrictive one)
-    const unitsScale = unitsExceedsCeiling ? unitsCeiling / sumUnitsBefore : 1.0;
-    const revenueScale = revenueExceedsCeiling ? revenueCeiling / sumRevenueBefore : 1.0;
-    const scaleFactor = Math.min(unitsScale, revenueScale);
-    
-    // Clamp scale factor to reasonable range (0.5x - 1.0x)
-    // Never scale up, only down if needed
-    const clampedScale = Math.max(0.5, Math.min(1.0, scaleFactor));
-    
-    // Apply proportional scaling to all products
-    // Preserves relative ordering and revenue share percentages
-    products.forEach(p => {
-      // Scale units (ensure never zero)
-      const scaledUnits = Math.max(1, Math.round(p.estimated_monthly_units * clampedScale));
-      
-      // Scale revenue proportionally (revenue = units × price)
-      const scaledRevenue = Math.round(scaledUnits * p.price);
-      
-      // Update product (preserve all other fields)
-      p.estimated_monthly_units = scaledUnits;
-      p.estimated_monthly_revenue = scaledRevenue;
-    });
-    
-    // Recalculate revenue share percentages after scaling
-    const scaledTotalRevenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-    if (scaledTotalRevenue > 0) {
-      products.forEach(p => {
-        if (p.estimated_monthly_revenue > 0) {
-          p.revenue_share_pct = Math.round((p.estimated_monthly_revenue / scaledTotalRevenue) * 100 * 100) / 100;
-        }
-      });
-    }
-    
-    const sumUnitsAfter = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-    const sumRevenueAfter = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-    
-    console.log("📉 NORMALIZATION APPLIED", {
-      before: sumUnitsBefore,
-      after: sumUnitsAfter,
-      revenue_before: sumRevenueBefore,
-      revenue_after: sumRevenueAfter,
-      competition_level: competitionLevel,
-      ceiling: {
-        units: unitsCeiling,
-        revenue: revenueCeiling,
-      },
-      scale_factor: clampedScale.toFixed(3),
-      reason: unitsExceedsCeiling || revenueExceedsCeiling 
-        ? "temporary_debug_cap_20k"
-        : "No scaling needed",
-      calibration_applied: true,
-      calibration_reason: "temporary_debug_cap_20k",
-    });
-  } else {
-    // No normalization needed - totals are within plausible range
-    console.log("📉 NORMALIZATION CHECK", {
-      total_units: sumUnitsBefore,
-      total_revenue: sumRevenueBefore,
-      ceiling: {
-        units: unitsCeiling,
-        revenue: revenueCeiling,
-      },
-      competition_level: competitionLevel,
-      normalized: false,
-      reason: "Totals within plausible range",
-    });
-  }
+  // Keyword-level unit caps removed - per-ASIN decay and limits applied instead (H10-style)
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PAGE-1 MARKET EXPANSION: Scale allocated units to realistic market size
@@ -1507,39 +1370,9 @@ export function buildKeywordPageOne(
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TEMPORARY DEBUG CAP: Apply final 20k cap after expansion
+  // TEMPORARY DEBUG CAP: REMOVED
   // ═══════════════════════════════════════════════════════════════════════════
-  const MAX_PAGE1_UNITS_FINAL = 20_000;
-  const finalTotalAfterExpansion = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  
-  console.log('DEBUG_UNIT_CAP_CHECK_AFTER_EXPANSION', {
-    total_units_before: finalTotalAfterExpansion,
-    cap: MAX_PAGE1_UNITS_FINAL,
-    scale_factor: finalTotalAfterExpansion > MAX_PAGE1_UNITS_FINAL
-      ? MAX_PAGE1_UNITS_FINAL / finalTotalAfterExpansion
-      : 1,
-    applied: finalTotalAfterExpansion > MAX_PAGE1_UNITS_FINAL,
-  });
-  
-  if (finalTotalAfterExpansion > MAX_PAGE1_UNITS_FINAL) {
-    const scaleFactor = MAX_PAGE1_UNITS_FINAL / finalTotalAfterExpansion;
-    
-    for (const product of products) {
-      product.estimated_monthly_units = Math.round(product.estimated_monthly_units * scaleFactor);
-      product.estimated_monthly_revenue = Math.round(product.estimated_monthly_units * product.price);
-    }
-    
-    totalPage1Units = MAX_PAGE1_UNITS_FINAL;
-    totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-    
-    console.log("🔧 TEMPORARY_DEBUG_CAP_APPLIED", {
-      total_units_before: finalTotalAfterExpansion,
-      total_units_after: totalPage1Units,
-      scale_factor: scaleFactor.toFixed(4),
-      calibration_applied: true,
-      calibration_reason: 'temporary_debug_cap_20k',
-    });
-  }
+  // Keyword-level unit caps removed - per-ASIN decay and limits applied instead (H10-style)
 
   // ═══════════════════════════════════════════════════════════════════════════
   // RANK ABSORPTION CAP: Prevent top ranks from absorbing too much demand
@@ -1672,47 +1505,9 @@ export function buildKeywordPageOne(
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CATEGORY-SCALED CAPS: Re-apply total cap and rank-1 cap after expansion
+  // CATEGORY-SCALED CAPS: REMOVED
   // ═══════════════════════════════════════════════════════════════════════════
-  // TEMPORARY DEBUG: Override maxUnits with debug cap
-  const MAX_PAGE1_UNITS_DEBUG = 20_000;
-  const effectiveMaxUnits = MAX_PAGE1_UNITS_DEBUG; // Override category-scaled cap temporarily
-  
-  // Market expansion may have pushed totals over category-scaled limits - re-apply caps
-  // Re-apply total cap if market expansion pushed it over
-  const currentTotalAfterExpansion = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  
-  console.log('DEBUG_UNIT_CAP_CHECK_CATEGORY_SCALED', {
-    total_units_before: currentTotalAfterExpansion,
-    cap: MAX_PAGE1_UNITS_DEBUG,
-    original_category_cap: maxUnits,
-    scale_factor: currentTotalAfterExpansion > MAX_PAGE1_UNITS_DEBUG
-      ? MAX_PAGE1_UNITS_DEBUG / currentTotalAfterExpansion
-      : 1,
-    applied: currentTotalAfterExpansion > MAX_PAGE1_UNITS_DEBUG,
-  });
-  
-  if (currentTotalAfterExpansion > effectiveMaxUnits) {
-    const scaleDownFactor = effectiveMaxUnits / currentTotalAfterExpansion;
-    products.forEach(p => {
-      p.estimated_monthly_units = Math.round(p.estimated_monthly_units * scaleDownFactor);
-      p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
-    });
-    
-    // Update totals
-    totalPage1Units = effectiveMaxUnits;
-    totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-    console.log("📊 CATEGORY_SCALED_CAP_REAPPLIED_AFTER_EXPANSION", {
-      category: categoryKey,
-      multiplier: categoryMultiplier,
-      max_units: effectiveMaxUnits,
-      original_category_max: maxUnits,
-      original_units: currentTotalAfterExpansion,
-      capped_units: totalPage1Units,
-      calibration_applied: true,
-      calibration_reason: 'temporary_debug_cap_20k',
-    });
-  }
+  // Keyword-level unit caps removed - per-ASIN decay and limits applied instead (H10-style)
   
   // Apply rank-1 cap with category scaling (if not already capped by rank absorption)
   if (rank1Product && rank1Product.estimated_monthly_units > maxRank1Units) {
@@ -1740,23 +1535,9 @@ export function buildKeywordPageOne(
       }
     }
     
-    // Re-normalize total after rank-1 redistribution (maintain debug cap)
-    const afterRank1Redistribution = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-    if (afterRank1Redistribution > effectiveMaxUnits) {
-      const renormalizeFactor = effectiveMaxUnits / afterRank1Redistribution;
-      products.forEach(p => {
-        p.estimated_monthly_units = Math.round(p.estimated_monthly_units * renormalizeFactor);
-        p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
-      });
-      totalPage1Units = effectiveMaxUnits;
-      totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-      console.log("🔧 TEMPORARY_DEBUG_CAP_AFTER_RANK1_REDISTRIBUTION", {
-        total_units_before: afterRank1Redistribution,
-        total_units_after: totalPage1Units,
-        scale_factor: renormalizeFactor.toFixed(4),
-        calibration_reason: 'temporary_debug_cap_20k',
-      });
-    }
+    // Recalculate totals after rank-1 redistribution (keyword caps removed)
+    totalPage1Units = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
+    totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
   }
   
   if (marketShape === "CONSUMABLE") {
