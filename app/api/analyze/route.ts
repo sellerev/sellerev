@@ -3392,62 +3392,19 @@ export async function POST(req: NextRequest) {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 🛡️ MARKET DATA VALIDATION GUARD
+    // 🛡️ MARKET DATA VALIDATION GUARD (FINAL GATE - MINIMAL STRICTNESS)
     // ═══════════════════════════════════════════════════════════════════════════
-    const hasRenderableMarketData =
-      canonicalProducts.length > 0 &&
-      marketSnapshot?.avg_price != null &&
-      (marketSnapshot?.est_total_monthly_revenue_min != null || 
-       marketSnapshot?.est_total_monthly_revenue_max != null ||
-       contractResponse?.aggregates_derived_from_page_one?.total_page1_revenue != null);
-
-    const decisionData = contractResponse?.decision;
-    if (!decisionData || (typeof decisionData === 'object' && Object.keys(decisionData).length === 0)) {
-      if (hasRenderableMarketData) {
-        console.warn("DECISION_DATA_MISSING_BUT_MARKET_VALID", {
-          keyword: body.input_value,
-          bsr_coverage: marketSnapshot?.bsr_sample_size,
-          listings: canonicalProducts.length,
-          total_page1_listings: marketSnapshot?.total_page1_listings,
-        });
-        // Return success with DECISION_DATA_PENDING warning - market data is renderable
-        return NextResponse.json(
-          {
-            success: true,
-            status: "processing",
-            warnings: ['DECISION_DATA_PENDING'],
-            analysisRunId: insertedRun?.id,
-            data_quality: dataQuality,
-            dataSource: dataSource,
-            snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
-            snapshot_last_updated: snapshotLastUpdated,
-            page_one_listings: canonicalProducts,
-            products: canonicalProducts,
-            aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
-            ...(contractResponse ? contractResponse : {}),
-            snapshot: marketSnapshot,
-            market: {
-              listings: canonicalProducts,
-              avg_price: marketSnapshot?.avg_price,
-              total_page1_revenue: contractResponse?.aggregates_derived_from_page_one?.total_page1_revenue || 
-                                  marketSnapshot?.est_total_monthly_revenue_min ||
-                                  marketSnapshot?.est_total_monthly_revenue_max,
-            },
-            decisionData: null,
-            message: "Market data is ready. Strategic decision is being processed.",
-          },
-          { 
-            status: 200,
-            headers: res.headers,
-          }
-        );
-      }
-      // No renderable market data - fail
+    // CRITICAL: Only block if listings.length === 0
+    // Partial BSR coverage, missing decision data, or missing revenue estimates are ALLOWED
+    // If listings exist, ALWAYS return success - let UI render with whatever data we have
+    
+    // ONLY return error if NO listings exist - partial enrichment is valid
+    if (canonicalProducts.length === 0) {
       return NextResponse.json(
         {
           success: false,
-          error: "Analysis failed: insufficient market data",
-          message: "Unable to generate market snapshot with sufficient data",
+          error: "NO_RENDERABLE_MARKET_DATA",
+          message: "Unable to generate market snapshot - no listings found",
         },
         { 
           status: 400,
@@ -3456,9 +3413,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Build response with required shape - always include listings and snapshot
+    const decisionData = contractResponse?.decision;
+    const hasDecisionData = decisionData && (typeof decisionData !== 'object' || Object.keys(decisionData).length > 0);
+    const warnings: string[] = [];
+    
+    if (!hasDecisionData) {
+      warnings.push('DECISION_DATA_PENDING');
+      console.warn("DECISION_DATA_MISSING_BUT_MARKET_VALID", {
+        keyword: body.input_value,
+        listings: canonicalProducts.length,
+        bsr_coverage_percent: marketSnapshot?.bsr_sample_size 
+          ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
+          : null,
+        avg_price: marketSnapshot?.avg_price,
+        message: "Partial enrichment is valid - returning success with listings",
+      });
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // STEP 6: Return listings immediately (before AI completes)
     // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Always return success with listings if listings.length > 0
+    // Response shape MUST always include listings and snapshot, even if decision data is missing
     return NextResponse.json(
       {
         success: true,
@@ -3468,14 +3445,34 @@ export async function POST(req: NextRequest) {
         dataSource: dataSource,
         snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
         snapshot_last_updated: snapshotLastUpdated,
-        // Return listings immediately
+        // CRITICAL: Always include listings - never drop them (required for UI rendering)
         page_one_listings: canonicalProducts,
         products: canonicalProducts,
+        listings: canonicalProducts, // Ensure listings field is always present
         aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
         ...(contractResponse ? contractResponse : {}),
+        // CRITICAL: Always include snapshot with required fields, even if some are null
+        snapshot: {
+          ...marketSnapshot,
+          avg_price: marketSnapshot?.avg_price ?? null,
+          total_page1_revenue: contractResponse?.aggregates_derived_from_page_one?.total_page1_revenue ||
+                              marketSnapshot?.est_total_monthly_revenue_min ||
+                              marketSnapshot?.est_total_monthly_revenue_max ||
+                              null,
+          total_units: marketSnapshot?.est_total_monthly_units_min ||
+                      marketSnapshot?.est_total_monthly_units_max ||
+                      null,
+          bsr_coverage_percent: marketSnapshot?.bsr_sample_size && canonicalProducts.length > 0
+            ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
+            : null,
+        },
+        // Include warnings if decision data is missing
+        ...(warnings.length > 0 ? { warnings } : {}),
         // Decision is set by fallback guard above if async AI hasn't returned yet
         // If contractResponse has decision, it's already spread above; otherwise it will be null
-        message: "Listings loaded. AI insights processing...",
+        message: hasDecisionData 
+          ? "Listings loaded. AI insights processing..." 
+          : "Market data loaded. Strategic decision is being processed.",
       },
       { 
         status: 200,

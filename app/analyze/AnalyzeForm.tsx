@@ -867,23 +867,17 @@ export default function AnalyzeForm({
         return;
       }
 
-      // ❗ Only error if NO renderable market data exists
+      // ❗ Only error if NO listings exist - partial enrichment is valid
       // Decision is now OPTIONAL - market data is sufficient to render
-      const pageOneListings = (data as any).page_one_listings || (data as any).products || [];
+      const pageOneListings = (data as any).page_one_listings || (data as any).products || (data as any).listings || [];
       const snapshot = (data as any).snapshot || (data as any).market_snapshot;
       const aggregates = (data as any).aggregates_derived_from_page_one;
       
-      const hasRenderableMarketData =
-        pageOneListings.length > 0 &&
-        (snapshot?.avg_price != null || aggregates?.avg_price != null) &&
-        (snapshot?.est_total_monthly_revenue_min != null ||
-         snapshot?.est_total_monthly_revenue_max != null ||
-         aggregates?.total_page1_revenue != null ||
-         aggregates?.total_monthly_revenue_est != null);
-
-      if (!hasRenderableMarketData) {
-        console.error("ANALYZE_INSUFFICIENT_MARKET_DATA", { data });
-        setError("Analysis failed: no market data returned");
+      // CRITICAL: Only check if listings exist - price/revenue are optional
+      // Partial BSR coverage (e.g. 40/68 ASINs) is valid and should render
+      if (pageOneListings.length === 0) {
+        console.error("ANALYZE_NO_LISTINGS", { data });
+        setError("Analysis failed: no listings returned");
         setLoading(false);
         return;
       }
@@ -985,8 +979,24 @@ export default function AnalyzeForm({
       // Store snapshot last_updated for freshness badge
       setSnapshotLastUpdated(data.snapshot_last_updated || null);
 
-      // Normalize and set analysis
-      setAnalysis(normalizeAnalysis(analysisData));
+      // CRITICAL: Guard against clearing valid listings
+      // Only update if we're setting listings OR if previous state has no listings
+      // This prevents router.replace() from triggering a state clear
+      setAnalysis((prev) => {
+        const newAnalysis = normalizeAnalysis(analysisData);
+        // If previous analysis has listings and new one doesn't, keep previous
+        if (prev?.page_one_listings && prev.page_one_listings.length > 0) {
+          if (!newAnalysis?.page_one_listings || newAnalysis.page_one_listings.length === 0) {
+            console.warn("FRONTEND_GUARD: Preventing clearing of valid listings", {
+              prev_listings: prev.page_one_listings.length,
+              new_listings: newAnalysis?.page_one_listings?.length || 0,
+              message: "Keeping previous analysis with listings",
+            });
+            return prev;
+          }
+        }
+        return newAnalysis;
+      });
       setError(null);
 
       // Update URL with the new analysis run ID for persistence (legacy contract)
