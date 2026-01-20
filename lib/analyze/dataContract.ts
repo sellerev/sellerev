@@ -766,7 +766,7 @@ export async function buildKeywordAnalyzeResponse(
   const avg_rating = pageOneRatings.length > 0
     ? pageOneRatings.reduce((sum, r) => sum + r, 0) / pageOneRatings.length
     : null;
-  const avg_rating_source = pageOneRatings.length >= 3 ? 'observed' : (pageOneRatings.length > 0 ? 'estimated' : null);
+  const avg_rating_source: 'observed' | 'estimated' | null = pageOneRatings.length >= 3 ? 'observed' : (pageOneRatings.length > 0 ? 'estimated' : null);
   
   const pageOneBsrs = pageOneListings
     .map(p => p.bsr)
