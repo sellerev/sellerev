@@ -19,7 +19,8 @@ import { batchEnrichPricing } from "@/lib/spapi/pricing";
 
 // TODO: AI PROMPTS DISABLED - Re-enable when AI processing is needed
 // PASS 1: Decision Brain - Plain text verdict and reasoning
-// const DECISION_BRAIN_PROMPT = `You are a senior Amazon seller allocating capital to product opportunities.
+/*
+const DECISION_BRAIN_PROMPT = `You are a senior Amazon seller allocating capital to product opportunities.
 
 Your role: Make a clear, decisive verdict about whether this keyword opportunity is viable for the seller.
 
@@ -122,10 +123,11 @@ The review barrier is too high for new sellers. Page 1 shows an average of 2,800
 
 ACTIONABLE GUIDANCE:
 Do not proceed unless you can commit to 6+ months of PPC spend and have a unique value proposition that breaks brand loyalty. Entry is only viable for existing sellers with established review velocity and clear differentiation strategy.`;
-// `;
+*/
 
 // PASS 2: Structuring Brain - Converts plain text decision into JSON contract (DISABLED)
-// const STRUCTURING_BRAIN_PROMPT = `You are a structuring assistant that converts plain text decisions into structured JSON contracts.
+/*
+const STRUCTURING_BRAIN_PROMPT = `You are a structuring assistant that converts plain text decisions into structured JSON contracts.
 
 Your role: Convert the Decision Brain's plain text verdict and reasoning into the required JSON decision contract format.
 
@@ -219,10 +221,11 @@ No additional keys.
 No missing keys.
 No markdown.
 No commentary outside JSON.`;
-// `;
+*/
 
 // Legacy system prompt (kept for reference, not used in two-pass system) (DISABLED)
-// const SYSTEM_PROMPT = `You are Sellerev, a seller decision engine for Amazon FBA.
+/*
+const SYSTEM_PROMPT = `You are Sellerev, a seller decision engine for Amazon FBA.
 
 You are a senior Amazon seller making real capital allocation decisions. You think and speak like someone who risks time and money on every product decision, even when data is imperfect.
 
@@ -535,7 +538,7 @@ Before returning your answer, verify:
 - Confidence reflects decision certainty based on market structure signals, not data completeness
 
 Output should read like a senior Amazon operator making a real decision about whether to risk time and capital, even when data is imperfect.`;
-// `;
+*/
 
 // Decision contract keys that must be present in the OpenAI response (DISABLED - AI not used)
 const REQUIRED_DECISION_KEYS = [
