@@ -604,13 +604,19 @@ export default function AnalyzeForm({
       const chatRunId = analysisRunIdForChat;
       const isSameRunId = (currentRunId === incomingRunId) || (chatRunId === incomingRunId);
       
-      // GUARD: Only skip sync if:
+      // GUARD: Only skip sync for background/polling updates (NOT user actions)
+      // Skip sync ONLY if:
       // 1. Same backend run ID
       // 2. Current state has products
       // 3. AND this is NOT a user-triggered Analyze action (no client_run_id means it's from URL/props)
-      // NEVER skip sync for user-triggered Analyze actions - they always get fresh state
-      if (isSameRunId && currentHasProducts && !clientRunId) {
-        // This is a URL/prop-based sync (not a user-triggered action)
+      // 4. AND this is NOT a keyword change (different input_value)
+      // NEVER skip sync for:
+      // - User clicking Analyze (client_run_id exists)
+      // - Keyword change (different input_value)
+      // - New client_run_id
+      const isKeywordChange = initialAnalysis.input_value !== (analysis?.input_value || '');
+      if (isSameRunId && currentHasProducts && !clientRunId && !isKeywordChange) {
+        // This is a URL/prop-based sync (not a user-triggered action) and keyword hasn't changed
         // Only skip if we have current products and it's the same run
         console.log("FRONTEND_SKIP_SYNC_SAME_RUN", {
           run_id: incomingRunId,
@@ -619,6 +625,7 @@ export default function AnalyzeForm({
           current_products: currentProducts.length,
           incoming_products: incomingProducts.length,
           client_run_id: clientRunId,
+          is_keyword_change: isKeywordChange,
           reason: "Same backend run ID with current products - preserving client state (URL/prop sync only, not user action)",
         });
         return;
@@ -626,6 +633,7 @@ export default function AnalyzeForm({
       
       // User-triggered Analyze actions always sync (client_run_id exists)
       // OR different run IDs always sync
+      // OR keyword change always sync
       // OR current state has no products - always sync
       
       // Only sync if different run ID or current state has no products
@@ -1018,24 +1026,27 @@ export default function AnalyzeForm({
           new_has_listings: !!(newAnalysis?.page_one_listings && newAnalysis.page_one_listings.length > 0),
         });
         
-        // SIMPLIFIED: If new analysis has products, always use it (source of truth)
-        // We already validated that pageOneListings.length > 0 earlier (line 947)
-        // so newAnalysis should always have products here
-        if (newAnalysis?.page_one_listings && newAnalysis.page_one_listings.length > 0) {
-          return newAnalysis;
+        // CRITICAL: Analyze response ALWAYS wins - never block updates
+        // Always use new analysis data, even if it has no products (backend is source of truth)
+        // Hard assertion for debug (only in development)
+        if (process.env.NODE_ENV === 'development') {
+          const hasProducts = !!(newAnalysis?.page_one_listings && newAnalysis.page_one_listings.length > 0) ||
+                              !!(newAnalysis?.products && newAnalysis.products.length > 0);
+          console.assert(
+            hasProducts,
+            'ANALYZE_RENDER_ASSERTION: Analyze returned data but UI may fail to render',
+            {
+              client_run_id: newClientRunId,
+              backend_run_id: data.analysisRunId,
+              page_one_listings: newAnalysis?.page_one_listings?.length || 0,
+              products: newAnalysis?.products?.length || 0,
+              has_market_snapshot: !!newAnalysis?.market_snapshot,
+            }
+          );
         }
         
-        // Fallback: if somehow we got here without products, keep previous state
-        // This should never happen due to earlier validation, but defensive programming
-        if (prev?.page_one_listings && prev.page_one_listings.length > 0) {
-          console.warn("FRONTEND_FALLBACK: New analysis has no products, keeping previous", {
-            prev_listings: prev.page_one_listings.length,
-            new_listings: newAnalysis?.page_one_listings?.length || 0,
-          });
-          return prev;
-        }
-        
-        // No previous state and no new products - return new analysis anyway
+        // ALWAYS return new analysis - never preserve previous state
+        // Backend response is the source of truth
         return newAnalysis;
       });
       setError(null);
@@ -1175,45 +1186,17 @@ export default function AnalyzeForm({
             )}
           </div>
 
-          {loading ? (
-            /* ALWAYS show loading animation when analyzing - regardless of previous results */
-            <div>
-              <div className="flex items-center justify-between mb-4 px-6 pt-6">
-                <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
-              </div>
-              <div className="px-6">
-                <ResultsLoadingState key={currentAnalysisRunId} />
-              </div>
-            </div>
-          ) : !analysis ? (
-            /* Show ready state when not loading and no analysis */
-            <div className="flex items-center justify-center min-h-[calc(100vh-16rem)] py-20 px-6">
-              <div className="text-center max-w-md">
-                <div className="w-20 h-20 mx-auto mb-6 bg-gray-100/60 backdrop-blur-sm rounded-full flex items-center justify-center">
-                  <svg
-                    className="w-10 h-10 text-gray-400"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                    />
-                  </svg>
+          {analysis ? (
+            /* CRITICAL: ALWAYS render results when analysis exists - animation does NOT block rendering */
+            <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6 relative">
+              {/* Show loading animation OVERLAY if loading (does not block results) */}
+              {loading && (
+                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-10 flex items-center justify-center">
+                  <ResultsLoadingState key={currentAnalysisRunId} />
                 </div>
-                <h2 className="text-2xl font-semibold text-gray-900 mb-3">
-                  Ready to Search
-                </h2>
-                <p className="text-gray-500 text-sm leading-relaxed">
-                  Enter a product keyword above to see Page 1 results with market intelligence.
-                  Click any product to ask questions about it.
-                </p>
-              </div>
-            </div>
-          ) : (
+              )}
+              {/* KEYWORD ANALYSIS: Interactive Amazon-style search */}
+              {analysis.market_snapshot ? (
             <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6">
               {/* KEYWORD ANALYSIS: Interactive Amazon-style search */}
               {analysis.market_snapshot ? (
@@ -1630,17 +1613,8 @@ export default function AnalyzeForm({
                     // CRITICAL: Do NOT assign empty array if pageOneListings already has data (prevent data loss on re-render)
                     // If none of the above match, pageOneListings remains empty [] (intentional)
                     
-                    // Show loading state when analyzing - ALWAYS show when loading, regardless of previous results
-                    if (loading) {
-                      return (
-                        <div key={currentAnalysisRunId || 'loading'}>
-                          <div className="flex items-center justify-between mb-4">
-                            <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
-                          </div>
-                          <ResultsLoadingState key={currentAnalysisRunId} />
-                        </div>
-                      );
-                    }
+                    // CRITICAL: NO BLOCKING GUARDS - always render results when they exist
+                    // Animation does NOT block rendering - it's shown as overlay if needed
                 
                     // Sort listings based on selected sort option
                     // Create a derived sorted array (do NOT mutate original)
@@ -2110,6 +2084,44 @@ export default function AnalyzeForm({
 
                 </>
               ) : null}
+            </div>
+          ) : loading ? (
+            /* Show loading animation when analyzing and no analysis yet */
+            <div>
+              <div className="flex items-center justify-between mb-4 px-6 pt-6">
+                <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
+              </div>
+              <div className="px-6">
+                <ResultsLoadingState key={currentAnalysisRunId} />
+              </div>
+            </div>
+          ) : (
+            /* Show ready state when not loading and no analysis */
+            <div className="flex items-center justify-center min-h-[calc(100vh-16rem)] py-20 px-6">
+              <div className="text-center max-w-md">
+                <div className="w-20 h-20 mx-auto mb-6 bg-gray-100/60 backdrop-blur-sm rounded-full flex items-center justify-center">
+                  <svg
+                    className="w-10 h-10 text-gray-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1.5}
+                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                    />
+                  </svg>
+                </div>
+                <h2 className="text-2xl font-semibold text-gray-900 mb-3">
+                  Ready to Search
+                </h2>
+                <p className="text-gray-500 text-sm leading-relaxed">
+                  Enter a product keyword above to see Page 1 results with market intelligence.
+                  Click any product to ask questions about it.
+                </p>
+              </div>
             </div>
           )}
         </div>
