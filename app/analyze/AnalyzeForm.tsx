@@ -464,6 +464,12 @@ export default function AnalyzeForm({
     normalizeAnalysis(initialAnalysis)
   );
   
+  // Client-side run ID generated BEFORE API call - tracks current search lifecycle
+  // This is separate from backend run_id which may be reused for cached results
+  const [clientRunId, setClientRunId] = useState<string | null>(null);
+  // Ref to track active client_run_id for stale response detection (state updates are async)
+  const activeClientRunIdRef = useRef<string | null>(null);
+  
   // Unique run ID generated on each Analyze click - used to force component remounts
   const [currentAnalysisRunId, setCurrentAnalysisRunId] = useState<string | null>(null);
   
@@ -598,20 +604,29 @@ export default function AnalyzeForm({
       const chatRunId = analysisRunIdForChat;
       const isSameRunId = (currentRunId === incomingRunId) || (chatRunId === incomingRunId);
       
-      // GUARD: If same run ID and current state has products, preserve current state
-      // This handles race condition after router.replace() where server hasn't loaded fresh data yet
-      // Client state from analyze() is more reliable than stale DB reads
-      if (isSameRunId && currentHasProducts) {
+      // GUARD: Only skip sync if:
+      // 1. Same backend run ID
+      // 2. Current state has products
+      // 3. AND this is NOT a user-triggered Analyze action (no client_run_id means it's from URL/props)
+      // NEVER skip sync for user-triggered Analyze actions - they always get fresh state
+      if (isSameRunId && currentHasProducts && !clientRunId) {
+        // This is a URL/prop-based sync (not a user-triggered action)
+        // Only skip if we have current products and it's the same run
         console.log("FRONTEND_SKIP_SYNC_SAME_RUN", {
           run_id: incomingRunId,
           current_run_id: currentRunId,
           chat_run_id: chatRunId,
           current_products: currentProducts.length,
           incoming_products: incomingProducts.length,
-          reason: "Same run ID with current products - preserving client state (more reliable than DB read)",
+          client_run_id: clientRunId,
+          reason: "Same backend run ID with current products - preserving client state (URL/prop sync only, not user action)",
         });
         return;
       }
+      
+      // User-triggered Analyze actions always sync (client_run_id exists)
+      // OR different run IDs always sync
+      // OR current state has no products - always sync
       
       // Only sync if different run ID or current state has no products
       if (incomingHasProducts) {
@@ -697,20 +712,38 @@ export default function AnalyzeForm({
     return true;
   };
 
+  // Generate UUID v4 (simple implementation)
+  const generateUUID = (): string => {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    // Fallback for older browsers
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  };
+
   const analyze = async () => {
     if (!validateInput()) return;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // HARD RESET: Generate unique run ID and clear ALL state before new search
+    // HARD RESET: Generate client_run_id BEFORE API call and clear ALL state
     // ═══════════════════════════════════════════════════════════════════════════
+    const newClientRunId = generateUUID();
     const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    
+    // Set client_run_id FIRST - this tracks the current search lifecycle
+    setClientRunId(newClientRunId);
+    activeClientRunIdRef.current = newClientRunId; // Update ref immediately (synchronous)
     setCurrentAnalysisRunId(newRunId);
     
-    // Hard reset all analyze-related state
+    // Hard reset all run-scoped UI state BEFORE API call
     setLoading(true);
     setError(null);
     setAnalysis(null); // Clear previous results
-    setAnalysisRunIdForChat(null); // Clear analysisRunId for chat
+    setAnalysisRunIdForChat(null); // Clear analysisRunId for chat (will be set from response)
     setChatMessages([]); // Clear previous chat
     setIsEstimated(false); // Reset estimated flag
     setSnapshotType("snapshot"); // Reset snapshot type
@@ -724,7 +757,10 @@ export default function AnalyzeForm({
     setBrandDropdownOpen(false);
 
     try {
-      console.log("ANALYZE_REQUEST_START", { inputValue: inputValue.trim() });
+      console.log("ANALYZE_REQUEST_START", { 
+        inputValue: inputValue.trim(),
+        client_run_id: newClientRunId,
+      });
 
       const res = await fetch("/api/analyze", {
         method: "POST",
@@ -740,6 +776,8 @@ export default function AnalyzeForm({
         status: res.status, 
         ok: res.ok, 
         success: data.success, 
+        client_run_id: newClientRunId,
+        backend_run_id: data.analysisRunId,
         has_analysisRunId: !!data.analysisRunId,
         has_snapshot: !!data.snapshot,
         has_snapshot_id: !!data.snapshot?.snapshot_id,
@@ -927,7 +965,8 @@ export default function AnalyzeForm({
       };
       
       console.log("ANALYZE_SUCCESS", { 
-        analysisRunId: data.analysisRunId,
+        client_run_id: newClientRunId,
+        backend_run_id: data.analysisRunId,
         has_analysis: !!analysisData,
         estimated: data.estimated || false,
         dataSource: data.dataSource || 'snapshot',
@@ -936,6 +975,20 @@ export default function AnalyzeForm({
         has_snapshot: !!analysisData.market_snapshot,
         has_decision: !!analysisData.decision,
       });
+
+      // CRITICAL: Only commit state if this response matches our current client_run_id
+      // This prevents stale responses from overwriting newer searches
+      // Use ref for reliable synchronous check (state updates are async)
+      if (activeClientRunIdRef.current !== newClientRunId) {
+        console.warn("ANALYZE_STALE_RESPONSE_IGNORED", {
+          expected_client_run_id: newClientRunId,
+          active_client_run_id: activeClientRunIdRef.current,
+          backend_run_id: data.analysisRunId,
+          reason: "Response does not match active client_run_id - user started a new search",
+        });
+        setLoading(false);
+        return; // Ignore stale response
+      }
 
       // CRITICAL: Set analysisRunIdForChat FIRST before any state updates or router calls
       // This prevents the useEffect from clearing state when router.replace() is called
@@ -949,19 +1002,20 @@ export default function AnalyzeForm({
       // Store snapshot last_updated for freshness badge
       setSnapshotLastUpdated(data.snapshot_last_updated || null);
 
-      // CRITICAL: Set analysis state - always overwrite with new data if it has products
-      // Products array is the source of truth - never block updates based on run ID
+      // CRITICAL: Set analysis state - always overwrite with new data if client_run_id matches
+      // Products array is the source of truth - never block updates based on backend run ID
       setAnalysis((prev) => {
         const newAnalysis = normalizeAnalysis(analysisData);
         
         // Log the state update for debugging
         console.log("FRONTEND_STATE_UPDATE", {
+          client_run_id: newClientRunId,
+          backend_run_id: data.analysisRunId,
           prev_listings: prev?.page_one_listings?.length || 0,
           new_listings: newAnalysis?.page_one_listings?.length || 0,
           new_products: newAnalysis?.products?.length || 0,
           prev_has_listings: !!(prev?.page_one_listings && prev.page_one_listings.length > 0),
           new_has_listings: !!(newAnalysis?.page_one_listings && newAnalysis.page_one_listings.length > 0),
-          has_analysis_run_id: !!data.analysisRunId,
         });
         
         // SIMPLIFIED: If new analysis has products, always use it (source of truth)
@@ -985,6 +1039,7 @@ export default function AnalyzeForm({
         return newAnalysis;
       });
       setError(null);
+      setLoading(false); // Hide animation after products are committed
 
       // Update URL with the new analysis run ID for persistence (legacy contract)
       // Use replace() to avoid adding to history stack
@@ -994,9 +1049,12 @@ export default function AnalyzeForm({
       }
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Analysis failed";
-      console.error("ANALYZE_EXCEPTION", { error: errorMessage, exception: e });
+      console.error("ANALYZE_EXCEPTION", { 
+        error: errorMessage, 
+        exception: e,
+        client_run_id: clientRunId,
+      });
       setError(errorMessage);
-    } finally {
       setLoading(false);
     }
   };
