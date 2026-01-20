@@ -3522,24 +3522,29 @@ export async function POST(req: NextRequest) {
     // ═══════════════════════════════════════════════════════════════════════════
     // 🛡️ HARD VALIDATION: Sponsored flag preservation check
     // ═══════════════════════════════════════════════════════════════════════════
-    // TEMP: Keep until stable - validates sponsored flags are preserved through pipeline
+    // Validates sponsored flags are preserved through pipeline
+    // NOTE: is_sponsored can be true (sponsored), false (organic), or null (unknown)
+    // null is a VALID state meaning "unknown" - only undefined indicates a pipeline bug
     const sponsoredCount = canonicalProducts.filter((p: any) => p.is_sponsored === true).length;
     const organicCount = canonicalProducts.filter((p: any) => p.is_sponsored === false).length;
-    const missingCount = canonicalProducts.filter((p: any) => p.is_sponsored === undefined || p.is_sponsored === null).length;
+    const unknownCount = canonicalProducts.filter((p: any) => p.is_sponsored === null).length;
+    const missingCount = canonicalProducts.filter((p: any) => p.is_sponsored === undefined).length;
     
     console.log('FINAL_SPONSORED_CHECK', {
       total: canonicalProducts.length,
       sponsored: sponsoredCount,
       organic: organicCount,
+      unknown: unknownCount,
       missing: missingCount,
     });
     
-    // FAIL THE REQUEST if sponsored flags are missing (indicates pipeline bug)
+    // FAIL THE REQUEST if sponsored flags are undefined (indicates pipeline bug)
+    // null is valid (unknown state from Rainforest API)
     if (missingCount > 0) {
       console.error('🚨 SPONSORED_FLAG_MISSING', {
         total: canonicalProducts.length,
         missing: missingCount,
-        message: 'Sponsored flags were dropped during pipeline processing',
+        message: 'Sponsored flags were dropped during pipeline processing (undefined, not null)',
       });
       return NextResponse.json(
         {
