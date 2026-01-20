@@ -22,7 +22,7 @@ export interface PageOneDemandInputs {
     price: number | null;
     reviews: number | null;
     rating: number | null;
-    is_sponsored: boolean;
+    is_sponsored: boolean | null; // null = unknown (excluded from organic count)
   }>;
   category?: string | null;
   avgPrice?: number | null;
@@ -82,8 +82,8 @@ export function estimatePageOneDemand({
   category,
   avgPrice,
 }: PageOneDemandInputs): PageOneDemandEstimate {
-  // Filter organic listings only
-  const organicListings = listings.filter(l => !l.is_sponsored);
+  // Filter organic listings only (exclude sponsored and unknown)
+  const organicListings = listings.filter(l => l.is_sponsored === false);
   const organicCount = organicListings.length;
 
   if (organicCount === 0) {
