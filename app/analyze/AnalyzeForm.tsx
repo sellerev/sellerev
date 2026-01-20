@@ -697,22 +697,28 @@ export default function AnalyzeForm({
       const currentProducts = analysis?.page_one_listings || analysis?.products || [];
       const currentHasProducts = currentProducts.length > 0;
       const currentRunId = analysis?.analysis_run_id;
-      const isSameRunId = currentRunId === incomingRunId;
+      // Also check analysisRunIdForChat as it's set earlier and more reliable
+      const chatRunId = analysisRunIdForChat;
+      const isSameRunId = (currentRunId === incomingRunId) || (chatRunId === incomingRunId);
       
-      // GUARD: If same run ID and current state has products but incoming doesn't,
-      // preserve current state (handles race condition after router.replace())
-      if (isSameRunId && currentHasProducts && !incomingHasProducts) {
-        console.log("FRONTEND_SKIP_SYNC_SAME_RUN_NO_INCOMING", {
+      // GUARD: If same run ID and current state has products, preserve current state
+      // This handles race condition after router.replace() where server hasn't loaded fresh data yet
+      // Client state from analyze() is more reliable than stale DB reads
+      if (isSameRunId && currentHasProducts) {
+        console.log("FRONTEND_SKIP_SYNC_SAME_RUN", {
           run_id: incomingRunId,
+          current_run_id: currentRunId,
+          chat_run_id: chatRunId,
           current_products: currentProducts.length,
           incoming_products: incomingProducts.length,
-          reason: "Same run ID, current has products but incoming doesn't - preserving client state",
+          reason: "Same run ID with current products - preserving client state (more reliable than DB read)",
         });
         return;
       }
       
+      // Only sync if different run ID or current state has no products
       if (incomingHasProducts) {
-        // Incoming has products - always sync (this is the source of truth)
+        // Incoming has products and different run ID - sync (this is the source of truth)
         console.log("FRONTEND_SYNC_FROM_INITIAL", {
           prev_run_id: currentRunId,
           new_run_id: incomingRunId,
@@ -720,6 +726,7 @@ export default function AnalyzeForm({
           prev_listings_count: currentProducts.length,
           has_incoming_listings: incomingHasProducts,
           incoming_count: incomingProducts.length,
+          is_same_run: isSameRunId,
         });
         setAnalysis(normalizeAnalysis(initialAnalysis));
         // CRITICAL: keep chat wired to the currently viewed analysis.
