@@ -45,6 +45,37 @@ export interface RawSnapshot {
 }
 
 /**
+ * PHASE 2 - INTERPRET: Normalize & Score Types
+ */
+
+export interface CanonicalListing {
+  asin: string;
+  title: string;
+  price: number | null;
+  image: string | null;
+  page_position: number;
+  organic_rank?: number;
+  sponsored: boolean | "unknown";
+  sponsored_confidence: "high" | "medium" | "low";
+  source_confidence: number; // 0-1
+}
+
+export interface EnrichedListing extends CanonicalListing {
+  brand?: string;
+  bsr?: number;
+  bsr_category?: string;
+  bsr_confidence?: "unique" | "shared";
+  dimensions?: object;
+}
+
+export interface MarketQuality {
+  bsr_coverage_pct: number;
+  sponsored_detection_confidence: number;
+  price_coverage_pct: number;
+  overall_confidence: "high" | "medium" | "low";
+}
+
+/**
  * Brand resolution structure - preserves all detected brands
  */
 export interface BrandResolution {
@@ -1418,6 +1449,206 @@ export function parseRainforestSearchResults(
       total_results: totalResults,
     },
     warnings: warnings.length > 0 ? warnings : undefined,
+  };
+}
+
+/**
+ * PHASE 2A - CANONICALIZATION: Sponsored Detection (FIXED)
+ * 
+ * ❌ No more unknown_count: 48
+ * ✅ Everything is classified, with confidence
+ * 
+ * @param raw - Raw listing from Phase 1
+ * @returns Sponsored status and confidence level
+ */
+export function detectSponsored(raw: RawListing): {
+  sponsored: boolean | "unknown";
+  confidence: "high" | "medium" | "low";
+} {
+  // High confidence: Explicit flag from Rainforest
+  if (raw.raw_sponsored_flag === true) {
+    return { sponsored: true, confidence: "high" };
+  }
+  
+  // Medium confidence: Block type indicates sponsored
+  if (raw.raw_block_type && /sponsored/i.test(raw.raw_block_type)) {
+    return { sponsored: true, confidence: "medium" };
+  }
+  
+  // Medium confidence: Badges indicate sponsored
+  if (raw.raw_badges && Array.isArray(raw.raw_badges)) {
+    const hasSponsoredBadge = raw.raw_badges.some((badge: any) => {
+      const badgeText = badge?.text || badge?.label || String(badge || "");
+      return /sponsored/i.test(badgeText);
+    });
+    if (hasSponsoredBadge) {
+      return { sponsored: true, confidence: "medium" };
+    }
+  }
+  
+  // Low confidence: Default to organic (not sponsored)
+  // We classify everything - no "unknown" state
+  return { sponsored: false, confidence: "low" };
+}
+
+/**
+ * PHASE 2A - CANONICALIZATION: Convert Raw Listings to Canonical Format
+ * 
+ * "What kind of listings are these?"
+ * 
+ * This is where all current bugs live — so we isolate them here.
+ * 
+ * @param rawSnapshot - Raw snapshot from Phase 1
+ * @returns Canonical listings with normalized structure
+ */
+export function canonicalizeListings(rawSnapshot: RawSnapshot): CanonicalListing[] {
+  const canonical: CanonicalListing[] = [];
+  let organicRankCounter = 1;
+  
+  for (const raw of rawSnapshot.listings) {
+    // Detect sponsored status with confidence
+    const sponsoredDetection = detectSponsored(raw);
+    
+    // Calculate organic rank (only for non-sponsored listings)
+    let organicRank: number | undefined = undefined;
+    if (sponsoredDetection.sponsored === false) {
+      organicRank = organicRankCounter++;
+    }
+    
+    // Calculate source confidence (based on data completeness)
+    let sourceConfidence = 1.0;
+    if (!raw.title || raw.title.trim().length === 0) {
+      sourceConfidence -= 0.2;
+    }
+    if (raw.price === null) {
+      sourceConfidence -= 0.1;
+    }
+    if (raw.image === null) {
+      sourceConfidence -= 0.1;
+    }
+    if (sponsoredDetection.confidence === "low") {
+      sourceConfidence -= 0.1;
+    }
+    sourceConfidence = Math.max(0, Math.min(1, sourceConfidence));
+    
+    canonical.push({
+      asin: raw.asin,
+      title: raw.title,
+      price: raw.price,
+      image: raw.image,
+      page_position: raw.raw_position,
+      organic_rank: organicRank,
+      sponsored: sponsoredDetection.sponsored,
+      sponsored_confidence: sponsoredDetection.confidence,
+      source_confidence: sourceConfidence,
+    });
+  }
+  
+  return canonical;
+}
+
+/**
+ * PHASE 2B - ENRICHMENT: Add SP-API Data with BSR Confidence
+ * 
+ * Critical Fix: BSR duplicates
+ * ❌ CURRENT (wrong): if (bsr appears > N times) mark invalid
+ * ✅ NEW (correct): if (bsr appears > 1 time) { bsr_confidence = "shared" } else { bsr_confidence = "unique" }
+ * 
+ * Never delete listings because of shared BSRs.
+ * 
+ * @param canonical - Canonical listings from Phase 2A
+ * @param spApiData - SP-API enrichment data (brand, BSR, category, etc.)
+ * @returns Enriched listings with BSR confidence
+ */
+export function enrichListings(
+  canonical: CanonicalListing[],
+  spApiData: Map<string, { brand?: string; bsr?: number; bsr_category?: string; dimensions?: object }>
+): EnrichedListing[] {
+  // Count BSR occurrences to determine confidence
+  const bsrCounts: Record<number, number> = {};
+  
+  // First pass: count BSRs from SP-API data
+  for (const [asin, data] of spApiData.entries()) {
+    if (data.bsr !== undefined && data.bsr !== null && data.bsr > 0) {
+      bsrCounts[data.bsr] = (bsrCounts[data.bsr] || 0) + 1;
+    }
+  }
+  
+  // Enrich canonical listings
+  const enriched: EnrichedListing[] = canonical.map((listing) => {
+    const spApi = spApiData.get(listing.asin);
+    
+    // Determine BSR confidence
+    let bsrConfidence: "unique" | "shared" | undefined = undefined;
+    if (spApi?.bsr !== undefined && spApi.bsr !== null && spApi.bsr > 0) {
+      const count = bsrCounts[spApi.bsr] || 0;
+      bsrConfidence = count > 1 ? "shared" : "unique";
+    }
+    
+    return {
+      ...listing,
+      brand: spApi?.brand,
+      bsr: spApi?.bsr,
+      bsr_category: spApi?.bsr_category,
+      bsr_confidence: bsrConfidence,
+      dimensions: spApi?.dimensions,
+    };
+  });
+  
+  return enriched;
+}
+
+/**
+ * PHASE 2C - COVERAGE SCORING: Calculate Market Quality Metrics
+ * 
+ * Rule: Coverage never blocks, only influences confidence + AI language
+ * 
+ * @param enriched - Enriched listings from Phase 2B
+ * @returns Market quality metrics
+ */
+export function calculateMarketQuality(enriched: EnrichedListing[]): MarketQuality {
+  if (enriched.length === 0) {
+    return {
+      bsr_coverage_pct: 0,
+      sponsored_detection_confidence: 0,
+      price_coverage_pct: 0,
+      overall_confidence: "low",
+    };
+  }
+  
+  // BSR coverage: % of listings with BSR
+  const listingsWithBSR = enriched.filter(l => l.bsr !== undefined && l.bsr !== null && l.bsr > 0).length;
+  const bsrCoveragePct = (listingsWithBSR / enriched.length) * 100;
+  
+  // Sponsored detection confidence: average confidence of sponsored detection
+  const sponsoredDetections = enriched.map(l => {
+    if (l.sponsored_confidence === "high") return 1.0;
+    if (l.sponsored_confidence === "medium") return 0.7;
+    if (l.sponsored_confidence === "low") return 0.4;
+    return 0.2; // unknown (shouldn't happen with fixed detection)
+  });
+  const avgSponsoredConfidence = sponsoredDetections.length > 0
+    ? sponsoredDetections.reduce((sum, c) => sum + c, 0) / sponsoredDetections.length
+    : 0;
+  const sponsoredDetectionConfidence = avgSponsoredConfidence * 100;
+  
+  // Price coverage: % of listings with price
+  const listingsWithPrice = enriched.filter(l => l.price !== null && l.price !== undefined && l.price > 0).length;
+  const priceCoveragePct = (listingsWithPrice / enriched.length) * 100;
+  
+  // Overall confidence: high/medium/low based on all metrics
+  let overallConfidence: "high" | "medium" | "low" = "low";
+  if (bsrCoveragePct >= 80 && sponsoredDetectionConfidence >= 80 && priceCoveragePct >= 90) {
+    overallConfidence = "high";
+  } else if (bsrCoveragePct >= 50 && sponsoredDetectionConfidence >= 60 && priceCoveragePct >= 70) {
+    overallConfidence = "medium";
+  }
+  
+  return {
+    bsr_coverage_pct: Math.round(bsrCoveragePct * 10) / 10,
+    sponsored_detection_confidence: Math.round(sponsoredDetectionConfidence * 10) / 10,
+    price_coverage_pct: Math.round(priceCoveragePct * 10) / 10,
+    overall_confidence: overallConfidence,
   };
 }
 
