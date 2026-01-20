@@ -2754,17 +2754,30 @@ export async function fetchKeywordMarketSnapshot(
           };
         }
         
-        // Get category (use main_category if available, otherwise default)
-        const category = listing.main_category || 'default';
+        const bsrSource = (listing as any).bsr_source;
+        let monthlyUnits: number;
+        let confidence: "low" | "medium";
         
-        // BSR-based calculation: main_category_bsr → monthly_units
-        const monthlyUnits = estimateMonthlySalesFromBSR(listing.main_category_bsr, category);
+        // CRITICAL: Use different logic based on BSR source
+        if (bsrSource === 'estimated' && (listing as any).estimated_units != null) {
+          // For estimated BSR: use pre-calculated estimated_units from H10-style estimation
+          monthlyUnits = Math.round((listing as any).estimated_units);
+          confidence = "low"; // Estimated BSR has lower confidence
+        } else if (bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog') {
+          // For real SP-API BSR: convert BSR → units using standard formula
+          const category = listing.main_category || 'default';
+          monthlyUnits = estimateMonthlySalesFromBSR(listing.main_category_bsr, category);
+          // Confidence: "medium" if BSR is reasonable, "low" if very high BSR
+          confidence = listing.main_category_bsr <= 100000 ? "medium" : "low";
+        } else {
+          // Fallback: use BSR → units conversion for any other BSR source
+          const category = listing.main_category || 'default';
+          monthlyUnits = estimateMonthlySalesFromBSR(listing.main_category_bsr, category);
+          confidence = listing.main_category_bsr <= 100000 ? "medium" : "low";
+        }
         
         // Revenue = units * price
         const monthlyRevenue = monthlyUnits * listing.price;
-        
-        // Confidence: "medium" if BSR is reasonable, "low" if very high BSR
-        const confidence: "low" | "medium" = listing.main_category_bsr <= 100000 ? "medium" : "low";
         
         return {
           ...listing,
@@ -2810,35 +2823,68 @@ export async function fetchKeywordMarketSnapshot(
 
     // CRITICAL SAFETY MERGE: Ensure BSR from spApiCatalogResults is merged into listingsWithEstimates
     // This handles cases where the merge at line 2055-2163 didn't work or was lost during .map()
-    for (const listing of listingsWithEstimates) {
-      if (!listing.asin) continue;
-      const asin = listing.asin.toUpperCase();
-      const catalog = spApiCatalogResults.get(asin);
+    // CRITICAL: Never overwrite real SP-API BSR, only fill missing or estimated BSRs
+    try {
+      const { estimateMonthlySalesFromBSR } = await import("@/lib/revenue/bsr-calculator");
       
-      if (catalog && catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
-        // 🔴 REQUIRED: Set BSR AND provenance at merge time when catalog has BSR
-        // Do NOT gate behind listing BSR check - if catalog has BSR, it's from SP-API
-        listing.main_category_bsr = catalog.bsr;
-        listing.bsr = catalog.bsr;
-        (listing as any).bsr_source = 'sp_api';
-        (listing as any).had_sp_api_response = true;
+      for (const listing of listingsWithEstimates) {
+        if (!listing.asin) continue;
+        const asin = listing.asin.toUpperCase();
+        const catalog = spApiCatalogResults.get(asin);
+        const currentBsrSource = (listing as any).bsr_source;
         
-        // Ensure enrichment_sources object exists
-        if (!(listing as any).enrichment_sources) {
-          (listing as any).enrichment_sources = {};
+        // Only merge if catalog has BSR AND listing doesn't already have real SP-API BSR
+        // If listing has estimated BSR, SP-API real BSR should replace it
+        if (
+          catalog && 
+          catalog.bsr !== null && 
+          catalog.bsr !== undefined && 
+          catalog.bsr > 0 &&
+          currentBsrSource !== 'sp_api' &&
+          currentBsrSource !== 'sp_api_catalog'
+        ) {
+          // 🔴 REQUIRED: Set BSR AND provenance at merge time when catalog has BSR
+          // This replaces estimated BSR with real SP-API BSR when available
+          listing.main_category_bsr = catalog.bsr;
+          listing.bsr = catalog.bsr;
+          (listing as any).bsr_source = 'sp_api';
+          (listing as any).had_sp_api_response = true;
+          
+          // Ensure enrichment_sources object exists
+          if (!(listing as any).enrichment_sources) {
+            (listing as any).enrichment_sources = {};
+          }
+          (listing as any).enrichment_sources.sp_api_catalog = true;
+          (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+          
+          // If we replaced estimated BSR, we need to recalculate units from real BSR
+          if (currentBsrSource === 'estimated' && listing.price !== null && listing.price > 0) {
+            const category = listing.main_category || 'default';
+            const monthlyUnits = estimateMonthlySalesFromBSR(catalog.bsr, category);
+            const monthlyRevenue = monthlyUnits * listing.price;
+            listing.est_monthly_units = monthlyUnits;
+            listing.est_monthly_revenue = Math.round(monthlyRevenue * 100) / 100;
+            listing.revenue_confidence = catalog.bsr <= 100000 ? "medium" : "low";
+          }
+          
+          console.log("🟢 SAFETY_MERGE_BSR_APPLIED", {
+            asin: listing.asin,
+            bsr: catalog.bsr,
+            previous_source: currentBsrSource,
+            keyword,
+            bsr_source: (listing as any).bsr_source,
+            had_sp_api_response: (listing as any).had_sp_api_response,
+            message: currentBsrSource === 'estimated' 
+              ? "Replaced estimated BSR with real SP-API BSR" 
+              : "BSR merged via safety merge - this should not happen if initial merge worked",
+          });
         }
-        (listing as any).enrichment_sources.sp_api_catalog = true;
-        (listing as any).enrichment_state = 'sp_api_catalog_enriched';
-        
-        console.log("🟢 SAFETY_MERGE_BSR_APPLIED", {
-          asin: listing.asin,
-          bsr: catalog.bsr,
-          keyword,
-          bsr_source: (listing as any).bsr_source,
-          had_sp_api_response: (listing as any).had_sp_api_response,
-          message: "BSR merged via safety merge - this should not happen if initial merge worked",
-        });
       }
+    } catch (safetyMergeError) {
+      console.error("Safety merge failed, continuing without it", {
+        keyword,
+        error: safetyMergeError instanceof Error ? safetyMergeError.message : String(safetyMergeError),
+      });
     }
 
     // FIX #2: Aggregate BSR-based revenue and units estimates with market dampening
