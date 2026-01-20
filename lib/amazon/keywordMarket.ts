@@ -2020,8 +2020,8 @@ export async function fetchKeywordMarketSnapshot(
       const brandResolution = resolveBrandFromSearchResult(item);
       // Backward compatibility: set brand field to raw_brand (never null if raw_brand exists)
       const brand = brandResolution.raw_brand;
-      // Store brand resolution structure
-      (item as any).brand_resolution = brandResolution;
+      // Store brand resolution structure (use snake_case for consistency with interface)
+      const brand_resolution = brandResolution;
       
       // ═══════════════════════════════════════════════════════════════════════════
       // STEP 1: Log raw brand data from Rainforest (first 5 listings)
@@ -2074,7 +2074,7 @@ export async function fetchKeywordMarketSnapshot(
         sponsored_source, // 'rainforest_serp' | 'organic_serp' (source of sponsored data)
         position,
         brand, // Optional (nullable) - DEPRECATED: Use brand_resolution.raw_brand
-        brand_resolution, // Brand resolution structure (preserves all brands)
+        brand_resolution, // Brand resolution structure (preserves all brands) - from brandResolution variable
         image_url, // Optional (nullable) - NEVER empty string, only null if missing
         bsr, // Optional (nullable) - DEPRECATED: use main_category_bsr
         main_category_bsr, // Main category BSR (top-level category only)
