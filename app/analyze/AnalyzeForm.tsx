@@ -2168,8 +2168,7 @@ export default function AnalyzeForm({
                 </p>
               </div>
             </div>
-            );
-          })()}
+          )}
         </div>
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* RIGHT COLUMN: AI CHAT SIDEBAR (RESIZABLE, SCROLLS INTERNALLY)   */}
