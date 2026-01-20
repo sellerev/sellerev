@@ -479,8 +479,9 @@ export async function buildKeywordAnalyzeResponse(
         estimated_monthly_revenue: revenue,
         revenue_share_pct: Math.round(revenueShare * 100) / 100,
         fulfillment: normalizeFulfillment(listing.fulfillment),
-        // Brand: normalize (trim whitespace, convert empty to null, preserve casing)
-        brand: listing.brand?.trim() || null,
+        // Brand: use brand_resolution.raw_brand if available, fallback to brand field
+        // CRITICAL: Never set to null if raw_brand exists
+        brand: listing.brand_resolution?.raw_brand ?? (listing.brand?.trim() || null),
         seller_country: inferSellerCountry(listing),
         // Algorithm boost tracking (default to 1 appearance for fallback path)
         page_one_appearances: 1, // appearance_count

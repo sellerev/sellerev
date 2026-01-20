@@ -1366,9 +1366,17 @@ export async function POST(req: NextRequest) {
                 }
                 
                 // SP-API overwrites: brand, category, BSR
+                // CRITICAL: Update brand_resolution when SP-API provides brand
                 if (metadata.brand) {
                   listing.brand = metadata.brand;
                   (listing as any).brand_source = 'sp_api';
+                  // Update or create brand_resolution with SP-API brand
+                  listing.brand_resolution = {
+                    raw_brand: metadata.brand,
+                    normalized_brand: metadata.brand, // Can be normalized later if needed
+                    brand_status: 'canonical', // SP-API is authoritative
+                    brand_source: 'sp_api'
+                  };
                 }
                 if (metadata.category) {
                   listing.main_category = metadata.category;
@@ -2179,9 +2187,17 @@ export async function POST(req: NextRequest) {
                 // ═══════════════════════════════════════════════════════════════════════════
                 // SOURCE-TAGGING ENFORCEMENT: Always set brand_source when brand comes from SP-API
                 // ═══════════════════════════════════════════════════════════════════════════
+                // CRITICAL: Update brand_resolution when SP-API provides brand
                 if (metadata.brand) {
                   listing.brand = metadata.brand;
                   (listing as any).brand_source = 'sp_api';
+                  // Update or create brand_resolution with SP-API brand
+                  listing.brand_resolution = {
+                    raw_brand: metadata.brand,
+                    normalized_brand: metadata.brand, // Can be normalized later if needed
+                    brand_status: 'canonical', // SP-API is authoritative
+                    brand_source: 'sp_api'
+                  };
                 }
                 if (metadata.category) {
                   listing.main_category = metadata.category;
@@ -2239,10 +2255,24 @@ export async function POST(req: NextRequest) {
                   message: 'Rainforest attempted to populate blocked metadata fields. These fields must come from SP-API only.',
                 });
                 
-                // Clear blocked fields if Rainforest populated them
+                // CRITICAL: Never delete brands - preserve brand_resolution
+                // If Rainforest populated brand but SP-API didn't, keep the brand but mark source
+                // Only update brand_resolution if it doesn't exist or needs source update
                 if (hasRainforestBrand && (listing as any).brand_source !== 'sp_api' && (listing as any).brand_source !== 'sp_api_catalog') {
-                  listing.brand = null;
-                  (listing as any).brand_source = null;
+                  // Preserve brand_resolution if it exists, otherwise create one
+                  if (!listing.brand_resolution && listing.brand) {
+                    listing.brand_resolution = {
+                      raw_brand: listing.brand,
+                      normalized_brand: listing.brand,
+                      brand_status: 'low_confidence',
+                      brand_source: 'rainforest'
+                    };
+                  } else if (listing.brand_resolution) {
+                    // Update source to rainforest if brand was from Rainforest
+                    listing.brand_resolution.brand_source = 'rainforest';
+                  }
+                  // Keep brand field for backward compatibility
+                  // Don't set to null - preserve the brand string
                 }
                 if (hasRainforestCategory && (listing as any).category_source !== 'sp_api_catalog') {
                   listing.main_category = null;

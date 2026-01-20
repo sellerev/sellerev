@@ -20,7 +20,7 @@
  * - Any other mutation throws error
  */
 
-import { ParsedListing, KeywordMarketSnapshot } from "./keywordMarket";
+import { ParsedListing, KeywordMarketSnapshot, BrandResolution } from "./keywordMarket";
 import { estimatePageOneDemand } from "./pageOneDemand";
 import { calibrateMarketTotals, calculateReviewDispersionFromListings, validateInvariants } from "./calibration";
 
@@ -37,7 +37,8 @@ export interface CanonicalProduct {
   estimated_monthly_revenue: number;
   revenue_share_pct: number;
   fulfillment: "FBA" | "FBM" | "AMZ";
-  brand: string | null;
+  brand: string | null; // DEPRECATED: Use brand_resolution.raw_brand instead. Kept for backward compatibility.
+  brand_resolution?: BrandResolution; // Brand resolution structure (preserves all brands)
   brand_confidence: "high" | "medium" | "low";
   seller_country: "US" | "CN" | "Other" | "Unknown";
   snapshot_inferred: boolean;
@@ -1062,15 +1063,27 @@ export function buildKeywordPageOne(
       revenue_share_pct: 0, // Will be calculated after all products are built
       image_url, // Preserved from listing (or null for ESTIMATED only)
       fulfillment, // Normalized: Prime → FBA, else → FBM, Amazon Retail → AMZ
-      // Brand mapping: use brand_display if available, otherwise brand (for backward compatibility)
-      // brand_entity is used internally for aggregation, but brand field is kept for compatibility
-      brand: (l as any)._brand_display ?? l.brand ?? null, // Use brand_display from search result resolution
+      // Brand resolution: preserve brand_resolution from listing, or create from brand field
+      brand_resolution: l.brand_resolution ?? (l.brand ? {
+        raw_brand: l.brand,
+        normalized_brand: l.brand,
+        brand_status: 'low_confidence',
+        brand_source: 'fallback'
+      } : {
+        raw_brand: null,
+        normalized_brand: null,
+        brand_status: 'unknown',
+        brand_source: 'fallback'
+      }),
+      // Backward compatibility: set brand field to raw_brand
+      brand: l.brand_resolution?.raw_brand ?? l.brand ?? null,
       brand_confidence: (() => {
-        const confidence = (l as any)._brand_confidence;
-        // Map new confidence values to existing interface: 'none' → 'low'
-        if (confidence === 'none') return 'low';
-        if (confidence === 'high' || confidence === 'medium') return confidence;
-        return 'low'; // Default fallback
+        // Map brand_status to brand_confidence for backward compatibility
+        const status = l.brand_resolution?.brand_status;
+        if (status === 'canonical') return 'high';
+        if (status === 'variant') return 'medium';
+        if (status === 'low_confidence') return 'low';
+        return 'low'; // Default for 'unknown'
       })(),
       
       // ═══════════════════════════════════════════════════════════════════════════

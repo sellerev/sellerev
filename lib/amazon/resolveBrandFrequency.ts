@@ -1,28 +1,31 @@
 /**
  * Brand Frequency Resolution Utility
  * 
- * Removes junk brands extracted from titles (e.g., "Under Sink Organizer", "Multi")
- * while preserving real brands.
+ * CRITICAL: Never deletes brands - only updates brand_status.
+ * Preserves all detected brands in raw_brand field.
  * 
- * Rules:
- * - A brand is valid if it appears 2+ times across listings OR
- * - A brand is valid if ANY listing has it from metadata enrichment (API source) OR
- * - A brand is valid if it controls >= 3% of total page-1 revenue (revenue-based fallback)
- * - Invalid brands are removed (set to null)
+ * Rules for brand_status classification:
+ * - 'canonical': Brand appears 2+ times OR has metadata source OR controls >= 3% revenue
+ * - 'low_confidence': Brand exists but doesn't meet canonical criteria
+ * - 'variant': Detected variant (e.g., "Callaway Golf Mens" -> normalized to "Callaway")
+ * - 'unknown': No brand string exists
  * 
  * This is a logic-only fix that uses existing data - no API calls.
  */
 
-import { ParsedListing } from "./keywordMarket";
+import { ParsedListing, BrandResolution } from "./keywordMarket";
 
 export function resolveBrandFrequency(listings: ParsedListing[]): ParsedListing[] {
-  // Step 1: Group listings by brand
+  // Step 1: Group listings by raw_brand (from brand_resolution or fallback to brand field)
   const brandMap = new Map<string, ParsedListing[]>();
 
   for (const listing of listings) {
-    if (!listing.brand) continue;
+    // Get raw_brand from brand_resolution if available, otherwise fallback to brand field
+    const rawBrand = listing.brand_resolution?.raw_brand ?? listing.brand;
+    
+    if (!rawBrand || typeof rawBrand !== 'string') continue;
 
-    const brand = listing.brand.trim();
+    const brand = rawBrand.trim();
     if (!brand) continue;
 
     if (!brandMap.has(brand)) {
@@ -47,26 +50,29 @@ export function resolveBrandFrequency(listings: ParsedListing[]): ParsedListing[
     return sum;
   }, 0);
 
-  // Step 3: Determine valid brands
-  // A brand is valid if ANY of these are true:
+  // Step 3: Determine canonical brands (for status classification)
+  // A brand is canonical if ANY of these are true:
   // 1) It appears 2+ times (frequency indicates it's real), OR
   // 2) Any listing has it from metadata enrichment (API source is authoritative), OR
   // 3) Brand controls >= 3% of total page-1 revenue (revenue-based fallback)
-  const validBrands = new Set<string>();
+  const canonicalBrands = new Set<string>();
 
   for (const [brand, items] of brandMap.entries()) {
     // Check 1: Frequency >= 2
     if (items.length >= 2) {
-      validBrands.add(brand);
+      canonicalBrands.add(brand);
       continue;
     }
 
-    // Check 2: Metadata source
+    // Check 2: Metadata source (SP-API or Rainforest API)
     const hasMetadataSource = items.some(
-      (i: any) => i._debug_brand_source === "metadata"
+      (listing) => {
+        const source = listing.brand_resolution?.brand_source;
+        return source === 'sp_api' || source === 'rainforest';
+      }
     );
     if (hasMetadataSource) {
-      validBrands.add(brand);
+      canonicalBrands.add(brand);
       continue;
     }
 
@@ -86,28 +92,72 @@ export function resolveBrandFrequency(listings: ParsedListing[]): ParsedListing[
       const brandRevenueSharePct = (brandRevenue / totalPage1Revenue) * 100;
       
       if (brandRevenueSharePct >= 3.0) {
-        validBrands.add(brand);
+        canonicalBrands.add(brand);
         continue;
       }
     }
   }
 
-  // Step 4: Remove invalid brands from listings
+  // Step 4: Update brand_status for all listings (NEVER delete brands)
   for (const listing of listings) {
-    if (listing.brand && !validBrands.has(listing.brand)) {
-      listing.brand = null;
+    // Get or create brand_resolution
+    let brandResolution = listing.brand_resolution;
+    
+    // If no brand_resolution exists, create one from brand field (backward compatibility)
+    if (!brandResolution) {
+      const rawBrand = listing.brand;
+      if (rawBrand && typeof rawBrand === 'string' && rawBrand.trim().length > 0) {
+        brandResolution = {
+          raw_brand: rawBrand.trim(),
+          normalized_brand: rawBrand.trim(), // Default to raw_brand if no normalization
+          brand_status: 'low_confidence',
+          brand_source: 'fallback'
+        };
+      } else {
+        brandResolution = {
+          raw_brand: null,
+          normalized_brand: null,
+          brand_status: 'unknown',
+          brand_source: 'fallback'
+        };
+      }
     }
+
+    // Update brand_status based on canonical check
+    if (brandResolution.raw_brand && typeof brandResolution.raw_brand === 'string') {
+      const rawBrand = brandResolution.raw_brand.trim();
+      if (canonicalBrands.has(rawBrand)) {
+        // Brand is canonical - keep existing status if already canonical, otherwise mark as canonical
+        if (brandResolution.brand_status !== 'canonical') {
+          brandResolution.brand_status = 'canonical';
+        }
+      } else {
+        // Brand exists but doesn't meet canonical criteria - mark as low_confidence
+        // Only update if currently unknown (preserve variant status if already set)
+        if (brandResolution.brand_status === 'unknown') {
+          brandResolution.brand_status = 'low_confidence';
+        }
+      }
+    }
+
+    // Update listing with brand_resolution
+    listing.brand_resolution = brandResolution;
+    // Also update brand field for backward compatibility (use raw_brand)
+    listing.brand = brandResolution.raw_brand;
   }
 
   // Log resolution results
-  const invalidBrands = Array.from(brandMap.keys()).filter(
-    (b) => !validBrands.has(b)
+  const lowConfidenceBrands = Array.from(brandMap.keys()).filter(
+    (b) => !canonicalBrands.has(b)
   );
 
   // Calculate revenue-based validation stats
   const revenueBasedBrands = Array.from(brandMap.entries())
     .filter(([brand, items]) => {
-      if (items.length >= 2 || items.some((i: any) => i._debug_brand_source === "metadata")) {
+      if (items.length >= 2 || items.some((listing) => {
+        const source = listing.brand_resolution?.brand_source;
+        return source === 'sp_api' || source === 'rainforest';
+      })) {
         return false; // Already counted in frequency/metadata
       }
       if (totalPage1Revenue > 0) {
@@ -130,13 +180,14 @@ export function resolveBrandFrequency(listings: ParsedListing[]): ParsedListing[
   console.log("🧠 BRAND_FREQUENCY_RESOLUTION", {
     totalListings: listings.length,
     totalBrandsBefore: brandMap.size,
-    totalBrandsAfter: validBrands.size,
+    canonicalBrandsCount: canonicalBrands.size,
+    lowConfidenceBrandsCount: lowConfidenceBrands.length,
     totalPage1Revenue: Math.round(totalPage1Revenue),
     revenueBasedBrandsCount: revenueBasedBrands.length,
     revenueBasedBrands: revenueBasedBrands.slice(0, 5),
-    validBrands: Array.from(validBrands).slice(0, 10),
-    invalidBrandsRemoved: invalidBrands.slice(0, 10),
-    removedCount: invalidBrands.length,
+    canonicalBrands: Array.from(canonicalBrands).slice(0, 10),
+    lowConfidenceBrands: lowConfidenceBrands.slice(0, 10),
+    message: "Brands preserved - only status updated (no brands deleted)",
   });
 
   return listings;

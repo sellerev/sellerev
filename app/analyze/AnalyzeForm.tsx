@@ -1747,16 +1747,31 @@ export default function AnalyzeForm({
                     
                     // Count brands for display (only show counts if needed)
                     const brandCounts = new Map<string, number>();
+                    // CRITICAL: Use brand_resolution.raw_brand if available, fallback to brand field
+                    // INVARIANT: If raw_brand exists, NEVER show "Unknown"
+                    // Helper function to get raw_brand with invariant check
+                    const getRawBrand = (listing: any): string | null => {
+                      const rawBrand = listing.brand_resolution?.raw_brand ?? listing.brand;
+                      // INVARIANT ASSERTION: If raw_brand exists and is non-empty, it must be returned
+                      if (rawBrand && typeof rawBrand === 'string' && rawBrand.trim().length > 0) {
+                        return rawBrand.trim();
+                      }
+                      return null;
+                    };
+                    
                     pageOneListings.forEach((listing: any) => {
-                      const brand = listing.brand; // Already normalized (trimmed, null if empty)
+                      const brand = getRawBrand(listing);
                       if (brand) {
                         brandCounts.set(brand, (brandCounts.get(brand) || 0) + 1);
                       }
                     });
                     
                     // Build brands list from snapshot.page_one_brands (sorted alphabetically)
-                    // Only show "Unknown" if at least one listing has null brand
-                    const hasUnknownBrand = pageOneListings.some((listing: any) => listing.brand === null || listing.brand === undefined);
+                    // Only show "Unknown" if NO brand string exists at all (raw_brand is null)
+                    // INVARIANT: If getRawBrand returns a string, "Unknown" must NOT be shown for that listing
+                    const hasUnknownBrand = pageOneListings.some((listing: any) => {
+                      return getRawBrand(listing) === null;
+                    });
                     const brandsList = [
                       ...brandOptions,
                       ...(hasUnknownBrand ? ["Unknown"] : [])
@@ -1766,9 +1781,12 @@ export default function AnalyzeForm({
                     // Filtering composes with sorting (filter after sort)
                     let filteredListings = sortedListings.filter((listing: any) => {
                       // Brand filter: exact match only (no normalization)
+                      // CRITICAL: Use brand_resolution.raw_brand if available
+                      // INVARIANT: If raw_brand exists, NEVER show "Unknown"
                       if (selectedBrands.size > 0) {
-                        const listingBrand = listing.brand; // Already normalized (trimmed, null if empty)
-                        const brandKey = listingBrand === null || listingBrand === undefined ? "Unknown" : listingBrand;
+                        const listingBrand = getRawBrand(listing);
+                        // INVARIANT ASSERTION: If listingBrand is not null, brandKey must be listingBrand, never "Unknown"
+                        const brandKey = listingBrand === null ? "Unknown" : listingBrand;
                         
                         if (!selectedBrands.has(brandKey)) {
                           return false;
@@ -1859,7 +1877,10 @@ export default function AnalyzeForm({
                                       <div className="text-xs text-gray-500 px-2 py-1.5">No brands available</div>
                                     ) : (
                                       brandsList.map((brand) => {
-                                        const count = brandCounts.get(brand) || (brand === "Unknown" ? pageOneListings.filter((l: any) => !l.brand).length : 0);
+                                        const count = brandCounts.get(brand) || (brand === "Unknown" ? pageOneListings.filter((l: any) => {
+                                          // INVARIANT: getRawBrand returns null only when no brand string exists
+                                          return getRawBrand(l) === null;
+                                        }).length : 0);
                                         return (
                                           <label key={brand} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded cursor-pointer text-xs">
                                             <input

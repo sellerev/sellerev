@@ -3,6 +3,8 @@
  * Ensures consistent field names and types across the application
  */
 
+import { BrandResolution } from "./keywordMarket";
+
 export interface ParsedListing {
   asin: string;
   title: string;
@@ -16,7 +18,8 @@ export interface ParsedListing {
   fulfillment: "FBA" | "FBM" | "Amazon" | null;
   sponsored: boolean;
   organic_rank: number | null;
-  brand: string | null;
+  brand: string | null; // DEPRECATED: Use brand_resolution.raw_brand instead. Kept for backward compatibility.
+  brand_resolution?: BrandResolution; // Brand resolution structure (preserves all brands)
 }
 
 /**
@@ -131,8 +134,23 @@ export function normalizeListing(raw: any): ParsedListing {
   const title = raw.title ?? raw.Title ?? "";
   
   // 🚨 COST OPTIMIZATION: Extract brand from title locally if brand field is missing
+  // CRITICAL: Always preserve raw_brand - never delete brands
   const explicitBrand = raw.brand ?? raw.Brand ?? null;
-  const brand = explicitBrand || (title ? extractBrandFromTitle(title) : null);
+  const inferredBrand = title ? extractBrandFromTitle(title) : null;
+  const brand = explicitBrand || inferredBrand;
+  
+  // Create brand_resolution structure
+  const brand_resolution: BrandResolution = brand ? {
+    raw_brand: brand, // ALWAYS preserve original brand string
+    normalized_brand: brand, // Default to raw_brand (normalization can happen later)
+    brand_status: explicitBrand ? 'canonical' : 'low_confidence', // Explicit brand is canonical, inferred is low_confidence
+    brand_source: explicitBrand ? 'rainforest' : 'title_parse'
+  } : {
+    raw_brand: null,
+    normalized_brand: null,
+    brand_status: 'unknown',
+    brand_source: 'fallback'
+  };
   
   // Extract raw fields for presentation fallback (preserve if they exist)
   const raw_title = raw.raw_title ?? null;
@@ -192,7 +210,8 @@ export function normalizeListing(raw: any): ParsedListing {
     fulfillment,
     sponsored: !!raw.is_sponsored || !!raw.IsSponsored || false,
     organic_rank: raw.organic_rank ?? raw.position ?? raw.Position ?? null,
-    brand, // Extracted from title if not explicitly provided
+    brand, // DEPRECATED: Use brand_resolution.raw_brand instead
+    brand_resolution, // Brand resolution structure (preserves all brands)
     // Preserve raw fields for presentation fallback
     raw_title,
     raw_image_url,

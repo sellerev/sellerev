@@ -12,6 +12,16 @@
 
 import { computePPCIndicators } from "./ppcIndicators";
 
+/**
+ * Brand resolution structure - preserves all detected brands
+ */
+export interface BrandResolution {
+  raw_brand: string | null; // Original detected brand string (NEVER null if a brand string exists)
+  normalized_brand: string | null; // Normalized/canonical brand name (may be null for variants/low-confidence)
+  brand_status: 'canonical' | 'variant' | 'low_confidence' | 'unknown'; // Brand classification
+  brand_source: 'sp_api' | 'rainforest' | 'title_parse' | 'fallback'; // Source of brand detection
+}
+
 export interface ParsedListing {
   asin: string | null;
   title: string | null;
@@ -22,7 +32,8 @@ export interface ParsedListing {
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
   sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data (Rainforest SERP only)
   position: number; // Organic rank (1-indexed position on Page 1)
-  brand: string | null;
+  brand: string | null; // DEPRECATED: Use brand_resolution.raw_brand instead. Kept for backward compatibility.
+  brand_resolution?: BrandResolution; // New brand resolution structure (preserves all brands)
   image_url: string | null; // Rainforest search_results[].image
   bsr: number | null; // Best Seller Rank (if available from Rainforest) - DEPRECATED: use main_category_bsr
   main_category_bsr: number | null; // Main category Best Seller Rank (top-level category only)
@@ -767,46 +778,45 @@ function normalizeBrand(brand: string): string {
  * - Product API calls (type=product)
  * - High confidence requirement
  * - Dropping "Generic" brands for counting
+ * 
+ * CRITICAL: Never deletes brands - always preserves raw_brand if a string exists
  */
 function resolveBrandFromSearchResult(
   item: any
-): { 
-  brand_display: string | null;
-  brand_entity: string | 'Amazon' | 'Generic';
-  brand_confidence: 'high' | 'medium' | 'low' | 'none';
-  brand_source: 'search' | 'brand_name' | 'seller' | 'title' | 'amazon_flag' | 'generic';
-} {
+): BrandResolution {
   // Priority 1: Amazon brand flags
   if (item.is_amazon_brand === true || 
       item.is_exclusive_to_amazon === true || 
       item.featured_from_our_brands === true) {
     return {
-      brand_display: 'Amazon',
-      brand_entity: 'Amazon',
-      brand_confidence: 'high',
-      brand_source: 'amazon_flag'
+      raw_brand: 'Amazon',
+      normalized_brand: 'Amazon',
+      brand_status: 'canonical',
+      brand_source: 'rainforest'
     };
   }
   
   // Priority 2: search_result.brand field
   if (item.brand && typeof item.brand === 'string' && item.brand.trim().length > 0) {
-    const normalized = normalizeBrand(item.brand.trim());
+    const rawBrand = item.brand.trim();
+    const normalized = normalizeBrand(rawBrand);
     return {
-      brand_display: item.brand.trim(), // Keep original for display
-      brand_entity: normalized,
-      brand_confidence: 'medium',
-      brand_source: 'search'
+      raw_brand: rawBrand, // ALWAYS preserve original
+      normalized_brand: normalized,
+      brand_status: 'canonical',
+      brand_source: 'rainforest'
     };
   }
   
   // Priority 3: search_result.brand_name field
   if (item.brand_name && typeof item.brand_name === 'string' && item.brand_name.trim().length > 0) {
-    const normalized = normalizeBrand(item.brand_name.trim());
+    const rawBrand = item.brand_name.trim();
+    const normalized = normalizeBrand(rawBrand);
     return {
-      brand_display: item.brand_name.trim(), // Keep original for display
-      brand_entity: normalized,
-      brand_confidence: 'medium',
-      brand_source: 'brand_name'
+      raw_brand: rawBrand, // ALWAYS preserve original
+      normalized_brand: normalized,
+      brand_status: 'canonical',
+      brand_source: 'rainforest'
     };
   }
   
@@ -818,10 +828,10 @@ function resolveBrandFromSearchResult(
         !sellerName.toLowerCase().includes('fulfilled')) {
       const normalized = normalizeBrand(sellerName);
       return {
-        brand_display: sellerName, // Keep original for display
-        brand_entity: normalized,
-        brand_confidence: 'low',
-        brand_source: 'seller'
+        raw_brand: sellerName, // ALWAYS preserve original
+        normalized_brand: normalized,
+        brand_status: 'low_confidence',
+        brand_source: 'fallback'
       };
     }
   }
@@ -832,20 +842,20 @@ function resolveBrandFromSearchResult(
     if (inferredBrand) {
       const normalized = normalizeBrand(inferredBrand);
       return {
-        brand_display: inferredBrand, // Keep original for display
-        brand_entity: normalized,
-        brand_confidence: 'low',
-        brand_source: 'title'
+        raw_brand: inferredBrand, // ALWAYS preserve original
+        normalized_brand: normalized,
+        brand_status: 'low_confidence',
+        brand_source: 'title_parse'
       };
     }
   }
   
-  // Priority 6: Generic (no brand found)
+  // Priority 6: Unknown (no brand found)
   return {
-    brand_display: null,
-    brand_entity: 'Generic',
-    brand_confidence: 'none',
-    brand_source: 'generic'
+    raw_brand: null,
+    normalized_brand: null,
+    brand_status: 'unknown',
+    brand_source: 'fallback'
   };
 }
 
@@ -2006,13 +2016,12 @@ export async function fetchKeywordMarketSnapshot(
       // ═══════════════════════════════════════════════════════════════════════════
       // Uses ONLY: item.brand, item.is_amazon_brand, item.is_exclusive_to_amazon, item.featured_from_our_brands
       // NO title extraction, NO product API, NO seller inference
+      // CRITICAL: Never deletes brands - always preserves raw_brand
       const brandResolution = resolveBrandFromSearchResult(item);
-      const brand = brandResolution.brand_entity === 'Generic' ? null : brandResolution.brand_display;
-      // Store brand metadata for backward compatibility and new fields
-      (item as any)._brand_confidence = brandResolution.brand_confidence;
-      (item as any)._brand_entity = brandResolution.brand_entity;
-      (item as any)._brand_display = brandResolution.brand_display;
-      (item as any)._brand_source = brandResolution.brand_source;
+      // Backward compatibility: set brand field to raw_brand (never null if raw_brand exists)
+      const brand = brandResolution.raw_brand;
+      // Store brand resolution structure
+      (item as any).brand_resolution = brandResolution;
       
       // ═══════════════════════════════════════════════════════════════════════════
       // STEP 1: Log raw brand data from Rainforest (first 5 listings)
@@ -2021,11 +2030,11 @@ export async function fetchKeywordMarketSnapshot(
         console.log("🟣 RAW BRAND SAMPLE", {
           index,
           asin,
-          brand_display: brandResolution.brand_display,
-          brand_entity: brandResolution.brand_entity,
-          brand_confidence: brandResolution.brand_confidence,
+          raw_brand: brandResolution.raw_brand,
+          normalized_brand: brandResolution.normalized_brand,
+          brand_status: brandResolution.brand_status,
           brand_source: brandResolution.brand_source,
-          raw_brand: item.brand,
+          item_brand: item.brand,
           is_amazon_brand: item.is_amazon_brand,
           is_exclusive_to_amazon: item.is_exclusive_to_amazon,
           featured_from_our_brands: item.featured_from_our_brands,
@@ -2064,7 +2073,8 @@ export async function fetchKeywordMarketSnapshot(
         sponsored_position, // Number | null (ad position from Rainforest)
         sponsored_source, // 'rainforest_serp' | 'organic_serp' (source of sponsored data)
         position,
-        brand, // Optional (nullable)
+        brand, // Optional (nullable) - DEPRECATED: Use brand_resolution.raw_brand
+        brand_resolution, // Brand resolution structure (preserves all brands)
         image_url, // Optional (nullable) - NEVER empty string, only null if missing
         bsr, // Optional (nullable) - DEPRECATED: use main_category_bsr
         main_category_bsr, // Main category BSR (top-level category only)
