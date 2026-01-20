@@ -2226,6 +2226,76 @@ export async function fetchKeywordMarketSnapshot(
           bsr_source: (l as any).bsr_source,
         })),
     });
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // H10-STYLE ESTIMATION: Fill missing BSRs using position-based inference
+    // ═══════════════════════════════════════════════════════════════════════════
+    const MIN_REAL_BSR_COUNT = 5;
+
+    // Step 1: collect real BSR anchors
+    const bsrAnchors = listings.filter(
+      l => l.bsr != null && l.position != null
+    );
+
+    if (bsrAnchors.length >= MIN_REAL_BSR_COUNT) {
+      // Helper function for median calculation
+      const median = (values: number[]): number => {
+        if (values.length === 0) return 0;
+        const sorted = [...values].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        return sorted.length % 2 === 0
+          ? (sorted[mid - 1] + sorted[mid]) / 2
+          : sorted[mid];
+      };
+
+      // Step 2: infer category velocity from real BSRs
+      const inferredCategoryUnits = median(
+        bsrAnchors.map(l =>
+          Math.exp(12.3 - 0.85 * Math.log(l.bsr!))
+        )
+      );
+
+      // Step 3: CTR curve (H10-style)
+      const positionShare = (pos: number): number => {
+        if (pos === 1) return 0.28;
+        if (pos === 2) return 0.17;
+        if (pos === 3) return 0.12;
+        if (pos === 4) return 0.09;
+        if (pos === 5) return 0.07;
+        if (pos <= 10) return 0.035;
+        if (pos <= 20) return 0.012;
+        return 0.004;
+      };
+
+      for (const listing of listings) {
+        if (listing.bsr == null && listing.position != null) {
+          // Step 4: estimate monthly units
+          const estimatedUnits =
+            inferredCategoryUnits *
+            positionShare(listing.position) *
+            Math.min(1.5, Math.log10((listing.reviews ?? 0) + 10));
+
+          // Step 5: invert units → implied BSR
+          const estimatedBsr =
+            Math.round(Math.exp(12.3 - Math.log(estimatedUnits)));
+
+          (listing as any).estimated_units = Math.round(estimatedUnits);
+          (listing as any).estimated_bsr = estimatedBsr;
+
+          listing.bsr = estimatedBsr;
+          listing.main_category_bsr = estimatedBsr;
+          (listing as any).bsr_source = 'estimated';
+          (listing as any).had_sp_api_response = false;
+        }
+      }
+
+      console.log("📊 H10_STYLE_ESTIMATION_APPLIED", {
+        keyword,
+        real_bsr_count: bsrAnchors.length,
+        inferred_category_units: Math.round(inferredCategoryUnits),
+        estimated_listings: listings.filter(l => (l as any).bsr_source === 'estimated').length,
+      });
+    }
     
     // SP-API Pricing overwrites: fulfillment, price, buy box
     // CRITICAL: If pricing fails, fulfillment_source remains null (not set to rainforest)
