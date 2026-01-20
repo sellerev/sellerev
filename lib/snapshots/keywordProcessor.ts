@@ -561,7 +561,8 @@ export async function processKeyword(
       // Extract sponsored fields from Rainforest
       const isSponsored = rf.sponsored === true;
       const sponsoredPosition = isSponsored ? rf.ad_position : null;
-      const sponsoredSource = rf.sponsored !== null ? 'rainforest' : 'unknown';
+      // sponsored_source: 'rainforest_serp' for sponsored, 'organic_serp' for organic or unknown
+      const sponsoredSource: 'rainforest_serp' | 'organic_serp' = rf.sponsored === true ? 'rainforest_serp' : 'organic_serp';
       
       return {
         asin: rf.asin,
