@@ -1508,37 +1508,7 @@ export function buildKeywordPageOne(
   // CATEGORY-SCALED CAPS: REMOVED
   // ═══════════════════════════════════════════════════════════════════════════
   // Keyword-level unit caps removed - per-ASIN decay and limits applied instead (H10-style)
-  
-  // Apply rank-1 cap with category scaling (if not already capped by rank absorption)
-  if (rank1Product && rank1Product.estimated_monthly_units > maxRank1Units) {
-    const rank1Excess = rank1Product.estimated_monthly_units - maxRank1Units;
-    rank1Product.estimated_monthly_units = maxRank1Units;
-    rank1Product.estimated_monthly_revenue = Math.round(maxRank1Units * rank1Product.price);
-    
-    // Redistribute excess to ranks 2-10 only (not tail)
-    const ranks2to10 = sortedByRank.filter(p => {
-      const rank = p.organic_rank ?? 999;
-      return rank >= 2 && rank <= 10;
-    });
-    
-    if (ranks2to10.length > 0) {
-      const totalRanks2to10Units = ranks2to10.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-      
-      if (totalRanks2to10Units > 0) {
-        // Distribute excess proportionally to ranks 2-10
-        ranks2to10.forEach(p => {
-          const share = p.estimated_monthly_units / totalRanks2to10Units;
-          const additionalUnits = Math.round(rank1Excess * share);
-          p.estimated_monthly_units += additionalUnits;
-          p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
-        });
-      }
-    }
-    
-    // Recalculate totals after rank-1 redistribution (keyword caps removed)
-    totalPage1Units = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-    totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  }
+  // Rank-1 cap logic removed - per-ASIN limits (MAX_UNITS_PER_ASIN = 4000) handle this
   
   if (marketShape === "CONSUMABLE") {
     // Remove forced minimum units for tail ASINs (ranks > 15) in CONSUMABLE categories
