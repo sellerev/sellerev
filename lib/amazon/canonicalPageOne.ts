@@ -595,19 +595,51 @@ export function buildKeywordPageOne(
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // CATEGORY-AWARE DEMAND CAPS: Prevent inflation for durable goods
+  // CATEGORY-SCALED DEMAND CAPS: Prevent inflation with category-aware multipliers
   // ═══════════════════════════════════════════════════════════════════════════
-  // Apply hard caps on total Page-1 units for DURABLE categories
+  // Apply category-scaled caps on total Page-1 units (replaces hard 30K cap)
   // Caps applied AFTER market calibration but BEFORE allocation
   // Constants defined at function scope for use in both pre-allocation and post-expansion caps
-  const DURABLE_MAX_TOTAL_UNITS = 30000; // Max total Page-1 units for durable goods
-  const DURABLE_MAX_RANK1_UNITS = 6000; // Max rank-1 units for durable goods
+  const CATEGORY_UNIT_MULTIPLIER: Record<string, number> = {
+    electronics: 3.5,
+    tvs: 4.0,
+    appliances: 2.5,
+    default: 1.0,
+  };
   
-  // Cap total Page-1 units if exceeds limit (before allocation)
-  if (marketShape === "DURABLE" && totalPage1Units > DURABLE_MAX_TOTAL_UNITS) {
-    const scaleDownFactor = DURABLE_MAX_TOTAL_UNITS / totalPage1Units;
-    totalPage1Units = DURABLE_MAX_TOTAL_UNITS;
+  // Map category string to multiplier key (normalize category name)
+  const normalizeCategory = (cat: string | null): string => {
+    if (!cat) return "default";
+    const lower = cat.toLowerCase();
+    if (lower.includes("electronics") || lower.includes("electronic")) return "electronics";
+    if (lower.includes("tv") || lower.includes("television")) return "tvs";
+    if (lower.includes("appliance") || lower.includes("kitchen")) return "appliances";
+    return "default";
+  };
+  
+  const categoryKey = normalizeCategory(category);
+  const categoryMultiplier = CATEGORY_UNIT_MULTIPLIER[categoryKey] ?? CATEGORY_UNIT_MULTIPLIER.default;
+  
+  // Base units for scaling (was 30000 hard cap)
+  const BASE_CATEGORY_UNITS = 30000;
+  const BASE_RANK1_UNITS = 6000;
+  
+  // Calculate category-scaled max units
+  const maxUnits = Math.round(BASE_CATEGORY_UNITS * categoryMultiplier);
+  const maxRank1Units = Math.round(BASE_RANK1_UNITS * categoryMultiplier);
+  
+  // Cap total Page-1 units if exceeds category-scaled limit (before allocation)
+  if (totalPage1Units > maxUnits) {
+    const scaleDownFactor = maxUnits / totalPage1Units;
+    totalPage1Units = maxUnits;
     totalPage1Revenue = Math.round(totalPage1Revenue * scaleDownFactor);
+    console.log("📊 CATEGORY_SCALED_CAP_APPLIED", {
+      category: categoryKey,
+      multiplier: categoryMultiplier,
+      max_units: maxUnits,
+      original_units: Math.round(totalPage1Units / scaleDownFactor),
+      capped_units: totalPage1Units,
+    });
   }
   
   // Note: Rank-1 cap will be applied after allocation (we'll find rank-1 product then)
@@ -1585,28 +1617,35 @@ export function buildKeywordPageOne(
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // DURABLE CATEGORY: Re-apply total cap and rank-1 cap after expansion
+  // CATEGORY-SCALED CAPS: Re-apply total cap and rank-1 cap after expansion
   // ═══════════════════════════════════════════════════════════════════════════
-  // Market expansion may have pushed totals over DURABLE limits - re-apply caps
+  // Market expansion may have pushed totals over category-scaled limits - re-apply caps
   // Re-apply total cap if market expansion pushed it over
   const currentTotalAfterExpansion = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-  if (currentTotalAfterExpansion > DURABLE_MAX_TOTAL_UNITS) {
-    const scaleDownFactor = DURABLE_MAX_TOTAL_UNITS / currentTotalAfterExpansion;
+  if (currentTotalAfterExpansion > maxUnits) {
+    const scaleDownFactor = maxUnits / currentTotalAfterExpansion;
     products.forEach(p => {
       p.estimated_monthly_units = Math.round(p.estimated_monthly_units * scaleDownFactor);
       p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
     });
     
     // Update totals
-    totalPage1Units = DURABLE_MAX_TOTAL_UNITS;
+    totalPage1Units = maxUnits;
     totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+    console.log("📊 CATEGORY_SCALED_CAP_REAPPLIED_AFTER_EXPANSION", {
+      category: categoryKey,
+      multiplier: categoryMultiplier,
+      max_units: maxUnits,
+      original_units: currentTotalAfterExpansion,
+      capped_units: totalPage1Units,
+    });
   }
   
-  // Apply rank-1 cap for DURABLE (if not already capped by rank absorption)
-  if (rank1Product && rank1Product.estimated_monthly_units > DURABLE_MAX_RANK1_UNITS) {
-    const durableRank1Excess = rank1Product.estimated_monthly_units - DURABLE_MAX_RANK1_UNITS;
-    rank1Product.estimated_monthly_units = DURABLE_MAX_RANK1_UNITS;
-    rank1Product.estimated_monthly_revenue = Math.round(DURABLE_MAX_RANK1_UNITS * rank1Product.price);
+  // Apply rank-1 cap with category scaling (if not already capped by rank absorption)
+  if (rank1Product && rank1Product.estimated_monthly_units > maxRank1Units) {
+    const rank1Excess = rank1Product.estimated_monthly_units - maxRank1Units;
+    rank1Product.estimated_monthly_units = maxRank1Units;
+    rank1Product.estimated_monthly_revenue = Math.round(maxRank1Units * rank1Product.price);
     
     // Redistribute excess to ranks 2-10 only (not tail)
     const ranks2to10 = sortedByRank.filter(p => {
@@ -1621,22 +1660,22 @@ export function buildKeywordPageOne(
         // Distribute excess proportionally to ranks 2-10
         ranks2to10.forEach(p => {
           const share = p.estimated_monthly_units / totalRanks2to10Units;
-          const additionalUnits = Math.round(durableRank1Excess * share);
+          const additionalUnits = Math.round(rank1Excess * share);
           p.estimated_monthly_units += additionalUnits;
           p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
         });
       }
     }
     
-    // Re-normalize total after rank-1 redistribution (maintain total cap)
+    // Re-normalize total after rank-1 redistribution (maintain category-scaled total cap)
     const afterRank1Redistribution = products.reduce((sum, p) => sum + p.estimated_monthly_units, 0);
-    if (afterRank1Redistribution > DURABLE_MAX_TOTAL_UNITS) {
-      const renormalizeFactor = DURABLE_MAX_TOTAL_UNITS / afterRank1Redistribution;
+    if (afterRank1Redistribution > maxUnits) {
+      const renormalizeFactor = maxUnits / afterRank1Redistribution;
       products.forEach(p => {
         p.estimated_monthly_units = Math.round(p.estimated_monthly_units * renormalizeFactor);
         p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
       });
-      totalPage1Units = DURABLE_MAX_TOTAL_UNITS;
+      totalPage1Units = maxUnits;
       totalPage1Revenue = products.reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
     }
   }
