@@ -340,7 +340,8 @@ Convert this plain text decision into the required JSON contract format. Extract
         ai_verdict: finalResponse.decision.verdict,
         ai_confidence: finalResponse.decision.confidence,
         response: finalResponse,
-        updated_at: new Date().toISOString(),
+        status: 'completed',
+        completed_at: new Date().toISOString(),
       })
       .eq("id", analysisRunId);
 
@@ -367,20 +368,31 @@ Convert this plain text decision into the required JSON contract format. Extract
       timestamp: new Date().toISOString(),
     });
 
-    // Update analysis_run with error status
-    await supabase
+    // Update analysis_run with error status - FIX: Use proper error handling, not .catch()
+    const existingResponse = await supabase
+      .from("analysis_runs")
+      .select("response")
+      .eq("id", analysisRunId)
+      .single();
+
+    const existingData = existingResponse.data?.response || {};
+    
+    const { error: updateError } = await supabase
       .from("analysis_runs")
       .update({
         response: {
+          ...existingData,
           error: error instanceof Error ? error.message : String(error),
           status: "ai_processing_failed",
         },
-        updated_at: new Date().toISOString(),
+        status: 'failed',
+        completed_at: new Date().toISOString(),
       })
-      .eq("id", analysisRunId)
-      .catch((updateErr: any) => {
-        console.error("Failed to update analysis_run with error:", updateErr);
-      });
+      .eq("id", analysisRunId);
+
+    if (updateError) {
+      console.error("Failed to update analysis_run with error:", updateError);
+    }
   }
 }
 

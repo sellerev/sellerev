@@ -48,12 +48,16 @@ export interface CanonicalProduct {
   appeared_multiple_times: boolean; // true if page_one_appearances > 1 (hidden Spellbook signal for dominance/defense reasoning)
   // Helium-10 style rank semantics
   organic_rank: number | null; // Position among organic listings only (1, 2, 3...) or null if sponsored
-  page_position: number; // Actual Page-1 position including sponsored listings (1, 2, 3...)
+  page_position: number; // Actual Page-1 position including sponsored listings (1, 2, 3...) - preserves original Amazon position
   // Sponsored visibility (for clarity, not estimation changes)
   // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
   is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown (Rainforest SERP only)
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
-  sponsored_source: 'rainforest' | 'unknown'; // Source of sponsored data
+  sponsored_source: 'rainforest' | 'link_pattern' | 'unknown'; // Source of sponsored data
+  // Additional sponsored fields for clarity
+  isSponsored?: boolean | null; // Alias for is_sponsored (for compatibility)
+  organicPosition?: number | null; // Alias for organic_rank (null if sponsored)
+  sponsoredSlot?: 'top' | 'middle' | 'bottom' | null; // Sponsored ad slot position (null if not sponsored)
 }
 
 /**
@@ -1067,12 +1071,18 @@ export function buildKeywordPageOne(
       appeared_multiple_times: pw.appearanceCount > 1, // Explicit flag for dominance/defense reasoning
       // Helium-10 style rank semantics
       organic_rank: pw.organicRank, // Position among organic listings only (null for sponsored)
-      page_position: pw.pagePosition, // Actual Page-1 position including sponsored
+      page_position: pw.pagePosition, // Actual Page-1 position including sponsored - preserves original Amazon position
       // Sponsored visibility (for clarity, not estimation changes)
       // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
       is_sponsored: isSponsored, // true = sponsored, false = organic, null = unknown
       sponsored_position: sponsoredPosition, // Ad position from Rainforest (null if not sponsored)
-      sponsored_source: sponsoredSource, // Source of sponsored data ('rainforest' | 'unknown')
+      sponsored_source: sponsoredSource, // Source of sponsored data ('rainforest' | 'link_pattern' | 'unknown')
+      // Additional sponsored fields for clarity
+      isSponsored: isSponsored, // Alias for is_sponsored (for compatibility)
+      organicPosition: pw.organicRank, // Alias for organic_rank (null if sponsored)
+      sponsoredSlot: isSponsored === true 
+        ? (pw.pagePosition <= 4 ? 'top' : pw.pagePosition <= 16 ? 'middle' : 'bottom')
+        : null, // Sponsored ad slot position (null if not sponsored)
     };
     
     // Store mapping for parent-child normalization (use ASIN as key)

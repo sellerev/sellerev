@@ -1918,24 +1918,35 @@ export async function fetchKeywordMarketSnapshot(
       const reviews = parseReviews(item); // Nullable
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // SPONSORED DETECTION: Rainforest SERP is the ONLY source of truth
+      // SPONSORED DETECTION: Rainforest SERP + link pattern detection
       // ═══════════════════════════════════════════════════════════════════════════
       // CRITICAL: Do NOT infer sponsored from rank, reviews, price, or BSR
       // SP-API MUST NOT be used for sponsored detection (has no ad data)
+      // Mark a listing as sponsored if:
+      //   - item.sponsored === true OR
+      //   - item.is_sponsored === true OR
+      //   - item.link contains '/sspa/'
       let is_sponsored: boolean | null = null;
       let sponsored_position: number | null = null;
-      let sponsored_source: 'rainforest' | 'unknown' = 'unknown';
+      let sponsored_source: 'rainforest' | 'link_pattern' | 'unknown' = 'unknown';
       
-      // Use Rainforest SERP data ONLY
-      if (item.is_sponsored === true) {
+      // Check Rainforest SERP flag first
+      const hasSponsoredFlag = item.sponsored === true || item.is_sponsored === true;
+      const hasNonSponsoredFlag = item.sponsored === false || item.is_sponsored === false;
+      
+      // Check link pattern for '/sspa/' (Amazon sponsored ad pattern)
+      const link = item.link || item.url || '';
+      const hasSspaPattern = typeof link === 'string' && link.includes('/sspa/');
+      
+      if (hasSponsoredFlag || hasSspaPattern) {
         is_sponsored = true;
         sponsored_position = item.ad_position ?? null;
-        sponsored_source = 'rainforest';
-      } else if (item.is_sponsored === false) {
+        sponsored_source = hasSponsoredFlag ? 'rainforest' : 'link_pattern';
+      } else if (hasNonSponsoredFlag) {
         is_sponsored = false;
         sponsored_source = 'rainforest';
       } else {
-        // Rainforest did not provide flag - set to null (unknown)
+        // Neither flag nor pattern found - set to null (unknown)
         is_sponsored = null;
         sponsored_source = 'unknown';
       }
@@ -2666,6 +2677,26 @@ export async function fetchKeywordMarketSnapshot(
     const sponsored_pct = total_page1_listings > 0
       ? Number(((sponsored_count / total_page1_listings) * 100).toFixed(1))
       : 0;
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DIAGNOSTICS: Sponsored vs Organic Classification
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Log sponsored/organic counts and percentage for diagnostics
+    // This must match visible Amazon SERP reality
+    const percent_sponsored_page1 = total_page1_listings > 0
+      ? Number(((sponsored_count / total_page1_listings) * 100).toFixed(1))
+      : 0;
+    
+    console.log("📊 SPONSORED_ORGANIC_DIAGNOSTICS", {
+      keyword,
+      sponsored_count,
+      organic_count,
+      unknown_sponsored_count,
+      total_page1_listings,
+      percent_sponsored_page1,
+      sponsored_pct,
+      timestamp: new Date().toISOString(),
+    });
     
     // ═══════════════════════════════════════════════════════════════════════════
     // PAGE-1 SCOPE VERIFICATION (REQUIRED)
