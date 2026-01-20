@@ -69,47 +69,23 @@ export async function fetchSearchResults(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
+    // PART 1: REMOVE INVALID ASSUMPTIONS
     // ═══════════════════════════════════════════════════════════════════════════
-    // Extract search_results from all possible locations with source tracking
-    const allSearchResults: Array<{ item: any; source: 'ads' | 'sponsored_products' | 'search_results' | 'organic_results' | 'results' | 'unknown' }> = [];
+    // CRITICAL: Rainforest type=search responses place BOTH sponsored and organic
+    // listings inside search_results[]. Do NOT read from ads[] or sponsored_products[]
+    // as these are NOT populated for Rainforest search.
+    // Extract search results ONLY from search_results[] array
+    const searchResults: any[] = [];
     
-    // Collect from ads array (sponsored)
-    if (Array.isArray(raw.ads) && raw.ads.length > 0) {
-      for (const item of raw.ads) {
-        allSearchResults.push({ item, source: 'ads' });
-      }
-    }
-    
-    // Collect from sponsored_products array (if present)
-    if (Array.isArray(raw.sponsored_products) && raw.sponsored_products.length > 0) {
-      for (const item of raw.sponsored_products) {
-        allSearchResults.push({ item, source: 'sponsored_products' });
-      }
-    }
-    
-    // Collect from search_results array (mixed: may contain both organic and sponsored)
+    // ONLY use search_results array (contains both sponsored and organic)
     if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
-      for (const item of raw.search_results) {
-        allSearchResults.push({ item, source: 'search_results' });
-      }
+      searchResults.push(...raw.search_results);
     }
     
-    // Collect from organic_results array (organic)
-    if (Array.isArray(raw.organic_results) && raw.organic_results.length > 0) {
-      for (const item of raw.organic_results) {
-        allSearchResults.push({ item, source: 'organic_results' });
-      }
+    // Fallback to results array if search_results is not present
+    if (searchResults.length === 0 && Array.isArray(raw.results) && raw.results.length > 0) {
+      searchResults.push(...raw.results);
     }
-    
-    // Collect from results array (fallback, unknown classification)
-    if (Array.isArray(raw.results) && raw.results.length > 0) {
-      for (const item of raw.results) {
-        allSearchResults.push({ item, source: 'results' });
-      }
-    }
-
-    const searchResults = allSearchResults;
 
     if (searchResults.length === 0) {
       console.log("INSTANT_ESTIMATE_NO_RESULTS", { keyword });
@@ -120,9 +96,7 @@ export async function fetchSearchResults(
     const products: SearchResultProduct[] = [];
 
     for (let i = 0; i < searchResults.length; i++) {
-      const entry = searchResults[i];
-      const item = entry.item;
-      const sourceBlock = entry.source;
+      const item = searchResults[i];
       const position = i + 1; // 1-indexed position
 
       // Parse price
@@ -138,39 +112,37 @@ export async function fetchSearchResults(
       }
 
       // ═══════════════════════════════════════════════════════════════════════════
-      // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
+      // PART 2: DETECT SPONSORED INSIDE search_results[]
       // ═══════════════════════════════════════════════════════════════════════════
-      // Extract sponsored status using strict priority order
-      let isSponsored: boolean | null = null;
+      // PART 3: PERSIST SOURCE TYPE ON LISTING
+      // Detect sponsored status using ONLY fields already returned by Rainforest
+      // NO heuristics beyond link patterns. NO position-based guessing.
       
-      // Priority 1: Check explicit is_sponsored flag
-      if (item.is_sponsored === true) {
-        isSponsored = true;
+      function isSponsored(item: any): boolean {
+        // Check explicit sponsored flag
+        if (item.sponsored === true || item.is_sponsored === true) {
+          return true;
+        }
+        
+        // Check link patterns
+        const link = item.link || item.url || '';
+        if (typeof link === 'string') {
+          if (link.includes('/sspa/')) {
+            return true;
+          }
+          if (link.includes('sp_csd=')) {
+            return true;
+          }
+          if (link.includes('sr=') && link.includes('-spons')) {
+            return true;
+          }
+        }
+        
+        return false;
       }
-      // Priority 2: Check badge_text for "Sponsored" (case-insensitive)
-      else if (item.badge_text && typeof item.badge_text === 'string' && item.badge_text.toLowerCase().includes('sponsored')) {
-        isSponsored = true;
-      }
-      // Priority 3: Check if ad_position is defined (indicates sponsored)
-      else if (item.ad_position !== undefined && item.ad_position !== null) {
-        isSponsored = true;
-      }
-      // Priority 4: Check source block (ads or sponsored_products)
-      else if (sourceBlock === 'ads' || sourceBlock === 'sponsored_products') {
-        isSponsored = true;
-      }
-      // Priority 5: Check if from search_results (treat as organic)
-      else if (sourceBlock === 'search_results') {
-        isSponsored = false;
-      }
-      // Priority 6: Check organic_results (explicitly organic)
-      else if (sourceBlock === 'organic_results') {
-        isSponsored = false;
-      }
-      // Fallback: Unknown
-      else {
-        isSponsored = null;
-      }
+      
+      // Determine sponsored status
+      const isSponsoredResult = isSponsored(item);
 
       // Only include products with valid prices
       if (price > 0) {
@@ -184,7 +156,7 @@ export async function fetchSearchResults(
             ? parseInt(item.reviews.count.toString().replace(/,/g, ""), 10)
             : undefined,
           image_url: item.image || undefined,
-          is_sponsored: isSponsored === true, // Convert to boolean for interface (true or false, never null)
+          is_sponsored: isSponsoredResult, // true or false (never null after detection)
         });
       }
     }

@@ -1376,87 +1376,60 @@ export async function fetchKeywordMarketSnapshot(
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
+    // PART 1: REMOVE INVALID ASSUMPTIONS
     // ═══════════════════════════════════════════════════════════════════════════
-    // Step 2: Collect ALL listings from ALL possible locations in Rainforest response
-    // PAGE-1 SCOPE: All results come from page=1 API call above - includes both organic and sponsored
-    // Check: search_results, organic_results, ads (sponsored), sponsored_products, results, etc.
-    // CRITICAL: Track source for each listing to properly classify sponsored vs organic
-    const searchResults: Array<{ item: any; source: 'ads' | 'sponsored_products' | 'search_results' | 'organic_results' | 'results' | 'unknown' }> = [];
+    // CRITICAL: Rainforest type=search responses place BOTH sponsored and organic
+    // listings inside search_results[]. Do NOT read from ads[] or sponsored_products[]
+    // as these are NOT populated for Rainforest search.
+    // Step 2: Collect listings ONLY from search_results[] array
+    const searchResults: any[] = [];
     
-    // Collect from ads array (sponsored)
-    if (Array.isArray(raw.ads) && raw.ads.length > 0) {
-      for (const item of raw.ads) {
-        searchResults.push({ item, source: 'ads' });
-      }
-    }
-    
-    // Collect from sponsored_products array (if present)
-    if (Array.isArray(raw.sponsored_products) && raw.sponsored_products.length > 0) {
-      for (const item of raw.sponsored_products) {
-        searchResults.push({ item, source: 'sponsored_products' });
-      }
-    }
-    
-    // Collect from search_results array (mixed: may contain both organic and sponsored)
+    // ONLY use search_results array (contains both sponsored and organic)
     if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
-      for (const item of raw.search_results) {
-        searchResults.push({ item, source: 'search_results' });
-      }
+      searchResults.push(...raw.search_results);
     }
     
-    // Collect from organic_results array (organic)
-    if (Array.isArray(raw.organic_results) && raw.organic_results.length > 0) {
-      for (const item of raw.organic_results) {
-        searchResults.push({ item, source: 'organic_results' });
-      }
+    // Fallback to results array if search_results is not present
+    if (searchResults.length === 0 && Array.isArray(raw.results) && raw.results.length > 0) {
+      searchResults.push(...raw.results);
     }
     
-    // Collect from results array (fallback, unknown classification)
-    if (Array.isArray(raw.results) && raw.results.length > 0) {
-      for (const item of raw.results) {
-        searchResults.push({ item, source: 'results' });
-      }
-    }
-    
-    console.log("COLLECTED_LISTINGS_FROM_ALL_SOURCES", {
+    console.log("COLLECTED_LISTINGS_FROM_SEARCH_RESULTS", {
       keyword,
       search_results_count: Array.isArray(raw.search_results) ? raw.search_results.length : 0,
-      organic_results_count: Array.isArray(raw.organic_results) ? raw.organic_results.length : 0,
-      ads_count: Array.isArray(raw.ads) ? raw.ads.length : 0,
-      sponsored_products_count: Array.isArray(raw.sponsored_products) ? raw.sponsored_products.length : 0,
       results_count: Array.isArray(raw.results) ? raw.results.length : 0,
       total_collected: searchResults.length,
+      note: "Only using search_results[] array (contains both sponsored and organic)",
     });
 
-    // Step 5: Only return null if ZERO ASINs exist across all result blocks
+    // Step 5: Only return null if ZERO ASINs exist
     if (searchResults.length === 0) {
-      console.log("No search results found in any location", {
+      console.log("No search results found", {
         keyword,
         has_raw: !!raw,
         raw_keys: raw ? Object.keys(raw) : [],
-        checked_locations: ["search_results", "organic_results", "ads", "sponsored_products", "results"],
+        checked_locations: ["search_results", "results"],
       });
       return null;
     }
     
     // Count ASINs to verify we have valid listings
-    const asinCount = searchResults.filter((entry: any) => entry.item?.asin).length;
+    const asinCount = searchResults.filter((item: any) => item?.asin).length;
     extractedAsinCount = asinCount; // TASK 2: Track for error classification
     apiReturnedResults = searchResults.length > 0; // TASK 2: Track if API returned results
     
     if (asinCount === 0) {
-      console.log("No ASINs found in any result", {
+      console.log("No ASINs found in search results", {
         keyword,
         total_items: searchResults.length,
-        sample_item: searchResults[0]?.item ? Object.keys(searchResults[0].item) : null,
+        sample_item: searchResults[0] ? Object.keys(searchResults[0]) : null,
       });
       return null; // TASK 2: This is genuine "zero_asins" case
     }
 
     // DEBUG TASK: Log one full product object for inspection (Step 1 & 2)
     if (searchResults.length > 0) {
-      const sampleProduct = searchResults[0].item;
+      const sampleProduct = searchResults[0];
       console.log("SAMPLE_PRODUCT_FULL_OBJECT", {
         keyword,
         asin: sampleProduct.asin,
@@ -1495,8 +1468,8 @@ export async function fetchKeywordMarketSnapshot(
 
     // STEP B: Extract all Page-1 ASINs (all listings, not just top 20)
     const page1Asins = searchResults
-      .filter((entry: any) => entry.item?.asin)
-      .map((entry: any) => entry.item.asin);
+      .filter((item: any) => item?.asin)
+      .map((item: any) => item.asin);
     
     console.log("SEARCH_ASINS_COUNT", {
       keyword,
@@ -1897,8 +1870,7 @@ export async function fetchKeywordMarketSnapshot(
     try {
       // PHASE 1: Detect duplicate BSRs before normalization (non-disruptive)
       // This allows us to mark invalid BSRs during normalization
-      const tempListingsForDetection = searchResults.map((entry: { item: any; source: string }, index: number) => {
-        const item = entry.item;
+      const tempListingsForDetection = searchResults.map((item: any, index: number) => {
         const asin = item.asin ?? null;
         const position = item.position ?? index + 1;
         
@@ -1930,10 +1902,7 @@ export async function fetchKeywordMarketSnapshot(
       const invalidBSRs = detectDuplicateBSRs(tempListingsForDetection);
       
       // Now parse listings with duplicate detection applied
-      parsedListings = searchResults.map((entry: { item: any; source: string }, index: number) => {
-      const item = entry.item;
-      const sourceBlock = entry.source;
-      
+      parsedListings = searchResults.map((item: any, index: number) => {
       // Step 2: ASIN is required, everything else is optional
       const asin = item.asin ?? null;
       
@@ -1951,62 +1920,46 @@ export async function fetchKeywordMarketSnapshot(
       const reviews = parseReviews(item); // Nullable
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
+      // PART 2: DETECT SPONSORED INSIDE search_results[]
       // ═══════════════════════════════════════════════════════════════════════════
-      // SPONSORED DETECTION: Strict priority order (DO NOT infer blindly)
-      // CRITICAL: Do NOT infer sponsored from rank, reviews, price, or BSR
-      // SP-API MUST NOT be used for sponsored detection (has no ad data)
+      // PART 3: PERSIST SOURCE TYPE ON LISTING
+      // CRITICAL: Detect sponsored status using ONLY fields already returned by Rainforest
+      // NO heuristics beyond link patterns. NO position-based guessing.
       // 
-      // Priority order:
-      // 1) product.is_sponsored === true → is_sponsored = true, sponsored_source = "rainforest_explicit"
-      // 2) product.badge_text contains "Sponsored" → is_sponsored = true, sponsored_source = "badge"
-      // 3) product.ad_position is defined → is_sponsored = true, sponsored_source = "ad_position"
-      // 4) product came from response.ads or response.sponsored_products → is_sponsored = true, sponsored_source = "ads_block"
-      // 5) product came from response.search_results → is_sponsored = false, sponsored_source = "organic_serp"
-      // 6) Else → is_sponsored = null, sponsored_source = "unknown"
-      let is_sponsored: boolean | null = null;
-      let sponsored_position: number | null = null;
-      let sponsored_source: 'rainforest_explicit' | 'badge' | 'ad_position' | 'ads_block' | 'organic_serp' | 'unknown' = 'unknown';
+      // Detection logic:
+      // - item.sponsored === true
+      // - item.link?.includes('/sspa/')
+      // - item.link?.includes('sp_csd=')
+      // - (item.link?.includes('sr=') && item.link.includes('-spons'))
       
-      // Priority 1: Check explicit is_sponsored flag
-      if (item.is_sponsored === true) {
-        is_sponsored = true;
-        sponsored_position = item.ad_position ?? null;
-        sponsored_source = 'rainforest_explicit';
+      function isSponsored(item: any): boolean {
+        // Check explicit sponsored flag
+        if (item.sponsored === true || item.is_sponsored === true) {
+          return true;
+        }
+        
+        // Check link patterns
+        const link = item.link || item.url || '';
+        if (typeof link === 'string') {
+          if (link.includes('/sspa/')) {
+            return true;
+          }
+          if (link.includes('sp_csd=')) {
+            return true;
+          }
+          if (link.includes('sr=') && link.includes('-spons')) {
+            return true;
+          }
+        }
+        
+        return false;
       }
-      // Priority 2: Check badge_text for "Sponsored" (case-insensitive)
-      else if (item.badge_text && typeof item.badge_text === 'string' && item.badge_text.toLowerCase().includes('sponsored')) {
-        is_sponsored = true;
-        sponsored_position = item.ad_position ?? null;
-        sponsored_source = 'badge';
-      }
-      // Priority 3: Check if ad_position is defined (indicates sponsored)
-      else if (item.ad_position !== undefined && item.ad_position !== null) {
-        is_sponsored = true;
-        sponsored_position = item.ad_position;
-        sponsored_source = 'ad_position';
-      }
-      // Priority 4: Check source block (ads or sponsored_products)
-      else if (sourceBlock === 'ads' || sourceBlock === 'sponsored_products') {
-        is_sponsored = true;
-        sponsored_position = item.ad_position ?? null;
-        sponsored_source = 'ads_block';
-      }
-      // Priority 5: Check if from search_results (treat as organic)
-      else if (sourceBlock === 'search_results') {
-        is_sponsored = false;
-        sponsored_source = 'organic_serp';
-      }
-      // Priority 6: Check organic_results (explicitly organic)
-      else if (sourceBlock === 'organic_results') {
-        is_sponsored = false;
-        sponsored_source = 'organic_serp';
-      }
-      // Fallback: Unknown
-      else {
-        is_sponsored = null;
-        sponsored_source = 'unknown';
-      }
+      
+      // Determine sponsored status
+      const isSponsoredResult = isSponsored(item);
+      let is_sponsored: boolean | null = isSponsoredResult ? true : false;
+      let sponsored_position: number | null = isSponsoredResult ? (item.ad_position ?? null) : null;
+      let sponsored_source: 'rainforest_serp' | 'organic_serp' = isSponsoredResult ? 'rainforest_serp' : 'organic_serp';
       
       const position = item.position ?? index + 1; // Organic rank (1-indexed)
       
@@ -2727,27 +2680,14 @@ export async function fetchKeywordMarketSnapshot(
 
     // Aggregate metrics from Page 1 listings only (using canonical `listings` variable)
     const total_page1_listings = listings.length;
-    // Sponsored metrics: Use exact is_sponsored values (true = sponsored, false = organic, null = unknown)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PART 5: FIX DIAGNOSTICS (MANDATORY)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Compute counts from rawListings[] (NOT from ads[] arrays)
     const sponsored_count = listings.filter((l) => l.is_sponsored === true).length;
     const organic_count = listings.filter((l) => l.is_sponsored === false).length;
     const unknown_sponsored_count = listings.filter((l) => l.is_sponsored === null).length;
     const sponsored_pct = total_page1_listings > 0
-      ? Number(((sponsored_count / total_page1_listings) * 100).toFixed(1))
-      : 0;
-    
-    // ═══════════════════════════════════════════════════════════════════════════
-    // PART 5: SNAPSHOT + DIAGNOSTIC LOGS (MANDATORY)
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Calculate sponsored sources breakdown
-    const sponsoredSourcesBreakdown: Record<string, number> = {};
-    listings.forEach((l) => {
-      if (l.is_sponsored === true && l.sponsored_source) {
-        const source = l.sponsored_source;
-        sponsoredSourcesBreakdown[source] = (sponsoredSourcesBreakdown[source] || 0) + 1;
-      }
-    });
-    
-    const percent_sponsored_page1 = total_page1_listings > 0
       ? Number(((sponsored_count / total_page1_listings) * 100).toFixed(1))
       : 0;
     
@@ -2759,7 +2699,6 @@ export async function fetchKeywordMarketSnapshot(
       sponsored_count,
       organic_count,
       unknown_count: unknown_sponsored_count,
-      sponsored_sources_breakdown: sponsoredSourcesBreakdown,
       keyword,
       timestamp: new Date().toISOString(),
     });
