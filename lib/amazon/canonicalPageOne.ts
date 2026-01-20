@@ -425,9 +425,11 @@ export function buildKeywordPageOne(
   
   // Sort by organic rank (best rank first)
   // Filter to only organic listings for ranking, then slice to 49
-  // PART 4: Only count listings with is_sponsored === false as organic
-  const organicListings = deduplicatedListings.filter(l => l.is_sponsored === false);
-  const sponsoredListings = deduplicatedListings.filter(l => l.is_sponsored);
+  // PART 4: Treat listings as organic if they're not explicitly sponsored
+  // This includes both is_sponsored === false (explicitly organic) and is_sponsored === null (unknown)
+  // Unknown listings should be treated as organic for capping purposes since they're not explicitly sponsored
+  const organicListings = deduplicatedListings.filter(l => l.is_sponsored !== true);
+  const sponsoredListings = deduplicatedListings.filter(l => l.is_sponsored === true);
   
   // Sort organic listings by position (best rank first)
   organicListings.sort((a, b) => (a.position || 999) - (b.position || 999));
@@ -528,8 +530,8 @@ export function buildKeywordPageOne(
   // CALIBRATION LAYER: Normalize into trusted bands
   // ═══════════════════════════════════════════════════════════════════════════
   // Use capped listings for calibration
-  // PART 4: Only count listings with is_sponsored === false as organic
-  const organicListingsForCalibration = cappedListings.filter(l => l.is_sponsored === false);
+  // PART 4: Treat listings as organic if they're not explicitly sponsored (includes unknown/null)
+  const organicListingsForCalibration = cappedListings.filter(l => l.is_sponsored !== true);
   const sponsoredCount = cappedListings.filter(l => l.is_sponsored).length;
   const sponsoredDensity = cappedListings.length > 0
     ? (sponsoredCount / cappedListings.length) * 100
@@ -1149,8 +1151,8 @@ export function buildKeywordPageOne(
     : avgPrice ?? 0;
   
   // Get estimated total market units (use market demand estimate or totalPage1Units)
-  // PART 4: Only count listings with is_sponsored === false as organic
-  const organicCountForDemand = cappedListings.filter(l => l.is_sponsored === false).length;
+  // PART 4: Treat listings as organic if they're not explicitly sponsored (includes unknown/null)
+  const organicCountForDemand = cappedListings.filter(l => l.is_sponsored !== true).length;
   const avgPriceForDemand = avgPrice ?? 0;
   const marketDemandEstimate = estimateMarketDemand({
     marketShape,
