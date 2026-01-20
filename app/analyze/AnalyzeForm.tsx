@@ -689,35 +689,56 @@ export default function AnalyzeForm({
     // CRITICAL: Never clear state if we have valid listings - they take priority over initialAnalysis
     // This prevents router.replace() from clearing state when server hasn't loaded the analysis yet
     const hasValidListings = analysis?.page_one_listings && analysis.page_one_listings.length > 0;
+    const currentRunId = analysis?.analysis_run_id;
+    const incomingRunId = initialAnalysis?.analysis_run_id;
     
     // Sync analysis state when initialAnalysis prop changes (indicates URL navigation or refresh)
     if (initialAnalysis) {
       // Only update if this is a different analysis (different run ID)
       // Don't overwrite if we have the same run ID and valid listings
-      if (analysis?.analysis_run_id !== initialAnalysis.analysis_run_id) {
-        console.log("FRONTEND_SYNC_FROM_INITIAL", {
-          prev_run_id: analysis?.analysis_run_id,
-          new_run_id: initialAnalysis.analysis_run_id,
-          has_prev_listings: hasValidListings,
-        });
-        setAnalysis(normalizeAnalysis(initialAnalysis));
-        // CRITICAL: keep chat wired to the currently viewed analysis.
-        // Without this, navigating to a run from the in-chat History panel can leave ChatSidebar
-        // with analysisRunId=null (or a stale ID), causing sendMessage() to no-op.
-        setAnalysisRunIdForChat(initialAnalysis.analysis_run_id || null);
-        setInputValue(initialAnalysis.input_value || "");
-        setIsEstimated(false);
-        setSnapshotType("snapshot");
-        setChatMessages(initialMessages);
-        // Reset selection when switching runs to avoid applying prior selection to a different market
-        setSelectedAsins([]);
-        // Reset sort to default (Amazon rank) when new analysis loads
-        setSortBy("rank");
-        // Reset filters when new analysis loads
-        setSelectedBrands(new Set());
-        setSelectedFulfillment(new Set());
-        setSponsoredFilter(null);
-        setBrandDropdownOpen(false);
+      if (currentRunId !== incomingRunId) {
+        // Different run ID - only sync if incoming analysis has valid data
+        // Don't overwrite valid client state with incomplete server data
+        const incomingHasListings = initialAnalysis.page_one_listings && initialAnalysis.page_one_listings.length > 0;
+        
+        if (incomingHasListings || !hasValidListings) {
+          // Incoming has listings OR we don't have valid listings - safe to sync
+          console.log("FRONTEND_SYNC_FROM_INITIAL", {
+            prev_run_id: currentRunId,
+            new_run_id: incomingRunId,
+            has_prev_listings: hasValidListings,
+            has_incoming_listings: incomingHasListings,
+          });
+          setAnalysis(normalizeAnalysis(initialAnalysis));
+          // CRITICAL: keep chat wired to the currently viewed analysis.
+          // Without this, navigating to a run from the in-chat History panel can leave ChatSidebar
+          // with analysisRunId=null (or a stale ID), causing sendMessage() to no-op.
+          setAnalysisRunIdForChat(initialAnalysis.analysis_run_id || null);
+          setInputValue(initialAnalysis.input_value || "");
+          setIsEstimated(false);
+          setSnapshotType("snapshot");
+          setChatMessages(initialMessages);
+          // Reset selection when switching runs to avoid applying prior selection to a different market
+          setSelectedAsins([]);
+          // Reset sort to default (Amazon rank) when new analysis loads
+          setSortBy("rank");
+          // Reset filters when new analysis loads
+          setSelectedBrands(new Set());
+          setSelectedFulfillment(new Set());
+          setSponsoredFilter(null);
+          setBrandDropdownOpen(false);
+        } else {
+          // We have valid listings but incoming doesn't - preserve client state
+          // This happens when router.replace() triggers before DB save completes
+          console.log("FRONTEND_PRESERVE_DURING_SWITCH", {
+            prev_run_id: currentRunId,
+            new_run_id: incomingRunId,
+            has_prev_listings: hasValidListings,
+            has_incoming_listings: incomingHasListings,
+            reason: "Preserving valid listings during search switch - incoming analysis incomplete",
+          });
+          // DO NOT clear - keep the state until incoming has valid data
+        }
       } else if (hasValidListings) {
         // Same run ID and we have valid listings - don't overwrite client state
         console.log("FRONTEND_SKIP_SYNC_SAME_RUN", {
@@ -731,10 +752,12 @@ export default function AnalyzeForm({
       // This is the key fix: preserve client state even if server returns null
       if (hasValidListings) {
         // We have valid listings - preserve them at all costs
+        // This happens when router.replace() triggers before server can load from DB
         console.log("FRONTEND_PRESERVE_STATE_NO_INITIAL", {
           has_listings: true,
           has_analysis_run_id: !!analysisRunIdForChat,
           listings_count: analysis?.page_one_listings?.length || 0,
+          current_run_id: currentRunId,
           reason: "Preserving valid listings - initialAnalysis is null but listings exist",
         });
         // DO NOT clear - keep the state
