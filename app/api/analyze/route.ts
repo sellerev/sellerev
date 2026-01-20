@@ -1168,7 +1168,9 @@ export async function POST(req: NextRequest) {
           price: row.price !== null && row.price !== undefined ? parseFloat(row.price) : null,
           rating: row.rating !== null && row.rating !== undefined ? parseFloat(row.rating) : null,
           reviews: row.review_count !== null && row.review_count !== undefined ? parseInt(row.review_count) : null,
-          is_sponsored: false, // Assume organic (not stored in keyword_products)
+          is_sponsored: null, // Unknown (not stored in keyword_products cache)
+          sponsored_position: null, // Not stored in keyword_products cache
+          sponsored_source: 'unknown', // Not stored in keyword_products cache
           position: row.rank || 1, // Organic rank
           brand: null, // Not stored in keyword_products
           image_url: null, // Not stored in keyword_products
@@ -1195,7 +1197,7 @@ export async function POST(req: NextRequest) {
       const { computePPCIndicators } = await import("@/lib/amazon/ppcIndicators");
 
       const total_page1_listings = listings.length;
-      const sponsored_count = listings.filter((l) => l.is_sponsored).length;
+      const sponsored_count = listings.filter((l) => l.is_sponsored === true).length;
 
       // Average price
       const listingsWithPrice = listings.filter((l) => l.price !== null && l.price !== undefined);
@@ -1613,7 +1615,9 @@ export async function POST(req: NextRequest) {
         price: p.price,
         rating: p.rating || null, // From cache
         reviews: p.review_count || null, // From cache (mapped from review_count)
-        is_sponsored: p.is_sponsored || false, // From cache (not assumed false)
+        is_sponsored: p.is_sponsored ?? null, // From cache (null if unknown)
+        sponsored_position: p.sponsored_position ?? null, // From cache (null if unknown)
+        sponsored_source: p.sponsored_source ?? 'unknown', // From cache ('unknown' if not stored)
         position: p.rank,
         brand: p.brand || null, // From cache
         image_url: p.image_url || null, // From cache
