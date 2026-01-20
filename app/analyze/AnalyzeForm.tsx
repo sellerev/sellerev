@@ -589,6 +589,20 @@ export default function AnalyzeForm({
   // This handles URL navigation between different analyses (browser back/forward, refresh, direct URL entry)
   // Note: When creating new analysis via router.replace(), props won't change, so state is updated directly in analyze()
   useEffect(() => {
+    // CRITICAL: NEVER sync from initialAnalysis if this is a user-triggered Analyze action
+    // When user clicks Analyze, we set state directly in analyze() function
+    // The router.replace() causes a re-render with initialAnalysis, but we must NOT overwrite
+    // the fresh state we just set from the API response
+    if (clientRunId) {
+      // This is a user-triggered action - don't sync from initialAnalysis
+      // The state was already set in analyze() function from the API response
+      console.log("FRONTEND_SKIP_SYNC_USER_ACTION", {
+        client_run_id: clientRunId,
+        reason: "User-triggered Analyze action - preserving state from API response, not initialAnalysis prop",
+      });
+      return;
+    }
+    
     // SIMPLIFIED RULE: If incoming analysis has products, always overwrite state
     // Run IDs are informational only - never block syncing based on them
     if (initialAnalysis) {
@@ -608,14 +622,12 @@ export default function AnalyzeForm({
       // Skip sync ONLY if:
       // 1. Same backend run ID
       // 2. Current state has products
-      // 3. AND this is NOT a user-triggered Analyze action (no client_run_id means it's from URL/props)
-      // 4. AND this is NOT a keyword change (different input_value)
+      // 3. AND this is NOT a keyword change (different input_value)
       // NEVER skip sync for:
-      // - User clicking Analyze (client_run_id exists)
+      // - User clicking Analyze (client_run_id exists) - already handled above
       // - Keyword change (different input_value)
-      // - New client_run_id
       const isKeywordChange = initialAnalysis.input_value !== (analysis?.input_value || '');
-      if (isSameRunId && currentHasProducts && !clientRunId && !isKeywordChange) {
+      if (isSameRunId && currentHasProducts && !isKeywordChange) {
         // This is a URL/prop-based sync (not a user-triggered action) and keyword hasn't changed
         // Only skip if we have current products and it's the same run
         console.log("FRONTEND_SKIP_SYNC_SAME_RUN", {
@@ -624,15 +636,13 @@ export default function AnalyzeForm({
           chat_run_id: chatRunId,
           current_products: currentProducts.length,
           incoming_products: incomingProducts.length,
-          client_run_id: clientRunId,
           is_keyword_change: isKeywordChange,
           reason: "Same backend run ID with current products - preserving client state (URL/prop sync only, not user action)",
         });
         return;
       }
       
-      // User-triggered Analyze actions always sync (client_run_id exists)
-      // OR different run IDs always sync
+      // Different run IDs always sync
       // OR keyword change always sync
       // OR current state has no products - always sync
       
@@ -696,7 +706,7 @@ export default function AnalyzeForm({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialAnalysis?.analysis_run_id, analysisRunIdForChat]); // Sync when analysis_run_id changes (different analysis loaded)
+  }, [initialAnalysis?.analysis_run_id, analysisRunIdForChat, clientRunId, analysis]); // Sync when analysis_run_id changes (different analysis loaded)
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -1058,6 +1068,13 @@ export default function AnalyzeForm({
       if (data.analysisRunId) {
         router.replace(`/analyze?run=${data.analysisRunId}`, { scroll: false });
       }
+      
+      // CRITICAL: Clear clientRunId AFTER a short delay to allow state to settle
+      // This prevents the sync useEffect from overwriting the state we just set
+      // We keep clientRunId set during the sync window to block overwrites
+      setTimeout(() => {
+        setClientRunId(null);
+      }, 100);
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : "Analysis failed";
       console.error("ANALYZE_EXCEPTION", { 
