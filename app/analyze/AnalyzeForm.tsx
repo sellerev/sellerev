@@ -1197,9 +1197,6 @@ export default function AnalyzeForm({
               )}
               {/* KEYWORD ANALYSIS: Interactive Amazon-style search */}
               {analysis.market_snapshot ? (
-            <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6">
-              {/* KEYWORD ANALYSIS: Interactive Amazon-style search */}
-              {analysis.market_snapshot ? (
                 <>
                   {/* ─────────────────────────────────────────────────────────── */}
                   {/* UNIFIED MARKET SNAPSHOT (CANONICAL - ONE ONLY)              */}
@@ -2125,7 +2122,6 @@ export default function AnalyzeForm({
             </div>
           )}
         </div>
-
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* RIGHT COLUMN: AI CHAT SIDEBAR (RESIZABLE, SCROLLS INTERNALLY)   */}
         {/* AI Copilot is always available - fixed within app shell        */}
