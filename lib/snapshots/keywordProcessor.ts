@@ -107,7 +107,10 @@ export async function processKeyword(
       timestamp: new Date().toISOString(),
     });
 
-    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=${marketplace}&search_term=${encodeURIComponent(keyword)}&page=1`;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PART 1: UPDATE RAINFOREST SEARCH REQUEST - INCLUDE ADS
+    // ═══════════════════════════════════════════════════════════════════════════
+    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=${marketplace}&search_term=${encodeURIComponent(keyword)}&page=1&include_ads=true&include_sponsored=true`;
     
     const searchResponse = await fetch(apiUrl, {
       method: "GET",
@@ -130,25 +133,48 @@ export async function processKeyword(
       };
     }
 
-    // Extract search results from all possible locations
-    const allResultArrays: any[][] = [];
-    if (Array.isArray(searchData.search_results) && searchData.search_results.length > 0) {
-      allResultArrays.push(searchData.search_results);
-    }
-    if (Array.isArray(searchData.organic_results) && searchData.organic_results.length > 0) {
-      allResultArrays.push(searchData.organic_results);
-    }
-    if (Array.isArray(searchData.results) && searchData.results.length > 0) {
-      allResultArrays.push(searchData.results);
-    }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Extract search results from all possible locations with source tracking
+    const allSearchResults: Array<{ item: any; source: 'ads' | 'sponsored_products' | 'search_results' | 'organic_results' | 'results' | 'unknown' }> = [];
+    
+    // Collect from ads array (sponsored)
     if (Array.isArray(searchData.ads) && searchData.ads.length > 0) {
-      allResultArrays.push(searchData.ads);
+      for (const item of searchData.ads) {
+        allSearchResults.push({ item, source: 'ads' });
+      }
     }
-
-    // Extract ALL results (organic + sponsored) for Page-1 analysis
-    const allSearchResults = allResultArrays.flat();
+    
+    // Collect from sponsored_products array (if present)
+    if (Array.isArray(searchData.sponsored_products) && searchData.sponsored_products.length > 0) {
+      for (const item of searchData.sponsored_products) {
+        allSearchResults.push({ item, source: 'sponsored_products' });
+      }
+    }
+    
+    // Collect from search_results array (mixed: may contain both organic and sponsored)
+    if (Array.isArray(searchData.search_results) && searchData.search_results.length > 0) {
+      for (const item of searchData.search_results) {
+        allSearchResults.push({ item, source: 'search_results' });
+      }
+    }
+    
+    // Collect from organic_results array (organic)
+    if (Array.isArray(searchData.organic_results) && searchData.organic_results.length > 0) {
+      for (const item of searchData.organic_results) {
+        allSearchResults.push({ item, source: 'organic_results' });
+      }
+    }
+    
+    // Collect from results array (fallback, unknown classification)
+    if (Array.isArray(searchData.results) && searchData.results.length > 0) {
+      for (const item of searchData.results) {
+        allSearchResults.push({ item, source: 'results' });
+      }
+    }
     const page1Results = allSearchResults
-      .filter((item: any) => item.asin && /^[A-Z0-9]{10}$/.test(item.asin.trim().toUpperCase()))
+      .filter((entry: any) => entry.item?.asin && /^[A-Z0-9]{10}$/.test(entry.item.asin.trim().toUpperCase()))
       .slice(0, 49);
 
     if (page1Results.length === 0) {
@@ -158,7 +184,7 @@ export async function processKeyword(
       };
     }
 
-    const page1Asins = page1Results.map((item: any) => item.asin.trim().toUpperCase());
+    const page1Asins = page1Results.map((entry: any) => entry.item.asin.trim().toUpperCase());
 
     console.log('RAINFOREST_SEARCH_COMPLETE', {
       keyword,
@@ -185,7 +211,9 @@ export async function processKeyword(
     }>();
 
     for (let i = 0; i < page1Results.length; i++) {
-      const item = page1Results[i];
+      const entry = page1Results[i];
+      const item = entry.item;
+      const sourceBlock = entry.source;
       const asin = item.asin.trim().toUpperCase();
       const price = parsePrice(item);
       
@@ -218,14 +246,50 @@ export async function processKeyword(
         }
       }
 
-      // Extract sponsored status and ad position from Rainforest
-      const isSponsored = item.is_sponsored === true || item.sponsored === true;
-      const adPosition = isSponsored ? (item.ad_position ?? null) : null;
+      // ═══════════════════════════════════════════════════════════════════════════
+      // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Extract sponsored status using strict priority order
+      let isSponsored: boolean | null = null;
+      let adPosition: number | null = null;
+      
+      // Priority 1: Check explicit is_sponsored flag
+      if (item.is_sponsored === true) {
+        isSponsored = true;
+        adPosition = item.ad_position ?? null;
+      }
+      // Priority 2: Check badge_text for "Sponsored" (case-insensitive)
+      else if (item.badge_text && typeof item.badge_text === 'string' && item.badge_text.toLowerCase().includes('sponsored')) {
+        isSponsored = true;
+        adPosition = item.ad_position ?? null;
+      }
+      // Priority 3: Check if ad_position is defined (indicates sponsored)
+      else if (item.ad_position !== undefined && item.ad_position !== null) {
+        isSponsored = true;
+        adPosition = item.ad_position;
+      }
+      // Priority 4: Check source block (ads or sponsored_products)
+      else if (sourceBlock === 'ads' || sourceBlock === 'sponsored_products') {
+        isSponsored = true;
+        adPosition = item.ad_position ?? null;
+      }
+      // Priority 5: Check if from search_results (treat as organic)
+      else if (sourceBlock === 'search_results') {
+        isSponsored = false;
+      }
+      // Priority 6: Check organic_results (explicitly organic)
+      else if (sourceBlock === 'organic_results') {
+        isSponsored = false;
+      }
+      // Fallback: Unknown
+      else {
+        isSponsored = null;
+      }
       
       rainforestData.set(asin, {
         asin,
         rank: i + 1, // Page position (1-indexed)
-        sponsored: isSponsored ? true : (item.is_sponsored === false ? false : null), // true, false, or null
+        sponsored: isSponsored, // true, false, or null
         ad_position: adPosition,
         page_position: i + 1,
         price,

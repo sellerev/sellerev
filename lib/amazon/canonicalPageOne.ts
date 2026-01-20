@@ -312,7 +312,8 @@ export function buildKeywordPageOne(
     if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
 
     const currentRank = listing.position || index + 1;
-    const isOrganic = !listing.is_sponsored;
+    // PART 4: Only count listings with is_sponsored === false as organic
+    const isOrganic = listing.is_sponsored === false;
     
     if (asinMap.has(asin)) {
       const existing = asinMap.get(asin)!;
@@ -423,7 +424,8 @@ export function buildKeywordPageOne(
   
   // Sort by organic rank (best rank first)
   // Filter to only organic listings for ranking, then slice to 49
-  const organicListings = deduplicatedListings.filter(l => !l.is_sponsored);
+  // PART 4: Only count listings with is_sponsored === false as organic
+  const organicListings = deduplicatedListings.filter(l => l.is_sponsored === false);
   const sponsoredListings = deduplicatedListings.filter(l => l.is_sponsored);
   
   // Sort organic listings by position (best rank first)
@@ -525,7 +527,8 @@ export function buildKeywordPageOne(
   // CALIBRATION LAYER: Normalize into trusted bands
   // ═══════════════════════════════════════════════════════════════════════════
   // Use capped listings for calibration
-  const organicListingsForCalibration = cappedListings.filter(l => !l.is_sponsored);
+  // PART 4: Only count listings with is_sponsored === false as organic
+  const organicListingsForCalibration = cappedListings.filter(l => l.is_sponsored === false);
   const sponsoredCount = cappedListings.filter(l => l.is_sponsored).length;
   const sponsoredDensity = cappedListings.length > 0
     ? (sponsoredCount / cappedListings.length) * 100
@@ -637,12 +640,18 @@ export function buildKeywordPageOne(
   // Sponsored listings do NOT inflate organic rank
   
   // Separate organic and sponsored listings for rank assignment
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PART 4: ORGANIC RANK CALCULATION
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CRITICAL: Increment organic_rank ONLY for listings where is_sponsored === false
+  // Sponsored listings (is_sponsored === true) MUST NOT affect organic ranking
+  // Unknown listings (is_sponsored === null) MUST NOT affect organic ranking
   // Use capped listings with metadata
   const organicListingsWithMetadata = cappedListingsWithMetadata.filter(
-    item => !item.listing.is_sponsored
+    item => item.listing.is_sponsored === false
   );
   const sponsoredListingsWithMetadata = cappedListingsWithMetadata.filter(
-    item => item.listing.is_sponsored
+    item => item.listing.is_sponsored === true
   );
   
   // Assign organic_rank to organic listings (1, 2, 3...)
@@ -655,10 +664,15 @@ export function buildKeywordPageOne(
     }));
   
   // Combine organic (with organic_rank) and sponsored (organic_rank = null)
+  // Unknown listings (is_sponsored === null) also get organic_rank = null
   // Sort by bestRank to maintain Page-1 order
   const allListingsWithRanks = [
     ...organicListingsRanked.map(item => ({ ...item, organicRank: item.organicRank })),
     ...sponsoredListingsWithMetadata.map(item => ({ ...item, organicRank: null })),
+    // Unknown listings (is_sponsored === null) also get organic_rank = null
+    ...cappedListingsWithMetadata
+      .filter(item => item.listing.is_sponsored === null)
+      .map(item => ({ ...item, organicRank: null })),
   ].sort((a, b) => a.bestRank - b.bestRank);
   
   // Build products with allocation weights (using capped listings)
@@ -1121,7 +1135,8 @@ export function buildKeywordPageOne(
     : avgPrice ?? 0;
   
   // Get estimated total market units (use market demand estimate or totalPage1Units)
-  const organicCountForDemand = cappedListings.filter(l => !l.is_sponsored).length;
+  // PART 4: Only count listings with is_sponsored === false as organic
+  const organicCountForDemand = cappedListings.filter(l => l.is_sponsored === false).length;
   const avgPriceForDemand = avgPrice ?? 0;
   const marketDemandEstimate = estimateMarketDemand({
     marketShape,

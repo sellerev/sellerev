@@ -29,11 +29,16 @@ export async function fetchSearchResults(
   }
 
   try {
-    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1`;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PART 1: UPDATE RAINFOREST SEARCH REQUEST - INCLUDE ADS
+    // ═══════════════════════════════════════════════════════════════════════════
+    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1&include_ads=true&include_sponsored=true`;
     
     console.log("INSTANT_ESTIMATE_SEARCH_REQUEST", {
       keyword,
       url: apiUrl.replace(rainforestApiKey, "***"),
+      include_ads: true,
+      include_sponsored: true,
     });
 
     const response = await fetch(apiUrl, {
@@ -63,23 +68,48 @@ export async function fetchSearchResults(
       throw new Error(`Search API error: ${raw.error}`);
     }
 
-    // Extract search_results from all possible locations
-    const allResultArrays: any[][] = [];
-
-    if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
-      allResultArrays.push(raw.search_results);
-    }
-    if (Array.isArray(raw.organic_results) && raw.organic_results.length > 0) {
-      allResultArrays.push(raw.organic_results);
-    }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Extract search_results from all possible locations with source tracking
+    const allSearchResults: Array<{ item: any; source: 'ads' | 'sponsored_products' | 'search_results' | 'organic_results' | 'results' | 'unknown' }> = [];
+    
+    // Collect from ads array (sponsored)
     if (Array.isArray(raw.ads) && raw.ads.length > 0) {
-      allResultArrays.push(raw.ads);
+      for (const item of raw.ads) {
+        allSearchResults.push({ item, source: 'ads' });
+      }
     }
+    
+    // Collect from sponsored_products array (if present)
+    if (Array.isArray(raw.sponsored_products) && raw.sponsored_products.length > 0) {
+      for (const item of raw.sponsored_products) {
+        allSearchResults.push({ item, source: 'sponsored_products' });
+      }
+    }
+    
+    // Collect from search_results array (mixed: may contain both organic and sponsored)
+    if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
+      for (const item of raw.search_results) {
+        allSearchResults.push({ item, source: 'search_results' });
+      }
+    }
+    
+    // Collect from organic_results array (organic)
+    if (Array.isArray(raw.organic_results) && raw.organic_results.length > 0) {
+      for (const item of raw.organic_results) {
+        allSearchResults.push({ item, source: 'organic_results' });
+      }
+    }
+    
+    // Collect from results array (fallback, unknown classification)
     if (Array.isArray(raw.results) && raw.results.length > 0) {
-      allResultArrays.push(raw.results);
+      for (const item of raw.results) {
+        allSearchResults.push({ item, source: 'results' });
+      }
     }
 
-    const searchResults = allResultArrays.flat();
+    const searchResults = allSearchResults;
 
     if (searchResults.length === 0) {
       console.log("INSTANT_ESTIMATE_NO_RESULTS", { keyword });
@@ -90,7 +120,9 @@ export async function fetchSearchResults(
     const products: SearchResultProduct[] = [];
 
     for (let i = 0; i < searchResults.length; i++) {
-      const item = searchResults[i];
+      const entry = searchResults[i];
+      const item = entry.item;
+      const sourceBlock = entry.source;
       const position = i + 1; // 1-indexed position
 
       // Parse price
@@ -105,6 +137,41 @@ export async function fetchSearchResults(
         price = parseFloat(item.price.replace(/[^0-9.]/g, "")) || 0;
       }
 
+      // ═══════════════════════════════════════════════════════════════════════════
+      // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Extract sponsored status using strict priority order
+      let isSponsored: boolean | null = null;
+      
+      // Priority 1: Check explicit is_sponsored flag
+      if (item.is_sponsored === true) {
+        isSponsored = true;
+      }
+      // Priority 2: Check badge_text for "Sponsored" (case-insensitive)
+      else if (item.badge_text && typeof item.badge_text === 'string' && item.badge_text.toLowerCase().includes('sponsored')) {
+        isSponsored = true;
+      }
+      // Priority 3: Check if ad_position is defined (indicates sponsored)
+      else if (item.ad_position !== undefined && item.ad_position !== null) {
+        isSponsored = true;
+      }
+      // Priority 4: Check source block (ads or sponsored_products)
+      else if (sourceBlock === 'ads' || sourceBlock === 'sponsored_products') {
+        isSponsored = true;
+      }
+      // Priority 5: Check if from search_results (treat as organic)
+      else if (sourceBlock === 'search_results') {
+        isSponsored = false;
+      }
+      // Priority 6: Check organic_results (explicitly organic)
+      else if (sourceBlock === 'organic_results') {
+        isSponsored = false;
+      }
+      // Fallback: Unknown
+      else {
+        isSponsored = null;
+      }
+
       // Only include products with valid prices
       if (price > 0) {
         products.push({
@@ -117,7 +184,7 @@ export async function fetchSearchResults(
             ? parseInt(item.reviews.count.toString().replace(/,/g, ""), 10)
             : undefined,
           image_url: item.image || undefined,
-          is_sponsored: item.is_sponsored || item.sponsored || false,
+          is_sponsored: isSponsored === true, // Convert to boolean for interface (true or false, never null)
         });
       }
     }

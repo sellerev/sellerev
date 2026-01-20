@@ -1245,12 +1245,17 @@ export async function fetchKeywordMarketSnapshot(
       apiCallCounter.count++;
     }
     
-    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1`;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PART 1: UPDATE RAINFOREST SEARCH REQUEST - INCLUDE ADS
+    // ═══════════════════════════════════════════════════════════════════════════
+    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1&include_ads=true&include_sponsored=true`;
     console.log("RAINFOREST_API_REQUEST", { 
       keyword, 
       url: apiUrl.replace(rainforestApiKey, "***"),
       api_call_count: apiCallCounter?.count || 0,
       api_calls_remaining: apiCallCounter ? apiCallCounter.max - apiCallCounter.count : "unlimited",
+      include_ads: true,
+      include_sponsored: true,
     });
     
     // Fetch Amazon search results via Rainforest API
@@ -1370,32 +1375,56 @@ export async function fetchKeywordMarketSnapshot(
       return null;
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
+    // ═══════════════════════════════════════════════════════════════════════════
     // Step 2: Collect ALL listings from ALL possible locations in Rainforest response
     // PAGE-1 SCOPE: All results come from page=1 API call above - includes both organic and sponsored
-    // Check: search_results, organic_results, ads (sponsored), results, etc.
-    const allResultArrays: any[][] = [];
+    // Check: search_results, organic_results, ads (sponsored), sponsored_products, results, etc.
+    // CRITICAL: Track source for each listing to properly classify sponsored vs organic
+    const searchResults: Array<{ item: any; source: 'ads' | 'sponsored_products' | 'search_results' | 'organic_results' | 'results' | 'unknown' }> = [];
     
-    if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
-      allResultArrays.push(raw.search_results);
-    }
-    if (Array.isArray(raw.organic_results) && raw.organic_results.length > 0) {
-      allResultArrays.push(raw.organic_results);
-    }
+    // Collect from ads array (sponsored)
     if (Array.isArray(raw.ads) && raw.ads.length > 0) {
-      allResultArrays.push(raw.ads); // Sponsored listings from Page-1
-    }
-    if (Array.isArray(raw.results) && raw.results.length > 0) {
-      allResultArrays.push(raw.results);
+      for (const item of raw.ads) {
+        searchResults.push({ item, source: 'ads' });
+      }
     }
     
-    // Flatten all arrays into a single array (Page-1 only: organic + sponsored)
-    const searchResults = allResultArrays.flat();
+    // Collect from sponsored_products array (if present)
+    if (Array.isArray(raw.sponsored_products) && raw.sponsored_products.length > 0) {
+      for (const item of raw.sponsored_products) {
+        searchResults.push({ item, source: 'sponsored_products' });
+      }
+    }
+    
+    // Collect from search_results array (mixed: may contain both organic and sponsored)
+    if (Array.isArray(raw.search_results) && raw.search_results.length > 0) {
+      for (const item of raw.search_results) {
+        searchResults.push({ item, source: 'search_results' });
+      }
+    }
+    
+    // Collect from organic_results array (organic)
+    if (Array.isArray(raw.organic_results) && raw.organic_results.length > 0) {
+      for (const item of raw.organic_results) {
+        searchResults.push({ item, source: 'organic_results' });
+      }
+    }
+    
+    // Collect from results array (fallback, unknown classification)
+    if (Array.isArray(raw.results) && raw.results.length > 0) {
+      for (const item of raw.results) {
+        searchResults.push({ item, source: 'results' });
+      }
+    }
     
     console.log("COLLECTED_LISTINGS_FROM_ALL_SOURCES", {
       keyword,
       search_results_count: Array.isArray(raw.search_results) ? raw.search_results.length : 0,
       organic_results_count: Array.isArray(raw.organic_results) ? raw.organic_results.length : 0,
       ads_count: Array.isArray(raw.ads) ? raw.ads.length : 0,
+      sponsored_products_count: Array.isArray(raw.sponsored_products) ? raw.sponsored_products.length : 0,
       results_count: Array.isArray(raw.results) ? raw.results.length : 0,
       total_collected: searchResults.length,
     });
@@ -1406,13 +1435,13 @@ export async function fetchKeywordMarketSnapshot(
         keyword,
         has_raw: !!raw,
         raw_keys: raw ? Object.keys(raw) : [],
-        checked_locations: ["search_results", "organic_results", "ads", "results"],
+        checked_locations: ["search_results", "organic_results", "ads", "sponsored_products", "results"],
       });
       return null;
     }
     
     // Count ASINs to verify we have valid listings
-    const asinCount = searchResults.filter((item: any) => item.asin).length;
+    const asinCount = searchResults.filter((entry: any) => entry.item?.asin).length;
     extractedAsinCount = asinCount; // TASK 2: Track for error classification
     apiReturnedResults = searchResults.length > 0; // TASK 2: Track if API returned results
     
@@ -1420,14 +1449,14 @@ export async function fetchKeywordMarketSnapshot(
       console.log("No ASINs found in any result", {
         keyword,
         total_items: searchResults.length,
-        sample_item: searchResults[0] ? Object.keys(searchResults[0]) : null,
+        sample_item: searchResults[0]?.item ? Object.keys(searchResults[0].item) : null,
       });
       return null; // TASK 2: This is genuine "zero_asins" case
     }
 
     // DEBUG TASK: Log one full product object for inspection (Step 1 & 2)
     if (searchResults.length > 0) {
-      const sampleProduct = searchResults[0];
+      const sampleProduct = searchResults[0].item;
       console.log("SAMPLE_PRODUCT_FULL_OBJECT", {
         keyword,
         asin: sampleProduct.asin,
@@ -1466,8 +1495,8 @@ export async function fetchKeywordMarketSnapshot(
 
     // STEP B: Extract all Page-1 ASINs (all listings, not just top 20)
     const page1Asins = searchResults
-      .filter((item: any) => item.asin)
-      .map((item: any) => item.asin);
+      .filter((entry: any) => entry.item?.asin)
+      .map((entry: any) => entry.item.asin);
     
     console.log("SEARCH_ASINS_COUNT", {
       keyword,
@@ -1868,7 +1897,8 @@ export async function fetchKeywordMarketSnapshot(
     try {
       // PHASE 1: Detect duplicate BSRs before normalization (non-disruptive)
       // This allows us to mark invalid BSRs during normalization
-      const tempListingsForDetection = searchResults.map((item: any, index: number) => {
+      const tempListingsForDetection = searchResults.map((entry: { item: any; source: string }, index: number) => {
+        const item = entry.item;
         const asin = item.asin ?? null;
         const position = item.position ?? index + 1;
         
@@ -1900,7 +1930,10 @@ export async function fetchKeywordMarketSnapshot(
       const invalidBSRs = detectDuplicateBSRs(tempListingsForDetection);
       
       // Now parse listings with duplicate detection applied
-      parsedListings = searchResults.map((item: any, index: number) => {
+      parsedListings = searchResults.map((entry: { item: any; source: string }, index: number) => {
+      const item = entry.item;
+      const sourceBlock = entry.source;
+      
       // Step 2: ASIN is required, everything else is optional
       const asin = item.asin ?? null;
       
@@ -1918,35 +1951,59 @@ export async function fetchKeywordMarketSnapshot(
       const reviews = parseReviews(item); // Nullable
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // SPONSORED DETECTION: Rainforest SERP + link pattern detection
+      // PART 2: PARSE SPONSORED RESULTS FROM RAINFOREST RESPONSE
       // ═══════════════════════════════════════════════════════════════════════════
+      // SPONSORED DETECTION: Strict priority order (DO NOT infer blindly)
       // CRITICAL: Do NOT infer sponsored from rank, reviews, price, or BSR
       // SP-API MUST NOT be used for sponsored detection (has no ad data)
-      // Mark a listing as sponsored if:
-      //   - item.sponsored === true OR
-      //   - item.is_sponsored === true OR
-      //   - item.link contains '/sspa/'
+      // 
+      // Priority order:
+      // 1) product.is_sponsored === true → is_sponsored = true, sponsored_source = "rainforest_explicit"
+      // 2) product.badge_text contains "Sponsored" → is_sponsored = true, sponsored_source = "badge"
+      // 3) product.ad_position is defined → is_sponsored = true, sponsored_source = "ad_position"
+      // 4) product came from response.ads or response.sponsored_products → is_sponsored = true, sponsored_source = "ads_block"
+      // 5) product came from response.search_results → is_sponsored = false, sponsored_source = "organic_serp"
+      // 6) Else → is_sponsored = null, sponsored_source = "unknown"
       let is_sponsored: boolean | null = null;
       let sponsored_position: number | null = null;
-      let sponsored_source: 'rainforest' | 'link_pattern' | 'unknown' = 'unknown';
+      let sponsored_source: 'rainforest_explicit' | 'badge' | 'ad_position' | 'ads_block' | 'organic_serp' | 'unknown' = 'unknown';
       
-      // Check Rainforest SERP flag first
-      const hasSponsoredFlag = item.sponsored === true || item.is_sponsored === true;
-      const hasNonSponsoredFlag = item.sponsored === false || item.is_sponsored === false;
-      
-      // Check link pattern for '/sspa/' (Amazon sponsored ad pattern)
-      const link = item.link || item.url || '';
-      const hasSspaPattern = typeof link === 'string' && link.includes('/sspa/');
-      
-      if (hasSponsoredFlag || hasSspaPattern) {
+      // Priority 1: Check explicit is_sponsored flag
+      if (item.is_sponsored === true) {
         is_sponsored = true;
         sponsored_position = item.ad_position ?? null;
-        sponsored_source = hasSponsoredFlag ? 'rainforest' : 'link_pattern';
-      } else if (hasNonSponsoredFlag) {
+        sponsored_source = 'rainforest_explicit';
+      }
+      // Priority 2: Check badge_text for "Sponsored" (case-insensitive)
+      else if (item.badge_text && typeof item.badge_text === 'string' && item.badge_text.toLowerCase().includes('sponsored')) {
+        is_sponsored = true;
+        sponsored_position = item.ad_position ?? null;
+        sponsored_source = 'badge';
+      }
+      // Priority 3: Check if ad_position is defined (indicates sponsored)
+      else if (item.ad_position !== undefined && item.ad_position !== null) {
+        is_sponsored = true;
+        sponsored_position = item.ad_position;
+        sponsored_source = 'ad_position';
+      }
+      // Priority 4: Check source block (ads or sponsored_products)
+      else if (sourceBlock === 'ads' || sourceBlock === 'sponsored_products') {
+        is_sponsored = true;
+        sponsored_position = item.ad_position ?? null;
+        sponsored_source = 'ads_block';
+      }
+      // Priority 5: Check if from search_results (treat as organic)
+      else if (sourceBlock === 'search_results') {
         is_sponsored = false;
-        sponsored_source = 'rainforest';
-      } else {
-        // Neither flag nor pattern found - set to null (unknown)
+        sponsored_source = 'organic_serp';
+      }
+      // Priority 6: Check organic_results (explicitly organic)
+      else if (sourceBlock === 'organic_results') {
+        is_sponsored = false;
+        sponsored_source = 'organic_serp';
+      }
+      // Fallback: Unknown
+      else {
         is_sponsored = null;
         sponsored_source = 'unknown';
       }
@@ -2679,22 +2736,31 @@ export async function fetchKeywordMarketSnapshot(
       : 0;
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // DIAGNOSTICS: Sponsored vs Organic Classification
+    // PART 5: SNAPSHOT + DIAGNOSTIC LOGS (MANDATORY)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Log sponsored/organic counts and percentage for diagnostics
-    // This must match visible Amazon SERP reality
+    // Calculate sponsored sources breakdown
+    const sponsoredSourcesBreakdown: Record<string, number> = {};
+    listings.forEach((l) => {
+      if (l.is_sponsored === true && l.sponsored_source) {
+        const source = l.sponsored_source;
+        sponsoredSourcesBreakdown[source] = (sponsoredSourcesBreakdown[source] || 0) + 1;
+      }
+    });
+    
     const percent_sponsored_page1 = total_page1_listings > 0
       ? Number(((sponsored_count / total_page1_listings) * 100).toFixed(1))
       : 0;
     
-    console.log("📊 SPONSORED_ORGANIC_DIAGNOSTICS", {
-      keyword,
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SPONSORED_ORGANIC_DIAGNOSTICS (MANDATORY - PART 5)
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log("SPONSORED_ORGANIC_DIAGNOSTICS", {
+      total_listings: total_page1_listings,
       sponsored_count,
       organic_count,
-      unknown_sponsored_count,
-      total_page1_listings,
-      percent_sponsored_page1,
-      sponsored_pct,
+      unknown_count: unknown_sponsored_count,
+      sponsored_sources_breakdown: sponsoredSourcesBreakdown,
+      keyword,
       timestamp: new Date().toISOString(),
     });
     
