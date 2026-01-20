@@ -686,84 +686,44 @@ export default function AnalyzeForm({
   // This handles URL navigation between different analyses (browser back/forward, refresh, direct URL entry)
   // Note: When creating new analysis via router.replace(), props won't change, so state is updated directly in analyze()
   useEffect(() => {
-    // CRITICAL: Never clear state if we have valid listings - they take priority over initialAnalysis
-    // This prevents router.replace() from clearing state when server hasn't loaded the analysis yet
-    const hasValidListings = analysis?.page_one_listings && analysis.page_one_listings.length > 0;
-    const currentRunId = analysis?.analysis_run_id;
-    const incomingRunId = initialAnalysis?.analysis_run_id;
-    
-    // Sync analysis state when initialAnalysis prop changes (indicates URL navigation or refresh)
+    // SIMPLIFIED RULE: If incoming analysis has products, always overwrite state
+    // Run IDs are informational only - never block syncing based on them
     if (initialAnalysis) {
-      // Only update if this is a different analysis (different run ID)
-      // Don't overwrite if we have the same run ID and valid listings
-      if (currentRunId !== incomingRunId) {
-        // Different run ID - only sync if incoming analysis has valid data
-        // Don't overwrite valid client state with incomplete server data
-        const incomingHasListings = initialAnalysis.page_one_listings && initialAnalysis.page_one_listings.length > 0;
-        
-        if (incomingHasListings || !hasValidListings) {
-          // Incoming has listings OR we don't have valid listings - safe to sync
-          console.log("FRONTEND_SYNC_FROM_INITIAL", {
-            prev_run_id: currentRunId,
-            new_run_id: incomingRunId,
-            has_prev_listings: hasValidListings,
-            has_incoming_listings: incomingHasListings,
-          });
-          setAnalysis(normalizeAnalysis(initialAnalysis));
-          // CRITICAL: keep chat wired to the currently viewed analysis.
-          // Without this, navigating to a run from the in-chat History panel can leave ChatSidebar
-          // with analysisRunId=null (or a stale ID), causing sendMessage() to no-op.
-          setAnalysisRunIdForChat(initialAnalysis.analysis_run_id || null);
-          setInputValue(initialAnalysis.input_value || "");
-          setIsEstimated(false);
-          setSnapshotType("snapshot");
-          setChatMessages(initialMessages);
-          // Reset selection when switching runs to avoid applying prior selection to a different market
-          setSelectedAsins([]);
-          // Reset sort to default (Amazon rank) when new analysis loads
-          setSortBy("rank");
-          // Reset filters when new analysis loads
-          setSelectedBrands(new Set());
-          setSelectedFulfillment(new Set());
-          setSponsoredFilter(null);
-          setBrandDropdownOpen(false);
-        } else {
-          // We have valid listings but incoming doesn't - preserve client state
-          // This happens when router.replace() triggers before DB save completes
-          console.log("FRONTEND_PRESERVE_DURING_SWITCH", {
-            prev_run_id: currentRunId,
-            new_run_id: incomingRunId,
-            has_prev_listings: hasValidListings,
-            has_incoming_listings: incomingHasListings,
-            reason: "Preserving valid listings during search switch - incoming analysis incomplete",
-          });
-          // DO NOT clear - keep the state until incoming has valid data
-        }
-      } else if (hasValidListings) {
-        // Same run ID and we have valid listings - don't overwrite client state
-        console.log("FRONTEND_SKIP_SYNC_SAME_RUN", {
-          run_id: initialAnalysis.analysis_run_id,
-          reason: "Same run ID with valid listings - preserving client state",
+      const incomingProducts = initialAnalysis.page_one_listings || initialAnalysis.products || [];
+      const incomingHasProducts = incomingProducts.length > 0;
+      
+      if (incomingHasProducts) {
+        // Incoming has products - always sync (this is the source of truth)
+        console.log("FRONTEND_SYNC_FROM_INITIAL", {
+          prev_run_id: analysis?.analysis_run_id,
+          new_run_id: initialAnalysis.analysis_run_id,
+          has_prev_listings: !!(analysis?.page_one_listings && analysis.page_one_listings.length > 0),
+          has_incoming_listings: incomingHasProducts,
+          incoming_count: incomingProducts.length,
         });
+        setAnalysis(normalizeAnalysis(initialAnalysis));
+        // CRITICAL: keep chat wired to the currently viewed analysis.
+        // Without this, navigating to a run from the in-chat History panel can leave ChatSidebar
+        // with analysisRunId=null (or a stale ID), causing sendMessage() to no-op.
+        setAnalysisRunIdForChat(initialAnalysis.analysis_run_id || null);
+        setInputValue(initialAnalysis.input_value || "");
+        setIsEstimated(false);
+        setSnapshotType("snapshot");
+        setChatMessages(initialMessages);
+        // Reset selection when switching runs to avoid applying prior selection to a different market
+        setSelectedAsins([]);
+        // Reset sort to default (Amazon rank) when new analysis loads
+        setSortBy("rank");
+        // Reset filters when new analysis loads
+        setSelectedBrands(new Set());
+        setSelectedFulfillment(new Set());
+        setSponsoredFilter(null);
+        setBrandDropdownOpen(false);
       }
+      // If incoming has no products, don't overwrite (preserve existing state)
+      // This handles edge cases where server hasn't loaded data yet
     } else {
       // No initialAnalysis means no run param - reset to blank state
-      // CRITICAL: NEVER clear if we have valid listings - they take absolute priority
-      // This is the key fix: preserve client state even if server returns null
-      if (hasValidListings) {
-        // We have valid listings - preserve them at all costs
-        // This happens when router.replace() triggers before server can load from DB
-        console.log("FRONTEND_PRESERVE_STATE_NO_INITIAL", {
-          has_listings: true,
-          has_analysis_run_id: !!analysisRunIdForChat,
-          listings_count: analysis?.page_one_listings?.length || 0,
-          current_run_id: currentRunId,
-          reason: "Preserving valid listings - initialAnalysis is null but listings exist",
-        });
-        // DO NOT clear - keep the state
-        return;
-      }
-      
       // Only clear if we truly have no listings AND no run ID
       const shouldClear = analysis !== null && !analysisRunIdForChat;
       
@@ -774,18 +734,18 @@ export default function AnalyzeForm({
         setAnalysis(null);
         setAnalysisRunIdForChat(null);
         setInputValue("");
-      setIsEstimated(false);
-      setSnapshotType("snapshot");
-      setShowRefiningBadge(false);
-      setNextUpdateExpectedSec(null);
-      setChatMessages([]);
-      setSelectedAsins([]);
-      setSortBy("rank");
-      // Reset filters when resetting to blank state
-      setSelectedBrands(new Set());
-      setSelectedFulfillment(new Set());
-      setSponsoredFilter(null);
-      setBrandDropdownOpen(false);
+        setIsEstimated(false);
+        setSnapshotType("snapshot");
+        setShowRefiningBadge(false);
+        setNextUpdateExpectedSec(null);
+        setChatMessages([]);
+        setSelectedAsins([]);
+        setSortBy("rank");
+        // Reset filters when resetting to blank state
+        setSelectedBrands(new Set());
+        setSelectedFulfillment(new Set());
+        setSponsoredFilter(null);
+        setBrandDropdownOpen(false);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1058,8 +1018,8 @@ export default function AnalyzeForm({
       // Store snapshot last_updated for freshness badge
       setSnapshotLastUpdated(data.snapshot_last_updated || null);
 
-      // CRITICAL: Set analysis state - guard against clearing valid listings
-      // This prevents router.replace() from triggering a state clear via useEffect
+      // CRITICAL: Set analysis state - always overwrite with new data if it has products
+      // Products array is the source of truth - never block updates based on run ID
       setAnalysis((prev) => {
         const newAnalysis = normalizeAnalysis(analysisData);
         
@@ -1073,24 +1033,24 @@ export default function AnalyzeForm({
           has_analysis_run_id: !!data.analysisRunId,
         });
         
-        // If previous analysis has listings and new one doesn't, keep previous
-        // BUT: Only do this if we're NOT setting a valid analysis (guard against empty updates)
-        if (prev?.page_one_listings && prev.page_one_listings.length > 0) {
-          if (!newAnalysis?.page_one_listings || newAnalysis.page_one_listings.length === 0) {
-            // Only prevent update if this looks like an accidental clear
-            // If we have a valid analysisRunId, we're setting new data - allow it
-            if (!data.analysisRunId) {
-              console.warn("FRONTEND_GUARD: Preventing clearing of valid listings", {
-                prev_listings: prev.page_one_listings.length,
-                new_listings: newAnalysis?.page_one_listings?.length || 0,
-                message: "Keeping previous analysis with listings",
-              });
-              return prev;
-            }
-          }
+        // SIMPLIFIED: If new analysis has products, always use it (source of truth)
+        // We already validated that pageOneListings.length > 0 earlier (line 947)
+        // so newAnalysis should always have products here
+        if (newAnalysis?.page_one_listings && newAnalysis.page_one_listings.length > 0) {
+          return newAnalysis;
         }
         
-        // Always return new analysis - it has listings and we have a valid run ID
+        // Fallback: if somehow we got here without products, keep previous state
+        // This should never happen due to earlier validation, but defensive programming
+        if (prev?.page_one_listings && prev.page_one_listings.length > 0) {
+          console.warn("FRONTEND_FALLBACK: New analysis has no products, keeping previous", {
+            prev_listings: prev.page_one_listings.length,
+            new_listings: newAnalysis?.page_one_listings?.length || 0,
+          });
+          return prev;
+        }
+        
+        // No previous state and no new products - return new analysis anyway
         return newAnalysis;
       });
       setError(null);
