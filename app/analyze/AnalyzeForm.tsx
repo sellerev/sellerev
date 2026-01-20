@@ -864,22 +864,46 @@ export default function AnalyzeForm({
         return;
       }
 
-      if (!data.decision) {
-        console.error("ANALYZE_MISSING_DECISION", { data });
-        setError("Analysis completed but no decision data returned");
+      // ❗ Only error if NO renderable market data exists
+      // Decision is now OPTIONAL - market data is sufficient to render
+      const pageOneListings = (data as any).page_one_listings || (data as any).products || [];
+      const snapshot = (data as any).snapshot || (data as any).market_snapshot;
+      const aggregates = (data as any).aggregates_derived_from_page_one;
+      
+      const hasRenderableMarketData =
+        pageOneListings.length > 0 &&
+        (snapshot?.avg_price != null || aggregates?.avg_price != null) &&
+        (snapshot?.est_total_monthly_revenue_min != null ||
+         snapshot?.est_total_monthly_revenue_max != null ||
+         aggregates?.total_page1_revenue != null ||
+         aggregates?.total_monthly_revenue_est != null);
+
+      if (!hasRenderableMarketData) {
+        console.error("ANALYZE_INSUFFICIENT_MARKET_DATA", { data });
+        setError("Analysis failed: no market data returned");
         setLoading(false);
         return;
       }
 
+      // ✅ Decision is OPTIONAL - log warning if missing but continue
+      if (!data.decision) {
+        console.warn("ANALYZE_MISSING_DECISION_BUT_MARKET_VALID", {
+          listings: pageOneListings.length,
+          has_snapshot: !!snapshot,
+          has_aggregates: !!aggregates,
+        });
+        // Continue without decision - market data is sufficient
+      }
+
       // Transform response to match AnalysisResponse interface
-      // data.decision already contains: decision, executive_summary, reasoning, risks, recommended_actions, assumptions_and_limits, numbers_used, market_snapshot
+      // data.decision may be null - handle gracefully
       
       // Normalize market_snapshot: extract from decision.market_snapshot and ensure it's an object or null
       // Never assume arrays - snapshot is always an object with the new structure
       // FIX FRONTEND STATE: Ensure listings are preserved
       // Check for market_snapshot from keywordMarket (new structure at top level) or decision.market_snapshot
-      const keywordMarketSnapshot = (data as any).market_snapshot;
-      const decisionMarketSnapshot = data.decision.market_snapshot || null;
+      const keywordMarketSnapshot = (data as any).market_snapshot || snapshot;
+      const decisionMarketSnapshot = data.decision?.market_snapshot || null;
       const preservedMarketSnapshot = keywordMarketSnapshot || decisionMarketSnapshot;
       
       // Preserve listings array if it exists - do NOT strip it
@@ -898,29 +922,35 @@ export default function AnalyzeForm({
       }
       
       // PART G: Extract margin_snapshot from decision (first-class feature)
-      const marginSnapshot = data.decision.margin_snapshot || null;
+      const marginSnapshot = data.decision?.margin_snapshot || null;
       
       const analysisData: AnalysisResponse = {
         analysis_run_id: data.analysisRunId,
         created_at: new Date().toISOString(),
         input_type: "keyword",
         input_value: inputValue.trim(),
-        decision: data.decision.decision,
-        executive_summary: data.decision.executive_summary,
-        reasoning: data.decision.reasoning,
-        risks: data.decision.risks,
-        recommended_actions: data.decision.recommended_actions,
-        assumptions_and_limits: data.decision.assumptions_and_limits,
+        // Decision is optional - use null if missing
+        decision: data.decision?.decision || null,
+        executive_summary: data.decision?.executive_summary || "Market data loaded. Decision confidence is still processing.",
+        reasoning: data.decision?.reasoning || { primary_factors: [], seller_context_impact: "" },
+        risks: data.decision?.risks || {
+          competition: { level: "unknown", explanation: "Analysis in progress" },
+          pricing: { level: "unknown", explanation: "Analysis in progress" },
+          differentiation: { level: "unknown", explanation: "Analysis in progress" },
+          operations: { level: "unknown", explanation: "Analysis in progress" },
+        },
+        recommended_actions: data.decision?.recommended_actions || { must_do: [], should_do: [], avoid: [] },
+        assumptions_and_limits: data.decision?.assumptions_and_limits || [],
         market_snapshot: preservedMarketSnapshot && typeof preservedMarketSnapshot === 'object' && !Array.isArray(preservedMarketSnapshot) 
           ? preservedMarketSnapshot 
           : null,
         margin_snapshot: marginSnapshot && typeof marginSnapshot === 'object' && !Array.isArray(marginSnapshot) && marginSnapshot !== null
           ? marginSnapshot
           : undefined,
-        // Extract canonical Page-1 products from decision (final authority)
-        page_one_listings: data.decision.page_one_listings ?? [],
-        products: data.decision.products ?? [],
-        aggregates_derived_from_page_one: data.decision.aggregates_derived_from_page_one,
+        // Extract canonical Page-1 products from data (may be at top level or in decision)
+        page_one_listings: pageOneListings.length > 0 ? pageOneListings : (data.decision?.page_one_listings ?? []),
+        products: pageOneListings.length > 0 ? pageOneListings : (data.decision?.products ?? []),
+        aggregates_derived_from_page_one: aggregates || data.decision?.aggregates_derived_from_page_one,
       };
       
       console.log("ANALYZE_SUCCESS", { 
