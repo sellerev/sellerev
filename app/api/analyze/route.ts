@@ -1689,6 +1689,9 @@ export async function POST(req: NextRequest) {
         revenue_confidence: 'medium' as const,
       } as ParsedListing));
       
+      // REMOVED: Reliability gate that blocked listings
+      // If listings exist, we'll return them (even if from cache/snapshot)
+      // Warnings will be added for data quality instead of blocking
       if (listings.length === 0) {
         if (dataSource === "market") {
           console.error("🔴 FATAL: dataSource === 'market' but snapshot branch generated estimated products", {
@@ -1707,14 +1710,8 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        return NextResponse.json(
-          {
-            success: false,
-            code: "PAGE1_LISTINGS_UNAVAILABLE",
-            error: "Unable to load reliable Page-1 listings for this keyword.",
-          },
-          { status: 422, headers: res.headers }
-        );
+        // Continue - will check for canonicalProducts later before final return
+        // Don't block here - fresh market data might still be available
       }
       
       // Compute sponsored_count and fulfillment_mix from cached products
@@ -1772,17 +1769,14 @@ export async function POST(req: NextRequest) {
       };
     } else {
       // Step 2: No snapshot exists (and no market fetch was used).
-      // Hard requirement: do NOT fabricate Page-1 listings. Queue work and return a hard error.
+      // Continue - will check for canonicalProducts later before final return
+      // Don't block here - fresh market data might still be available
       const normalizedKeyword = body.input_value.toLowerCase().trim();
-      await queueKeyword(supabase, normalizedKeyword, 5, user.id, marketplace);
-      return NextResponse.json(
-        {
-          success: false,
-          code: "PAGE1_LISTINGS_UNAVAILABLE",
-          error: "Unable to load reliable Page-1 listings for this keyword.",
-        },
-        { status: 422, headers: res.headers }
-      );
+      await queueKeyword(supabase, normalizedKeyword, 5, user.id, marketplace).catch((err) => {
+        console.warn("Failed to queue keyword:", err);
+        // Non-blocking - continue anyway
+      });
+      // Continue to check for fresh market data
       }
     }
 
@@ -1812,7 +1806,7 @@ export async function POST(req: NextRequest) {
       }
     }
     
-    // CRITICAL: keywordMarketData must never be null at this point
+    // CRITICAL: keywordMarketData must never be null at this point (for market dataSource)
     if (!keywordMarketData) {
       if (dataSource === "market") {
         console.error("🔴 FATAL: dataSource === 'market' but keywordMarketData is null", {
@@ -1831,18 +1825,14 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      return NextResponse.json(
-        {
-          success: false,
-          code: "PAGE1_LISTINGS_UNAVAILABLE",
-          error: "Unable to load reliable Page-1 listings for this keyword.",
-        },
-        { status: 422, headers: res.headers }
-      );
+      // Continue - will check for canonicalProducts later before final return
+      // Don't block here based on keywordMarketData - canonicalProducts might still exist
     }
     
-    // FINAL GUARANTEE: Ensure listings are never empty before proceeding
-    if (!keywordMarketData.listings || keywordMarketData.listings.length === 0) {
+    // REMOVED: Reliability gate that blocked empty listings
+    // If keywordMarketData.listings is empty but canonicalProducts exist, we'll return those
+    // Only hard-fail if dataSource === "market" and rawRainforestListings exist but listings are empty
+    if (keywordMarketData && (!keywordMarketData.listings || keywordMarketData.listings.length === 0)) {
       if (dataSource === "market") {
         console.error("🔴 FATAL: dataSource === 'market' but listings array is empty", {
           keyword: body.input_value,
@@ -1861,14 +1851,8 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      return NextResponse.json(
-        {
-          success: false,
-          code: "PAGE1_LISTINGS_UNAVAILABLE",
-          error: "Unable to load reliable Page-1 listings for this keyword.",
-        },
-        { status: 422, headers: res.headers }
-      );
+      // Continue - will check for canonicalProducts later before final return
+      // Don't block here based on keywordMarketData.listings - canonicalProducts might still exist
     }
 
     // Determine data source: market (real) vs snapshot (estimated)
@@ -3476,37 +3460,49 @@ export async function POST(req: NextRequest) {
     // }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 🛡️ MARKET DATA VALIDATION GUARD (FINAL GATE - MINIMAL STRICTNESS)
+    // 🛡️ FINAL LISTINGS CHECK (ONLY GATE - No Reliability Requirements)
     // ═══════════════════════════════════════════════════════════════════════════
-    // CRITICAL: Phase 1 never throws - only downgrades confidence
-    // If baseListings.length === 0, return success with warnings (not error)
-    // Partial BSR coverage, missing decision data, or missing revenue estimates are ALLOWED
+    // CRITICAL: Only return error if NO listings exist at all (canonicalProducts OR baseListings)
+    // Reliability checks (BSR coverage, organic count, sponsored mix) are NOT gates
+    // They only add warnings and set confidence flags
     // ═══════════════════════════════════════════════════════════════════════════
-    // PHASE 1 RULE: Never delete data early, only downgrade confidence later
-    // If no listings found, return with warning instead of error
-    if (!hasRenderableMarket || baseListings.length === 0) {
-      console.warn("PHASE_1_NO_LISTINGS_WARNING", {
+    
+    // Check if we have ANY listings (canonicalProducts takes priority, then baseListings)
+    const finalListings = canonicalProducts.length > 0 ? canonicalProducts : baseListings;
+    
+    console.log("FINAL_ANALYZE_RETURN", {
+      listings: finalListings.length,
+      canonical_listings: canonicalProducts.length,
+      base_listings: baseListings.length,
+      keyword: body.input_value,
+    });
+    
+    // ONLY return error if truly NO listings exist from ANY source
+    if (finalListings.length === 0) {
+      console.warn("NO_LISTINGS_AVAILABLE", {
         keyword: body.input_value,
+        canonicalProducts_count: canonicalProducts.length,
         baseListings_count: baseListings.length,
         hasRenderableMarket,
-        message: "Phase 1 completed but no listings found - returning with warning",
+        message: "No listings found from any source - returning error",
       });
       
-      // Return success with warnings instead of error
       return NextResponse.json(
         {
-          success: true,
-          warnings: ["NO_RESULTS_RETURNED"],
-          message: "No listings found in Rainforest search results",
+          success: false,
+          error: "No listings found",
+          message: "No Page-1 listings were available for this keyword from Rainforest or cache.",
           listings: [],
           snapshot: null,
         },
         { 
-          status: 200,
+          status: 404, // Use 404 for "not found" instead of 422 for "unprocessable"
           headers: res.headers,
         }
       );
     }
+    
+    // If listings exist, continue to return them (with warnings if data quality is low)
 
     // Build response with required shape - always include listings and snapshot
     // AI decision data is disabled - all decision fields will be null
@@ -3585,9 +3581,10 @@ export async function POST(req: NextRequest) {
         snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
         snapshot_last_updated: snapshotLastUpdated,
         // CRITICAL: Always include listings - never drop them (required for UI rendering)
-        page_one_listings: canonicalProducts,
-        products: canonicalProducts,
-        listings: canonicalProducts, // Ensure listings field is always present
+        // Use finalListings (canonicalProducts if available, otherwise baseListings)
+        page_one_listings: finalListings,
+        products: finalListings,
+        listings: finalListings, // Ensure listings field is always present
         aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
         // Spread contractResponse but ensure AI fields are null if not present
         ...(contractResponse ? {
