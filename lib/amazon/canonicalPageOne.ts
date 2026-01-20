@@ -53,7 +53,7 @@ export interface CanonicalProduct {
   // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
   is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown (Rainforest SERP only)
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
-  sponsored_source: 'rainforest' | 'link_pattern' | 'unknown'; // Source of sponsored data
+  sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data
   // Additional sponsored fields for clarity
   isSponsored?: boolean | null; // Alias for is_sponsored (for compatibility)
   organicPosition?: number | null; // Alias for organic_rank (null if sponsored)
@@ -825,7 +825,8 @@ export function buildKeywordPageOne(
     // CRITICAL: Preserve is_sponsored as-is (true/false/null), don't coerce null to false
     const isSponsored = l.is_sponsored; // Preserve null (unknown) state
     const sponsoredPosition = l.sponsored_position ?? null;
-    const sponsoredSource = l.sponsored_source ?? 'unknown';
+    // sponsored_source is now 'rainforest_serp' | 'organic_serp', default to 'organic_serp' if missing
+    const sponsoredSource = l.sponsored_source ?? 'organic_serp';
     
     // Apply demand floor (use 0 if reviewCount is null for floor calculation)
     // For floor calculation, treat null sponsored as false (conservative)
@@ -1090,7 +1091,7 @@ export function buildKeywordPageOne(
       // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
       is_sponsored: isSponsored, // true = sponsored, false = organic, null = unknown
       sponsored_position: sponsoredPosition, // Ad position from Rainforest (null if not sponsored)
-      sponsored_source: sponsoredSource, // Source of sponsored data ('rainforest' | 'link_pattern' | 'unknown')
+      sponsored_source: sponsoredSource, // Source of sponsored data ('rainforest_serp' | 'organic_serp')
       // Additional sponsored fields for clarity
       isSponsored: isSponsored, // Alias for is_sponsored (for compatibility)
       organicPosition: pw.organicRank, // Alias for organic_rank (null if sponsored)

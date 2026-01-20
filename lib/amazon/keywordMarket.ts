@@ -20,7 +20,7 @@ export interface ParsedListing {
   reviews: number | null;
   is_sponsored: boolean | null; // Sponsored status from Rainforest SERP (null = unknown)
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
-  sponsored_source: 'rainforest' | 'unknown'; // Source of sponsored data (Rainforest SERP only)
+  sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data (Rainforest SERP only)
   position: number; // Organic rank (1-indexed position on Page 1)
   brand: string | null;
   image_url: string | null; // Rainforest search_results[].image
@@ -2062,7 +2062,7 @@ export async function fetchKeywordMarketSnapshot(
         reviews, // Optional (nullable)
         is_sponsored, // Boolean | null (null = unknown, Rainforest SERP only)
         sponsored_position, // Number | null (ad position from Rainforest)
-        sponsored_source, // 'rainforest' | 'unknown' (source of sponsored data)
+        sponsored_source, // 'rainforest_serp' | 'organic_serp' (source of sponsored data)
         position,
         brand, // Optional (nullable)
         image_url, // Optional (nullable) - NEVER empty string, only null if missing
