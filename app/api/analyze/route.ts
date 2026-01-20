@@ -1060,6 +1060,9 @@ export async function POST(req: NextRequest) {
     let snapshotStatus = 'miss';
     let dataSource: "market" | "snapshot" = "snapshot"; // Default to snapshot, switch to market if real listings exist
     let rawRainforestListings: any[] = []; // Track raw Rainforest listings for assertions
+    let baseListings: any[] = []; // 🔒 Source of truth for renderability (created from Rainforest search_results[])
+    let hasRenderableMarket = false; // 🔒 Lock: true if baseListings.length > 0, NEVER overridden
+    let catalogResult: any = null; // SP-API catalog enrichment result (for final log)
     
     // STEP 1: Check keyword_confidence and skip Rainforest if HIGH confidence
     const normalizedKeyword = body.input_value.toLowerCase().trim();
@@ -1485,6 +1488,34 @@ export async function POST(req: NextRequest) {
           rawRainforestListings = [...realMarketData.listings]; // Store raw listings for assertions
           dataSource = "market";
           snapshotStatus = 'market'; // Mark as real market data
+          
+          // ═══════════════════════════════════════════════════════════════════════════
+          // 🔒 CREATE BASE LISTINGS IMMEDIATELY (source of truth for renderability)
+          // ═══════════════════════════════════════════════════════════════════════════
+          // This array is created from raw Rainforest search_results[] and determines market validity
+          // Market is ALWAYS renderable if baseListings.length > 0
+          baseListings = rawRainforestListings.map((r: any) => ({
+            asin: r.asin,
+            position: r.position,
+            title: r.title,
+            image: r.image || r.image_url,
+            price: r.price?.value ?? r.price ?? null,
+            rating: r.rating ?? null,
+            ratings_total: r.reviews?.count ?? r.reviews ?? r.ratings_total ?? null,
+            sponsored: r.sponsored === true, // 🔒 LOCKED - from Rainforest, never recomputed
+            source: "rainforest"
+          }));
+          
+          // 🔒 LOCK: If baseListings.length > 0, market is ALWAYS renderable
+          // This guard MUST NOT be overridden by later checks
+          hasRenderableMarket = baseListings.length > 0;
+          
+          console.log("🔒 BASE_LISTINGS_CREATED", {
+            keyword: body.input_value,
+            baseListings_count: baseListings.length,
+            hasRenderableMarket,
+            timestamp: new Date().toISOString(),
+          });
           
           // ═══════════════════════════════════════════════════════════════════════════
           // STEP 3: Trace raw Page-1 listings BEFORE any processing
@@ -2125,7 +2156,7 @@ export async function POST(req: NextRequest) {
           // Execute SP-API Catalog and Pricing enrichment in parallel
           // NO conditional gates - always executes
           // CRITICAL: Pricing failures must NOT block catalog enrichment
-          let catalogResult: any = null;
+          // catalogResult declared at function scope
           let pricingResult: any = null;
           
           // NOTE: This block is disabled (if false) - SP-API handled by fetchKeywordMarketSnapshot
@@ -3447,15 +3478,21 @@ export async function POST(req: NextRequest) {
     // ═══════════════════════════════════════════════════════════════════════════
     // CRITICAL: Only block if listings.length === 0
     // Partial BSR coverage, missing decision data, or missing revenue estimates are ALLOWED
-    // If listings exist, ALWAYS return success - let UI render with whatever data we have
-    
-    // ONLY return error if NO listings exist - partial enrichment is valid
-    if (canonicalProducts.length === 0) {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 🔒 VALIDATION: ONLY throw NO_RENDERABLE_MARKET_DATA if baseListings.length === 0
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Market validity is determined by baseListings (from Rainforest search_results[])
+    // NOT by SP-API enrichment, decision engine, aggregates, BSR, or catalog data
+    // If baseListings exist, market is ALWAYS renderable - return listings even if:
+    // - SP-API partially fails
+    // - some ASINs have no BSR
+    // - decision engine has not completed
+    if (!hasRenderableMarket || baseListings.length === 0) {
       return NextResponse.json(
         {
           success: false,
           error: "NO_RENDERABLE_MARKET_DATA",
-          message: "Unable to generate market snapshot - no listings found",
+          message: "No listings found in Rainforest search results",
         },
         { 
           status: 400,
@@ -3514,6 +3551,23 @@ export async function POST(req: NextRequest) {
         { status: 500, headers: res.headers }
       );
     }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 🔒 FINAL SAFETY LOG: Validate renderability before returning
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Count SP-API enriched listings (from catalogResult if available)
+    let spApiEnrichedCount = 0;
+    if (catalogResult && catalogResult.enriched) {
+      spApiEnrichedCount = catalogResult.enriched.size;
+    }
+    
+    console.log("FINAL_RENDER_CHECK", {
+      baseListings: baseListings.length,
+      finalListings: canonicalProducts.length,
+      spApiEnriched: spApiEnrichedCount,
+      hasRenderableMarket,
+      keyword: body.input_value,
+    });
     
     // ═══════════════════════════════════════════════════════════════════════════
     // STEP 6: Return listings immediately (before AI completes)
