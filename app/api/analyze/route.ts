@@ -1873,9 +1873,10 @@ export async function POST(req: NextRequest) {
       snapshot_last_updated: snapshotLastUpdated, // For freshness badge
     };
     
-    // Use the snapshot (guaranteed to exist after snapshot check)
-    const marketSnapshot = keywordMarketData.snapshot;
-    const marketSnapshotJson = keywordMarketData.snapshot;
+    // Use the snapshot (may be null if keywordMarketData is null, but we'll handle that)
+    // NOTE: keywordMarketData can be null if we're using cached data, so use optional chaining
+    const marketSnapshot = keywordMarketData?.snapshot || null;
+    const marketSnapshotJson = keywordMarketData?.snapshot || null;
     
     // CPI calculation moved to after canonical Page-1 build
     // (Will be calculated from canonical products after they're built)
@@ -1950,6 +1951,7 @@ export async function POST(req: NextRequest) {
     let tier1Snapshot: TieredAnalyzeResponse | null = null;
     
     // Build contract-compliant response
+    // NOTE: keywordMarketData may be null if we're using cached data, but we'll handle that
     if (keywordMarketData) {
       // CANONICAL PAGE-1 BUILDER: Replace raw listings with deterministic Page-1 reconstruction
       // CRITICAL: This MUST run when dataSource === "market"
@@ -2795,19 +2797,20 @@ export async function POST(req: NextRequest) {
             ((l as any).bsr_source === 'sp_api' || (l as any).bsr_source === 'sp_api_catalog')
           );
           
-          // Only throw error if SP-API was truly not called (no SP-API response at all)
-          // NOTE: Missing brand/brand_source does NOT cause failure in keyword mode
-          // NOTE: Partial enrichment is OK - only fail if NO ASINs have SP-API BSR
-          if (failedAsins.length > 0 && !anySpApiBsr) {
-            const errorMessage = `SP_API_EXPECTED_BUT_NOT_CALLED: ${failedAsins.length} page-1 ASIN(s) missing SP-API response. Failed ASINs: ${failedAsins.map(f => `${f.asin}(${JSON.stringify(f.signals)})`).join(', ')}`;
-            console.error("❌ SP_API_EXPECTED_BUT_NOT_CALLED", {
+            // REMOVED: Throw on SP-API validation failure
+            // Caching/ingestion must NEVER throw - log warning instead
+            // NOTE: Missing brand/brand_source does NOT cause failure in keyword mode
+            // NOTE: Partial enrichment is OK - only warn if NO ASINs have SP-API BSR
+            if (failedAsins.length > 0 && !anySpApiBsr) {
+              const errorMessage = `SP_API_EXPECTED_BUT_NOT_CALLED: ${failedAsins.length} page-1 ASIN(s) missing SP-API response. Failed ASINs: ${failedAsins.map(f => `${f.asin}(${JSON.stringify(f.signals)})`).join(', ')}`;
+            console.warn("⚠️ SP_API_EXPECTED_BUT_NOT_CALLED (non-blocking)", {
               keyword: body.input_value,
               failed_count: failedAsins.length,
               total_asins: pageOneProducts.length,
               failed_asins: failedAsins,
-              message: "SP-API Catalog MUST be called for all page-1 ASINs. No SP-API signals detected for failed ASINs.",
+              message: "SP-API Catalog was expected but not called for some ASINs. Continuing with available data.",
             });
-            throw new Error(errorMessage);
+            // Continue - don't throw, just log warning
           }
         }
         
@@ -3079,21 +3082,28 @@ export async function POST(req: NextRequest) {
             const fulfillment = p.fulfillment || null;
             const buyBoxOwner = sourceTags.buy_box_owner || null;
             
-            // Validate source tags
+            // REMOVED: Source tag validation throws (non-blocking)
+            // Caching must NEVER throw - these are logging concerns, not runtime errors
+            // Infer missing source tags instead of throwing
             if (brand && !sourceTags.brand_source) {
-              throw new Error(`SOURCE_TAG_MISSING: brand populated (${brand}) but brand_source is missing for ASIN ${p.asin}`);
+              console.warn(`SOURCE_TAG_MISSING: brand populated (${brand}) but brand_source is missing for ASIN ${p.asin} - inferring "inferred"`);
+              sourceTags.brand_source = "inferred";
             }
             if (category && !sourceTags.category_source) {
-              throw new Error(`SOURCE_TAG_MISSING: category populated (${category}) but category_source is missing for ASIN ${p.asin}`);
+              console.warn(`SOURCE_TAG_MISSING: category populated (${category}) but category_source is missing for ASIN ${p.asin} - inferring "inferred"`);
+              sourceTags.category_source = "inferred";
             }
             if (bsr && !sourceTags.bsr_source) {
-              throw new Error(`SOURCE_TAG_MISSING: bsr populated (${bsr}) but bsr_source is missing for ASIN ${p.asin}`);
+              console.warn(`SOURCE_TAG_MISSING: bsr populated (${bsr}) but bsr_source is missing for ASIN ${p.asin} - inferring "inferred"`);
+              sourceTags.bsr_source = "inferred";
             }
             if (fulfillment && !sourceTags.fulfillment_source) {
-              throw new Error(`SOURCE_TAG_MISSING: fulfillment populated (${fulfillment}) but fulfillment_source is missing for ASIN ${p.asin}`);
+              console.warn(`SOURCE_TAG_MISSING: fulfillment populated (${fulfillment}) but fulfillment_source is missing for ASIN ${p.asin} - inferring "inferred"`);
+              sourceTags.fulfillment_source = "inferred";
             }
             if (buyBoxOwner && !sourceTags.buy_box_owner_source) {
-              throw new Error(`SOURCE_TAG_MISSING: buy_box_owner populated (${buyBoxOwner}) but buy_box_owner_source is missing for ASIN ${p.asin}`);
+              console.warn(`SOURCE_TAG_MISSING: buy_box_owner populated (${buyBoxOwner}) but buy_box_owner_source is missing for ASIN ${p.asin} - inferring "inferred"`);
+              sourceTags.buy_box_owner_source = "inferred";
             }
             
             // Compute DB flags based on source tags
@@ -3160,44 +3170,53 @@ export async function POST(req: NextRequest) {
             },
           });
           
-          const { error: upsertError } = await supabase
+          // FIRE-AND-FORGET: Cache keyword products asynchronously (do NOT await)
+          // This must NOT block the response - caching is non-critical
+          supabase
             .from("keyword_products")
             .upsert(upsertData, {
               onConflict: "keyword,asin",
+            })
+            .then(({ error: upsertError }) => {
+              if (upsertError) {
+                console.warn("Failed to cache keyword products:", upsertError);
+              } else {
+                console.log("KEYWORD_PRODUCTS_CACHE_WRITE", {
+                  keyword: normalizedKeyword,
+                  product_count: upsertData.length,
+                });
+                
+                // ═══════════════════════════════════════════════════════════════════════════
+                // SQL VERIFICATION HELPER (DEV-ONLY) - Also fire-and-forget
+                // ═══════════════════════════════════════════════════════════════════════════
+                supabase
+                  .from('keyword_products')
+                  .select('brand_source')
+                  .eq('keyword', normalizedKeyword)
+                  .then(({ data: verificationData, error: verificationError }) => {
+                    if (!verificationError && verificationData) {
+                      const total = verificationData.length;
+                      const spapiBrands = verificationData.filter((p: any) => p.brand_source === 'sp_api_catalog').length;
+                      
+                      // REQUIRED LOG: SP_API_DB_VERIFICATION
+                      console.log('SP_API_DB_VERIFICATION', {
+                        keyword: normalizedKeyword,
+                        total: total,
+                        spapi_brands: spapiBrands,
+                        spapi_brands_pct: total > 0 ? Math.round((spapiBrands / total) * 10000) / 100 : 0,
+                        sql_query: `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE brand_source = 'sp_api_catalog') AS spapi_brands FROM keyword_products WHERE keyword = '${normalizedKeyword}';`,
+                        timestamp: new Date().toISOString(),
+                      });
+                    }
+                  })
+                  .catch((err) => {
+                    console.warn("Verification query failed (non-blocking):", err);
+                  });
+              }
+            })
+            .catch((err) => {
+              console.warn("Failed to cache keyword products (non-blocking):", err);
             });
-          
-          if (upsertError) {
-            console.warn("Failed to cache keyword products:", upsertError);
-          } else {
-            console.log("KEYWORD_PRODUCTS_CACHE_WRITE", {
-              keyword: normalizedKeyword,
-              product_count: upsertData.length,
-            });
-            
-            // ═══════════════════════════════════════════════════════════════════════════
-            // SQL VERIFICATION HELPER (DEV-ONLY)
-            // ═══════════════════════════════════════════════════════════════════════════
-            // One-line SQL verification query result
-            const { data: verificationData, error: verificationError } = await supabase
-              .from('keyword_products')
-              .select('brand_source')
-              .eq('keyword', normalizedKeyword);
-            
-            if (!verificationError && verificationData) {
-              const total = verificationData.length;
-              const spapiBrands = verificationData.filter((p: any) => p.brand_source === 'sp_api_catalog').length;
-              
-              // REQUIRED LOG: SP_API_DB_VERIFICATION
-              console.log('SP_API_DB_VERIFICATION', {
-                keyword: normalizedKeyword,
-                total: total,
-                spapi_brands: spapiBrands,
-                spapi_brands_pct: total > 0 ? Math.round((spapiBrands / total) * 10000) / 100 : 0,
-                sql_query: `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE brand_source = 'sp_api_catalog') AS spapi_brands FROM keyword_products WHERE keyword = '${normalizedKeyword}';`,
-                timestamp: new Date().toISOString(),
-              });
-            }
-          }
         } catch (error) {
           console.warn("Error caching keyword products:", error);
         }
@@ -3216,16 +3235,19 @@ export async function POST(req: NextRequest) {
         // Pass canonical products directly to data contract builder
         // This ensures canonical products are the final authority
         // v1: No refined data - canonical revenue only
-        contractResponse = await buildKeywordAnalyzeResponse(
-          body.input_value,
-          keywordMarketData,
-          marginSnapshot,
-          marketplaceCode,
-          "USD",
-          supabase, // supabase client for keyword history blending
-          canonicalProducts, // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
-          0 // refinedDataCount - v1 does not support refinement
-        );
+        // NOTE: keywordMarketData may be null, but buildKeywordAnalyzeResponse can handle that
+        if (keywordMarketData) {
+          contractResponse = await buildKeywordAnalyzeResponse(
+            body.input_value,
+            keywordMarketData,
+            marginSnapshot,
+            marketplaceCode,
+            "USD",
+            supabase, // supabase client for keyword history blending
+            canonicalProducts, // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
+            0 // refinedDataCount - v1 does not support refinement
+          );
+        }
         
         // Canonical products are already set in contractResponse - no replacement needed
         console.log("✅ CANONICAL_PAGE1_INJECTED_INTO_CONTRACT", {
