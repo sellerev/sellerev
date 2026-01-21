@@ -11,6 +11,7 @@ import { ProductCard } from "@/app/components/ProductCard";
 import SearchBar from "@/app/components/SearchBar";
 import { MetricSkeleton, TextSkeleton } from "./components/MetricSkeleton";
 import AIThinkingMessage from "./components/AIThinkingMessage";
+import ResultsLoadingState from "./components/ResultsLoadingState";
 
 // Hard safety check: Prevent localhost calls in production
 if (typeof window !== 'undefined' && process.env.NODE_ENV === 'production') {
@@ -2016,8 +2017,11 @@ export default function AnalyzeForm({
                       </div>
                     )}
                     {/* Product Cards Grid - auto-fill with minmax */}
-                    <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-                      {filteredListings.map((listing: any, idx: number) => {
+                    {loading && pageOneListings.length === 0 ? (
+                      <ResultsLoadingState />
+                    ) : (
+                      <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
+                        {filteredListings.map((listing: any, idx: number) => {
                           // Extract ASIN FIRST - this is the single source of truth for this listing
                           const asin = listing.asin || normalizeListing(listing).asin || null;
                           
@@ -2128,7 +2132,8 @@ export default function AnalyzeForm({
                             </motion.div>
                           );
                         })}
-                    </div>
+                      </div>
+                    )}
                   </div>
                   );
                   })()}
