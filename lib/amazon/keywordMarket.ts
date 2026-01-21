@@ -2676,18 +2676,19 @@ export async function fetchKeywordMarketSnapshot(
         }
       }
       
-      // PRODUCTION HARDENING: Validate BSR (null, 0, or < 1 are invalid, must be ≤ 300,000)
-      // Exclude from calculations but still allow listing to exist
-      // CRITICAL: Only set BSR from Rainforest if SP-API BSR is not already present
-      // Never overwrite a valid SP-API BSR with null from Rainforest
+      // ═══════════════════════════════════════════════════════════════════════════
+      // BSR RULES: Only category-based BSR from SP-API (never from Rainforest)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: BSR must ONLY come from SP-API CatalogItems (category-specific)
+      // Do NOT use Rainforest BSR - it will be set during SP-API merge step
+      // If SP-API doesn't provide BSR, it remains null (unavailable)
       let main_category_bsr: number | null = null;
-      if (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000) {
-        main_category_bsr = mainBSRData.rank;
-      }
+      let bsr: number | null = null;
+      
+      // Category can come from Rainforest initially, but will be overridden by SP-API if available
       const main_category = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000)
         ? mainBSRData.category
         : null;
-      let bsr = main_category_bsr; // Keep for backward compatibility
       
       // PHASE 1: Apply duplicate BSR detection (non-disruptive)
       // If BSR is in invalid set, mark it as null and add reason
@@ -2699,10 +2700,15 @@ export async function fetchKeywordMarketSnapshot(
         console.log(`🔵 BSR_MARKED_INVALID: Listing ${asin} BSR ${mainBSRData?.rank} marked as invalid (duplicate_bug)`);
       }
       
-      const fulfillment = parseFulfillment(item); // Nullable
+      // ═══════════════════════════════════════════════════════════════════════════
+      // FULFILLMENT: Do NOT infer from Rainforest - only SP-API Pricing is authoritative
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: Rainforest fulfillment inference is NOT canonical
+      // Set to null initially - will be set by SP-API Pricing if available
+      const fulfillment: "FBA" | "FBM" | "Amazon" | null = null;
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // BRAND RESOLUTION: Search-based only (low-cost, Helium-10 style)
+      // BRAND RESOLUTION: Search-based only (will be overridden by SP-API if available)
       // ═══════════════════════════════════════════════════════════════════════════
       // Uses ONLY: item.brand, item.is_amazon_brand, item.is_exclusive_to_amazon, item.featured_from_our_brands
       // NO title extraction, NO product API, NO seller inference
@@ -2858,15 +2864,22 @@ export async function fetchKeywordMarketSnapshot(
       const catalog = spApiCatalogResults.get(asinKey);
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // ✅ FIELD RECONCILIATION: SP-API as UPGRADE layer (not replacement)
+      // ✅ FIELD RECONCILIATION: SP-API is CANONICAL SOURCE (overrides Rainforest)
       // ═══════════════════════════════════════════════════════════════════════════
-      // RAINFOREST BASELINE (never overwritten by SP-API):
-      //   - ASIN, Title, Image, Price, FBA/FBM, Sponsored, Rank, Rating, Reviews
-      // SP-API UPGRADE (only when available):
-      //   - Brand (authoritative), Category, BSR
-      // ═══════════════════════════════════════════════════════════════════════════
-      // DO NOT overwrite: title, image_url, price, fulfillment, is_sponsored, 
-      //   sponsored_position, sponsored_source, rating, reviews, position
+      // SP-API CANONICAL (always overrides Rainforest when available):
+      //   - Title (always override)
+      //   - Brand (always override, never parse titles if available)
+      //   - Image (SP-API preferred, fallback to Rainforest)
+      //   - Category (always override)
+      //   - BSR (category-based only, mark unavailable if missing)
+      // 
+      // RAINFOREST ONLY (never overridden by SP-API):
+      //   - ASIN list (Page-1 discovery)
+      //   - Rank (1-48, immutable)
+      //   - Sponsored / Organic (immutable)
+      //   - Reviews / Rating (cache aggressively)
+      //   - Fallback image (when SP-API missing)
+      //   - Fallback price (when SP-API Pricing unavailable)
       // ═══════════════════════════════════════════════════════════════════════════
       if (catalog) {
         mergeCount++;
@@ -2887,77 +2900,111 @@ export async function fetchKeywordMarketSnapshot(
         }
         (listing as any).enrichment_sources.sp_api_catalog = true;
         
-        // ✅ BRAND: SP-API is authoritative (only upgrade when available)
+        // ✅ TITLE: SP-API always overrides Rainforest
+        if (catalog.title && typeof catalog.title === 'string' && catalog.title.trim().length > 0) {
+          listing.title = catalog.title.trim();
+          (listing as any).title_source = 'sp_api';
+          (listing as any).title_confidence = 'high';
+        }
+        
+        // ✅ BRAND: SP-API always overrides, never parse titles if SP-API brand exists
         if (catalog.brand && typeof catalog.brand === 'string' && catalog.brand.trim().length > 0) {
           listing.brand = catalog.brand.trim();
           (listing as any).brand_source = 'sp_api';
+          (listing as any).brand_confidence = 'high';
+          // Update brand_resolution structure
+          listing.brand_resolution = {
+            raw_brand: catalog.brand.trim(),
+            normalized_brand: catalog.brand.trim(),
+            brand_status: 'canonical',
+            brand_source: 'sp_api'
+          };
+          // Clear any title-parsed brand when SP-API brand is available
           (listing as any)._brand_confidence = 'high';
           (listing as any)._brand_entity = catalog.brand;
           (listing as any)._brand_display = catalog.brand;
         }
         
-        // ✅ CATEGORY: SP-API is authoritative (only upgrade when available)
+        // ✅ IMAGE: SP-API preferred, fallback to Rainforest
+        if (catalog.image_url && typeof catalog.image_url === 'string' && catalog.image_url.trim().length > 0) {
+          listing.image_url = catalog.image_url.trim();
+          (listing as any).image_source = 'sp_api';
+          (listing as any).image_confidence = 'high';
+        }
+        // If SP-API image missing, keep Rainforest image (already set from parseRainforestSearchResults)
+        // Fallback is handled automatically - Rainforest image_url remains if SP-API doesn't provide one
+        
+        // ✅ CATEGORY: SP-API is authoritative (always override when available)
         if (catalog.category && typeof catalog.category === 'string' && catalog.category.trim().length > 0) {
           listing.main_category = catalog.category.trim();
           (listing as any).category_source = 'sp_api_catalog';
+          (listing as any).category_confidence = 'high';
         }
-        // CRITICAL: BSR from catalog is authoritative and must be preserved
-        // Pricing failures must NOT affect BSR coverage
-        // Attach BSR directly to listing if it exists (even if 0, as long as it's a valid number)
-        // This happens IMMEDIATELY when SP-API results are merged - no delay, no DB queries
-        // 🔴 NEVER overwrite a valid BSR with null - SP-API BSR is authoritative
+        // ═══════════════════════════════════════════════════════════════════════════
+        // ✅ BSR RULES: Only category-based BSR from SP-API, mark unavailable if missing
+        // ═══════════════════════════════════════════════════════════════════════════
+        // CRITICAL: BSR from SP-API CatalogItems is authoritative (category-based only)
+        // - Only use BSR if it's from SP-API (category-specific)
+        // - If SP-API BSR missing: mark as unavailable, do NOT estimate silently
+        // - Never overwrite a valid SP-API BSR with null or estimated values
         if (catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
           bsrMergeCount++;
-          // 🔴 REQUIRED: Set BSR AND provenance at merge time (not inferred later)
-          // Only set BSR if it's not already present (preserve existing valid BSR)
-          // Use nullish coalescing to avoid overwriting existing valid BSR
-          listing.main_category_bsr ??= catalog.bsr;
-          listing.bsr ??= catalog.bsr;
+          // SP-API BSR is authoritative - always set when available
+          listing.main_category_bsr = catalog.bsr;
+          listing.bsr = catalog.bsr;
           
-          // If listing had no BSR, now it has SP-API BSR - set source tags
-          if (listing.main_category_bsr === catalog.bsr) {
-            (listing as any).bsr_source = 'sp_api';
-            (listing as any).had_sp_api_response = true;
-            
-            // Ensure enrichment_sources object exists
-            if (!(listing as any).enrichment_sources) {
-              (listing as any).enrichment_sources = {};
-            }
-            (listing as any).enrichment_sources.sp_api_catalog = true;
-            
-            // Transition enrichment state immediately when BSR is extracted
-            // State machine: raw -> sp_api_catalog_enriched
-            (listing as any).enrichment_state = 'sp_api_catalog_enriched';
-            
-            // Debug log for BSR merge (first 5 ASINs only)
-            if (bsrMergeCount <= 5) {
-              console.log("MERGE_BSR_PRESERVED", {
-                asin: listing.asin,
-                bsr: listing.main_category_bsr,
-                source: 'sp_api',
-              });
-            }
+          // Set source tags for SP-API BSR
+          (listing as any).bsr_source = 'sp_api';
+          (listing as any).bsr_confidence = 'high';
+          (listing as any).had_sp_api_response = true;
+          
+          // Ensure enrichment_sources object exists
+          if (!(listing as any).enrichment_sources) {
+            (listing as any).enrichment_sources = {};
           }
-        } else if (catalog.bsr === null || catalog.bsr === undefined || catalog.bsr <= 0) {
+          (listing as any).enrichment_sources.sp_api_catalog = true;
+          
+          // Transition enrichment state immediately when BSR is extracted
+          (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+          
+          // Debug log for BSR merge (first 5 ASINs only)
+          if (bsrMergeCount <= 5) {
+            console.log("MERGE_BSR_FROM_SP_API", {
+              asin: listing.asin,
+              bsr: listing.main_category_bsr,
+              category: catalog.category || listing.main_category,
+              source: 'sp_api',
+            });
+          }
+        } else {
+          // SP-API BSR is missing - mark as unavailable (do NOT estimate)
+          // This ensures UI knows BSR is not available from authoritative source
+          listing.main_category_bsr = null;
+          listing.bsr = null;
+          (listing as any).bsr_source = 'unavailable';
+          (listing as any).bsr_confidence = 'unknown';
+          
           // Debug: Log when catalog exists but BSR is missing
           if (bsrMergeCount < 3) {
             console.warn("⚠️ CATALOG_EXISTS_BUT_NO_BSR", {
               asin: listing.asin,
               catalog_bsr: catalog.bsr,
-              catalog_keys: Object.keys(catalog),
+              catalog_category: catalog.category,
+              message: "SP-API Catalog returned item but no category-based BSR - marked unavailable",
             });
           }
         }
         
-        // ❌ TITLE: RAINFOREST BASELINE (never overwritten by SP-API)
-        // Title comes from Rainforest SERP and matches what users see visually
-        // SP-API title is NOT used - Rainforest is source of truth for Page-1 composition
-        // (listing as any).title_source remains 'rainforest' (or undefined)
-        
-        // ❌ IMAGE_URL: RAINFOREST BASELINE (never overwritten by SP-API)
-        // Image comes from Rainforest SERP and matches what users see visually
-        // SP-API image is NOT used - Rainforest is source of truth for Page-1 composition
-        // (listing as any).image_source remains 'rainforest' (or undefined)
+        // Source tracking for fields not set above
+        // If SP-API didn't provide title/image, track that Rainforest is being used
+        if (!(listing as any).title_source) {
+          (listing as any).title_source = 'rainforest';
+          (listing as any).title_confidence = 'fallback';
+        }
+        if (!(listing as any).image_source) {
+          (listing as any).image_source = 'rainforest';
+          (listing as any).image_confidence = 'fallback';
+        }
       } else {
         catalogNotFoundCount++;
         // Debug: Log first few ASINs not found in catalog
@@ -3087,25 +3134,27 @@ export async function fetchKeywordMarketSnapshot(
     // Clamp calibration factor
     bsrCalibrationFactor = clamp(bsrCalibrationFactor, 0.6, 1.4);
 
-    // 4. ESTIMATE MISSING BSRs (DETERMINISTIC, NOT RANDOM)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BSR HANDLING: No estimation - only use SP-API category-based BSR
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Do NOT estimate missing BSRs
+    // If SP-API doesn't provide BSR, it remains null (unavailable)
+    // Source tags are already set during merge step above
     for (const listing of listings) {
-      if (listing.main_category_bsr == null && listing.position != null) {
-        const estimatedBsr = Math.round(
-          (1 / page1Ctr(listing.position)) *
-          100 *
-          bsrCalibrationFactor
-        );
-
-        (listing as any).estimated_bsr = estimatedBsr;
-        listing.bsr = estimatedBsr;
-        listing.main_category_bsr = estimatedBsr;
-        (listing as any).bsr_source = 'estimated';
-        (listing as any).had_sp_api_response = false;
-      } else if (listing.main_category_bsr != null) {
-        // Real BSR exists - tag as SP-API (unless already tagged)
-        if (!(listing as any).bsr_source) {
+      // Ensure source tags are set correctly
+      if (listing.main_category_bsr == null || listing.main_category_bsr <= 0) {
+        // BSR is unavailable from SP-API - ensure tags reflect this
+        if (!(listing as any).bsr_source || (listing as any).bsr_source === 'rainforest') {
+          (listing as any).bsr_source = 'unavailable';
+          (listing as any).bsr_confidence = 'unknown';
+        }
+        listing.bsr = null;
+        listing.main_category_bsr = null;
+      } else {
+        // BSR exists from SP-API - ensure source tag is correct
+        if (!(listing as any).bsr_source || (listing as any).bsr_source === 'rainforest') {
           (listing as any).bsr_source = 'sp_api';
-          (listing as any).had_sp_api_response = true;
+          (listing as any).bsr_confidence = 'high';
         }
       }
     }
@@ -3176,9 +3225,14 @@ export async function fetchKeywordMarketSnapshot(
       total_monthly_revenue: Math.round(totalMonthlyRevenue),
     });
     
-    // SP-API Pricing overwrites: fulfillment, price, buy box
-    // CRITICAL: If pricing fails, fulfillment_source remains null (not set to rainforest)
-    // Only set fulfillment_source if SP-API pricing actually succeeded
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ✅ PRICING & FULFILLMENT: SP-API Pricing is authoritative source
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL RULES:
+    // - Buy Box price: SP-API Pricing API (authoritative)
+    // - Fulfillment (FBA/FBM): SP-API Pricing API only (never infer from Rainforest)
+    // - If OAuth does NOT exist: use Rainforest price as fallback, set fulfillment = unknown
+    // - Do NOT assume fulfillment from Rainforest when SP-API pricing is unavailable
     for (const listing of listings) {
       if (!listing.asin) continue;
       
@@ -3193,17 +3247,25 @@ export async function fetchKeywordMarketSnapshot(
           (listing as any).enrichment_state = 'pricing_enriched';
         }
         
+        // ✅ FULFILLMENT: SP-API Pricing is authoritative (FBA/FBM)
         if (pricing.fulfillment_channel) {
           listing.fulfillment = pricing.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
           (listing as any).fulfillment_source = 'sp_api_pricing';
+          (listing as any).fulfillment_confidence = 'high';
         }
+        
+        // ✅ PRICE: SP-API Pricing (Buy Box) is authoritative
         if (pricing.buy_box_price !== null) {
           listing.price = pricing.buy_box_price;
           (listing as any).price_source = 'sp_api_pricing';
+          (listing as any).price_confidence = 'high';
         } else if (pricing.lowest_price !== null) {
           listing.price = pricing.lowest_price;
           (listing as any).price_source = 'sp_api_pricing';
+          (listing as any).price_confidence = 'high';
         }
+        
+        // Additional pricing metadata
         if (pricing.buy_box_owner) {
           (listing as any).buy_box_owner = pricing.buy_box_owner;
           (listing as any).buy_box_owner_source = 'sp_api_pricing';
@@ -3213,13 +3275,22 @@ export async function fetchKeywordMarketSnapshot(
           (listing as any).offer_count_source = 'sp_api_pricing';
         }
       } else {
-        // Pricing API failed or returned no data - mark price source as Rainforest fallback
-        // Only if we have a price from Rainforest and no SP-API price was set
+        // ═══════════════════════════════════════════════════════════════════════
+        // SP-API Pricing unavailable (no OAuth or API failure)
+        // ═══════════════════════════════════════════════════════════════════════
+        // Price: Use Rainforest fallback (already set from parseRainforestSearchResults)
         if (listing.price !== null && listing.price !== undefined && !(listing as any).price_source) {
-          (listing as any).price_source = 'rainforest_serp';
+          (listing as any).price_source = 'rainforest';
+          (listing as any).price_confidence = 'fallback';
         }
-        // Do NOT set fulfillment_source to rainforest_serp here - only set it if we have Rainforest data
-        // and it wasn't already set by SP-API. This is handled in route.ts fallback logic.
+        
+        // Fulfillment: Set to unknown (do NOT infer from Rainforest)
+        // Rainforest fulfillment inference is NOT canonical - only SP-API Pricing is authoritative
+        if (!listing.fulfillment || !(listing as any).fulfillment_source) {
+          listing.fulfillment = null; // Explicitly mark as unknown
+          (listing as any).fulfillment_source = 'unknown';
+          (listing as any).fulfillment_confidence = 'unknown';
+        }
       }
     }
 

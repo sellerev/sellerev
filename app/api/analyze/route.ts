@@ -1353,7 +1353,11 @@ export async function POST(req: NextRequest) {
                 }
               });
               
-              // Apply SP-API Catalog enrichment (authoritative: brand, category, BSR)
+              // ═══════════════════════════════════════════════════════════════════════
+              // APPLY SP-API CATALOG ENRICHMENT (CANONICAL SOURCE)
+              // ═══════════════════════════════════════════════════════════════════════
+              // SP-API always overrides Rainforest for: title, brand, image, category, BSR
+              // Rainforest used for: ASIN discovery, rank, sponsored/organic, reviews, rating
               for (const [asin, metadata] of spApiCatalogResults.entries()) {
                 const asinKey = normalizeAsin(asin);
                 const listing = listingMap.get(asinKey);
@@ -1363,9 +1367,18 @@ export async function POST(req: NextRequest) {
                     (listing as any).enrichment_state = 'sp_api_catalog_enriched';
                   }
                   
+                  // ✅ TITLE: SP-API always overrides Rainforest
+                  if (metadata.title) {
+                    listing.title = metadata.title;
+                    (listing as any).title_source = 'sp_api';
+                    (listing as any).title_confidence = 'high';
+                  }
+                  
+                  // ✅ BRAND: SP-API always overrides, never parse titles if SP-API brand exists
                   if (metadata.brand) {
                     listing.brand = metadata.brand;
                     (listing as any).brand_source = 'sp_api';
+                    (listing as any).brand_confidence = 'high';
                     listing.brand_resolution = {
                       raw_brand: metadata.brand,
                       normalized_brand: metadata.brand,
@@ -1373,48 +1386,93 @@ export async function POST(req: NextRequest) {
                       brand_source: 'sp_api'
                     };
                   }
+                  
+                  // ✅ IMAGE: SP-API preferred, fallback to Rainforest
+                  if (metadata.image_url) {
+                    listing.image_url = metadata.image_url;
+                    (listing as any).image_source = 'sp_api';
+                    (listing as any).image_confidence = 'high';
+                  }
+                  
+                  // ✅ CATEGORY: SP-API is authoritative
                   if (metadata.category) {
                     listing.main_category = metadata.category;
                     (listing as any).category_source = 'sp_api_catalog';
+                    (listing as any).category_confidence = 'high';
                   }
+                  
+                  // ✅ BSR: Only category-based from SP-API, mark unavailable if missing
                   if (metadata.bsr != null && metadata.bsr > 0) {
-                    // 🔴 NEVER overwrite a valid BSR with null - use nullish coalescing
-                    listing.bsr ??= metadata.bsr;
-                    listing.main_category_bsr ??= metadata.bsr;
+                    listing.bsr = metadata.bsr;
+                    listing.main_category_bsr = metadata.bsr;
                     (listing as any).bsr_source = 'sp_api';
+                    (listing as any).bsr_confidence = 'high';
                     (listing as any).had_sp_api_response = true;
                     if (!(listing as any).enrichment_sources) {
                       (listing as any).enrichment_sources = {};
                     }
                     (listing as any).enrichment_sources.sp_api_catalog = true;
                     (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+                  } else {
+                    // SP-API BSR missing - mark as unavailable
+                    listing.bsr = null;
+                    listing.main_category_bsr = null;
+                    (listing as any).bsr_source = 'unavailable';
+                    (listing as any).bsr_confidence = 'unknown';
                   }
-                  // ❌ TITLE: RAINFOREST BASELINE (never overwritten by SP-API)
-                  // Title comes from Rainforest SERP and matches what users see visually
-                  // SP-API title is NOT used - Rainforest is source of truth for Page-1 composition
                   
-                  // ❌ IMAGE_URL: RAINFOREST BASELINE (never overwritten by SP-API)
-                  // Image comes from Rainforest SERP and matches what users see visually
-                  // SP-API image is NOT used - Rainforest is source of truth for Page-1 composition
+                  // Source tracking for fields not set above
+                  if (!(listing as any).title_source) {
+                    (listing as any).title_source = 'rainforest';
+                    (listing as any).title_confidence = 'fallback';
+                  }
+                  if (!(listing as any).image_source) {
+                    (listing as any).image_source = 'rainforest';
+                    (listing as any).image_confidence = 'fallback';
+                  }
                 }
               }
               
-              // Apply SP-API Pricing enrichment
+              // ═══════════════════════════════════════════════════════════════════════
+              // APPLY SP-API PRICING ENRICHMENT (AUTHORITATIVE SOURCE)
+              // ═══════════════════════════════════════════════════════════════════════
+              // SP-API Pricing provides: Buy Box price, FBA/FBM fulfillment
+              // If unavailable: use Rainforest price fallback, set fulfillment = unknown
               if (pricingResult && pricingResult.enriched && pricingResult.enriched.size > 0) {
                 for (const [asin, metadata] of pricingResult.enriched.entries()) {
                   const listing = listingMap.get(normalizeAsin(asin));
                   if (listing) {
+                    // ✅ FULFILLMENT: SP-API Pricing is authoritative (never infer from Rainforest)
                     if (metadata.fulfillment_channel) {
                       listing.fulfillment = metadata.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
                       (listing as any).fulfillment_source = 'sp_api_pricing';
+                      (listing as any).fulfillment_confidence = 'high';
                     }
+                    
+                    // ✅ PRICE: SP-API Pricing (Buy Box) is authoritative
                     if (metadata.buy_box_price !== null) {
                       listing.price = metadata.buy_box_price;
                       (listing as any).price_source = 'sp_api_pricing';
+                      (listing as any).price_confidence = 'high';
                     } else if (metadata.lowest_price !== null) {
                       listing.price = metadata.lowest_price;
                       (listing as any).price_source = 'sp_api_pricing';
+                      (listing as any).price_confidence = 'high';
                     }
+                  }
+                }
+              } else {
+                // SP-API Pricing unavailable - mark fulfillment as unknown
+                for (const listing of listingMap.values()) {
+                  if (!listing.fulfillment || !(listing as any).fulfillment_source || (listing as any).fulfillment_source !== 'sp_api_pricing') {
+                    listing.fulfillment = null;
+                    (listing as any).fulfillment_source = 'unknown';
+                    (listing as any).fulfillment_confidence = 'unknown';
+                  }
+                  // Price source tracking (already set from cache or will use Rainforest fallback)
+                  if (listing.price !== null && listing.price !== undefined && !(listing as any).price_source) {
+                    (listing as any).price_source = 'rainforest';
+                    (listing as any).price_confidence = 'fallback';
                   }
                 }
               }
