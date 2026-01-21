@@ -1133,28 +1133,49 @@ export async function enrichListingsMetadata(
       // SP-API Catalog already provides authoritative title and image_url
       // These are merged into listings BEFORE this function runs (see fetchKeywordMarketSnapshot)
       // Only enrich ratings/reviews which SP-API cannot provide
-      // CRITICAL: Only enrich if null - never overwrite non-null fields
+      // CRITICAL: Preserve existing values - never overwrite with null or undefined
+      // GUARD: Enrichment must never reduce data quality
 
-      // Enrich rating (only if null - never overwrite existing value)
-      if (enriched.rating === null) {
+      // Store original values for data quality check
+      const originalRating = enriched.rating;
+      const originalReviews = enriched.reviews;
+
+      // Enrich rating (only if null/undefined - never overwrite existing value)
+      // Only overwrite when we have a valid number (> 0)
+      if (enriched.rating === null || enriched.rating === undefined) {
         const rating = parseRating(productData);
-        if (rating !== null) {
+        // Only set if we got a valid number (null means couldn't parse, leave as null)
+        if (rating !== null && rating !== undefined && !isNaN(rating) && rating > 0) {
           enriched.rating = rating;
           enrichedFieldsCount++;
           listingEnriched = true;
         }
         // If rating is null and can't be parsed, leave it as null (don't set to 0)
       }
+      
+      // GUARD: Never reduce data quality - preserve existing rating if present
+      if (originalRating !== null && originalRating !== undefined && 
+          (enriched.rating === null || enriched.rating === undefined)) {
+        enriched.rating = originalRating; // Restore original value
+      }
 
-      // Enrich reviews (only if null - never overwrite existing value)
-      if (enriched.reviews === null) {
+      // Enrich reviews (only if null/undefined - never overwrite existing value)
+      // Only overwrite when we have a valid number (> 0)
+      if (enriched.reviews === null || enriched.reviews === undefined) {
         const reviews = parseReviews(productData);
-        if (reviews !== null) {
+        // Only set if we got a valid number (null means couldn't parse, leave as null)
+        if (reviews !== null && reviews !== undefined && !isNaN(reviews) && reviews > 0) {
           enriched.reviews = reviews;
           enrichedFieldsCount++;
           listingEnriched = true;
         }
         // If reviews is null and can't be parsed, leave it as null (don't set to 0)
+      }
+      
+      // GUARD: Never reduce data quality - preserve existing reviews if present
+      if (originalReviews !== null && originalReviews !== undefined && 
+          (enriched.reviews === null || enriched.reviews === undefined)) {
+        enriched.reviews = originalReviews; // Restore original value
       }
 
       // NOTE: Brand enrichment removed - brands come from search results only (low-cost, Helium-10 style)
