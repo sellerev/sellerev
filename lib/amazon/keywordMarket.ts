@@ -2145,15 +2145,35 @@ export async function fetchKeywordMarketSnapshot(
     });
 
     // STEP B: Extract all Page-1 ASINs (all listings, not just top 20)
-    const page1Asins = searchResults
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Deduplicate ASINs before SP-API calls
+    // SP-API returns one BSR per ASIN, so duplicates cause false BSR invalidation
+    // ═══════════════════════════════════════════════════════════════════════════
+    const rawAsins = searchResults
       .filter((item: any) => item?.asin)
-      .map((item: any) => item.asin);
+      .map((item: any) => item.asin.trim().toUpperCase());
+    
+    // Track rank positions for each ASIN (for duplicate detection later)
+    const asinRanks = new Map<string, number[]>();
+    rawAsins.forEach((asin, index) => {
+      if (!asinRanks.has(asin)) {
+        asinRanks.set(asin, []);
+      }
+      asinRanks.get(asin)!.push(index + 1); // Rank positions are 1-indexed
+    });
+    
+    // Deduplicate ASINs - keep unique ASINs only
+    const uniqueAsins = [...new Set(rawAsins)];
+    
+    // Use deduplicated ASINs for SP-API calls
+    const page1Asins = uniqueAsins;
     
     console.log("SEARCH_ASINS_COUNT", {
       keyword,
       total_search_results: searchResults.length,
+      unique_asins: uniqueAsins.length,
+      duplicate_count: rawAsins.length - uniqueAsins.length,
       page1_asins: page1Asins,
-      asin_count: page1Asins.length,
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
