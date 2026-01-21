@@ -28,6 +28,7 @@ export interface RawListing {
   raw_badges: any[];
   raw_block_type?: string;
   raw_sponsored_flag?: boolean;
+  raw_link?: string; // Preserve link for /sspa/ detection
 }
 
 export interface RawSnapshot {
@@ -1288,22 +1289,27 @@ export function parseRainforestSearchResults(
     // Extract image (can be null)
     const image = item.image || item.image_url || null;
     
+    // Extract link for sponsored detection (must check link even if sponsored flag is set)
+    const link = item.link || item.url || '';
+    
     // Extract sponsored flag (can be undefined)
+    // CRITICAL: Check BOTH sponsored flag AND link pattern (/sspa/)
+    // Organic if: !sponsored && !link.includes('/sspa/')
+    // Sponsored if: sponsored === true || link.includes('/sspa/')
     let rawSponsoredFlag: boolean | undefined = undefined;
-    if (item.sponsored === true || item.is_sponsored === true) {
+    const hasSspaLink = typeof link === 'string' && link.includes('/sspa/');
+    
+    // Priority 1: Link pattern (/sspa/) indicates sponsored (most reliable)
+    if (hasSspaLink) {
+      rawSponsoredFlag = true;
+    } else if (item.sponsored === true || item.is_sponsored === true) {
+      // Priority 2: Explicit sponsored flag
       rawSponsoredFlag = true;
     } else if (item.sponsored === false || item.is_sponsored === false) {
+      // Priority 3: Explicit organic flag (only if link doesn't have /sspa/)
       rawSponsoredFlag = false;
-    } else {
-      // Check link patterns for sponsored detection
-      const link = item.link || item.url || '';
-      if (typeof link === 'string') {
-        if (link.includes('/sspa/') || link.includes('sp_csd=') || 
-            (link.includes('sr=') && link.includes('-spons'))) {
-          rawSponsoredFlag = true;
-        }
-      }
     }
+    // If neither flag is set and no /sspa/ link, leave as undefined (will be detected later)
     
     // Extract BSR/rank from bestsellers_rank (can be null)
     let rainforestRank: number = 0;
@@ -1339,6 +1345,7 @@ export function parseRainforestSearchResults(
       raw_badges: badgesArray,
       raw_block_type: rawBlockType,
       raw_sponsored_flag: rawSponsoredFlag,
+      raw_link: typeof link === 'string' ? link : undefined, // Preserve link for detection
     });
   }
   
@@ -1383,8 +1390,15 @@ export function detectSponsored(raw: RawListing): {
   sponsored: boolean | "unknown";
   confidence: "high" | "medium" | "low";
 } {
-  // High confidence: Explicit flag from Rainforest
-  if (raw.raw_sponsored_flag === true) {
+  // CRITICAL: Check BOTH sponsored flag AND link pattern (/sspa/)
+  // Organic if: !sponsored && !link.includes('/sspa/')
+  // Sponsored if: sponsored === true || link.includes('/sspa/')
+  
+  const link = raw.raw_link || '';
+  const hasSspaLink = typeof link === 'string' && link.includes('/sspa/');
+  
+  // High confidence: Explicit flag from Rainforest OR /sspa/ link pattern
+  if (raw.raw_sponsored_flag === true || hasSspaLink) {
     return { sponsored: true, confidence: "high" };
   }
   
@@ -1406,6 +1420,12 @@ export function detectSponsored(raw: RawListing): {
   
   // Low confidence: Default to organic (not sponsored)
   // We classify everything - no "unknown" state
+  // Only mark as organic if both sponsored flag is false AND link doesn't have /sspa/
+  if (raw.raw_sponsored_flag === false && !hasSspaLink) {
+    return { sponsored: false, confidence: "low" };
+  }
+  
+  // If we can't determine, default to organic
   return { sponsored: false, confidence: "low" };
 }
 
