@@ -1168,14 +1168,20 @@ export async function enrichListingsMetadata(
       return enriched;
     });
 
+    // CRITICAL: enrichment_success_rate must NEVER exceed 100%
+    // Cap the rate at 100% if enrichedListingsCount exceeds listingsNeedingEnrichment
+    const rawSuccessRate = listingsNeedingEnrichment.length > 0 
+      ? (enrichedListingsCount / listingsNeedingEnrichment.length) * 100
+      : 0;
+    const cappedSuccessRate = Math.min(rawSuccessRate, 100); // Cap at 100%
+    
     console.log("✅ ASIN_METADATA_ENRICHMENT_COMPLETE", {
       keyword: keyword || "unknown",
       listings_enriched: enrichedListingsCount,
       fields_enriched: enrichedFieldsCount,
       total_listings: enrichedListings.length,
-      enrichment_success_rate: listingsNeedingEnrichment.length > 0 
-        ? `${((enrichedListingsCount / listingsNeedingEnrichment.length) * 100).toFixed(1)}%`
-        : "0%",
+      listings_needing_enrichment: listingsNeedingEnrichment.length,
+      enrichment_success_rate: `${cappedSuccessRate.toFixed(1)}%`,
       api_calls_made: allProducts.length,
       max_allowed: MAX_METADATA_ENRICHMENT,
     });
@@ -1433,13 +1439,10 @@ export function detectSponsored(raw: RawListing): {
   }
   
   // Low confidence: Default to organic (not sponsored)
-  // We classify everything - no "unknown" state
-  // Only mark as organic if both sponsored flag is false AND link doesn't have /sspa/
-  if (raw.raw_sponsored_flag === false && !hasSspaLink) {
-    return { sponsored: false, confidence: "low" };
-  }
-  
-  // If we can't determine, default to organic
+  // CRITICAL: We classify everything - no "unknown" state
+  // If an ASIN appears both sponsored and organic, treat it as organic
+  // Organic if: !sponsored && !link.includes('/sspa/')
+  // Default to organic if we can't determine sponsored status
   return { sponsored: false, confidence: "low" };
 }
 
@@ -2599,9 +2602,14 @@ export async function fetchKeywordMarketSnapshot(
       }
       
       // 🔒 LOCK SPONSORED FLAG AT INGESTION (single source of truth)
-      // Use ONLY item.sponsored === true from Rainforest - NEVER recompute later
-      // This is the authoritative source - preserve it through all merges
-      const is_sponsored: boolean | null = item.sponsored === true ? true : (item.sponsored === false ? false : null);
+      // CRITICAL: Check BOTH sponsored flag AND link pattern (/sspa/)
+      // Organic if: !sponsored && !link.includes('/sspa/')
+      // Sponsored if: sponsored === true || link.includes('/sspa/')
+      // If an ASIN appears both sponsored and organic, treat it as organic
+      // Use the helper function which checks both flag and link pattern
+      // CRITICAL: Classify everything - default to organic if not sponsored (no nulls)
+      const isSponsoredResult = isSponsored(item);
+      const is_sponsored: boolean = isSponsoredResult; // Always boolean - no nulls
       const sponsored_position: number | null = is_sponsored === true ? (item.ad_position ?? null) : null;
       const sponsored_source: 'rainforest_serp' | 'organic_serp' = 'rainforest_serp'; // Always from Rainforest SERP
       
