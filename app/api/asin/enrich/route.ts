@@ -660,13 +660,17 @@ export async function POST(req: NextRequest) {
     }
 
     // Parse fulfillment type
+    // 🔒 STRICT RULE: DO NOT infer FBA from is_prime (Prime ≠ FBA)
+    // Only use explicit fulfillment data from SP-API or Rainforest
     let fulfillmentType: string | null = null;
-    if (product.fulfillment?.is_prime === true || product.fulfillment?.type === "prime") {
-      fulfillmentType = "FBA";
-    } else if (product.fulfillment?.type === "amazon") {
+    if (product.fulfillment?.type === "amazon") {
       fulfillmentType = "Amazon";
-    } else {
+    } else if (product.fulfillment?.type === "FBA" || product.fulfillment?.is_fba === true) {
+      fulfillmentType = "FBA";
+    } else if (product.fulfillment?.type === "FBM") {
       fulfillmentType = "FBM";
+    }
+    // If fulfillment cannot be determined, leave as null (honest and credible)
     }
 
     // 6. Compute "best available signal" (Helium-10-like)

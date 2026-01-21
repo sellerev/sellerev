@@ -111,38 +111,11 @@ export async function fetchSearchResults(
         price = parseFloat(item.price.replace(/[^0-9.]/g, "")) || 0;
       }
 
-      // ═══════════════════════════════════════════════════════════════════════════
-      // PART 2: DETECT SPONSORED INSIDE search_results[]
-      // ═══════════════════════════════════════════════════════════════════════════
-      // PART 3: PERSIST SOURCE TYPE ON LISTING
-      // Detect sponsored status using ONLY fields already returned by Rainforest
-      // NO heuristics beyond link patterns. NO position-based guessing.
-      
-      function isSponsored(item: any): boolean {
-        // Check explicit sponsored flag
-        if (item.sponsored === true || item.is_sponsored === true) {
-          return true;
-        }
-        
-        // Check link patterns
-        const link = item.link || item.url || '';
-        if (typeof link === 'string') {
-          if (link.includes('/sspa/')) {
-            return true;
-          }
-          if (link.includes('sp_csd=')) {
-            return true;
-          }
-          if (link.includes('sr=') && link.includes('-spons')) {
-            return true;
-          }
-        }
-        
-        return false;
-      }
-      
-      // Determine sponsored status
-      const isSponsoredResult = isSponsored(item);
+      // 🔒 CANONICAL SPONSORED DETECTION
+      // Use ONLY item.sponsored (the authoritative field from Rainforest)
+      // If missing, treat as false (not sponsored)
+      // DO NOT use link parsing, is_sponsored, or any other heuristics
+      const isSponsoredResult = item.sponsored === true;
 
       // Only include products with valid prices
       if (price > 0) {

@@ -98,28 +98,31 @@ function parseBSR(item: any): number | null {
 
 /**
  * Determines fulfillment type from product data.
+ * 
+ * 🔒 STRICT RULE: Rainforest does NOT guarantee fulfillment data.
+ * Only return fulfillment if explicitly provided.
+ * DO NOT infer fulfillment from is_prime (Prime ≠ FBA).
  */
 function parseFulfillment(item: any): "FBA" | "FBM" | "Amazon" | null {
-  // Check if sold by Amazon
-  if (item.buybox_winner?.type === "Amazon" || item.availability?.raw?.includes("Amazon")) {
+  // Check if sold by Amazon (explicit field)
+  if (item.buybox_winner?.type === "Amazon") {
     return "Amazon";
   }
   
-  // Check for FBA indicator
-  if (item.fba || item.is_fba || item.fulfillment === "FBA" || item.fulfillment_type === "FBA") {
+  // Check explicit fulfillment fields (if provided by Rainforest or SP-API)
+  if (item.fulfillment === "FBA" || item.fulfillment_type === "FBA" || item.fba === true || item.is_fba === true) {
     return "FBA";
   }
   
-  // Check if Prime badge indicates FBA
-  if (item.is_prime) {
-    return "FBA"; // Most Prime items are FBA
-  }
-  
-  // Default to FBM if we can't determine
   if (item.fulfillment === "FBM" || item.fulfillment_type === "FBM") {
     return "FBM";
   }
   
+  // ❌ DO NOT infer from is_prime - Prime ≠ FBA
+  // ❌ DO NOT parse availability.raw - not guaranteed
+  
+  // Return null if fulfillment cannot be determined
+  // This is honest and credible - UI will show "Unknown" or Prime badge only
   return null;
 }
 

@@ -10,6 +10,46 @@
  * - If data cannot be computed, omit it (do NOT fake it)
  */
 
+/**
+ * 🔒 CANONICAL RAINFOREST DATA CONTRACT
+ * 
+ * This is the ONLY authoritative mapping from Rainforest API to internal types.
+ * 
+ * Based on Rainforest type=search official spec:
+ * - position: Page position (guaranteed)
+ * - asin: ASIN (guaranteed)
+ * - title: Title (guaranteed)
+ * - brand: Optional
+ * - image: Product image (guaranteed)
+ * - price: Main price (guaranteed)
+ * - rating: Star rating (guaranteed)
+ * - ratings_total: Review count (guaranteed)
+ * - sponsored: The ONLY sponsored flag (guaranteed, boolean)
+ * - is_prime: Prime eligibility (guaranteed, boolean) - NOT fulfillment
+ * 
+ * ❌ DO NOT USE:
+ * - item.is_sponsored (not documented)
+ * - Link parsing (/sspa/) (hack, will drift)
+ * - is_prime → FBA inference (Prime ≠ FBA)
+ * - delivery.text parsing (not guaranteed)
+ * 
+ * ✅ CORRECT RULES:
+ * - isSponsored = item.sponsored === true (treat missing as false)
+ * - fulfillment = "Unknown" unless SP-API confirms it
+ * - prime_eligible = item.is_prime (use for Prime badge, not fulfillment)
+ */
+export interface RainforestSearchListing {
+  asin: string;
+  title: string;
+  brand?: string;
+  image: string;
+  price?: number;
+  rating?: number;
+  ratings_total?: number;
+  sponsored: boolean; // The ONLY sponsored flag - use this exclusively
+  is_prime: boolean; // Prime eligibility - NOT fulfillment channel
+  position: number;
+}
 
 /**
  * PHASE 1 - COLLECT: Raw Market Truth Types
@@ -31,7 +71,6 @@ export interface RawListing {
   raw_badges: any[];
   raw_block_type?: string;
   raw_sponsored_flag?: boolean;
-  raw_link?: string; // Preserve link for /sspa/ detection
 }
 
 export interface RawSnapshot {
@@ -588,9 +627,18 @@ function parseBSR(item: any): number | null {
 
 /**
  * Safely parses fulfillment type (FBA/FBM/Amazon).
+ * 
+ * 🔒 STRICT RULE: Rainforest does NOT guarantee fulfillment data.
+ * Only return fulfillment if explicitly provided by Rainforest or SP-API.
+ * DO NOT infer fulfillment from is_prime (Prime ≠ FBA).
  */
 function parseFulfillment(item: any): "FBA" | "FBM" | "Amazon" | null {
-  // Try various fulfillment field names from Rainforest API
+  // Check if sold by Amazon (explicit field)
+  if (item.is_amazon === true || item.buybox_winner?.type === "Amazon") {
+    return "Amazon";
+  }
+  
+  // Try explicit fulfillment field from Rainforest (if provided)
   if (item.fulfillment) {
     const fulfillment = item.fulfillment.toString().toUpperCase();
     if (fulfillment.includes("FBA") || fulfillment.includes("FULFILLED BY AMAZON")) {
@@ -603,39 +651,21 @@ function parseFulfillment(item: any): "FBA" | "FBM" | "Amazon" | null {
       return "Amazon";
     }
   }
-  if (item.is_amazon) {
-    return "Amazon";
-  }
   
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PRIME-BASED FBA INFERENCE (for cached listings without fulfillment_channel)
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Check is_prime flag
-  if (item.is_prime === true || item.isPrime === true) {
+  // Check explicit FBA/FBM flags (if provided)
+  if (item.fba === true || item.is_fba === true || item.fulfillment_type === "FBA") {
     return "FBA";
   }
-  // Check delivery field for "Prime" text
-  if (item.delivery) {
-    const deliveryStr = typeof item.delivery === 'string' 
-      ? item.delivery 
-      : (item.delivery?.text || item.delivery?.message || String(item.delivery));
-    if (typeof deliveryStr === 'string' && deliveryStr.toLowerCase().includes('prime')) {
-      return "FBA";
-    }
-  }
-  // Check badges array for "Prime" badge
-  if (item.badges && Array.isArray(item.badges)) {
-    const hasPrimeBadge = item.badges.some((badge: any) => {
-      const badgeText = typeof badge === 'string' 
-        ? badge 
-        : (badge?.text || badge?.label || String(badge));
-      return typeof badgeText === 'string' && badgeText.toLowerCase().includes('prime');
-    });
-    if (hasPrimeBadge) {
-      return "FBA";
-    }
+  if (item.fulfillment_type === "FBM") {
+    return "FBM";
   }
   
+  // ❌ DO NOT infer from is_prime - Prime ≠ FBA
+  // ❌ DO NOT parse delivery.text - not guaranteed
+  // ❌ DO NOT parse badges - not guaranteed
+  
+  // Return null if fulfillment cannot be determined
+  // This is honest and credible - UI will show "Unknown" or Prime badge only
   return null;
 }
 
@@ -1335,29 +1365,17 @@ export function parseRainforestSearchResults(
     // Extract image (can be null)
     const image = item.image || item.image_url || null;
     
-    // Extract link for sponsored detection (must check link even if sponsored flag is set)
-    const link = item.link || item.url || '';
-    
-    // Extract sponsored flag (can be undefined)
-    // CRITICAL: Check BOTH sponsored flag AND link pattern (/sspa/)
-    // Organic if: !sponsored && !link.includes('/sspa/')
-    // Sponsored if: sponsored === true || link.includes('/sspa/')
-    // CRITICAL: If Rainforest provides a flag (true or false), preserve it - never null
+    // 🔒 CANONICAL SPONSORED DETECTION
+    // Use ONLY item.sponsored (the authoritative field from Rainforest)
+    // If missing, treat as false (not sponsored)
+    // DO NOT use link parsing, is_sponsored, or any other heuristics
     let rawSponsoredFlag: boolean | undefined = undefined;
-    const hasSspaLink = typeof link === 'string' && link.includes('/sspa/');
-    
-    // Priority 1: Link pattern (/sspa/) indicates sponsored (most reliable)
-    if (hasSspaLink) {
+    if (item.sponsored === true) {
       rawSponsoredFlag = true;
-    } else if (item.sponsored === true || item.is_sponsored === true) {
-      // Priority 2: Explicit sponsored flag from Rainforest - preserve it
-      rawSponsoredFlag = true;
-    } else if (item.sponsored === false || item.is_sponsored === false) {
-      // Priority 3: Explicit organic flag from Rainforest - preserve it
+    } else if (item.sponsored === false) {
       rawSponsoredFlag = false;
     }
-    // If neither flag is set and no /sspa/ link, leave as undefined (will be detected later)
-    // But if Rainforest provided a flag, we've already captured it above
+    // If item.sponsored is missing/undefined, leave as undefined (will be treated as false later)
     
     // Extract BSR/rank from bestsellers_rank (can be null)
     let rainforestRank: number = 0;
@@ -1401,7 +1419,6 @@ export function parseRainforestSearchResults(
       raw_badges: badgesArray,
       raw_block_type: rawBlockType,
       raw_sponsored_flag: rawSponsoredFlag,
-      raw_link: typeof link === 'string' ? link : undefined, // Preserve link for detection
     });
   }
   
@@ -1434,10 +1451,9 @@ export function parseRainforestSearchResults(
 }
 
 /**
- * PHASE 2A - CANONICALIZATION: Sponsored Detection (FIXED)
+ * PHASE 2A - CANONICALIZATION: Sponsored Detection
  * 
- * ❌ No more unknown_count: 48
- * ✅ Everything is classified, with confidence
+ * 🔒 STRICT RULE: Use ONLY item.sponsored from Rainforest
  * 
  * @param raw - Raw listing from Phase 1
  * @returns Sponsored status and confidence level
@@ -1446,53 +1462,19 @@ export function detectSponsored(raw: RawListing): {
   sponsored: boolean | "unknown";
   confidence: "high" | "medium" | "low";
 } {
-  // CRITICAL: Check BOTH sponsored flag AND link pattern (/sspa/)
-  // Organic if: !sponsored && !link.includes('/sspa/')
-  // Sponsored if: sponsored === true || link.includes('/sspa/')
-  // CRITICAL: If Rainforest provides a flag (true or false), preserve it with high confidence
+  // 🔒 CANONICAL RULE: isSponsored = item.sponsored === true
+  // If the field is missing, treat as false (not sponsored)
+  // DO NOT use link parsing, is_sponsored, badges, or any other heuristics
   
-  const link = raw.raw_link || '';
-  const hasSspaLink = typeof link === 'string' && link.includes('/sspa/');
-  
-  // Priority 1: If Rainforest provided an explicit flag, preserve it with high confidence
   if (raw.raw_sponsored_flag === true) {
     return { sponsored: true, confidence: "high" };
   }
   if (raw.raw_sponsored_flag === false) {
-    // Only return organic if link doesn't contradict it
-    if (hasSspaLink) {
-      // Link pattern contradicts explicit flag - trust link pattern
-      return { sponsored: true, confidence: "high" };
-    }
     return { sponsored: false, confidence: "high" };
   }
   
-  // Priority 2: Link pattern (/sspa/) indicates sponsored (most reliable when no explicit flag)
-  if (hasSspaLink) {
-    return { sponsored: true, confidence: "high" };
-  }
-  
-  // Medium confidence: Block type indicates sponsored
-  if (raw.raw_block_type && /sponsored/i.test(raw.raw_block_type)) {
-    return { sponsored: true, confidence: "medium" };
-  }
-  
-  // Medium confidence: Badges indicate sponsored
-  if (raw.raw_badges && Array.isArray(raw.raw_badges)) {
-    const hasSponsoredBadge = raw.raw_badges.some((badge: any) => {
-      const badgeText = badge?.text || badge?.label || String(badge || "");
-      return /sponsored/i.test(badgeText);
-    });
-    if (hasSponsoredBadge) {
-      return { sponsored: true, confidence: "medium" };
-    }
-  }
-  
-  // Low confidence: Default to organic (not sponsored)
-  // CRITICAL: We classify everything - no "unknown" state
-  // If an ASIN appears both sponsored and organic, treat it as organic
-  // Organic if: !sponsored && !link.includes('/sspa/')
-  // Default to organic if we can't determine sponsored status
+  // If missing/undefined, treat as false (not sponsored) with low confidence
+  // This ensures we never have "unknown" states that break aggregates
   return { sponsored: false, confidence: "low" };
 }
 
@@ -2659,47 +2641,11 @@ export async function fetchKeywordMarketSnapshot(
       // ═══════════════════════════════════════════════════════════════════════════
       // PART 2: DETECT SPONSORED INSIDE search_results[]
       // ═══════════════════════════════════════════════════════════════════════════
-      // PART 3: PERSIST SOURCE TYPE ON LISTING
-      // CRITICAL: Detect sponsored status using ONLY fields already returned by Rainforest
-      // NO heuristics beyond link patterns. NO position-based guessing.
-      // 
-      // Detection logic:
-      // - item.sponsored === true
-      // - item.link?.includes('/sspa/')
-      // - item.link?.includes('sp_csd=')
-      // - (item.link?.includes('sr=') && item.link.includes('-spons'))
-      
-      function isSponsored(item: any): boolean {
-        // Check explicit sponsored flag
-        if (item.sponsored === true || item.is_sponsored === true) {
-          return true;
-        }
-        
-        // Check link patterns
-        const link = item.link || item.url || '';
-        if (typeof link === 'string') {
-          if (link.includes('/sspa/')) {
-            return true;
-          }
-          if (link.includes('sp_csd=')) {
-            return true;
-          }
-          if (link.includes('sr=') && link.includes('-spons')) {
-            return true;
-          }
-        }
-        
-        return false;
-      }
-      
-      // 🔒 LOCK SPONSORED FLAG AT INGESTION (single source of truth)
-      // CRITICAL: Check BOTH sponsored flag AND link pattern (/sspa/)
-      // Organic if: !sponsored && !link.includes('/sspa/')
-      // Sponsored if: sponsored === true || link.includes('/sspa/')
-      // If an ASIN appears both sponsored and organic, treat it as organic
-      // Use the helper function which checks both flag and link pattern
-      // CRITICAL: Classify everything - default to organic if not sponsored (no nulls)
-      const isSponsoredResult = isSponsored(item);
+      // 🔒 CANONICAL SPONSORED DETECTION
+      // Use ONLY item.sponsored (the authoritative field from Rainforest)
+      // If missing, treat as false (not sponsored)
+      // DO NOT use link parsing, is_sponsored, or any other heuristics
+      const isSponsoredResult = item.sponsored === true;
       const is_sponsored: boolean = isSponsoredResult; // Always boolean - no nulls
       const sponsored_position: number | null = is_sponsored === true ? (item.ad_position ?? null) : null;
       const sponsored_source: 'rainforest_serp' | 'organic_serp' = 'rainforest_serp'; // Always from Rainforest SERP

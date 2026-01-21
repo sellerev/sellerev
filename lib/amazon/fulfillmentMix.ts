@@ -22,10 +22,14 @@ export interface FulfillmentMix {
 /**
  * Compute fulfillment mix from listings
  * 
- * Detection Logic (Rainforest-first, fallback safe):
- * 1. Amazon Retail: seller === 'Amazon' OR brand === 'Amazon'
- * 2. FBA: is_prime === true OR fulfillment === 'FBA'
- * 3. FBM: Everything else (default)
+ * 🔒 STRICT RULE: Only use explicit fulfillment data.
+ * DO NOT infer FBA from is_prime (Prime ≠ FBA).
+ * 
+ * Detection Logic:
+ * 1. Amazon Retail: seller === 'Amazon' OR brand === 'Amazon' OR fulfillment === 'Amazon'
+ * 2. FBA: fulfillment === 'FBA' (explicit only, from SP-API or Rainforest)
+ * 3. FBM: fulfillment === 'FBM' (explicit only)
+ * 4. Unknown: fulfillment === null (counted separately, not in mix)
  * 
  * Always returns percentages, even if data is missing (uses defaults).
  */
@@ -33,19 +37,26 @@ export function computeFulfillmentMix(listings: ParsedListing[]): FulfillmentMix
   let fba = 0;
   let fbm = 0;
   let amazon = 0;
+  let unknown = 0;
   
   listings.forEach(l => {
     // Check for Amazon Retail first
-    // Detection: seller === 'Amazon' OR brand === 'Amazon'
     const isAmazonRetail = l.seller === 'Amazon' || l.brand === 'Amazon' || l.fulfillment === 'Amazon';
     
     if (isAmazonRetail) {
       amazon++;
-    } else if (l.is_prime === true || l.fulfillment === 'FBA') {
-      // FBA: is_prime === true OR fulfillment === 'FBA' (Prime-eligible)
+    } else if (l.fulfillment === 'FBA') {
+      // FBA: Only if explicitly set (from SP-API or Rainforest)
       fba++;
+    } else if (l.fulfillment === 'FBM') {
+      // FBM: Only if explicitly set
+      fbm++;
     } else {
-      // FBM: Everything else (default)
+      // Unknown: fulfillment is null or undefined
+      // DO NOT infer from is_prime
+      unknown++;
+      // For now, count unknown as FBM for backward compatibility
+      // TODO: Consider tracking unknown separately in the future
       fbm++;
     }
   });
