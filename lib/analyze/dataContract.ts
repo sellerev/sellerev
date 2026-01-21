@@ -638,6 +638,21 @@ export async function buildKeywordAnalyzeResponse(
       ? Number(((sponsoredCount / canonicalProducts.length) * 100).toFixed(1))
       : 0;
 
+    // Step 4.6: Compute Page-1 and Top-10 sponsored aggregates
+    // Page-1 aggregates: all listings on page 1
+    const page1_sponsored_count = sponsoredCount;
+    const page1_sponsored_pct = sponsoredPct;
+    
+    // Top-10 aggregates: first 10 listings by page_position
+    const top10Listings = canonicalProducts
+      .slice()
+      .sort((a, b) => (a.page_position ?? 999) - (b.page_position ?? 999))
+      .slice(0, 10);
+    const top10_sponsored_count = top10Listings.filter(p => p.is_sponsored === true).length;
+    const top10_sponsored_pct = top10Listings.length > 0
+      ? Number(((top10_sponsored_count / top10Listings.length) * 100).toFixed(1))
+      : 0;
+
     // Step 5: Attach brand_stats, page_one_brands, and sponsored metrics to snapshot
     // CRITICAL: Snapshot totals MUST equal sum of all products (guaranteed by calculation above)
     if (snapshot) {
@@ -666,6 +681,11 @@ export async function buildKeywordAnalyzeResponse(
       (snapshot as any).organic_count = organicCount;
       (snapshot as any).unknown_sponsored_count = unknownSponsoredCount;
       (snapshot as any).sponsored_pct = sponsoredPct;
+      // Add Page-1 and Top-10 sponsored aggregates
+      (snapshot as any).page1_sponsored_count = page1_sponsored_count;
+      (snapshot as any).page1_sponsored_pct = page1_sponsored_pct;
+      (snapshot as any).top10_sponsored_count = top10_sponsored_count;
+      (snapshot as any).top10_sponsored_pct = top10_sponsored_pct;
     }
     
     // Step 6: Logging
@@ -1029,6 +1049,13 @@ export async function buildKeywordAnalyzeResponse(
       top_5_brand_revenue_share_pct: snapshot.top_5_brand_revenue_share_pct ?? null,
       total_monthly_revenue: summary.total_monthly_revenue_est,
       total_monthly_units: summary.total_monthly_units_est,
+      // Sponsored aggregates (Page-1 and Top-10)
+      page1_sponsored_count: (snapshot as any).page1_sponsored_count ?? null,
+      page1_sponsored_pct: (snapshot as any).page1_sponsored_pct ?? null,
+      top10_sponsored_count: (snapshot as any).top10_sponsored_count ?? null,
+      top10_sponsored_pct: (snapshot as any).top10_sponsored_pct ?? null,
+      sponsored_count: (snapshot as any).sponsored_count ?? null,
+      sponsored_pct: (snapshot as any).sponsored_pct ?? null,
     },
     // Calibration metadata (for AI explanations only, not UI math)
     calibration: calibrationMetadata || {

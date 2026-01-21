@@ -1342,6 +1342,7 @@ export function parseRainforestSearchResults(
     // CRITICAL: Check BOTH sponsored flag AND link pattern (/sspa/)
     // Organic if: !sponsored && !link.includes('/sspa/')
     // Sponsored if: sponsored === true || link.includes('/sspa/')
+    // CRITICAL: If Rainforest provides a flag (true or false), preserve it - never null
     let rawSponsoredFlag: boolean | undefined = undefined;
     const hasSspaLink = typeof link === 'string' && link.includes('/sspa/');
     
@@ -1349,13 +1350,14 @@ export function parseRainforestSearchResults(
     if (hasSspaLink) {
       rawSponsoredFlag = true;
     } else if (item.sponsored === true || item.is_sponsored === true) {
-      // Priority 2: Explicit sponsored flag
+      // Priority 2: Explicit sponsored flag from Rainforest - preserve it
       rawSponsoredFlag = true;
     } else if (item.sponsored === false || item.is_sponsored === false) {
-      // Priority 3: Explicit organic flag (only if link doesn't have /sspa/)
+      // Priority 3: Explicit organic flag from Rainforest - preserve it
       rawSponsoredFlag = false;
     }
     // If neither flag is set and no /sspa/ link, leave as undefined (will be detected later)
+    // But if Rainforest provided a flag, we've already captured it above
     
     // Extract BSR/rank from bestsellers_rank (can be null)
     let rainforestRank: number = 0;
@@ -1447,12 +1449,26 @@ export function detectSponsored(raw: RawListing): {
   // CRITICAL: Check BOTH sponsored flag AND link pattern (/sspa/)
   // Organic if: !sponsored && !link.includes('/sspa/')
   // Sponsored if: sponsored === true || link.includes('/sspa/')
+  // CRITICAL: If Rainforest provides a flag (true or false), preserve it with high confidence
   
   const link = raw.raw_link || '';
   const hasSspaLink = typeof link === 'string' && link.includes('/sspa/');
   
-  // High confidence: Explicit flag from Rainforest OR /sspa/ link pattern
-  if (raw.raw_sponsored_flag === true || hasSspaLink) {
+  // Priority 1: If Rainforest provided an explicit flag, preserve it with high confidence
+  if (raw.raw_sponsored_flag === true) {
+    return { sponsored: true, confidence: "high" };
+  }
+  if (raw.raw_sponsored_flag === false) {
+    // Only return organic if link doesn't contradict it
+    if (hasSspaLink) {
+      // Link pattern contradicts explicit flag - trust link pattern
+      return { sponsored: true, confidence: "high" };
+    }
+    return { sponsored: false, confidence: "high" };
+  }
+  
+  // Priority 2: Link pattern (/sspa/) indicates sponsored (most reliable when no explicit flag)
+  if (hasSspaLink) {
     return { sponsored: true, confidence: "high" };
   }
   
