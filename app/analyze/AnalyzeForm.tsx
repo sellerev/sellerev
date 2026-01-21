@@ -648,18 +648,21 @@ export default function AnalyzeForm({
       const chatRunId = analysisRunIdForChat;
       const isSameRunId = (currentRunId === incomingRunId) || (chatRunId === incomingRunId);
       
-      // GUARD: Only skip sync for background/polling updates (NOT user actions)
+      // GUARD: Only skip sync for background/polling updates (NOT user actions or history navigation)
       // Skip sync ONLY if:
       // 1. Same backend run ID
       // 2. Current state has products
       // 3. AND this is NOT a keyword change (different input_value)
+      // 4. AND this is NOT from history navigation (clientRunId is null when coming from history)
       // NEVER skip sync for:
       // - User clicking Analyze (client_run_id exists) - already handled above
       // - Keyword change (different input_value)
+      // - History navigation (clientRunId is null) - always sync to ensure state is correct
       const isKeywordChange = initialAnalysis.input_value !== (analysis?.input_value || '');
-      if (isSameRunId && currentHasProducts && !isKeywordChange) {
-        // This is a URL/prop-based sync (not a user-triggered action) and keyword hasn't changed
-        // Only skip if we have current products and it's the same run
+      const isFromHistory = !clientRunId; // Coming from history/navigation, not user-triggered action
+      if (isSameRunId && currentHasProducts && !isKeywordChange && !isFromHistory) {
+        // This is a URL/prop-based sync (not a user-triggered action or history navigation) and keyword hasn't changed
+        // Only skip if we have current products and it's the same run AND not from history
         console.log("FRONTEND_SKIP_SYNC_SAME_RUN", {
           run_id: incomingRunId,
           current_run_id: currentRunId,
@@ -667,7 +670,8 @@ export default function AnalyzeForm({
           current_products: currentProducts.length,
           incoming_products: incomingProducts.length,
           is_keyword_change: isKeywordChange,
-          reason: "Same backend run ID with current products - preserving client state (URL/prop sync only, not user action)",
+          is_from_history: isFromHistory,
+          reason: "Same backend run ID with current products - preserving client state (URL/prop sync only, not user action or history)",
         });
         return;
       }
@@ -680,8 +684,8 @@ export default function AnalyzeForm({
       // Always sync if:
       // 1. Incoming has products (different run ID or keyword change), OR
       // 2. Coming from history/navigation (clientRunId is null) - initialAnalysis is source of truth
-      // The only time we DON'T sync is when incoming has no products AND it's a background update (same run, no keyword change)
-      const isFromHistory = !clientRunId; // Coming from history/navigation, not user-triggered action
+      // The only time we DON'T sync is when incoming has no products AND it's a background update (same run, no keyword change, not from history)
+      // Note: isFromHistory is already calculated above in the skip check
       const shouldSync = incomingHasProducts || isFromHistory || !isSameRunId || isKeywordChange || !currentHasProducts;
       
       if (shouldSync) {
