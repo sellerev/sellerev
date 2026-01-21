@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import BrandMoatBlock from "./BrandMoatBlock";
@@ -2021,117 +2021,129 @@ export default function AnalyzeForm({
                       <ResultsLoadingState />
                     ) : (
                       <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-                        {filteredListings.map((listing: any, idx: number) => {
-                          // Extract ASIN FIRST - this is the single source of truth for this listing
-                          const asin = listing.asin || normalizeListing(listing).asin || null;
-                          
-                          // CRITICAL: Use the extracted asin for selection check (must match what we store)
-                          const isSelected = asin !== null && selectedAsins.includes(asin);
-                          
-                          // Extract image URL with fallback - preserve from stable source
-                          const imageUrl = listing.image_url ?? listing.image ?? null;
-                          // Rank = Page-1 position (use page_position if available, else use array index + 1 for display)
-                          // Note: When sorted, we still show the original page_position for rank display
-                          const rank = listing.page_position ?? listing.organic_rank ?? (idx + 1);
-                          // Fulfillment from canonical product (map AMZ → FBA, default to FBM if null)
-                          const fulfillment = listing.fulfillment === "AMZ" 
-                            ? "AMZ" 
-                            : (listing.fulfillment === "FBA" 
-                              ? "FBA" 
-                              : (listing.fulfillment === "FBM" ? "FBM" : "FBM"));
-                          
-                          // Extract data with safe defaults - map from canonical product fields
-                          // Title: preserve null if missing (don't fallback to "Product Title")
-                          const title = listing.title || null;
-                          // Brand removed (Phase 3: brands not displayed at product level)
-                          
-                          // ═══════════════════════════════════════════════════════════════════════════
-                          // STEP 3: Log final product card data (first 5 cards)
-                          // ═══════════════════════════════════════════════════════════════════════════
-                          if (idx < 5) {
-                            console.log("🔵 FINAL PRODUCT CARD DATA", {
-                              index: idx,
-                              asin: asin,
-                              listing_keys: Object.keys(listing),
-                            });
-                          }
-                          // Price: must be > 0 to display
-                          const price = listing.price ?? 0;
-                          // Rating: can be 0 (ProductCard handles this)
-                          const rating = listing.rating ?? 0;
-                          // Reviews: page_one_listings uses review_count, ProductCard expects reviews prop
-                          const reviews = listing.review_count ?? listing.reviews ?? 0;
-                          
-                          // Revenue and units: ALWAYS use estimated_monthly_revenue/estimated_monthly_units from listing
-                          // These are FINAL and authoritative - produced during H10-style estimation, BSR override, or rank-weighted allocation
-                          // Do NOT use legacy fields (revenue, units, est_monthly_revenue, est_monthly_units)
-                          // Explicit check: preserve value if it exists (including 0), set null if undefined/null
-                          const monthlyRevenue = (listing as any).estimated_monthly_revenue ?? null;
-                          const monthlyUnits = (listing as any).estimated_monthly_units ?? null;
-                          // BSR source determines prefix (~ for estimated, no prefix for sp_api)
-                          const bsrSource = (listing as any).bsr_source ?? (listing as any).bsrSource ?? null;
-                          
-                          // Sponsored: preserve exact value from listing (true/false/null)
-                          // CRITICAL: Do NOT coerce null to false - null means unknown
-                          const isSponsored = listing.is_sponsored ?? listing.sponsored ?? null;
-                          
-                          return (
-                            <motion.div
-                              key={`${asin || idx}-${idx}`}
-                              initial={{ opacity: 0, y: 4 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ duration: 0.25, ease: "easeOut", delay: idx * 0.03 }}
-                            >
-                              <ProductCard
-                                rank={rank}
-                                title={title}
-                                // brand removed (Phase 3: brands not displayed at product level)
-                                price={price}
-                                rating={rating}
-                                reviews={reviews}
-                                monthlyRevenue={monthlyRevenue}
-                                monthlyUnits={monthlyUnits}
-                                bsrSource={bsrSource}
-                                fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
-                                isSponsored={isSponsored}
-                                imageUrl={imageUrl}
-                                asin={asin}
-                                isSelected={isSelected}
-                                onSelect={(e) => {
-                                // CRITICAL: Use the extracted asin (not listing.asin) for consistency
-                                if (!asin) return;
+                        <AnimatePresence mode="popLayout">
+                          {filteredListings.map((listing: any, idx: number) => {
+                            // Extract ASIN FIRST - this is the single source of truth for this listing
+                            const asin = listing.asin || normalizeListing(listing).asin || null;
+                            
+                            // CRITICAL: Use a stable key based on ASIN (or fallback to a unique identifier)
+                            // This ensures Framer Motion can properly track component lifecycle for animations
+                            const stableKey = asin || `listing-${idx}-${listing.page_position || idx}`;
+                            
+                            // CRITICAL: Use the extracted asin for selection check (must match what we store)
+                            const isSelected = asin !== null && selectedAsins.includes(asin);
+                            
+                            // Extract image URL with fallback - preserve from stable source
+                            const imageUrl = listing.image_url ?? listing.image ?? null;
+                            // Rank = Page-1 position (use page_position if available, else use array index + 1 for display)
+                            // Note: When sorted, we still show the original page_position for rank display
+                            const rank = listing.page_position ?? listing.organic_rank ?? (idx + 1);
+                            // Fulfillment from canonical product (map AMZ → FBA, default to FBM if null)
+                            const fulfillment = listing.fulfillment === "AMZ" 
+                              ? "AMZ" 
+                              : (listing.fulfillment === "FBA" 
+                                ? "FBA" 
+                                : (listing.fulfillment === "FBM" ? "FBM" : "FBM"));
+                            
+                            // Extract data with safe defaults - map from canonical product fields
+                            // Title: preserve null if missing (don't fallback to "Product Title")
+                            const title = listing.title || null;
+                            // Brand removed (Phase 3: brands not displayed at product level)
+                            
+                            // ═══════════════════════════════════════════════════════════════════════════
+                            // STEP 3: Log final product card data (first 5 cards)
+                            // ═══════════════════════════════════════════════════════════════════════════
+                            if (idx < 5) {
+                              console.log("🔵 FINAL PRODUCT CARD DATA", {
+                                index: idx,
+                                asin: asin,
+                                listing_keys: Object.keys(listing),
+                              });
+                            }
+                            // Price: must be > 0 to display
+                            const price = listing.price ?? 0;
+                            // Rating: can be 0 (ProductCard handles this)
+                            const rating = listing.rating ?? 0;
+                            // Reviews: page_one_listings uses review_count, ProductCard expects reviews prop
+                            const reviews = listing.review_count ?? listing.reviews ?? 0;
+                            
+                            // Revenue and units: ALWAYS use estimated_monthly_revenue/estimated_monthly_units from listing
+                            // These are FINAL and authoritative - produced during H10-style estimation, BSR override, or rank-weighted allocation
+                            // Do NOT use legacy fields (revenue, units, est_monthly_revenue, est_monthly_units)
+                            // Explicit check: preserve value if it exists (including 0), set null if undefined/null
+                            const monthlyRevenue = (listing as any).estimated_monthly_revenue ?? null;
+                            const monthlyUnits = (listing as any).estimated_monthly_units ?? null;
+                            // BSR source determines prefix (~ for estimated, no prefix for sp_api)
+                            const bsrSource = (listing as any).bsr_source ?? (listing as any).bsrSource ?? null;
+                            
+                            // Sponsored: preserve exact value from listing (true/false/null)
+                            // CRITICAL: Do NOT coerce null to false - null means unknown
+                            const isSponsored = listing.is_sponsored ?? listing.sponsored ?? null;
+                            
+                            return (
+                              <motion.div
+                                key={stableKey}
+                                initial={{ opacity: 0, y: 8 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -8 }}
+                                transition={{ 
+                                  duration: 0.3, 
+                                  ease: [0.4, 0, 0.2, 1], // ease-out cubic bezier
+                                  delay: idx * 0.04 
+                                }}
+                                layout
+                              >
+                                <ProductCard
+                                  rank={rank}
+                                  title={title}
+                                  // brand removed (Phase 3: brands not displayed at product level)
+                                  price={price}
+                                  rating={rating}
+                                  reviews={reviews}
+                                  monthlyRevenue={monthlyRevenue}
+                                  monthlyUnits={monthlyUnits}
+                                  bsrSource={bsrSource}
+                                  fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
+                                  isSponsored={isSponsored}
+                                  imageUrl={imageUrl}
+                                  asin={asin}
+                                  isSelected={isSelected}
+                                  onSelect={(e) => {
+                                  // CRITICAL: Use the extracted asin (not listing.asin) for consistency
+                                  if (!asin) return;
 
-                                const isMulti =
-                                  ("metaKey" in e && e.metaKey) ||
-                                  ("ctrlKey" in e && e.ctrlKey) ||
-                                  ("shiftKey" in e && e.shiftKey);
+                                  const isMulti =
+                                    ("metaKey" in e && e.metaKey) ||
+                                    ("ctrlKey" in e && e.ctrlKey) ||
+                                    ("shiftKey" in e && e.shiftKey);
 
-                                if (isMulti) {
-                                  // Multi-select toggle
-                                  if (isSelected) {
-                                    setSelectedAsins(prev => prev.filter(selectedAsin => selectedAsin !== asin));
-                                  } else {
-                                    setSelectedAsins(prev => [...prev, asin]);
+                                  if (isMulti) {
+                                    // Multi-select toggle
+                                    if (isSelected) {
+                                      setSelectedAsins(prev => prev.filter(selectedAsin => selectedAsin !== asin));
+                                    } else {
+                                      setSelectedAsins(prev => [...prev, asin]);
+                                    }
+                                    return;
                                   }
-                                  return;
-                                }
 
-                                // Default click: single-select toggle
-                                if (isSelected && selectedAsins.length === 1) {
-                                  setSelectedAsins([]);
-                                } else {
-                                  setSelectedAsins([asin]);
-                                }
+                                  // Default click: single-select toggle
+                                  if (isSelected && selectedAsins.length === 1) {
+                                    setSelectedAsins([]);
+                                  } else {
+                                    setSelectedAsins([asin]);
+                                  }
 
-                                // Clear focus after mouse click to avoid stuck focus styles
-                                if ("currentTarget" in e) {
-                                  (e.currentTarget as HTMLElement).blur?.();
-                                }
-                              }}
-                            />
-                            </motion.div>
-                          );
-                        })}
+                                  // Clear focus after mouse click to avoid stuck focus styles
+                                  if ("currentTarget" in e) {
+                                    (e.currentTarget as HTMLElement).blur?.();
+                                  }
+                                }}
+                              />
+                              </motion.div>
+                            );
+                          })}
+                        </AnimatePresence>
                       </div>
                     )}
                   </div>
