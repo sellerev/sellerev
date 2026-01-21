@@ -3,12 +3,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
+import { motion } from "framer-motion";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import BrandMoatBlock from "./BrandMoatBlock";
 import { ProductCard } from "@/app/components/ProductCard";
 import SearchBar from "@/app/components/SearchBar";
-import ResultsLoadingState from "./components/ResultsLoadingState";
+import { MetricSkeleton, TextSkeleton } from "./components/MetricSkeleton";
+import AIThinkingMessage from "./components/AIThinkingMessage";
 
 // Hard safety check: Prevent localhost calls in production
 if (typeof window !== 'undefined' && process.env.NODE_ENV === 'production') {
@@ -476,11 +478,20 @@ export default function AnalyzeForm({
   const [inputError, setInputError] = useState<string | null>(null);
 
   // Analysis state - initialize with provided analysis if available, normalized
-  const [loading, setLoading] = useState(false);
+  // UI state model: 'initial' → cards render, skeletons visible
+  //                 'enriching' → skeletons + AI-thinking copy
+  //                 'complete' → skeletons removed, values locked in
+  type AnalysisUIState = 'initial' | 'enriching' | 'complete';
+  const [analysisUIState, setAnalysisUIState] = useState<AnalysisUIState>(
+    initialAnalysis ? 'complete' : 'initial'
+  );
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(
     normalizeAnalysis(initialAnalysis)
   );
+  
+  // Keep loading state for backward compatibility with SearchBar component
+  const [loading, setLoading] = useState(false);
   
   // Client-side run ID generated BEFORE API call - tracks current search lifecycle
   // This is separate from backend run_id which may be reused for cached results
@@ -777,6 +788,7 @@ export default function AnalyzeForm({
     
     // Hard reset all run-scoped UI state BEFORE API call
     setLoading(true);
+    setAnalysisUIState('initial'); // Start with initial state - cards will render with skeletons
     setError(null);
     setAnalysis(null); // Clear previous results
     setAnalysisRunIdForChat(null); // Clear analysisRunId for chat (will be set from response)
@@ -832,6 +844,7 @@ export default function AnalyzeForm({
         });
         setError(data.message || "Analysis queued. Ready in ~5–10 minutes.");
         setLoading(false);
+        setAnalysisUIState('initial');
         return;
       }
 
@@ -862,6 +875,7 @@ export default function AnalyzeForm({
         
         setError(displayError);
         setLoading(false);
+        setAnalysisUIState('initial');
         return;
       }
 
@@ -887,6 +901,7 @@ export default function AnalyzeForm({
         console.error("ANALYZE_MISSING_RUN_ID", { data });
         setError("Analysis failed to produce a snapshot or run ID");
         setLoading(false);
+        setAnalysisUIState('initial');
         return;
       }
 
@@ -918,6 +933,7 @@ export default function AnalyzeForm({
         });
         setError("Analysis failed: no listings returned");
         setLoading(false);
+        setAnalysisUIState('initial');
         return;
       }
 
@@ -1079,6 +1095,41 @@ export default function AnalyzeForm({
       });
       setError(null);
       setLoading(false); // Hide animation after products are committed
+      
+      // Update UI state: transition to 'enriching' if we have listings but incomplete data
+      // Transition to 'complete' when we have full data
+      const hasListings = pageOneListings.length > 0;
+      
+      // Calculate monthly units and revenue from listings to determine state
+      const calculatedMonthlyUnits = hasListings && pageOneListings.length > 0
+        ? pageOneListings.reduce((sum: number, product: any) => {
+            const units = product.estimated_monthly_units;
+            if (typeof units === 'number') {
+              return sum + units;
+            }
+            return sum;
+          }, 0)
+        : null;
+      
+      const calculatedMonthlyRevenue = hasListings && pageOneListings.length > 0
+        ? pageOneListings.reduce((sum: number, product: any) => {
+            const revenue = product.estimated_monthly_revenue;
+            if (typeof revenue === 'number') {
+              return sum + revenue;
+            }
+            return sum;
+          }, 0)
+        : null;
+      
+      const hasFullData = hasListings && 
+                         (calculatedMonthlyUnits !== null && calculatedMonthlyUnits !== undefined) &&
+                         (calculatedMonthlyRevenue !== null && calculatedMonthlyRevenue !== undefined);
+      
+      if (hasFullData) {
+        setAnalysisUIState('complete');
+      } else if (hasListings) {
+        setAnalysisUIState('enriching');
+      }
 
       // Update URL with the new analysis run ID for persistence (legacy contract)
       // Use replace() to avoid adding to history stack
@@ -1099,6 +1150,7 @@ export default function AnalyzeForm({
       });
       setError(errorMessage);
       setLoading(false);
+      setAnalysisUIState('initial');
     }
   };
 
@@ -1219,12 +1271,12 @@ export default function AnalyzeForm({
           </div>
 
           {analysis ? (
-            /* CRITICAL: ALWAYS render results when analysis exists - animation does NOT block rendering */
+            /* CRITICAL: ALWAYS render results when analysis exists - never block rendering */
             <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6 relative">
-              {/* Show loading animation OVERLAY if loading (does not block results) */}
-              {loading && (
-                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-10 flex items-center justify-center">
-                  <ResultsLoadingState key={currentAnalysisRunId} />
+              {/* AI Thinking Message - shown when enriching (non-blocking) */}
+              {analysisUIState === 'enriching' && (
+                <div className="mb-4">
+                  <AIThinkingMessage />
                 </div>
               )}
               {/* KEYWORD ANALYSIS: Interactive Amazon-style search */}
@@ -1464,21 +1516,39 @@ export default function AnalyzeForm({
                           {/* 6. Monthly Units */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
-                            <div className="text-lg font-semibold text-gray-900">
-                              {monthlyUnits !== null && monthlyUnits !== undefined
-                                ? (monthlyUnits === 0 ? "0" : monthlyUnits.toLocaleString())
-                                : "—"}
-                            </div>
+                            {monthlyUnits !== null && monthlyUnits !== undefined ? (
+                              <motion.div
+                                initial={{ opacity: 0, y: 4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ duration: 0.25, ease: "easeOut" }}
+                                className="text-lg font-semibold text-gray-900"
+                              >
+                                {monthlyUnits === 0 ? "0" : monthlyUnits.toLocaleString()}
+                              </motion.div>
+                            ) : analysisUIState !== 'complete' ? (
+                              <MetricSkeleton />
+                            ) : (
+                              <div className="text-lg font-semibold text-gray-900">—</div>
+                            )}
                           </div>
                           
                           {/* 7. Monthly Revenue */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
-                            <div className="text-lg font-semibold text-gray-900">
-                              {monthlyRevenue !== null && monthlyRevenue !== undefined
-                                ? (monthlyRevenue === 0 ? "$0.00" : formatCurrency(monthlyRevenue))
-                                : "—"}
-                            </div>
+                            {monthlyRevenue !== null && monthlyRevenue !== undefined ? (
+                              <motion.div
+                                initial={{ opacity: 0, y: 4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ duration: 0.25, ease: "easeOut" }}
+                                className="text-lg font-semibold text-gray-900"
+                              >
+                                {monthlyRevenue === 0 ? "$0.00" : formatCurrency(monthlyRevenue)}
+                              </motion.div>
+                            ) : analysisUIState !== 'complete' ? (
+                              <MetricSkeleton />
+                            ) : (
+                              <div className="text-lg font-semibold text-gray-900">—</div>
+                            )}
                           </div>
                           
                           {/* 7. Average Rating */}
@@ -2002,23 +2072,28 @@ export default function AnalyzeForm({
                           const isSponsored = listing.is_sponsored ?? listing.sponsored ?? null;
                           
                           return (
-                            <ProductCard
+                            <motion.div
                               key={`${asin || idx}-${idx}`}
-                              rank={rank}
-                              title={title}
-                              // brand removed (Phase 3: brands not displayed at product level)
-                              price={price}
-                              rating={rating}
-                              reviews={reviews}
-                              monthlyRevenue={monthlyRevenue}
-                              monthlyUnits={monthlyUnits}
-                              bsrSource={bsrSource}
-                              fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
-                              isSponsored={isSponsored}
-                              imageUrl={imageUrl}
-                              asin={asin}
-                              isSelected={isSelected}
-                              onSelect={(e) => {
+                              initial={{ opacity: 0, y: 4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ duration: 0.25, ease: "easeOut", delay: idx * 0.03 }}
+                            >
+                              <ProductCard
+                                rank={rank}
+                                title={title}
+                                // brand removed (Phase 3: brands not displayed at product level)
+                                price={price}
+                                rating={rating}
+                                reviews={reviews}
+                                monthlyRevenue={monthlyRevenue}
+                                monthlyUnits={monthlyUnits}
+                                bsrSource={bsrSource}
+                                fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
+                                isSponsored={isSponsored}
+                                imageUrl={imageUrl}
+                                asin={asin}
+                                isSelected={isSelected}
+                                onSelect={(e) => {
                                 // CRITICAL: Use the extracted asin (not listing.asin) for consistency
                                 if (!asin) return;
 
@@ -2050,6 +2125,7 @@ export default function AnalyzeForm({
                                 }
                               }}
                             />
+                            </motion.div>
                           );
                         })}
                     </div>
@@ -2059,16 +2135,6 @@ export default function AnalyzeForm({
 
                 </>
               ) : null}
-            </div>
-          ) : loading ? (
-            /* Show loading animation when analyzing and no analysis yet */
-            <div>
-              <div className="flex items-center justify-between mb-4 px-6 pt-6">
-                <h2 className="text-xl font-semibold text-gray-900">Page 1 Results</h2>
-              </div>
-              <div className="px-6">
-                <ResultsLoadingState key={currentAnalysisRunId} />
-              </div>
             </div>
           ) : (
             /* Show ready state when not loading and no analysis */

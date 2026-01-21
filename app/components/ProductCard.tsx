@@ -228,16 +228,14 @@ export function ProductCard({
               <span className="text-[10px] text-[#9CA3AF]">(~estimate)</span>
             )}
           </div>
-          <div className="text-xl font-bold text-[#111827]">
-            {monthlyRevenue !== null && monthlyRevenue !== undefined && monthlyRevenue >= 0
-              ? (
-                  <>
-                    {showEstimatePrefix ? '~' : ''}${(monthlyRevenue / 1000).toFixed(1)}K
-                    <span className="text-sm font-normal text-[#6B7280]"> / mo</span>
-                  </>
-                )
-              : "—"}
-          </div>
+          {monthlyRevenue !== null && monthlyRevenue !== undefined && monthlyRevenue >= 0 ? (
+            <div className="text-xl font-bold text-[#111827]">
+              {showEstimatePrefix ? '~' : ''}${(monthlyRevenue / 1000).toFixed(1)}K
+              <span className="text-sm font-normal text-[#6B7280]"> / mo</span>
+            </div>
+          ) : (
+            <div className="h-7 bg-gray-200 rounded animate-pulse" />
+          )}
         </div>
 
         {/* Monthly Units - Always shown */}
@@ -248,11 +246,13 @@ export function ProductCard({
               <span className="text-[10px] text-[#9CA3AF]">(~estimate)</span>
             )}
           </div>
-          <div className="text-sm font-medium text-[#111827]">
-            {monthlyUnits !== null && monthlyUnits !== undefined && monthlyUnits >= 0
-              ? `${showEstimatePrefix ? '~' : ''}${monthlyUnits.toLocaleString()} units`
-              : "—"}
-          </div>
+          {monthlyUnits !== null && monthlyUnits !== undefined && monthlyUnits >= 0 ? (
+            <div className="text-sm font-medium text-[#111827]">
+              {showEstimatePrefix ? '~' : ''}{monthlyUnits.toLocaleString()} units
+            </div>
+          ) : (
+            <div className="h-5 bg-gray-200 rounded animate-pulse" />
+          )}
         </div>
 
         {/* Badges Row */}
