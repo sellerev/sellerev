@@ -2129,28 +2129,27 @@ export async function POST(req: NextRequest) {
 
     // ────────────────────────────────────────────────────────────────────────
     // FIX 1: PER-MESSAGE PRODUCT SELECTION GATING (NON-STICKY)
-    // Only require product selection when THIS message cannot be answered from Page-1
-    // and it appears to be product-specific (per escalation decision), not because of prior turns.
+    // Only require product selection when THIS message requires ASINs (required_asins.length > 0)
+    // and cannot be answered from Page-1 data alone.
+    // Page-1 questions (can_answer_from_page1 === true) must proceed WITHOUT requiring selected ASINs.
     // ────────────────────────────────────────────────────────────────────────
-    const requiresProductSelectionForThisMessage =
-      typeof escalationDecision.escalation_reason === "string" &&
-      /select a product from page-1|product specifications|requires product details/i.test(
-        escalationDecision.escalation_reason
-      );
-
-    // Only hard-block when the question is clearly ASIN-specific.
-    // Broad Page-1 questions must never be blocked for having 0 selected ASINs.
-    const isProductSpecificQuestion =
-      /\b(B[A-Z0-9]{9})\b/i.test(body.message || "") ||
-      /\b(product|listing|rank|position)\s*(?:#|number)?\s*\d+\b/i.test((body.message || "").toLowerCase()) ||
-      /\b(this|that)\s+product\b/i.test((body.message || "").toLowerCase());
-
-    if (
-      requiresProductSelectionForThisMessage &&
-      isProductSpecificQuestion &&
+    
+    // CRITICAL FIX: Allow Page-1 questions to proceed without selected ASINs
+    // If can_answer_from_page1 === true, the question can be answered using market-level data
+    // and should NEVER be blocked for having 0 selected ASINs
+    if (escalationDecision.can_answer_from_page1 === true) {
+      // Question can be answered from Page-1 data - proceed to AI without requiring ASIN selection
+      // Do NOT block or show fallback message
+    } else if (
+      // Only require ASIN selection if:
+      // 1. Question requires specific ASINs (required_asins.length > 0)
+      // 2. AND no ASINs are selected (selectedAsins.length === 0)
+      // 3. AND no explicit ASINs in message (explicitAsins.length === 0)
+      escalationDecision.required_asins.length > 0 &&
       selectedAsins.length === 0 &&
       explicitAsins.length === 0
     ) {
+      // Hard-block: Question requires product-specific data but no ASIN is selected
       const stream = new ReadableStream({
         start(controller) {
           controller.enqueue(
