@@ -25,6 +25,9 @@ export interface RawListing {
   image: string | null;
   raw_position: number;
   rainforest_rank: number;
+  // Ratings & reviews from Rainforest Page-1 (nullable, but NEVER overwritten by SP-API)
+  rating: number | null;
+  reviews: number | null;
   raw_badges: any[];
   raw_block_type?: string;
   raw_sponsored_flag?: boolean;
@@ -897,32 +900,32 @@ export async function enrichListingsMetadata(
   // Check which listings need enrichment (ratings/reviews only)
   // SP-API Catalog already provides title, brand, image_url, category, BSR
   // We only enrich ratings/reviews which SP-API cannot provide
-  // CRITICAL: Only enrich if BOTH rating AND reviews are null
-  // SP-API data is authoritative - never overwrite non-null fields
-  const listingsNeedingEnrichment = listings
-    .slice(0, MAX_METADATA_ENRICHMENT) // Only top 2 (part of 7-call budget, now optional: only if ratings/reviews missing)
-    .filter(l => {
-      if (!l.asin) return false;
-      
-      // CRITICAL: Only enrich if BOTH rating AND reviews are null
-      // SP-API data is authoritative - never overwrite non-null fields
-      // Title, image, brand come from SP-API Catalog (already merged before this function runs)
-      const needsRating = l.rating === null;
-      const needsReviews = l.reviews === null;
-      
-      // Only enrich if BOTH are null (per user requirement)
-      return needsRating && needsReviews;
-    });
+  // CRITICAL: Only enrich if BOTH rating AND reviews are null.
+  // Ratings & reviews NEVER come from SP-API; they are Rainforest-only fields.
+  // Detection must be based on listing.rating/listing.reviews, not SP-API metadata.
+  const listingsMissingRatingOrReviews = listings.filter(l => {
+    if (!l.asin) return false;
+    
+    const needsRating = l.rating === null || l.rating === undefined;
+    const needsReviews = l.reviews === null || l.reviews === undefined;
+
+    // Enrichment is only relevant if at least one of the two is missing.
+    return needsRating || needsReviews;
+  });
+
+  // Enforce call cap AFTER detection: we may have many missing, but only enrich top N.
+  const listingsNeedingEnrichment = listingsMissingRatingOrReviews
+    .slice(0, MAX_METADATA_ENRICHMENT);
 
   if (listingsNeedingEnrichment.length === 0) {
-    // All listings have ratings/reviews from SP-API or search data - no enrichment needed
+    // All listings have ratings/reviews from Rainforest/search data - no enrichment needed
     console.log("METADATA_ENRICHMENT_SKIPPED", {
       keyword: keyword || "unknown",
-      reason: "SP_API already populated",
+      reason: "ratings_and_reviews_already_populated",
       total_listings: listings.length,
       listings_with_rating: listings.filter(l => l.rating !== null && l.rating !== undefined).length,
       listings_with_reviews: listings.filter(l => l.reviews !== null && l.reviews !== undefined).length,
-      note: "Title, image, brand already provided by SP-API Catalog",
+      note: "Title, image, brand already provided by SP-API Catalog; ratings/reviews from Rainforest/search",
     });
     return listings;
   }
@@ -933,9 +936,11 @@ export async function enrichListingsMetadata(
     total_listings: listings.length,
     enrichment_scope: "ratings_and_reviews_only",
     note: "Title, image, brand already provided by SP-API Catalog",
+    // IMPORTANT: missing_* counts are computed over ALL listings missing data,
+    // not just the first MAX_METADATA_ENRICHMENT entries we will actually refetch.
     missing_metadata_breakdown: {
-      missing_rating: listingsNeedingEnrichment.filter(l => l.rating === null).length,
-      missing_reviews: listingsNeedingEnrichment.filter(l => l.reviews === null).length,
+      missing_rating: listingsMissingRatingOrReviews.filter(l => l.rating === null || l.rating === undefined).length,
+      missing_reviews: listingsMissingRatingOrReviews.filter(l => l.reviews === null || l.reviews === undefined).length,
     },
   });
 
@@ -1376,6 +1381,12 @@ export function parseRainforestSearchResults(
     // Extract block type if available
     const rawBlockType = item.block_type || item.type || undefined;
     
+    // Extract ratings & reviews from raw Rainforest item
+    // CRITICAL: This is the ONLY backend source for ratings/reviews.
+    // SP-API Catalog NEVER provides these fields and must not overwrite them.
+    const rating = parseRating(item);   // Nullable
+    const reviews = parseReviews(item); // Nullable
+
     rawListings.push({
       asin: item.asin,
       title,
@@ -1383,6 +1394,8 @@ export function parseRainforestSearchResults(
       image,
       raw_position: i + 1, // 1-indexed position
       rainforest_rank: rainforestRank,
+      rating,
+      reviews,
       raw_badges: badgesArray,
       raw_block_type: rawBlockType,
       raw_sponsored_flag: rawSponsoredFlag,
@@ -2084,8 +2097,9 @@ export async function fetchKeywordMarketSnapshot(
     }
     
     // Convert RawSnapshot listings back to searchResults format for Phase 2/3 compatibility
-    // This preserves backward compatibility while using Phase 1 structure
-    // We need to reconstruct the original raw API format for downstream processing
+    // This preserves backward compatibility while using Phase 1 structure.
+    // CRITICAL: Preserve ratings and reviews from Rainforest so they are not lost
+    // when SP-API Catalog is merged later (SP-API has no rating/review fields).
     const searchResults: any[] = rawSnapshot.listings.map((listing) => {
       // Reconstruct the original item structure that Phase 2/3 expects
       const reconstructed: any = {
@@ -2102,6 +2116,16 @@ export async function fetchKeywordMarketSnapshot(
       // Reconstruct bestsellers_rank if available
       if (listing.rainforest_rank > 0) {
         reconstructed.bestsellers_rank = listing.rainforest_rank;
+      }
+
+      // Preserve ratings & reviews from Phase 1
+      // These map directly onto the fields parseRating/parseReviews expect.
+      if (listing.rating !== null && listing.rating !== undefined) {
+        reconstructed.rating = listing.rating;
+      }
+      if (listing.reviews !== null && listing.reviews !== undefined) {
+        // parseReviews can consume a bare number in `reviews`
+        reconstructed.reviews = listing.reviews;
       }
       
       // Reconstruct sponsored flags
