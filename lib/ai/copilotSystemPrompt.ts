@@ -104,33 +104,80 @@ export function buildCopilotSystemPrompt(
   const executiveSummary = decision?.executive_summary || "";
 
   // Extract selected ASINs from context (multi-select support)
-  // Check for selected_listing (backward compatibility) or selected_asins in context
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CRITICAL: selected_asins is a structured array with full product data
+  // This is the authoritative source for selected ASIN information
+  const selectedAsinsArray = (ai_context.selected_asins as Array<{
+    asin: string;
+    title: string | null;
+    brand: string | null;
+    price: number;
+    rating: number;
+    reviews: number;
+    bsr: number | null;
+    is_sponsored: boolean | null;
+    prime_eligible: boolean | null;
+    page1_position: number | null;
+    organic_rank: number | null;
+    estimated_monthly_revenue?: number;
+    estimated_monthly_units?: number;
+    fulfillment?: string;
+  }> | undefined) || [];
+  
+  // Backward compatibility: Check for selected_listing (deprecated)
   const selectedListing = (ai_context.selected_listing as { asin?: string } | undefined) || null;
   const selectedAsin = selectedListing?.asin || null;
   
-  // Try to get selected ASINs from context (may be set by buildContextMessage)
-  // For now, we'll infer from selected_listing or use empty array
-  const selectedAsins: string[] = selectedAsin ? [selectedAsin] : [];
+  // Build selected ASINs list (prefer structured array, fallback to legacy)
+  const selectedAsins: string[] = selectedAsinsArray.length > 0
+    ? selectedAsinsArray.map(p => p.asin)
+    : (selectedAsin ? [selectedAsin] : []);
   
-  // Build selected ASINs lock instructions
-  const selectedAsinLock = selectedAsins.length > 0
-    ? `\n\n=== SELECTED ASINS HARD LOCK (CRITICAL) ===
-You are HARD-LOCKED to the currently selected product${selectedAsins.length === 1 ? '' : 's'}: ${selectedAsins.join(', ')}
+  // Build selected ASINs lock instructions with structured data
+  const selectedAsinLock = selectedAsinsArray.length > 0
+    ? `\n\n=== SELECTED ASINS (PINNED CONTEXT) ===
+You have ${selectedAsinsArray.length === 1 ? '1 product' : `${selectedAsinsArray.length} products`} selected from Page-1. These are your "pinned context" for this conversation.
 
-MANDATORY RULES:
-1. You may ONLY reference, cite, or escalate for ASIN${selectedAsins.length === 1 ? '' : 's'}: ${selectedAsins.join(', ')}
-2. NEVER infer or reference other ASINs unless the user explicitly requests a comparison
-3. All citations must use only these selected ASINs
-4. If the question is ambiguous or mentions other ASINs, you MUST ask a clarification question instead of guessing
-5. If ${selectedAsins.length > 2 ? 'more than 2 products are selected and escalation is needed, you must ask the user to narrow to 1-2 products' : 'escalation is needed, you can escalate for up to 2 selected products'}
-6. If the user asks about a different product, you MUST say: "I can only reference the currently selected product${selectedAsins.length === 1 ? '' : 's'} (${selectedAsins.join(', ')}). Please select the product${selectedAsins.length === 1 ? '' : 's'} you want to discuss, or clarify your question."
+SELECTED PRODUCTS DATA:
+${selectedAsinsArray.map((product, idx) => {
+  const position = product.page1_position ?? product.organic_rank ?? idx + 1;
+  const bsrText = product.bsr ? `BSR: #${product.bsr.toLocaleString()}` : 'BSR: N/A';
+  const sponsoredText = product.is_sponsored === true ? ' (Sponsored)' : '';
+  const primeText = product.prime_eligible === true ? ' (Prime)' : '';
+  const revenueText = product.estimated_monthly_revenue 
+    ? ` | Est. Revenue: $${product.estimated_monthly_revenue.toLocaleString()}/mo`
+    : '';
+  return `${idx + 1}. ASIN: ${product.asin} | Position: ${position}${sponsoredText}${primeText}
+   Title: ${product.title || 'N/A'}
+   Brand: ${product.brand || 'Generic'}
+   Price: $${product.price.toFixed(2)} | Rating: ${product.rating.toFixed(1)} | Reviews: ${product.reviews.toLocaleString()}
+   ${bsrText}${revenueText}`;
+}).join('\n')}
 
-This lock is NON-NEGOTIABLE. You cannot reference any other ASINs.`
+MANDATORY BEHAVIOR RULES:
+${selectedAsinsArray.length === 1 
+  ? `1. SINGLE PRODUCT MODE: Answer product-specific questions using the selected product's data
+2. Reference the product explicitly: "This product has ${selectedAsinsArray[0].reviews.toLocaleString()} reviews..."
+3. Use the product's specific metrics (price, reviews, BSR, revenue) when answering
+4. If escalation is needed, use ASIN: ${selectedAsinsArray[0].asin}`
+  : `1. COMPARATIVE MODE: Answer questions by comparing the ${selectedAsinsArray.length} selected products
+2. Reference products explicitly: "The first product has ${selectedAsinsArray[0].reviews.toLocaleString()} reviews, while the second has ${selectedAsinsArray[1]?.reviews.toLocaleString() || 'N/A'}..."
+3. Compare key differences: price, reviews, BSR, revenue, brand, position
+4. Use phrases like "Between these products..." or "Comparing these listings..."
+5. If escalation is needed, you can escalate for up to 2 selected products`}
+
+CRITICAL:
+- You MUST acknowledge selected products implicitly in your reasoning
+- You MUST use their data when answering (don't just mention them, use their metrics)
+- You MUST reference them explicitly in answers (e.g., "The first product...", "Between these two...")
+- Selection alone is sufficient - user doesn't need to restate ASINs in the prompt
+- If NO products are selected, answer at Page-1 market level (aggregate data)`
     : (selectedAsins.length === 0 
       ? `\n\n=== NO PRODUCTS SELECTED ===
-No products are currently selected. You may answer using market-level / Page-1 aggregate data.
-- You CAN answer questions about listings, products, or market patterns using Page-1 aggregate data
-- You CAN compare listings, identify patterns, and analyze market structure without product selection
+No products are currently selected. Answer at Page-1 market level using aggregate data.
+- Use page1_market_summary for competitive facts
+- Use market_structure for market patterns
+- Use snapshot metrics for demand/revenue estimates
 - You CAN reference specific listings by rank or ASIN when discussing Page-1 data
 - Only require product selection if the question explicitly requires escalation (product specifications, dimensions, etc.)
 - Do NOT say "Select a product from Page-1 to analyze it" unless escalation is actually required
@@ -300,6 +347,19 @@ HARD RULE: The AI may ONLY use numbers that exist in ai_context or are directly 
 Every claim MUST reference specific metrics from AVAILABLE data:
 
 REQUIRED CITATIONS (use what exists):
+- Selected ASINs (PINNED CONTEXT): If ai_context.selected_asins exists and has products:
+  * For SINGLE product (selected_asins.length === 1): Answer product-specific questions using that product's data
+    - Reference it explicitly: "This product has [reviews] reviews..."
+    - Use its specific metrics: price, rating, reviews, BSR, revenue, position
+    - Example: "This product (ASIN: [asin]) has 3,378 reviews and ranks #2 in its category..."
+  * For MULTIPLE products (selected_asins.length > 1): Answer comparatively
+    - Compare key differences: "The first product has [X] reviews, while the second has [Y]..."
+    - Use phrases like "Between these products..." or "Comparing these listings..."
+    - Highlight differences in price, reviews, BSR, revenue, brand, position
+    - Example: "Between these two products, the key difference is review count: Product 1 has 3,378 reviews vs Product 2's 1,200..."
+  * Selection alone is sufficient - user doesn't need to restate ASINs in the prompt
+  * You MUST acknowledge selected products implicitly in reasoning
+  * You MUST use their data when answering (don't just mention them, use their metrics)
 - Page-1 Market Summary (AUTHORITATIVE FACTS): When discussing Page-1 competitive reality, ALWAYS reference page1_market_summary from ai_context. These are authoritative facts from Rainforest search_results ONLY:
   * "Page-1 has [page1_market_summary.page1_total_listings] listings" (use exact count)
   * "[page1_market_summary.page1_sponsored_pct]% of Page-1 listings are sponsored" (use exact percentage)
