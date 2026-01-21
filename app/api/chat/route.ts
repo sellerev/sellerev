@@ -2657,23 +2657,44 @@ CRITICAL RULES FOR ESCALATED DATA:
 
         const decoder = new TextDecoder();
         let readerReleased = false;
+        let buffer = ""; // Buffer for incomplete SSE lines
         
         try {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split("\n").filter((line) => line.trim() !== "");
+            // Decode chunk and add to buffer
+            buffer += decoder.decode(value, { stream: true });
 
+            // Split by double newline to get complete SSE events
+            const lines = buffer.split("\n\n");
+            // Keep the last incomplete line in buffer
+            buffer = lines.pop() || "";
+
+            // Process complete lines
             for (const line of lines) {
-              if (line === "data: [DONE]") {
+              if (!line.trim()) continue;
+
+              // Handle [DONE] marker
+              if (line.trim() === "data: [DONE]" || line.trim() === "[DONE]") {
                 continue;
               }
 
-              if (line.startsWith("data: ")) {
+              // Extract data from SSE line
+              if (line.startsWith("data:")) {
+                const data = line.replace(/^data:\s*/, "").trim();
+                
+                // Skip [DONE] marker
+                if (data === "[DONE]") {
+                  continue;
+                }
+
+                // Parse JSON data
                 try {
-                  const json = JSON.parse(line.slice(6));
+                  const json = JSON.parse(data);
+                  
+                  // Extract content from OpenAI streaming format: choices[0].delta.content
                   const content = json.choices?.[0]?.delta?.content;
                   if (content) {
                     fullAssistantMessage += content;
@@ -2681,8 +2702,35 @@ CRITICAL RULES FOR ESCALATED DATA:
                     controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
                   }
                 } catch (parseError) {
-                  // Skip malformed JSON chunks - log for debugging
-                  console.warn("Skipping malformed JSON chunk:", line.substring(0, 100));
+                  // Only log if it's not an empty string or partial JSON (which is expected)
+                  if (data && data !== "[DONE]" && !data.startsWith("{")) {
+                    console.warn("Failed to parse SSE line:", data.substring(0, 100));
+                  }
+                }
+              }
+            }
+          }
+          
+          // Process any remaining buffer content after stream ends
+          if (buffer.trim()) {
+            const lines = buffer.split("\n\n");
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              if (line.trim() === "data: [DONE]" || line.trim() === "[DONE]") continue;
+              
+              if (line.startsWith("data:")) {
+                const data = line.replace(/^data:\s*/, "").trim();
+                if (data === "[DONE]") continue;
+                
+                try {
+                  const json = JSON.parse(data);
+                  const content = json.choices?.[0]?.delta?.content;
+                  if (content) {
+                    fullAssistantMessage += content;
+                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+                  }
+                } catch (parseError) {
+                  // Ignore parse errors on leftover buffer
                 }
               }
             }
