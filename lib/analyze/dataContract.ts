@@ -35,6 +35,30 @@ export interface Page1MarketSummary {
   sponsored_in_top10_count?: number | null;
 }
 
+/**
+ * Authoritative facts object - READ-ONLY factual values derived from analysis
+ * 
+ * These values are immutable and must NEVER be estimated, guessed, or revised.
+ * The AI must quote these values directly or refuse if unavailable.
+ */
+export interface AuthoritativeFacts {
+  page1_total_listings: number;
+  page1_distinct_brands: number;
+  page1_sponsored_pct: number;
+  page1_prime_eligible_pct: number;
+  top5_median_reviews: number;
+  price_min: number | null;
+  price_max: number | null;
+  price_cluster_width: number | null;
+  // Additional factual values from market snapshot
+  total_monthly_revenue?: number | null;
+  total_monthly_units?: number | null;
+  avg_price?: number | null;
+  avg_rating?: number | null;
+  avg_reviews?: number | null;
+  top_5_brand_revenue_share_pct?: number | null;
+}
+
 // ============================================================================
 // TYPE DEFINITIONS (EXACT CONTRACT SCHEMAS)
 // ============================================================================
@@ -224,6 +248,9 @@ export interface KeywordAnalyzeResponse {
     margin_snapshot: KeywordAnalyzeResponse["margin_snapshot"];
     signals: KeywordAnalyzeResponse["signals"];
     brand_moat: KeywordAnalyzeResponse["brand_moat"];
+    // Authoritative facts (READ-ONLY, IMMUTABLE)
+    // These are factual, countable values that must NEVER be estimated, guessed, or revised
+    authoritative_facts: AuthoritativeFacts;
     // Page-1 market summary (authoritative facts from Rainforest search_results ONLY)
     page1_market_summary: Page1MarketSummary;
     // Snapshot metrics (explicitly exposed for AI reference)
@@ -1198,6 +1225,37 @@ export async function buildKeywordAnalyzeResponse(
       : "N/A",
   });
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUILD AUTHORITATIVE FACTS (READ-ONLY, IMMUTABLE)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // These are factual, countable values that must NEVER be estimated, guessed, or revised
+  // The AI must quote these values directly or refuse if unavailable
+  const authoritativeFacts: AuthoritativeFacts = {
+    page1_total_listings: page1MarketSummary.page1_total_listings,
+    page1_distinct_brands: page1MarketSummary.distinct_brand_count,
+    page1_sponsored_pct: page1MarketSummary.page1_sponsored_pct,
+    page1_prime_eligible_pct: page1MarketSummary.prime_eligible_pct,
+    top5_median_reviews: page1MarketSummary.top5_median_reviews,
+    price_min: page1MarketSummary.price_min,
+    price_max: page1MarketSummary.price_max,
+    price_cluster_width: page1MarketSummary.price_cluster_width,
+    // Additional factual values from market snapshot
+    total_monthly_revenue: summary.total_monthly_revenue_est,
+    total_monthly_units: summary.total_monthly_units_est,
+    avg_price: summary.avg_price,
+    avg_rating: summary.avg_rating,
+    avg_reviews: snapshot.avg_reviews || null,
+    top_5_brand_revenue_share_pct: snapshot.top_5_brand_revenue_share_pct ?? null,
+  };
+  
+  console.log("🔒 AUTHORITATIVE_FACTS_BUILT", {
+    keyword,
+    page1_total_listings: authoritativeFacts.page1_total_listings,
+    page1_distinct_brands: authoritativeFacts.page1_distinct_brands,
+    page1_sponsored_pct: authoritativeFacts.page1_sponsored_pct,
+    note: "These values are READ-ONLY and IMMUTABLE - AI must quote directly or refuse",
+  });
+  
   // Build AI context (read-only copy)
   const aiContext = {
     mode: "keyword" as const,
@@ -1208,6 +1266,8 @@ export async function buildKeywordAnalyzeResponse(
     margin_snapshot: marginSnapshotContract,
     signals,
     brand_moat: brandMoat, // Add brand moat to AI context
+    // Authoritative facts (READ-ONLY, IMMUTABLE)
+    authoritative_facts: authoritativeFacts,
     // Page-1 market summary (authoritative facts from Rainforest search_results ONLY)
     page1_market_summary: page1MarketSummary,
     // Snapshot metrics (explicitly exposed for AI reference)
