@@ -1210,7 +1210,6 @@ export async function POST(req: NextRequest) {
       // Compute KeywordMarketSnapshot from listings (reusing existing helper functions)
       const { computeAvgReviews } = await import("@/lib/amazon/marketAggregates");
       const { computeFulfillmentMix } = await import("@/lib/amazon/fulfillmentMix");
-      const { computePPCIndicators } = await import("@/lib/amazon/ppcIndicators");
 
       const total_page1_listings = listings.length;
       const sponsored_count = listings.filter((l) => l.is_sponsored === true).length;
@@ -1230,11 +1229,15 @@ export async function POST(req: NextRequest) {
       // Average reviews
       const avg_reviews = computeAvgReviews(listings);
 
-      // Average rating: filter to listings with numeric ratings only
-      const listingsWithRating = listings.filter((l) => typeof l.rating === 'number' && !isNaN(l.rating) && l.rating > 0);
-      const avg_rating =
-        listingsWithRating.length > 0
-          ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length
+      // Average rating: compute ONLY with coverage threshold (>= 10% and >= 3 ratings)
+      const ratings = listings
+        .map(l => l.rating)
+        .filter(r => typeof r === 'number' && r > 0);
+      
+      const ratingCoverage = listings.length > 0 ? ratings.length / listings.length : 0;
+      const avg_rating = 
+        ratingCoverage >= 0.1 && ratings.length >= 3
+          ? Number((ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(2))
           : null;
 
       // Average BSR (none in cache, so null)
@@ -1247,26 +1250,6 @@ export async function POST(req: NextRequest) {
 
       // Top brands (none in cache, so dominance_score = 0)
       const dominance_score = 0;
-
-      // PPC indicators
-      let ppcIndicators: { sponsored_pct: number; ad_intensity_label: "Low" | "Medium" | "High"; signals: string[]; source: "heuristic_v1" } | null = null;
-      try {
-        const ppcResult = computePPCIndicators(
-          listings,
-          total_page1_listings,
-          sponsored_count,
-          dominance_score,
-          avg_price
-        );
-        ppcIndicators = {
-          sponsored_pct: ppcResult.sponsored_pct,
-          ad_intensity_label: ppcResult.ad_intensity_label,
-          signals: ppcResult.signals,
-          source: "heuristic_v1",
-        };
-      } catch (error) {
-        // Continue without PPC indicators if computation fails
-      }
 
       const snapshot: KeywordMarketSnapshot = {
         keyword,
@@ -1281,7 +1264,6 @@ export async function POST(req: NextRequest) {
         sponsored_pct,
         dominance_score,
         fulfillment_mix: fulfillmentMix,
-        ppc: ppcIndicators,
       };
 
       return {

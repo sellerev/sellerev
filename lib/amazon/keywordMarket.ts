@@ -10,7 +10,6 @@
  * - If data cannot be computed, omit it (do NOT fake it)
  */
 
-import { computePPCIndicators } from "./ppcIndicators";
 
 /**
  * PHASE 1 - COLLECT: Raw Market Truth Types
@@ -187,13 +186,6 @@ export interface KeywordMarketSnapshot {
       price_compression: number; // 0-15 points
       seller_fit_modifier: number; // -10 to +10 points
     };
-  } | null;
-  // PPC Indicators - heuristic assessment of advertising intensity
-  ppc?: {
-    sponsored_pct: number; // 0-100
-    ad_intensity_label: "Low" | "Medium" | "High";
-    signals: string[]; // Max 3 signal bullets
-    source: "heuristic_v1";
   } | null;
 }
 
@@ -3413,12 +3405,17 @@ export async function fetchKeywordMarketSnapshot(
     const { computeAvgReviews } = await import("./marketAggregates");
     const avg_reviews = computeAvgReviews(listings); // Always returns a number (0 if none)
 
-    // TASK 3: Average rating (only over listings with numeric rating) - do NOT fall back when real listings exist
-    const listingsWithRating = listings.filter((l) => typeof l.rating === 'number' && !isNaN(l.rating) && l.rating > 0);
-    const avg_rating =
-      listingsWithRating.length > 0
-        ? listingsWithRating.reduce((sum, l) => sum + (l.rating ?? 0), 0) / listingsWithRating.length
-        : null; // null is OK - we'll use fallback only if NO listings exist
+    // TASK 3: Average rating (only over listings with numeric rating) - computed ONLY in final snapshot phase
+    // Only compute if coverage is meaningful (>= 10% and >= 3 ratings)
+    const ratings = listings
+      .map(l => l.rating)
+      .filter(r => typeof r === 'number' && r > 0);
+    
+    const ratingCoverage = listings.length > 0 ? ratings.length / listings.length : 0;
+    const avg_rating = 
+      ratingCoverage >= 0.1 && ratings.length >= 3
+        ? Number((ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(2))
+        : null;
 
     // Average BSR (only over listings with main category BSR)
     // CRITICAL: Only use listings with valid main_category_bsr (exclude if missing)
@@ -3530,27 +3527,6 @@ export async function fetchKeywordMarketSnapshot(
         ? Math.round((topKnownBrand.count / total_page1_listings) * 100)
         : 0;
 
-    // Compute PPC indicators
-    let ppcIndicators: { sponsored_pct: number; ad_intensity_label: "Low" | "Medium" | "High"; signals: string[]; source: "heuristic_v1" } | null = null;
-    try {
-      const ppcResult = computePPCIndicators(
-        listings,
-        total_page1_listings,
-        sponsored_count,
-        dominance_score,
-        avg_price
-      );
-      ppcIndicators = {
-        sponsored_pct: ppcResult.sponsored_pct,
-        ad_intensity_label: ppcResult.ad_intensity_label,
-        signals: ppcResult.signals,
-        source: "heuristic_v1",
-      };
-    } catch (error) {
-      console.error("Error computing PPC indicators:", error);
-      // Continue without PPC indicators if computation fails
-    }
-
     const snapshot: KeywordMarketSnapshot = {
       keyword,
       avg_price: avg_price !== null ? Math.round(avg_price * 100) / 100 : null,
@@ -3570,7 +3546,6 @@ export async function fetchKeywordMarketSnapshot(
       total_page1_brands, // Total distinct brands (includes "Generic")
       top_brands_by_frequency: top_brands.slice(0, 10), // Top 10 brands by frequency
       fulfillment_mix: fulfillmentMix, // Always an object now (never null when listings exist)
-      ppc: ppcIndicators,
     };
 
     // STEP 2: BSR Duplicate Bug Detection
