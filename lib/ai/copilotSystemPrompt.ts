@@ -128,10 +128,13 @@ MANDATORY RULES:
 This lock is NON-NEGOTIABLE. You cannot reference any other ASINs.`
     : (selectedAsins.length === 0 
       ? `\n\n=== NO PRODUCTS SELECTED ===
-No products are currently selected. You may only answer using market-level / Page-1 aggregate data.
-- Do NOT reference specific products
-- Do NOT escalate for product-specific questions
-- If the user asks about a specific product, respond: "Select a product from Page-1 to analyze it."`
+No products are currently selected. You may answer using market-level / Page-1 aggregate data.
+- You CAN answer questions about listings, products, or market patterns using Page-1 aggregate data
+- You CAN compare listings, identify patterns, and analyze market structure without product selection
+- You CAN reference specific listings by rank or ASIN when discussing Page-1 data
+- Only require product selection if the question explicitly requires escalation (product specifications, dimensions, etc.)
+- Do NOT say "Select a product from Page-1 to analyze it" unless escalation is actually required
+- Most questions can be answered using Page-1 aggregate data - always try to answer first`
       : "");
   
   return `You are a seller decision engine grounded ONLY in visible Page-1 data.
