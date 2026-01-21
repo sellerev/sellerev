@@ -40,17 +40,34 @@ export interface Page1MarketSummary {
  * 
  * These values are immutable and must NEVER be estimated, guessed, or revised.
  * The AI must quote these values directly or refuse if unavailable.
+ * 
+ * This is the SINGLE SOURCE OF TRUTH for factual questions.
+ * These values override user claims, memory, reasoning, and prior messages.
  */
 export interface AuthoritativeFacts {
-  page1_total_listings: number;
-  page1_distinct_brands: number;
-  page1_sponsored_pct: number;
-  page1_prime_eligible_pct: number;
-  top5_median_reviews: number;
-  price_min: number | null;
-  price_max: number | null;
-  price_cluster_width: number | null;
-  // Additional factual values from market snapshot
+  page1: {
+    total_listings: number;                // e.g. 49
+    organic_listings: number;              // derived
+    sponsored_listings: number;            // derived
+    sponsored_pct: number;                 // derived
+    prime_eligible_pct: number;            // derived
+    distinct_brand_count: number;           // exact count
+    price_min: number | null;
+    price_max: number | null;
+    price_cluster_width_pct?: number | null;
+  };
+  rankings: {
+    highest_revenue_asin?: string | null;
+    highest_units_asin?: string | null;
+    lowest_review_asin?: string | null;
+    highest_review_asin?: string | null;
+  };
+  confidence: {
+    data_completeness_score: number;        // 0–100
+    rainforest_coverage_pct: number;
+    sp_api_coverage_pct: number;
+  };
+  // Additional factual values from market snapshot (legacy support)
   total_monthly_revenue?: number | null;
   total_monthly_units?: number | null;
   avg_price?: number | null;
@@ -1230,16 +1247,64 @@ export async function buildKeywordAnalyzeResponse(
   // ═══════════════════════════════════════════════════════════════════════════
   // These are factual, countable values that must NEVER be estimated, guessed, or revised
   // The AI must quote these values directly or refuse if unavailable
+  
+  // Compute rankings from products array
+  const sortedByRevenue = [...products]
+    .filter(p => p.estimated_monthly_revenue > 0)
+    .sort((a, b) => b.estimated_monthly_revenue - a.estimated_monthly_revenue);
+  const sortedByUnits = [...products]
+    .filter(p => p.estimated_monthly_units > 0)
+    .sort((a, b) => b.estimated_monthly_units - a.estimated_monthly_units);
+  const sortedByReviews = [...products]
+    .filter(p => p.review_count > 0)
+    .sort((a, b) => a.review_count - b.review_count); // Lowest first
+  const sortedByReviewsDesc = [...products]
+    .filter(p => p.review_count > 0)
+    .sort((a, b) => b.review_count - a.review_count); // Highest first
+  
+  // Calculate organic vs sponsored counts
+  const organicListings = products.filter(p => p.is_sponsored === false).length;
+  const sponsoredListings = products.filter(p => p.is_sponsored === true).length;
+  
+  // Calculate price cluster width percentage
+  const priceClusterWidthPct = (page1MarketSummary.price_min !== null && page1MarketSummary.price_max !== null && summary.avg_price > 0)
+    ? Number((((page1MarketSummary.price_max - page1MarketSummary.price_min) / summary.avg_price) * 100).toFixed(1))
+    : null;
+  
+  // Calculate confidence scores (simplified - can be enhanced with actual data quality metrics)
+  const totalListings = products.length;
+  const listingsWithRainforestData = products.filter(p => p.title !== null).length;
+  const listingsWithSpApiData = products.filter(p => p.bsr !== null).length; // BSR indicates SP-API enrichment
+  const rainforestCoveragePct = totalListings > 0 ? Number(((listingsWithRainforestData / totalListings) * 100).toFixed(1)) : 0;
+  const spApiCoveragePct = totalListings > 0 ? Number(((listingsWithSpApiData / totalListings) * 100).toFixed(1)) : 0;
+  
+  // Data completeness score (0-100) based on coverage
+  const dataCompletenessScore = Math.round((rainforestCoveragePct * 0.6 + spApiCoveragePct * 0.4));
+  
   const authoritativeFacts: AuthoritativeFacts = {
-    page1_total_listings: page1MarketSummary.page1_total_listings,
-    page1_distinct_brands: page1MarketSummary.distinct_brand_count,
-    page1_sponsored_pct: page1MarketSummary.page1_sponsored_pct,
-    page1_prime_eligible_pct: page1MarketSummary.prime_eligible_pct,
-    top5_median_reviews: page1MarketSummary.top5_median_reviews,
-    price_min: page1MarketSummary.price_min,
-    price_max: page1MarketSummary.price_max,
-    price_cluster_width: page1MarketSummary.price_cluster_width,
-    // Additional factual values from market snapshot
+    page1: {
+      total_listings: page1MarketSummary.page1_total_listings,
+      organic_listings: organicListings,
+      sponsored_listings: sponsoredListings,
+      sponsored_pct: page1MarketSummary.page1_sponsored_pct,
+      prime_eligible_pct: page1MarketSummary.prime_eligible_pct,
+      distinct_brand_count: page1MarketSummary.distinct_brand_count,
+      price_min: page1MarketSummary.price_min,
+      price_max: page1MarketSummary.price_max,
+      price_cluster_width_pct: priceClusterWidthPct,
+    },
+    rankings: {
+      highest_revenue_asin: sortedByRevenue.length > 0 ? sortedByRevenue[0].asin : null,
+      highest_units_asin: sortedByUnits.length > 0 ? sortedByUnits[0].asin : null,
+      lowest_review_asin: sortedByReviews.length > 0 ? sortedByReviews[0].asin : null,
+      highest_review_asin: sortedByReviewsDesc.length > 0 ? sortedByReviewsDesc[0].asin : null,
+    },
+    confidence: {
+      data_completeness_score: dataCompletenessScore,
+      rainforest_coverage_pct: rainforestCoveragePct,
+      sp_api_coverage_pct: spApiCoveragePct,
+    },
+    // Legacy fields for backward compatibility
     total_monthly_revenue: summary.total_monthly_revenue_est,
     total_monthly_units: summary.total_monthly_units_est,
     avg_price: summary.avg_price,
