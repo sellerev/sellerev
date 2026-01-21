@@ -2209,21 +2209,49 @@ export async function fetchKeywordMarketSnapshot(
     // Collect ingestion promises to await before final summary
     const ingestionPromises: Promise<any>[] = [];
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIX #2: Check BSR cache to avoid refetching Catalog for ASINs that already have BSR
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Only call SP-API Catalog for ASINs that don't have BSR in cache
+    // STEP C: Bulk cache lookup (includes BSR and brand data) - move earlier
+    const { bulkLookupBsrCache } = await import("./asinBsrCache");
+    const bsrCache = supabase ? await bulkLookupBsrCache(supabase, page1Asins) : new Map();
+    
     // Check catalog cache before making API calls
     let catalogCache: Map<string, any> = new Map();
     let catalogCacheHitCount = 0;
-    let asinsToFetch: string[] = page1Asins;
     
-    if (supabase) {
+    // Filter ASINs that need catalog fetch: only those missing BSR from cache
+    const asinsNeedingCatalog = page1Asins.filter(asin => {
+      const upperAsin = asin.toUpperCase();
+      const bsrCacheEntry = bsrCache.get(upperAsin);
+      // Need catalog if: no BSR in cache, or BSR is invalid/null
+      const needsCatalog = !bsrCacheEntry || 
+                          !bsrCacheEntry.main_category_bsr || 
+                          bsrCacheEntry.main_category_bsr <= 0;
+      return needsCatalog;
+    });
+    
+    let asinsToFetch: string[] = asinsNeedingCatalog;
+    
+    console.log("BSR_CACHE_FILTER", {
+      keyword,
+      total_asins: page1Asins.length,
+      asins_with_bsr_in_cache: page1Asins.length - asinsNeedingCatalog.length,
+      asins_needing_catalog: asinsNeedingCatalog.length,
+      skipped_asins: page1Asins.length - asinsNeedingCatalog.length,
+    });
+    
+    if (supabase && asinsNeedingCatalog.length > 0) {
       try {
         const { bulkLookupCatalogCache } = await import("../spapi/catalogPersist");
-        catalogCache = await bulkLookupCatalogCache(supabase, page1Asins);
+        catalogCache = await bulkLookupCatalogCache(supabase, asinsNeedingCatalog);
         catalogCacheHitCount = catalogCache.size;
         if (catalogCacheHitCount > 0) {
           console.log("✅ CATALOG_CACHE_HIT", {
             keyword,
             cached_asins: catalogCacheHitCount,
-            total_asins: page1Asins.length,
+            total_asins_needing_catalog: asinsNeedingCatalog.length,
           });
           // Merge cached data into results - write directly to authoritative map
           for (const [asin, record] of catalogCache.entries()) {
@@ -2246,7 +2274,7 @@ export async function fetchKeywordMarketSnapshot(
             }
           }
           // Filter out ASINs that were found in cache
-          asinsToFetch = page1Asins.filter(asin => !catalogCache.has(asin.toUpperCase()));
+          asinsToFetch = asinsNeedingCatalog.filter(asin => !catalogCache.has(asin.toUpperCase()));
         }
       } catch (error) {
         console.warn("CATALOG_CACHE_LOOKUP_ERROR", {
@@ -2258,9 +2286,11 @@ export async function fetchKeywordMarketSnapshot(
     }
     
     // Batch ASINs that need to be fetched from API
+    // FIX #4: Batch size reduced to 10 (from 20) for better reliability
+    const BATCH_SIZE = 10;
     const asinBatchesToFetch: string[][] = [];
-    for (let i = 0; i < asinsToFetch.length; i += 20) {
-      asinBatchesToFetch.push(asinsToFetch.slice(i, i + 20));
+    for (let i = 0; i < asinsToFetch.length; i += BATCH_SIZE) {
+      asinBatchesToFetch.push(asinsToFetch.slice(i, i + BATCH_SIZE));
     }
     
     try {
@@ -2435,9 +2465,9 @@ export async function fetchKeywordMarketSnapshot(
       });
     }
 
-    // STEP C: Bulk cache lookup (includes BSR and brand data)
-    const { bulkLookupBsrCache, bulkUpsertBsrCache } = await import("./asinBsrCache");
-    const cacheMap = supabase ? await bulkLookupBsrCache(supabase, page1Asins) : new Map();
+    // STEP C: Bulk cache lookup (includes BSR and brand data) - already done above
+    // Use bsrCache from earlier (moved before catalog cache check)
+    const cacheMap = bsrCache; // Reuse the BSR cache we already fetched
     
     // Create brand cache map for quick lookups
     const brandCacheMap = new Map<string, string>();

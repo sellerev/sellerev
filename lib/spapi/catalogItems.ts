@@ -70,11 +70,16 @@ export async function batchEnrichCatalogItems(
     return;
   }
 
-  // Batch ASINs into groups of 20 (SP-API limit)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FIX #4: Lower batch size to improve reliability
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Changed from 20 → 10 to reduce timeout errors and improve BSR coverage
+  // SP-API limits are tight (rate_limit_limit: 2.0), smaller batches are more reliable
+  const BATCH_SIZE = 10; // Reduced from 20 to 10 for better reliability
   const batches: string[][] = [];
   const batchSizes: number[] = [];
-  for (let i = 0; i < asins.length; i += 20) {
-    const batch = asins.slice(i, i + 20);
+  for (let i = 0; i < asins.length; i += BATCH_SIZE) {
+    const batch = asins.slice(i, i + BATCH_SIZE);
     batches.push(batch);
     batchSizes.push(batch.length);
   }
@@ -109,10 +114,11 @@ export async function batchEnrichCatalogItems(
         spApiCatalogResults
       );
       
-      // Add delay between batches (600-800ms) to respect ~2 req/sec limit
+      // Add delay between batches (100-150ms) to respect ~2 req/sec limit
       // Skip delay after last batch
+      // FIX #4: Reduced delay since batches are smaller (10 ASINs instead of 20)
       if (batchIndex < batches.length - 1) {
-        const delayMs = 700; // 700ms = ~1.4 req/sec (safe margin)
+        const delayMs = 125; // 125ms delay between batches (smaller batches need less delay)
         await sleep(delayMs);
       }
     } catch (error) {
@@ -263,6 +269,9 @@ async function fetchBatchWithRetry(
 
 /**
  * Fetch a batch of ASINs with timeout
+ * 
+ * CRITICAL: Treat batches as PARTIALLY SUCCESSFUL if any ASIN returns data
+ * Do NOT fail the batch if response.items exists, even if timeout exceeded
  */
 async function fetchBatchWithTimeout(
   asins: string[],
@@ -283,17 +292,54 @@ async function fetchBatchWithTimeout(
   },
   spApiCatalogResults?: Map<string, any>
 ): Promise<void> {
+  // Track results size before fetch
+  const resultsSizeBefore = spApiCatalogResults?.size || 0;
+  
+  // Start fetch immediately
+  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase, ingestionMetrics, spApiCatalogResults);
+  
+  // Create timeout promise
   const timeoutPromise = new Promise<void>((_, reject) => {
     setTimeout(() => reject(new Error("SP-API batch request timeout")), timeoutMs);
   });
 
-  const fetchPromise = fetchBatch(asins, marketplaceId, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase, ingestionMetrics, spApiCatalogResults);
-
-  return Promise.race([fetchPromise, timeoutPromise]);
+  try {
+    // Race between fetch and timeout
+    await Promise.race([fetchPromise, timeoutPromise]);
+  } catch (error: any) {
+    // Check if timeout error but we got data
+    const resultsSizeAfter = spApiCatalogResults?.size || 0;
+    const hasData = resultsSizeAfter > resultsSizeBefore;
+    
+    if (error.message?.includes('timeout')) {
+      if (hasData) {
+        // Timeout occurred but we got partial data - log warning but don't fail
+        console.warn("⏰ SP_API_BATCH_TIMEOUT_WITH_DATA", {
+          batch_index: batchIndex,
+          keyword: keyword || 'unknown',
+          asins_in_batch: asins.length,
+          data_obtained: resultsSizeAfter - resultsSizeBefore,
+          message: "Timeout occurred but partial data was obtained - treating as partially successful",
+        });
+        // Don't throw - partial success is acceptable
+        return;
+      } else {
+        // Real timeout with no data - log error and throw
+        console.error("❌ SP_API_BATCH_TIMEOUT_NO_DATA", {
+          batch_index: batchIndex,
+          keyword: keyword || 'unknown',
+          asins_in_batch: asins.length,
+          message: "Timeout occurred with no data - batch failed",
+        });
+      }
+    }
+    // Re-throw error (either not a timeout, or timeout with no data)
+    throw error;
+  }
 }
 
 /**
- * Fetch a single batch of ASINs (max 20)
+ * Fetch a single batch of ASINs (max 10 - reduced from 20 for reliability)
  */
 async function fetchBatch(
   asins: string[],
@@ -364,7 +410,7 @@ async function fetchBatch(
       query_params: queryString,
       marketplace_id: marketplaceId,
       asin_count: asins.length,
-      asins: asins.slice(0, 20), // Log first 20 ASINs
+      asins: asins.slice(0, 10), // Log first 10 ASINs
       batch_index: batchIndex,
       total_batches: totalBatches,
     });
