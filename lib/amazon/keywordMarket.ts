@@ -897,25 +897,31 @@ export async function enrichListingsMetadata(
   // Check which listings need enrichment (ratings/reviews only)
   // SP-API Catalog already provides title, brand, image_url, category, BSR
   // We only enrich ratings/reviews which SP-API cannot provide
+  // CRITICAL: Only enrich if BOTH rating AND reviews are null
+  // SP-API data is authoritative - never overwrite non-null fields
   const listingsNeedingEnrichment = listings
     .slice(0, MAX_METADATA_ENRICHMENT) // Only top 2 (part of 7-call budget, now optional: only if ratings/reviews missing)
     .filter(l => {
       if (!l.asin) return false;
       
-      // Only enrich if ratings or reviews are missing
+      // CRITICAL: Only enrich if BOTH rating AND reviews are null
+      // SP-API data is authoritative - never overwrite non-null fields
       // Title, image, brand come from SP-API Catalog (already merged before this function runs)
       const needsRating = l.rating === null;
       const needsReviews = l.reviews === null;
       
-      return needsRating || needsReviews;
+      // Only enrich if BOTH are null (per user requirement)
+      return needsRating && needsReviews;
     });
 
   if (listingsNeedingEnrichment.length === 0) {
-    // All listings have ratings/reviews from search data - no enrichment needed
-    console.log("✅ METADATA_ENRICHMENT_SKIPPED", {
+    // All listings have ratings/reviews from SP-API or search data - no enrichment needed
+    console.log("METADATA_ENRICHMENT_SKIPPED", {
       keyword: keyword || "unknown",
-      reason: "All listings have ratings and reviews from search data",
+      reason: "SP_API already populated",
       total_listings: listings.length,
+      listings_with_rating: listings.filter(l => l.rating !== null && l.rating !== undefined).length,
+      listings_with_reviews: listings.filter(l => l.reviews !== null && l.reviews !== undefined).length,
       note: "Title, image, brand already provided by SP-API Catalog",
     });
     return listings;
@@ -1089,21 +1095,31 @@ export async function enrichListingsMetadata(
       }
     }
 
-    // Enrich listings with fetched metadata (title, image, rating, reviews)
+    // Enrich listings with fetched metadata (ratings/reviews only)
     // NOTE: Brands come from search results only, not from product API enrichment
+    // CRITICAL: Only enrich listings that need enrichment (BOTH rating AND reviews are null)
+    // SP-API data is authoritative - never overwrite non-null fields
     let enrichedListingsCount = 0;
     let enrichedFieldsCount = 0;
+    
+    // Create a Set of ASINs that need enrichment for fast lookup
+    const asinsNeedingEnrichment = new Set(
+      listingsNeedingEnrichment.map(l => l.asin?.toUpperCase()).filter(Boolean) as string[]
+    );
+    
     const enrichedListings = listings.map(listing => {
-      // If this listing was enriched via API, use that data
-      if (listing.asin && enrichmentMap.has(listing.asin.toUpperCase())) {
-        // Will be enriched below
-      } else {
-        // No API enrichment - return with locally extracted brand
+      // Only enrich if this listing actually needs enrichment (BOTH rating AND reviews are null)
+      const needsEnrichment = listing.asin && asinsNeedingEnrichment.has(listing.asin.toUpperCase());
+      
+      if (!needsEnrichment) {
+        // Listing doesn't need enrichment - return as-is
         return listing;
       }
       
+      // Listing needs enrichment - check if we have API data
       if (!listing.asin || !enrichmentMap.has(listing.asin.toUpperCase())) {
-        return listing; // No enrichment data available
+        // No API enrichment data available - return as-is (don't overwrite with nulls)
+        return listing;
       }
 
       const productData = enrichmentMap.get(listing.asin.toUpperCase())!;
@@ -1117,36 +1133,34 @@ export async function enrichListingsMetadata(
       // SP-API Catalog already provides authoritative title and image_url
       // These are merged into listings BEFORE this function runs (see fetchKeywordMarketSnapshot)
       // Only enrich ratings/reviews which SP-API cannot provide
+      // CRITICAL: Only enrich if null - never overwrite non-null fields
 
-      // Enrich rating (only if null)
+      // Enrich rating (only if null - never overwrite existing value)
       if (enriched.rating === null) {
         const rating = parseRating(productData);
         if (rating !== null) {
           enriched.rating = rating;
           enrichedFieldsCount++;
           listingEnriched = true;
-        } else {
-          // Ensure rating is 0 if missing (not null) for aggregation calculations
-          enriched.rating = 0;
         }
+        // If rating is null and can't be parsed, leave it as null (don't set to 0)
       }
 
-      // Enrich reviews (only if null)
+      // Enrich reviews (only if null - never overwrite existing value)
       if (enriched.reviews === null) {
         const reviews = parseReviews(productData);
         if (reviews !== null) {
           enriched.reviews = reviews;
           enrichedFieldsCount++;
           listingEnriched = true;
-        } else {
-          // Ensure review_count is 0 if missing (not null) for aggregation calculations
-          enriched.reviews = 0;
         }
+        // If reviews is null and can't be parsed, leave it as null (don't set to 0)
       }
 
       // NOTE: Brand enrichment removed - brands come from search results only (low-cost, Helium-10 style)
       // Brands are resolved in fetchKeywordMarketSnapshot using resolveBrandFromSearchResult()
       
+      // Track enriched listings count (increment after map)
       if (listingEnriched) {
         enrichedListingsCount++;
       }
