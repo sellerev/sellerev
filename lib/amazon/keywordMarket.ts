@@ -380,141 +380,52 @@ export function extractMainCategoryBSR(item: any): { rank: number; category: str
 }
 
 /**
- * PHASE 1: Detect duplicate BSRs (non-disruptive utility)
+ * PHASE 1: Detect duplicate BSRs (DISABLED)
  * 
- * Identifies broken Rainforest data where the same BSR appears across many products.
- * Returns a Set of invalid BSR values that should be excluded.
+ * ⚠️ DUPLICATE DETECTION DISABLED: BSR duplication is valid across categories
  * 
- * Logic:
- * - Extract all valid BSR values (1-300,000)
- * - Count frequency
- * - If a BSR appears ≥ 8 times → mark as invalid
+ * Amazon BSR is category-scoped, so multiple products can legitimately have
+ * the same BSR number in different categories (e.g., BSR #1 in "Drawer Organizers"
+ * and BSR #1 in "Flatware Organizers" are both valid).
+ * 
+ * Helium 10 does not invalidate duplicate BSRs for this reason.
  * 
  * @param listings - Array of parsed listings
- * @returns Set of invalid BSR values
+ * @returns Empty Set (no BSRs are marked as invalid)
  */
 export function detectDuplicateBSRs(listings: ParsedListing[]): Set<number> {
-  const invalidBSRs = new Set<number>();
+  console.log("BSR_DUPLICATE_DETECTION_SKIPPED", {
+    reason: "BSR duplication is valid across categories",
+    total_listings: listings.length,
+    timestamp: new Date().toISOString(),
+  });
   
-  // Extract all valid BSR values (1-300,000)
-  const bsrCounts: Record<number, number> = {};
-  
-  for (const listing of listings) {
-    // Check both main_category_bsr and deprecated bsr field
-    const bsr = listing.main_category_bsr ?? listing.bsr;
-    
-    // Validate BSR range: 1-300,000
-    if (bsr !== null && bsr !== undefined && bsr >= 1 && bsr <= 300000) {
-      bsrCounts[bsr] = (bsrCounts[bsr] || 0) + 1;
-    }
-  }
-  
-  // Find BSRs that appear ≥ 8 times (invalid duplicates)
-  for (const [bsrStr, count] of Object.entries(bsrCounts)) {
-    if (count >= 8) {
-      const bsr = parseInt(bsrStr, 10);
-      invalidBSRs.add(bsr);
-      console.log(`🔵 BSR_DUPLICATE_DETECTED: BSR ${bsr} appears ${count} times - marking as invalid`);
-    }
-  }
-  
-  if (invalidBSRs.size > 0) {
-    console.log("🔵 BSR_DUPLICATE_DETECTION", {
-      invalid_bsr_count: invalidBSRs.size,
-      invalid_bsrs: Array.from(invalidBSRs),
-      total_listings: listings.length,
-      timestamp: new Date().toISOString(),
-    });
-  }
-  
-  return invalidBSRs;
+  // Return empty Set - no BSRs are invalidated
+  return new Set<number>();
 }
 
 /**
- * STEP 2: Detects duplicate BSR bug from Rainforest API
- * If the same BSR appears ≥ 5 times across Page-1 listings, mark it as invalid
+ * STEP 2: Detects duplicate BSR bug from Rainforest API (DISABLED)
+ * 
+ * ⚠️ DUPLICATE DETECTION DISABLED: BSR duplication is valid across categories
+ * 
+ * Amazon BSR is category-scoped, so multiple products can legitimately have
+ * the same BSR number in different categories. Helium 10 does not invalidate
+ * duplicate BSRs for this reason.
  * 
  * @param listings - Array of parsed listings
- * @returns Array of listings with invalid BSRs set to null
+ * @returns Listings unchanged (no BSRs are removed)
  */
 function detectAndRemoveDuplicateBSRs(listings: ParsedListing[]): ParsedListing[] {
-  // STEP 4: Enhanced logging for duplicate BSR detection
-  console.log("🔵 BSR_DUPLICATE_DETECTION_START", {
+  console.log("BSR_DUPLICATE_DETECTION_SKIPPED", {
+    reason: "BSR duplication is valid across categories",
     total_listings: listings.length,
     listings_with_bsr: listings.filter(l => l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0).length,
     timestamp: new Date().toISOString(),
   });
   
-  // Count BSR occurrences
-  const bsrCounts: Record<number, number> = {};
-  
-  for (const listing of listings) {
-    const bsr = listing.main_category_bsr;
-    if (bsr !== null && bsr !== undefined && bsr > 0) {
-      bsrCounts[bsr] = (bsrCounts[bsr] || 0) + 1;
-    }
-  }
-  
-  // Find BSRs that appear ≥ 5 times (invalid duplicates)
-  const invalidBSRs = new Set<number>();
-  const duplicateDetails: Array<{ bsr: number; count: number }> = [];
-  
-  for (const [bsrStr, count] of Object.entries(bsrCounts)) {
-    if (count >= 5) {
-      const bsr = parseInt(bsrStr, 10);
-      invalidBSRs.add(bsr);
-      duplicateDetails.push({ bsr, count });
-      console.log(`🔵 BSR_DUPLICATE_DETECTED: BSR ${bsr} appears ${count} times - marking as invalid`);
-    }
-  }
-  
-  // STEP 4: Enhanced logging for duplicate detection results
-  if (invalidBSRs.size > 0) {
-    console.log("🔵 BSR_DUPLICATE_DETECTION_RESULTS", {
-      invalid_bsr_count: invalidBSRs.size,
-      duplicate_details: duplicateDetails,
-      affected_listings: listings.filter(l => 
-        l.main_category_bsr !== null && 
-        l.main_category_bsr !== undefined && 
-        invalidBSRs.has(l.main_category_bsr)
-      ).length,
-      timestamp: new Date().toISOString(),
-    });
-  } else {
-    console.log("🔵 BSR_DUPLICATE_DETECTION_RESULTS", {
-      status: "no_duplicates_found",
-      unique_bsrs: Object.keys(bsrCounts).length,
-      timestamp: new Date().toISOString(),
-    });
-  }
-  
-  // If no duplicates found, return listings unchanged
-  if (invalidBSRs.size === 0) {
-    return listings;
-  }
-  
-  // Remove invalid BSRs from listings
-  const cleanedListings = listings.map(listing => {
-    if (listing.main_category_bsr !== null && 
-        listing.main_category_bsr !== undefined && 
-        invalidBSRs.has(listing.main_category_bsr)) {
-      return {
-        ...listing,
-        main_category_bsr: null,
-        bsr: null, // Also clear deprecated bsr field
-      };
-    }
-    return listing;
-  });
-  
-  console.log("🔵 BSR_DUPLICATE_DETECTION_COMPLETE", {
-    original_listings_with_bsr: listings.filter(l => l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0).length,
-    cleaned_listings_with_bsr: cleanedListings.filter(l => l.main_category_bsr !== null && l.main_category_bsr !== undefined && l.main_category_bsr > 0).length,
-    invalid_bsrs_removed: invalidBSRs.size,
-    timestamp: new Date().toISOString(),
-  });
-  
-  return cleanedListings;
+  // Return listings unchanged - no BSRs are removed
+  return listings;
 }
 
 /**
