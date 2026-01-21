@@ -675,10 +675,17 @@ export default function AnalyzeForm({
       // Different run IDs always sync
       // OR keyword change always sync
       // OR current state has no products - always sync
+      // OR when coming from history (clientRunId is null) - always sync regardless of products
       
-      // Only sync if different run ID or current state has no products
-      if (incomingHasProducts) {
-        // Incoming has products and different run ID - sync (this is the source of truth)
+      // Always sync if:
+      // 1. Incoming has products (different run ID or keyword change), OR
+      // 2. Coming from history/navigation (clientRunId is null) - initialAnalysis is source of truth
+      // The only time we DON'T sync is when incoming has no products AND it's a background update (same run, no keyword change)
+      const isFromHistory = !clientRunId; // Coming from history/navigation, not user-triggered action
+      const shouldSync = incomingHasProducts || isFromHistory || !isSameRunId || isKeywordChange || !currentHasProducts;
+      
+      if (shouldSync) {
+        // Sync from initialAnalysis - this is the source of truth when coming from history
         console.log("FRONTEND_SYNC_FROM_INITIAL", {
           prev_run_id: currentRunId,
           new_run_id: incomingRunId,
@@ -687,6 +694,8 @@ export default function AnalyzeForm({
           has_incoming_listings: incomingHasProducts,
           incoming_count: incomingProducts.length,
           is_same_run: isSameRunId,
+          is_from_history: isFromHistory,
+          reason: isFromHistory ? "History navigation - always sync" : "Different run/keyword or no current products",
         });
         setAnalysis(normalizeAnalysis(initialAnalysis));
         // CRITICAL: keep chat wired to the currently viewed analysis.
@@ -706,9 +715,14 @@ export default function AnalyzeForm({
         setSelectedFulfillment(new Set());
         setSponsoredFilter(null);
         setBrandDropdownOpen(false);
+        // CRITICAL: Set UI state to 'complete' when syncing from history
+        // This ensures results are displayed even if initialAnalysis didn't set it properly
+        if (isFromHistory) {
+          setAnalysisUIState('complete');
+        }
       }
-      // If incoming has no products and different run ID, don't overwrite (preserve existing state)
-      // This handles edge cases where server hasn't loaded data yet
+      // Only skip sync if: incoming has no products AND same run ID AND no keyword change AND not from history
+      // This handles edge cases where server hasn't loaded data yet (background polling)
     } else {
       // No initialAnalysis means no run param - reset to blank state
       // Only clear if we truly have no listings AND no run ID
