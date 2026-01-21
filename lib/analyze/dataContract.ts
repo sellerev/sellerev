@@ -17,6 +17,25 @@ import { CanonicalProduct } from "@/lib/amazon/canonicalPageOne";
 import { calculateReviewDispersionFromListings } from "@/lib/amazon/calibration";
 
 // ============================================================================
+// PAGE-1 AGGREGATE TYPES
+// ============================================================================
+
+export interface Page1MarketSummary {
+  page1_total_listings: number;
+  page1_sponsored_count: number;
+  page1_sponsored_pct: number;
+  prime_eligible_count: number;
+  prime_eligible_pct: number;
+  distinct_brand_count: number;
+  top5_median_reviews: number;
+  price_min: number | null;
+  price_max: number | null;
+  price_cluster_width: number | null;
+  top_brand_asin_count?: number | null;
+  sponsored_in_top10_count?: number | null;
+}
+
+// ============================================================================
 // TYPE DEFINITIONS (EXACT CONTRACT SCHEMAS)
 // ============================================================================
 
@@ -205,6 +224,8 @@ export interface KeywordAnalyzeResponse {
     margin_snapshot: KeywordAnalyzeResponse["margin_snapshot"];
     signals: KeywordAnalyzeResponse["signals"];
     brand_moat: KeywordAnalyzeResponse["brand_moat"];
+    // Page-1 market summary (authoritative facts from Rainforest search_results ONLY)
+    page1_market_summary: Page1MarketSummary;
     // Snapshot metrics (explicitly exposed for AI reference)
     snapshot: {
       top_5_brand_revenue_share_pct: number | null;
@@ -352,6 +373,128 @@ function normalizeBrandBucket(brand: string | null | undefined): string {
   return trimmed;
 }
 
+/**
+ * Builds Page-1 aggregate object from Rainforest search_results ONLY
+ * 
+ * This function computes authoritative Page-1 facts from raw listings
+ * (which represent Rainforest search_results[] only, excluding ad_blocks, video_blocks, carousels).
+ * 
+ * These aggregates are treated as authoritative facts for AI reasoning.
+ * 
+ * @param listings - Array of ParsedListing objects representing Page-1 search_results
+ * @returns Page-1 market summary with all required aggregates
+ */
+export function buildPage1Aggregates(listings: ParsedListing[]): Page1MarketSummary {
+  if (!listings || listings.length === 0) {
+    return {
+      page1_total_listings: 0,
+      page1_sponsored_count: 0,
+      page1_sponsored_pct: 0,
+      prime_eligible_count: 0,
+      prime_eligible_pct: 0,
+      distinct_brand_count: 0,
+      top5_median_reviews: 0,
+      price_min: null,
+      price_max: null,
+      price_cluster_width: null,
+      top_brand_asin_count: null,
+      sponsored_in_top10_count: null,
+    };
+  }
+
+  // Total listings on Page-1
+  const page1_total_listings = listings.length;
+
+  // Sponsored count and percentage
+  const page1_sponsored_count = listings.filter(l => l.is_sponsored === true).length;
+  const page1_sponsored_pct = page1_total_listings > 0
+    ? Number(((page1_sponsored_count / page1_total_listings) * 100).toFixed(1))
+    : 0;
+
+  // Prime eligible count and percentage (from is_prime field)
+  // Note: is_prime indicates Prime eligibility, NOT fulfillment method
+  const prime_eligible_count = listings.filter(l => l.is_prime === true).length;
+  const prime_eligible_pct = page1_total_listings > 0
+    ? Number(((prime_eligible_count / page1_total_listings) * 100).toFixed(1))
+    : 0;
+
+  // Distinct brand count (using brand_resolution.raw_brand or brand field)
+  const brandSet = new Set<string>();
+  for (const listing of listings) {
+    const brand = listing.brand_resolution?.raw_brand ?? listing.brand;
+    if (brand && typeof brand === 'string' && brand.trim().length > 0) {
+      brandSet.add(brand.trim());
+    }
+  }
+  const distinct_brand_count = brandSet.size;
+
+  // Top 5 median reviews
+  const reviews = listings
+    .map(l => l.reviews)
+    .filter((r): r is number => r !== null && r !== undefined && r > 0)
+    .sort((a, b) => b - a) // Sort descending
+    .slice(0, 5); // Top 5
+
+  let top5_median_reviews = 0;
+  if (reviews.length > 0) {
+    const mid = Math.floor(reviews.length / 2);
+    top5_median_reviews = reviews.length % 2 === 0
+      ? Math.round((reviews[mid - 1] + reviews[mid]) / 2)
+      : reviews[mid];
+  }
+
+  // Price range
+  const prices = listings
+    .map(l => l.price)
+    .filter((p): p is number => p !== null && p !== undefined && p > 0);
+
+  const price_min = prices.length > 0 ? Math.min(...prices) : null;
+  const price_max = prices.length > 0 ? Math.max(...prices) : null;
+  const price_cluster_width = (price_min !== null && price_max !== null)
+    ? Number((price_max - price_min).toFixed(2))
+    : null;
+
+  // Top brand ASIN count (optional)
+  const brandCounts = new Map<string, number>();
+  for (const listing of listings) {
+    const brand = listing.brand_resolution?.raw_brand ?? listing.brand;
+    if (brand && typeof brand === 'string' && brand.trim().length > 0) {
+      const brandKey = brand.trim();
+      brandCounts.set(brandKey, (brandCounts.get(brandKey) || 0) + 1);
+    }
+  }
+  const top_brand_asin_count = brandCounts.size > 0
+    ? Math.max(...Array.from(brandCounts.values()))
+    : null;
+
+  // Sponsored in top 10 count (optional)
+  // Top 10 by position (page_position or position field)
+  const top10Listings = listings
+    .slice()
+    .sort((a, b) => {
+      const posA = a.position ?? 999;
+      const posB = b.position ?? 999;
+      return posA - posB;
+    })
+    .slice(0, 10);
+  const sponsored_in_top10_count = top10Listings.filter(l => l.is_sponsored === true).length;
+
+  return {
+    page1_total_listings,
+    page1_sponsored_count,
+    page1_sponsored_pct,
+    prime_eligible_count,
+    prime_eligible_pct,
+    distinct_brand_count,
+    top5_median_reviews,
+    price_min,
+    price_max,
+    price_cluster_width,
+    top_brand_asin_count,
+    sponsored_in_top10_count,
+  };
+}
+
 // ============================================================================
 // KEYWORD ANALYZE MAPPER
 // ============================================================================
@@ -364,7 +507,8 @@ export async function buildKeywordAnalyzeResponse(
   currency: Currency = "USD",
   supabase?: any,
   canonicalProducts?: CanonicalProduct[], // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
-  refinedDataCount?: number // Number of listings with refined data (for accuracy scoring)
+  refinedDataCount?: number, // Number of listings with refined data (for accuracy scoring)
+  rawListings?: ParsedListing[] // Raw listings from Rainforest search_results (for Page-1 aggregates)
 ): Promise<KeywordAnalyzeResponse> {
   // Guard against null/undefined inputs
   if (!marketData) {
@@ -1034,6 +1178,26 @@ export async function buildKeywordAnalyzeResponse(
   
   const accuracyResult = calculateEstimationConfidence(estimationMetadata);
   
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUILD PAGE-1 AGGREGATES FROM RAINFOREST SEARCH_RESULTS ONLY
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Use raw listings (ParsedListing[]) which represent Rainforest search_results[]
+  // These are authoritative facts about Page-1 competitive reality
+  const listingsForAggregates = rawListings || marketData.listings || [];
+  const page1MarketSummary = buildPage1Aggregates(listingsForAggregates);
+  
+  console.log("📊 PAGE1_MARKET_SUMMARY_COMPUTED", {
+    keyword,
+    page1_total_listings: page1MarketSummary.page1_total_listings,
+    page1_sponsored_pct: page1MarketSummary.page1_sponsored_pct,
+    prime_eligible_pct: page1MarketSummary.prime_eligible_pct,
+    distinct_brand_count: page1MarketSummary.distinct_brand_count,
+    top5_median_reviews: page1MarketSummary.top5_median_reviews,
+    price_range: page1MarketSummary.price_min !== null && page1MarketSummary.price_max !== null
+      ? `$${page1MarketSummary.price_min.toFixed(2)}–$${page1MarketSummary.price_max.toFixed(2)}`
+      : "N/A",
+  });
+  
   // Build AI context (read-only copy)
   const aiContext = {
     mode: "keyword" as const,
@@ -1044,6 +1208,8 @@ export async function buildKeywordAnalyzeResponse(
     margin_snapshot: marginSnapshotContract,
     signals,
     brand_moat: brandMoat, // Add brand moat to AI context
+    // Page-1 market summary (authoritative facts from Rainforest search_results ONLY)
+    page1_market_summary: page1MarketSummary,
     // Snapshot metrics (explicitly exposed for AI reference)
     snapshot: {
       top_5_brand_revenue_share_pct: snapshot.top_5_brand_revenue_share_pct ?? null,

@@ -3031,7 +3031,8 @@ export async function POST(req: NextRequest) {
             "USD",
             supabase, // supabase client for keyword history blending
             canonicalProducts, // CANONICAL PAGE-1 PRODUCTS (FINAL AUTHORITY)
-            0 // refinedDataCount - v1 does not support refinement
+            0, // refinedDataCount - v1 does not support refinement
+            rawListings // Raw listings from Rainforest search_results (for Page-1 aggregates)
           );
         }
         

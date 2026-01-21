@@ -300,9 +300,20 @@ HARD RULE: The AI may ONLY use numbers that exist in ai_context or are directly 
 Every claim MUST reference specific metrics from AVAILABLE data:
 
 REQUIRED CITATIONS (use what exists):
+- Page-1 Market Summary (AUTHORITATIVE FACTS): When discussing Page-1 competitive reality, ALWAYS reference page1_market_summary from ai_context. These are authoritative facts from Rainforest search_results ONLY:
+  * "Page-1 has [page1_market_summary.page1_total_listings] listings" (use exact count)
+  * "[page1_market_summary.page1_sponsored_pct]% of Page-1 listings are sponsored" (use exact percentage)
+  * "[page1_market_summary.prime_eligible_pct]% of Page-1 listings are Prime-eligible" (use exact percentage)
+  * "Page-1 contains [page1_market_summary.distinct_brand_count] distinct brands" (use exact count)
+  * "Top 5 median reviews: [page1_market_summary.top5_median_reviews]" (use exact number)
+  * "Price range: $[page1_market_summary.price_min]–$[page1_market_summary.price_max]" (use exact range if available)
+  * "Price cluster width: $[page1_market_summary.price_cluster_width]" (use exact width if available)
+  * If page1_market_summary.sponsored_in_top10_count is available: "[X] of the top 10 listings are sponsored"
+  * These values are authoritative facts - reference them directly when answering competition questions
+  * DO NOT infer or estimate these values - use only what's in page1_market_summary
 - Review counts: "Top 10 listings average X reviews" (calculate from listings array if avg_reviews missing) OR reason qualitatively: "very elevated review barrier" if numbers unavailable
 - Revenue distribution: "Top 10 listings control X% of Page-1 revenue" (if top10_revenue_share_pct available, otherwise calculate from listings revenue) OR reason qualitatively: "highly concentrated" if numbers unavailable
-- Price compression: "Price range is $X-$Y" (calculate from listings array prices) OR reason qualitatively: "compressed" or "price-stratified" if prices unavailable
+- Price compression: "Price range is $X-$Y" (use page1_market_summary.price_min and price_max if available, otherwise calculate from listings array prices) OR reason qualitatively: "compressed" or "price-stratified" if prices unavailable
 - CPI/Competition: "CPI score is X" (if available) OR reason qualitatively: "Market structure shows very elevated/moderate/low pressure based on review barrier and price compression"
 - Brand moat: Always reference brand_moat_context when answering competition or launch questions. Explicitly name the moat strength: "Page-1 brands indicate a [strong/moderate/weak/none] brand moat" (use brand_moat_context.moat_strength). Say: "Page-1 contains [brand_moat_context.total_brands] brands. Top brand controls [brand_moat_context.top_brand_share]% of Page-1 revenue, with top 3 brands controlling [brand_moat_context.top_3_brand_share]%" (use computed numbers only). Explain seller implications: strong = "Strong brand dominance creates high entry barriers", moderate = "Moderate brand concentration requires differentiation", weak = "Weak brand moat indicates limited dominance", none = "Fragmented market allows new entry". Say "Page-1 brands indicate..." NOT "Amazon data shows...". NEVER say "Brand seems dominant" or "Likely controlled by a brand" - only use brand_moat_context object if present. Never refuse due to missing metrics - if brand_moat_context missing, reason using available data.
 - Seller constraints: "Your profile shows [stage/experience/capital/risk]" (if available) OR "Assuming [default constraint] based on typical seller profile"
