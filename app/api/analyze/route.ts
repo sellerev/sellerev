@@ -1378,8 +1378,9 @@ export async function POST(req: NextRequest) {
                     (listing as any).category_source = 'sp_api_catalog';
                   }
                   if (metadata.bsr != null && metadata.bsr > 0) {
-                    listing.bsr = metadata.bsr;
-                    listing.main_category_bsr = metadata.bsr;
+                    // 🔴 NEVER overwrite a valid BSR with null - use nullish coalescing
+                    listing.bsr ??= metadata.bsr;
+                    listing.main_category_bsr ??= metadata.bsr;
                     (listing as any).bsr_source = 'sp_api';
                     (listing as any).had_sp_api_response = true;
                     if (!(listing as any).enrichment_sources) {

@@ -2591,9 +2591,12 @@ export async function fetchKeywordMarketSnapshot(
       
       // PRODUCTION HARDENING: Validate BSR (null, 0, or < 1 are invalid, must be ≤ 300,000)
       // Exclude from calculations but still allow listing to exist
-      let main_category_bsr = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000) 
-        ? mainBSRData.rank 
-        : null;
+      // CRITICAL: Only set BSR from Rainforest if SP-API BSR is not already present
+      // Never overwrite a valid SP-API BSR with null from Rainforest
+      let main_category_bsr: number | null = null;
+      if (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000) {
+        main_category_bsr = mainBSRData.rank;
+      }
       const main_category = (mainBSRData && mainBSRData.rank && mainBSRData.rank >= 1 && mainBSRData.rank <= 300000)
         ? mainBSRData.category
         : null;
@@ -2806,36 +2809,38 @@ export async function fetchKeywordMarketSnapshot(
         // Pricing failures must NOT affect BSR coverage
         // Attach BSR directly to listing if it exists (even if 0, as long as it's a valid number)
         // This happens IMMEDIATELY when SP-API results are merged - no delay, no DB queries
+        // 🔴 NEVER overwrite a valid BSR with null - SP-API BSR is authoritative
         if (catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
           bsrMergeCount++;
           // 🔴 REQUIRED: Set BSR AND provenance at merge time (not inferred later)
-          listing.main_category_bsr = catalog.bsr;
-          listing.bsr = catalog.bsr;
-          (listing as any).bsr_source = 'sp_api';
-          (listing as any).had_sp_api_response = true;
+          // Only set BSR if it's not already present (preserve existing valid BSR)
+          // Use nullish coalescing to avoid overwriting existing valid BSR
+          listing.main_category_bsr ??= catalog.bsr;
+          listing.bsr ??= catalog.bsr;
           
-          // Ensure enrichment_sources object exists
-          if (!(listing as any).enrichment_sources) {
-            (listing as any).enrichment_sources = {};
-          }
-          (listing as any).enrichment_sources.sp_api_catalog = true;
-          
-          // Transition enrichment state immediately when BSR is extracted
-          // State machine: raw -> sp_api_catalog_enriched
-          (listing as any).enrichment_state = 'sp_api_catalog_enriched';
-          
-          // Debug log for BSR merge (first 5 ASINs only)
-          if (bsrMergeCount <= 5) {
-            console.log("🟢 SP_API_BSR_MERGED", {
-              asin: listing.asin,
-              bsr: catalog.bsr,
-              main_category_bsr_set: listing.main_category_bsr,
-              bsr_set: listing.bsr,
-              bsr_source: (listing as any).bsr_source,
-              enrichment_state: (listing as any).enrichment_state,
-              catalog_bsr: catalog.bsr,
-              listing_bsr_before: listing.bsr,
-            });
+          // If listing had no BSR, now it has SP-API BSR - set source tags
+          if (listing.main_category_bsr === catalog.bsr) {
+            (listing as any).bsr_source = 'sp_api';
+            (listing as any).had_sp_api_response = true;
+            
+            // Ensure enrichment_sources object exists
+            if (!(listing as any).enrichment_sources) {
+              (listing as any).enrichment_sources = {};
+            }
+            (listing as any).enrichment_sources.sp_api_catalog = true;
+            
+            // Transition enrichment state immediately when BSR is extracted
+            // State machine: raw -> sp_api_catalog_enriched
+            (listing as any).enrichment_state = 'sp_api_catalog_enriched';
+            
+            // Debug log for BSR merge (first 5 ASINs only)
+            if (bsrMergeCount <= 5) {
+              console.log("MERGE_BSR_PRESERVED", {
+                asin: listing.asin,
+                bsr: listing.main_category_bsr,
+                source: 'sp_api',
+              });
+            }
           }
         } else if (catalog.bsr === null || catalog.bsr === undefined || catalog.bsr <= 0) {
           // Debug: Log when catalog exists but BSR is missing
@@ -3628,8 +3633,9 @@ export async function fetchKeywordMarketSnapshot(
         ) {
           // 🔴 REQUIRED: Set BSR AND provenance at merge time when catalog has BSR
           // This replaces estimated BSR with real SP-API BSR when available
-          listing.main_category_bsr = catalog.bsr;
-          listing.bsr = catalog.bsr;
+          // 🔴 NEVER overwrite a valid BSR with null - use nullish coalescing
+          listing.main_category_bsr ??= catalog.bsr;
+          listing.bsr ??= catalog.bsr;
           (listing as any).bsr_source = 'sp_api';
           (listing as any).had_sp_api_response = true;
           
