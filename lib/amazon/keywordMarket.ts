@@ -3407,9 +3407,9 @@ export async function fetchKeywordMarketSnapshot(
 
     // TASK 3: Average rating (only over listings with numeric rating) - computed ONLY in final snapshot phase
     // Only compute if coverage is meaningful (>= 10% and >= 3 ratings)
-    const ratings = listings
+    const ratings: number[] = listings
       .map(l => l.rating)
-      .filter(r => typeof r === 'number' && r > 0);
+      .filter((r): r is number => typeof r === 'number' && r > 0);
     
     const ratingCoverage = listings.length > 0 ? ratings.length / listings.length : 0;
     const avg_rating = 

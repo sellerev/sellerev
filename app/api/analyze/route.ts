@@ -1230,9 +1230,9 @@ export async function POST(req: NextRequest) {
       const avg_reviews = computeAvgReviews(listings);
 
       // Average rating: compute ONLY with coverage threshold (>= 10% and >= 3 ratings)
-      const ratings = listings
+      const ratings: number[] = listings
         .map(l => l.rating)
-        .filter(r => typeof r === 'number' && r > 0);
+        .filter((r): r is number => typeof r === 'number' && r > 0);
       
       const ratingCoverage = listings.length > 0 ? ratings.length / listings.length : 0;
       const avg_rating = 
