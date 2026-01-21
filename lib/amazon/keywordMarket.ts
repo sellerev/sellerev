@@ -2857,10 +2857,17 @@ export async function fetchKeywordMarketSnapshot(
       const asinKey = normalizeAsin(listing.asin);
       const catalog = spApiCatalogResults.get(asinKey);
       
-      // SP-API Catalog overwrites: brand, category, BSR, title, image
-      // CRITICAL: SP-API brand is authoritative - override title-parsed brands
-      // CRITICAL: SP-API MUST NOT touch sponsored fields (has no ad data)
-      // DO NOT overwrite: is_sponsored, sponsored_position, sponsored_source
+      // ═══════════════════════════════════════════════════════════════════════════
+      // ✅ FIELD RECONCILIATION: SP-API as UPGRADE layer (not replacement)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // RAINFOREST BASELINE (never overwritten by SP-API):
+      //   - ASIN, Title, Image, Price, FBA/FBM, Sponsored, Rank, Rating, Reviews
+      // SP-API UPGRADE (only when available):
+      //   - Brand (authoritative), Category, BSR
+      // ═══════════════════════════════════════════════════════════════════════════
+      // DO NOT overwrite: title, image_url, price, fulfillment, is_sponsored, 
+      //   sponsored_position, sponsored_source, rating, reviews, position
+      // ═══════════════════════════════════════════════════════════════════════════
       if (catalog) {
         mergeCount++;
         // Mark that SP-API responded (even if no data was extracted)
@@ -2880,16 +2887,18 @@ export async function fetchKeywordMarketSnapshot(
         }
         (listing as any).enrichment_sources.sp_api_catalog = true;
         
-        if (catalog.brand) {
-          listing.brand = catalog.brand;
+        // ✅ BRAND: SP-API is authoritative (only upgrade when available)
+        if (catalog.brand && typeof catalog.brand === 'string' && catalog.brand.trim().length > 0) {
+          listing.brand = catalog.brand.trim();
           (listing as any).brand_source = 'sp_api';
-          // Update brand confidence to high when from SP-API (authoritative)
           (listing as any)._brand_confidence = 'high';
           (listing as any)._brand_entity = catalog.brand;
           (listing as any)._brand_display = catalog.brand;
         }
-        if (catalog.category) {
-          listing.main_category = catalog.category;
+        
+        // ✅ CATEGORY: SP-API is authoritative (only upgrade when available)
+        if (catalog.category && typeof catalog.category === 'string' && catalog.category.trim().length > 0) {
+          listing.main_category = catalog.category.trim();
           (listing as any).category_source = 'sp_api_catalog';
         }
         // CRITICAL: BSR from catalog is authoritative and must be preserved
@@ -2940,14 +2949,15 @@ export async function fetchKeywordMarketSnapshot(
           }
         }
         
-        if (catalog.title) {
-          listing.title = catalog.title;
-          (listing as any).title_source = 'sp_api_catalog';
-        }
-        if (catalog.image_url) {
-          listing.image_url = catalog.image_url;
-          (listing as any).image_source = 'sp_api_catalog';
-        }
+        // ❌ TITLE: RAINFOREST BASELINE (never overwritten by SP-API)
+        // Title comes from Rainforest SERP and matches what users see visually
+        // SP-API title is NOT used - Rainforest is source of truth for Page-1 composition
+        // (listing as any).title_source remains 'rainforest' (or undefined)
+        
+        // ❌ IMAGE_URL: RAINFOREST BASELINE (never overwritten by SP-API)
+        // Image comes from Rainforest SERP and matches what users see visually
+        // SP-API image is NOT used - Rainforest is source of truth for Page-1 composition
+        // (listing as any).image_source remains 'rainforest' (or undefined)
       } else {
         catalogNotFoundCount++;
         // Debug: Log first few ASINs not found in catalog

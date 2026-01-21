@@ -82,13 +82,50 @@ export async function batchEnrichCatalogItems(
   const totalBatches = batches.length;
   const totalStartTime = Date.now();
 
-  // Execute batches in parallel with timeout
-  // CRITICAL: Pass spApiCatalogResults directly so it's mutated in place
-  const batchPromises = batches.map((batch, batchIndex) =>
-    fetchBatchWithTimeout(batch, marketplaceId, timeoutMs, awsAccessKeyId, awsSecretAccessKey, batchIndex, totalBatches, keyword, supabase, ingestionMetrics, spApiCatalogResults)
-  );
-
-  await Promise.allSettled(batchPromises);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ✅ RATE-SAFE SERIALIZED EXECUTION (NO PARALLEL REQUESTS)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CRITICAL: SP-API has ~2 req/sec rate limit
+  // - Serialize all batches (no Promise.all)
+  // - 600-800ms delay between batches
+  // - Retry with exponential backoff on 429 errors
+  // ═══════════════════════════════════════════════════════════════════════════
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    
+    try {
+      // Execute batch with retry logic
+      await fetchBatchWithRetry(
+        batch,
+        marketplaceId,
+        timeoutMs,
+        awsAccessKeyId,
+        awsSecretAccessKey,
+        batchIndex,
+        totalBatches,
+        keyword,
+        supabase,
+        ingestionMetrics,
+        spApiCatalogResults
+      );
+      
+      // Add delay between batches (600-800ms) to respect ~2 req/sec limit
+      // Skip delay after last batch
+      if (batchIndex < batches.length - 1) {
+        const delayMs = 700; // 700ms = ~1.4 req/sec (safe margin)
+        await sleep(delayMs);
+      }
+    } catch (error) {
+      // Log batch error but continue processing remaining batches
+      console.error("❌ SP_API_BATCH_FAILED", {
+        batch_index: batchIndex,
+        batch_size: batch.length,
+        keyword: keyword || 'unknown',
+        error: error instanceof Error ? error.message : String(error),
+        message: "Batch failed - continuing with remaining batches",
+      });
+    }
+  }
 
   // Emit batch summary log
   const totalDuration = Date.now() - totalStartTime;
@@ -105,6 +142,123 @@ export async function batchEnrichCatalogItems(
     avg_duration_ms: avgDuration,
     timestamp: new Date().toISOString(),
   });
+}
+
+/**
+ * Sleep helper for delays
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Check if error is a 429 QuotaExceeded error
+ */
+function isQuotaExceededError(error: any): boolean {
+  if (!error) return false;
+  
+  // Check HTTP status code
+  if (error.http_status === 429 || error.status === 429) {
+    return true;
+  }
+  
+  // Check error message/body for QuotaExceeded
+  const errorText = typeof error === 'string' 
+    ? error 
+    : (error.message || error.error || String(error) || '');
+  
+  return errorText.includes('429') || 
+         errorText.includes('QuotaExceeded') || 
+         errorText.includes('Rate limit');
+}
+
+/**
+ * Fetch batch with retry logic for 429 errors
+ * 
+ * Retry strategy:
+ * - Max 2 retries (3 total attempts)
+ * - Exponential backoff: 1500ms, 3000ms
+ * - Only retries on 429 QuotaExceeded errors
+ */
+async function fetchBatchWithRetry(
+  asins: string[],
+  marketplaceId: string,
+  timeoutMs: number,
+  awsAccessKeyId: string,
+  awsSecretAccessKey: string,
+  batchIndex: number,
+  totalBatches: number,
+  keyword?: string,
+  supabase?: any,
+  ingestionMetrics?: { 
+    totalAttributesWritten: { value: number };
+    totalClassificationsWritten: { value: number };
+    totalImagesWritten: { value: number };
+    totalRelationshipsWritten: { value: number };
+    totalSkippedDueToCache: { value: number };
+  },
+  spApiCatalogResults?: Map<string, any>,
+  attempt: number = 1,
+  maxRetries: number = 2
+): Promise<void> {
+  const backoffDelays = [1500, 3000]; // Exponential backoff delays in ms
+  
+  try {
+    await fetchBatchWithTimeout(
+      asins,
+      marketplaceId,
+      timeoutMs,
+      awsAccessKeyId,
+      awsSecretAccessKey,
+      batchIndex,
+      totalBatches,
+      keyword,
+      supabase,
+      ingestionMetrics,
+      spApiCatalogResults
+    );
+  } catch (error: any) {
+    // Check if this is a 429 error and we have retries left
+    const is429 = isQuotaExceededError(error);
+    const hasRetries = attempt <= maxRetries;
+    
+    if (is429 && hasRetries) {
+      const backoffMs = backoffDelays[attempt - 1] || 3000;
+      
+      console.warn("⏳ SP_API_429_RETRY", {
+        batch_index: batchIndex,
+        attempt,
+        max_retries: maxRetries,
+        backoff_ms: backoffMs,
+        keyword: keyword || 'unknown',
+        asins: asins.slice(0, 5), // Log first 5 ASINs for context
+        message: "Rate limit exceeded - retrying with backoff",
+      });
+      
+      // Wait before retrying
+      await sleep(backoffMs);
+      
+      // Retry the batch
+      return fetchBatchWithRetry(
+        asins,
+        marketplaceId,
+        timeoutMs,
+        awsAccessKeyId,
+        awsSecretAccessKey,
+        batchIndex,
+        totalBatches,
+        keyword,
+        supabase,
+        ingestionMetrics,
+        spApiCatalogResults,
+        attempt + 1,
+        maxRetries
+      );
+    } else {
+      // Not a 429 error, or no retries left - throw the error
+      throw error;
+    }
+  }
 }
 
 /**
@@ -238,6 +392,14 @@ async function fetchBatch(
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
       
+      // Create error object with status for retry logic
+      const errorWithStatus = {
+        http_status: response.status,
+        status: response.status,
+        message: errorText.substring(0, 500),
+        error: errorText.substring(0, 500),
+      };
+      
       // Log error
       logSpApiEvent({
         event_type: 'SP_API_ERROR',
@@ -258,6 +420,12 @@ async function fetchBatch(
         total_batches: totalBatches,
       });
 
+      // For 429 errors, throw so retry logic can handle it
+      // For other errors, return void (no retry)
+      if (response.status === 429) {
+        throw errorWithStatus;
+      }
+      
       // HTTP error - return void, no data added to map
       return;
     }

@@ -1389,14 +1389,13 @@ export async function POST(req: NextRequest) {
                     (listing as any).enrichment_sources.sp_api_catalog = true;
                     (listing as any).enrichment_state = 'sp_api_catalog_enriched';
                   }
-                  if (metadata.title) {
-                    listing.title = metadata.title;
-                    (listing as any).title_source = 'sp_api_catalog';
-                  }
-                  if (metadata.image_url) {
-                    listing.image_url = metadata.image_url;
-                    (listing as any).image_source = 'sp_api_catalog';
-                  }
+                  // ❌ TITLE: RAINFOREST BASELINE (never overwritten by SP-API)
+                  // Title comes from Rainforest SERP and matches what users see visually
+                  // SP-API title is NOT used - Rainforest is source of truth for Page-1 composition
+                  
+                  // ❌ IMAGE_URL: RAINFOREST BASELINE (never overwritten by SP-API)
+                  // Image comes from Rainforest SERP and matches what users see visually
+                  // SP-API image is NOT used - Rainforest is source of truth for Page-1 composition
                 }
               }
               
