@@ -247,6 +247,90 @@ function buildCompactContext(
 }
 
 /**
+ * Builds structured selected_asins array from analysis response products
+ * 
+ * Matches selected ASINs to products in the analysis response and returns
+ * a structured array with all relevant product data for AI reasoning.
+ * 
+ * @param selectedAsins - Array of selected ASIN strings
+ * @param analysisResponse - Full analysis response containing products/page_one_listings
+ * @returns Structured array of selected ASIN data, or empty array if none selected
+ */
+function buildSelectedAsinsArray(
+  selectedAsins: string[],
+  analysisResponse: Record<string, unknown>
+): Array<{
+  asin: string;
+  title: string | null;
+  brand: string | null;
+  price: number;
+  rating: number;
+  reviews: number;
+  bsr: number | null;
+  is_sponsored: boolean | null;
+  prime_eligible: boolean | null;
+  page1_position: number | null;
+  organic_rank: number | null;
+  estimated_monthly_revenue?: number;
+  estimated_monthly_units?: number;
+  fulfillment?: string;
+}> {
+  if (!selectedAsins || selectedAsins.length === 0) {
+    return [];
+  }
+
+  // Get products from analysis response (try both field names)
+  const products = (analysisResponse.page_one_listings as any[]) || 
+                   (analysisResponse.products as any[]) || 
+                   [];
+
+  // Normalize ASINs for comparison (uppercase, trimmed)
+  const normalizeAsin = (asin: string) => asin.trim().toUpperCase();
+  const selectedAsinsNormalized = selectedAsins.map(normalizeAsin);
+
+  // Match selected ASINs to products
+  const selectedProducts = products
+    .filter((product: any) => {
+      if (!product || !product.asin) return false;
+      const productAsin = normalizeAsin(product.asin);
+      return selectedAsinsNormalized.includes(productAsin);
+    })
+    .map((product: any) => ({
+      asin: product.asin || '',
+      title: product.title || null,
+      brand: product.brand || null,
+      price: typeof product.price === 'number' ? product.price : 0,
+      rating: typeof product.rating === 'number' ? product.rating : 0,
+      reviews: typeof product.review_count === 'number' ? product.review_count : 
+               (typeof product.reviews === 'number' ? product.reviews : 0),
+      bsr: typeof product.bsr === 'number' ? product.bsr : null,
+      is_sponsored: product.is_sponsored === true ? true : 
+                    (product.is_sponsored === false ? false : null),
+      prime_eligible: product.is_prime === true ? true : 
+                      (product.is_prime === false ? false : null),
+      page1_position: typeof product.page_position === 'number' ? product.page_position :
+                      (typeof product.rank === 'number' ? product.rank : null),
+      organic_rank: typeof product.organic_rank === 'number' ? product.organic_rank : null,
+      estimated_monthly_revenue: typeof product.estimated_monthly_revenue === 'number' 
+        ? product.estimated_monthly_revenue 
+        : undefined,
+      estimated_monthly_units: typeof product.estimated_monthly_units === 'number' 
+        ? product.estimated_monthly_units 
+        : undefined,
+      fulfillment: typeof product.fulfillment === 'string' ? product.fulfillment : undefined,
+    }));
+
+  // Sort by page1_position to maintain order
+  selectedProducts.sort((a, b) => {
+    const posA = a.page1_position ?? 999;
+    const posB = b.page1_position ?? 999;
+    return posA - posB;
+  });
+
+  return selectedProducts;
+}
+
+/**
  * Builds the grounded context message that anchors the conversation.
  * 
  * WHY THIS PREVENTS HALLUCINATIONS:
@@ -594,98 +678,14 @@ CRITICAL AI RULES:
   }
 
   // Section 7: Selected Listings Context (multi-ASIN support)
-/**
- * Builds structured selected_asins array from analysis response products
- * 
- * Matches selected ASINs to products in the analysis response and returns
- * a structured array with all relevant product data for AI reasoning.
- * 
- * @param selectedAsins - Array of selected ASIN strings
- * @param analysisResponse - Full analysis response containing products/page_one_listings
- * @returns Structured array of selected ASIN data, or empty array if none selected
- */
-function buildSelectedAsinsArray(
-  selectedAsins: string[],
-  analysisResponse: Record<string, unknown>
-): Array<{
-  asin: string;
-  title: string | null;
-  brand: string | null;
-  price: number;
-  rating: number;
-  reviews: number;
-  bsr: number | null;
-  is_sponsored: boolean | null;
-  prime_eligible: boolean | null;
-  page1_position: number | null;
-  organic_rank: number | null;
-  estimated_monthly_revenue?: number;
-  estimated_monthly_units?: number;
-  fulfillment?: string;
-}> {
-  if (!selectedAsins || selectedAsins.length === 0) {
-    return [];
-  }
-
-  // Get products from analysis response (try both field names)
-  const products = (analysisResponse.page_one_listings as any[]) || 
-                   (analysisResponse.products as any[]) || 
-                   [];
-
-  // Normalize ASINs for comparison (uppercase, trimmed)
-  const normalizeAsin = (asin: string) => asin.trim().toUpperCase();
-  const selectedAsinsNormalized = selectedAsins.map(normalizeAsin);
-
-  // Match selected ASINs to products
-  const selectedProducts = products
-    .filter((product: any) => {
-      if (!product || !product.asin) return false;
-      const productAsin = normalizeAsin(product.asin);
-      return selectedAsinsNormalized.includes(productAsin);
-    })
-    .map((product: any) => ({
-      asin: product.asin || '',
-      title: product.title || null,
-      brand: product.brand || null,
-      price: typeof product.price === 'number' ? product.price : 0,
-      rating: typeof product.rating === 'number' ? product.rating : 0,
-      reviews: typeof product.review_count === 'number' ? product.review_count : 
-               (typeof product.reviews === 'number' ? product.reviews : 0),
-      bsr: typeof product.bsr === 'number' ? product.bsr : null,
-      is_sponsored: product.is_sponsored === true ? true : 
-                    (product.is_sponsored === false ? false : null),
-      prime_eligible: product.is_prime === true ? true : 
-                      (product.is_prime === false ? false : null),
-      page1_position: typeof product.page_position === 'number' ? product.page_position :
-                      (typeof product.rank === 'number' ? product.rank : null),
-      organic_rank: typeof product.organic_rank === 'number' ? product.organic_rank : null,
-      estimated_monthly_revenue: typeof product.estimated_monthly_revenue === 'number' 
-        ? product.estimated_monthly_revenue 
-        : undefined,
-      estimated_monthly_units: typeof product.estimated_monthly_units === 'number' 
-        ? product.estimated_monthly_units 
-        : undefined,
-      fulfillment: typeof product.fulfillment === 'string' ? product.fulfillment : undefined,
-    }));
-
-  // Sort by page1_position to maintain order
-  selectedProducts.sort((a, b) => {
-    const posA = a.page1_position ?? 999;
-    const posB = b.page1_position ?? 999;
-    return posA - posB;
-  });
-
-  return selectedProducts;
-}
-
-    // CRITICAL: selectedAsins is the single source of truth
-    // If selectedAsins.length === 0, NO products are selected
-    // Only use selectedListing as fallback if selectedAsins is empty/undefined
-    const effectiveSelectedAsins: string[] = Array.isArray(selectedAsins) && selectedAsins.length > 0
-      ? selectedAsins.filter(asin => asin && typeof asin === 'string') // Filter out invalid ASINs
-      : (selectedListing?.asin && typeof selectedListing.asin === 'string'
-        ? [selectedListing.asin] // Backward compatibility fallback
-        : []); // Empty array = no selection
+  // CRITICAL: selectedAsins is the single source of truth
+  // If selectedAsins.length === 0, NO products are selected
+  // Only use selectedListing as fallback if selectedAsins is empty/undefined
+  const effectiveSelectedAsins: string[] = Array.isArray(selectedAsins) && selectedAsins.length > 0
+    ? selectedAsins.filter(asin => asin && typeof asin === 'string') // Filter out invalid ASINs
+    : (selectedListing?.asin && typeof selectedListing.asin === 'string'
+      ? [selectedListing.asin] // Backward compatibility fallback
+      : []); // Empty array = no selection
   
   if (effectiveSelectedAsins.length > 0) {
     try {
