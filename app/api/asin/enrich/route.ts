@@ -671,7 +671,6 @@ export async function POST(req: NextRequest) {
       fulfillmentType = "FBM";
     }
     // If fulfillment cannot be determined, leave as null (honest and credible)
-    }
 
     // 6. Compute "best available signal" (Helium-10-like)
     // Priority:
