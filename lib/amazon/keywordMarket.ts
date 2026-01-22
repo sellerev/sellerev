@@ -2702,12 +2702,21 @@ export async function fetchKeywordMarketSnapshot(
     // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
     // Use ONLY item.sponsored (the authoritative field from Rainforest)
     // Single source of truth: !!item.sponsored
-    const appearances: Appearance[] = searchResults.map((item: any, index: number) => ({
-      asin: item.asin,
-      position: item.position ?? index + 1,
-      isSponsored: !!item.sponsored,
-      source: (!!item.sponsored ? 'sponsored' : 'organic') as 'organic' | 'sponsored'
-    })).filter((app: Appearance) => app.asin && /^[A-Z0-9]{10}$/i.test(app.asin.trim()));
+    // 🛡️ LOCK SPONSORED EARLY: Capture immediately after Rainforest parse
+    // Check multiple field names as fallback (Rainforest may vary)
+    const appearances: Appearance[] = searchResults.map((item: any, index: number) => {
+      // Lock sponsored flag immediately - check multiple sources
+      const isSponsored = !!item.sponsored || 
+                         !!item.ad || 
+                         (typeof item.link === 'string' && (item.link.includes('/sspa/') || item.link.includes('-spons')));
+      
+      return {
+        asin: item.asin,
+        position: item.position ?? index + 1,
+        isSponsored,
+        source: (isSponsored ? 'sponsored' : 'organic') as 'organic' | 'sponsored'
+      };
+    }).filter((app: Appearance) => app.asin && /^[A-Z0-9]{10}$/i.test(app.asin.trim()));
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SPONSORED DIAGNOSTICS (MANDATORY)
@@ -3019,6 +3028,13 @@ export async function fetchKeywordMarketSnapshot(
       throw new Error("BUG: BSR extracted but spApiCatalogResults is empty before merge");
     }
     
+    // 🛡️ SPONSORED PRESERVATION LOGGING: Track sponsored flag before merge
+    const sponsoredCountPreMerge = listings.filter(l => l.isSponsored === true).length;
+    const sponsoredAsinsPreMerge = listings
+      .filter(l => l.isSponsored === true)
+      .map(l => l.asin)
+      .slice(0, 10);
+    
     // Debug: Log spApiCatalogResults state before merge
     console.log("🔵 SP_API_MERGE_START", {
       keyword,
@@ -3028,6 +3044,9 @@ export async function fetchKeywordMarketSnapshot(
       sample_catalog_bsrs: Array.from(spApiCatalogResults.entries())
         .slice(0, 5)
         .map(([asin, metadata]) => ({ asin, bsr: metadata.bsr })),
+      // 🛡️ SPONSORED PRESERVATION: Log before merge
+      sponsored_count_pre_merge: sponsoredCountPreMerge,
+      sponsored_asins_pre_merge: sponsoredAsinsPreMerge,
     });
     
     let mergeCount = 0;
@@ -3065,6 +3084,16 @@ export async function fetchKeywordMarketSnapshot(
       // ═══════════════════════════════════════════════════════════════════════════
       if (catalog) {
         mergeCount++;
+        
+        // 🛡️ CRITICAL: Preserve sponsored flag BEFORE any merge operations
+        // SP-API has NO ad data - sponsored flags come ONLY from Rainforest SERP
+        const preservedIsSponsored = listing.isSponsored;
+        const preservedIsSponsoredDeprecated = listing.is_sponsored;
+        const preservedSponsoredPosition = listing.sponsored_position;
+        const preservedSponsoredSource = listing.sponsored_source;
+        const preservedAppearsSponsored = listing.appearsSponsored;
+        const preservedSponsoredPositions = listing.sponsoredPositions;
+        
         // Mark that SP-API responded (even if no data was extracted)
         (listing as any).had_sp_api_response = true;
         
@@ -3187,6 +3216,15 @@ export async function fetchKeywordMarketSnapshot(
           (listing as any).image_source = 'rainforest';
           (listing as any).image_confidence = 'fallback';
         }
+        
+        // 🛡️ CRITICAL: Restore preserved sponsored flags AFTER merge
+        // SP-API merge must NEVER overwrite Rainforest SERP sponsored data
+        listing.isSponsored = preservedIsSponsored;
+        listing.is_sponsored = preservedIsSponsoredDeprecated;
+        listing.sponsored_position = preservedSponsoredPosition;
+        listing.sponsored_source = preservedSponsoredSource;
+        listing.appearsSponsored = preservedAppearsSponsored;
+        listing.sponsoredPositions = preservedSponsoredPositions;
       } else {
         catalogNotFoundCount++;
         // Debug: Log first few ASINs not found in catalog
@@ -3206,6 +3244,25 @@ export async function fetchKeywordMarketSnapshot(
       (l.bsr !== null && l.bsr > 0) || (l.main_category_bsr !== null && l.main_category_bsr > 0)
     ).length;
     
+    // 🛡️ SPONSORED PRESERVATION LOGGING: Track sponsored flag after merge
+    const sponsoredCountPostMerge = listings.filter(l => l.isSponsored === true).length;
+    const sponsoredAsinsPostMerge = listings
+      .filter(l => l.isSponsored === true)
+      .map(l => l.asin)
+      .slice(0, 10);
+    
+    // 🚨 GUARDRAIL: Throw if sponsored count dropped
+    if (sponsoredCountPostMerge < sponsoredCountPreMerge) {
+      const lostAsins = sponsoredAsinsPreMerge.filter(asin => 
+        !sponsoredAsinsPostMerge.includes(asin)
+      );
+      throw new Error(
+        `SPONSORED_FLAG_LOST_DURING_MERGE: ` +
+        `Pre-merge: ${sponsoredCountPreMerge}, Post-merge: ${sponsoredCountPostMerge}. ` +
+        `Lost ASINs: ${lostAsins.join(', ')}`
+      );
+    }
+    
     console.log("🔵 SP_API_MERGE_COMPLETE", {
       keyword,
       total_listings: listings.length,
@@ -3222,6 +3279,10 @@ export async function fetchKeywordMarketSnapshot(
           main_category_bsr: l.main_category_bsr,
           bsr_source: (l as any).bsr_source,
         })),
+      // 🛡️ SPONSORED PRESERVATION: Log after merge
+      sponsored_count_pre_merge: sponsoredCountPreMerge,
+      sponsored_count_post_merge: sponsoredCountPostMerge,
+      sponsored_preserved: sponsoredCountPostMerge === sponsoredCountPreMerge,
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
