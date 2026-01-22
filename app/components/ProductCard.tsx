@@ -261,11 +261,6 @@ export function ProductCard({
 
         {/* Badges Row */}
         <div className="flex gap-2 mt-3">
-          {fulfillment && (
-            <span className={`px-2 py-1 rounded-full text-[11px] font-medium ${getFulfillmentBadgeStyle()}`}>
-              {fulfillment}
-            </span>
-          )}
           {/* SPONSORED badge (ASIN-level: show if appearsSponsored, even if also ranks organically) */}
           {appearsSponsored && (
             (() => {
