@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ThemeToggle from "./ThemeToggle";
+import SellerevLogo from "./SellerevLogo";
 
 export default function PublicNavigation() {
   const pathname = usePathname();
@@ -14,14 +15,15 @@ export default function PublicNavigation() {
           {/* Logo */}
           <Link
             href="/"
-            className="text-xl font-bold text-foreground hover:text-primary transition-colors"
+            className="flex items-center hover:opacity-80 transition-opacity"
+            aria-label="Sellerev"
           >
-            Sellerev
+            <SellerevLogo className="w-8 h-8" />
           </Link>
           
           {/* Right-aligned: Theme toggle and Auth buttons */}
           <div className="flex items-center gap-4">
-            <ThemeToggle />
+            {pathname !== "/" && <ThemeToggle />}
             <Link
               href="/auth"
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"

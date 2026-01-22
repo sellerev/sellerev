@@ -4,7 +4,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import PublicNavigation from "./components/PublicNavigation";
 import PublicFooter from "./components/PublicFooter";
-import AIChatVisual from "./components/AIChatVisual";
+import TypewriterText from "./components/TypewriterText";
 
 export default function HomePage() {
   const scrollToPricing = () => {
@@ -31,7 +31,7 @@ export default function HomePage() {
             <p className="text-xl md:text-2xl text-muted-foreground mb-8 max-w-3xl mx-auto leading-relaxed">
               Sellerev is a generative AI platform that helps Amazon sellers understand markets, ask better questions, and make confident decisions
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-8">
               <Link
                 href="/auth"
                 className="bg-gradient-to-r from-primary to-primary-glow text-primary-foreground px-8 py-4 rounded-lg text-lg font-medium hover:opacity-90 transition-opacity"
@@ -45,15 +45,14 @@ export default function HomePage() {
                 View Pricing
               </button>
             </div>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-            className="max-w-2xl mx-auto"
-          >
-            <AIChatVisual />
+            
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.6, delay: 0.3 }}
+            >
+              <TypewriterText />
+            </motion.div>
           </motion.div>
         </section>
 
