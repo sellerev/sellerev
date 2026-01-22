@@ -84,10 +84,12 @@ export function estimatePageOneDemand({
   avgPrice,
 }: PageOneDemandInputs): PageOneDemandEstimate {
   // Filter organic listings only (exclude sponsored)
-  // Use isSponsored if available, otherwise fall back to is_sponsored
+  // CRITICAL: Use appearsSponsored (ASIN-level), NOT isSponsored (instance-level)
   const organicListings = listings.filter(l => {
-    const isSponsored = typeof l.isSponsored === 'boolean' ? l.isSponsored : Boolean(l.is_sponsored === true);
-    return isSponsored === false;
+    const appearsSponsored = typeof l.appearsSponsored === 'boolean' 
+      ? l.appearsSponsored 
+      : Boolean(l.is_sponsored === true);
+    return appearsSponsored === false;
   });
   const organicCount = organicListings.length;
 

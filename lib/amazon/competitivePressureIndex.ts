@@ -129,8 +129,8 @@ export function calculateCPI(context: CPIContext): CPICalculation {
 
   // Component C: Sponsored Saturation Score (0-20 points)
   // sponsored_ratio = sponsored_listings / page1_listings
-  // Use isSponsored (canonical field, always boolean)
-  const sponsoredCount = listings.filter(l => l.isSponsored === true).length;
+  // CRITICAL: Use appearsSponsored (ASIN-level), NOT isSponsored (instance-level)
+  const sponsoredCount = listings.filter(l => l.appearsSponsored === true).length;
   const sponsoredRatio = listings.length > 0 ? sponsoredCount / listings.length : 0;
   const sponsoredPercentage = sponsoredRatio * 100;
   

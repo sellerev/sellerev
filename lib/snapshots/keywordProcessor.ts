@@ -529,10 +529,21 @@ export async function processKeyword(
       
       // SP-API is authoritative for metadata (override, not fallback)
       // Use Pricing API fulfillment if available, otherwise Rainforest hint
-      // Ensure fulfillment is never null (use "UNKNOWN" as fallback)
-      const fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN" = pricingEnriched?.fulfillment_channel 
-        ? (pricingEnriched.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM')
-        : (rf.fulfillment_hint === 'AMZ' ? 'Amazon' : (rf.fulfillment_hint || 'UNKNOWN'));
+      // Ensure fulfillment is never null (use "UNKNOWN" as fallback, NEVER defaults to FBM)
+      const fulfillmentResult = pricingEnriched?.fulfillment_channel 
+        ? {
+            fulfillment: (pricingEnriched.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM') as "FBA" | "FBM" | "UNKNOWN",
+            source: 'sp_api' as const,
+            confidence: 'high' as const,
+          }
+        : {
+            fulfillment: (rf.fulfillment_hint === 'FBA' ? 'FBA' : rf.fulfillment_hint === 'FBM' ? 'FBM' : 'UNKNOWN') as "FBA" | "FBM" | "UNKNOWN",
+            source: 'rainforest_inferred' as const,
+            confidence: 'medium' as const,
+          };
+      const fulfillment: "FBA" | "FBM" | "UNKNOWN" = fulfillmentResult.fulfillment;
+      const fulfillmentSource = fulfillmentResult.source;
+      const fulfillmentConfidence = fulfillmentResult.confidence;
       
       // Extract sponsored fields from Rainforest
       // Normalize isSponsored to boolean (canonical field, always boolean)
@@ -553,7 +564,12 @@ export async function processKeyword(
         is_sponsored: isSponsored, // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
         sponsored_position: sponsoredPosition,
         sponsored_source: sponsoredSource,
-        fulfillment: fulfillment || "UNKNOWN", // Ensure fulfillment is never null
+        // ASIN-level sponsored aggregation (if available, otherwise default to instance-level)
+        appearsSponsored: typeof rf.sponsored === 'boolean' && rf.sponsored === true,
+        sponsoredPositions: typeof rf.sponsored === 'boolean' && rf.sponsored === true ? [rf.rank] : [],
+        fulfillment, // Fulfillment type (never null, never defaults to FBM)
+        fulfillmentSource, // Source of fulfillment data
+        fulfillmentConfidence, // Confidence in fulfillment inference
         brand: catalogEnriched?.brand || cached?.brand || null, // SP-API only (no Rainforest inference)
         main_category: catalogEnriched?.category || cached?.category || null, // SP-API only
         main_category_bsr: catalogEnriched?.bsr || cached?.bsr || null, // SP-API only

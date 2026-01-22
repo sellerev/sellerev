@@ -52,10 +52,20 @@ export interface CanonicalProduct {
   page_position: number; // Actual Page-1 position including sponsored listings (1, 2, 3...) - preserves original Amazon position
   // Sponsored visibility (for clarity, not estimation changes)
   // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
-  isSponsored: boolean; // Canonical sponsored status (always boolean, normalized at ingest)
+  isSponsored: boolean; // Instance-level sponsored status (always boolean, normalized at ingest)
   is_sponsored?: boolean | null; // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
   sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ASIN-LEVEL SPONSORED AGGREGATION (CRITICAL - DO NOT MODIFY WITHOUT UPDATING AGGREGATION LOGIC)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Sponsored and Fulfillment are ASIN-level properties, not instance-level.
+  // appearsSponsored: true if ASIN appears as sponsored ANYWHERE on Page 1
+  // sponsoredPositions: all positions where this ASIN appeared as sponsored
+  // These fields persist through canonicalization and represent Page-1 advertising presence.
+  // DO NOT MODIFY THIS LOGIC - it matches Helium 10 / Jungle Scout behavior.
+  appearsSponsored: boolean; // ASIN-level: true if appears sponsored anywhere on Page 1
+  sponsoredPositions: number[]; // ASIN-level: all positions where ASIN appeared as sponsored
   organicPosition?: number | null; // Alias for organic_rank (null if sponsored)
   sponsoredSlot?: 'top' | 'middle' | 'bottom' | null; // Sponsored ad slot position (null if not sponsored)
 }
@@ -312,8 +322,9 @@ export function buildKeywordPageOne(
     if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
 
     const currentRank = listing.position || index + 1;
-    // PART 4: Only count listings with isSponsored === false as organic
-    const isOrganic = listing.isSponsored === false;
+    // PART 4: Use appearsSponsored (ASIN-level) for organic detection
+    // NOTE: appearsSponsored (ASIN-level) is preserved through canonicalization
+    const isOrganic = listing.appearsSponsored === false;
     
     if (asinMap.has(asin)) {
       const existing = asinMap.get(asin)!;
@@ -323,6 +334,7 @@ export function buildKeywordPageOne(
       // Selection logic:
       // 1. Prefer organic over sponsored
       // 2. If same type, prefer better (lower) rank
+      // CRITICAL: appearsSponsored and sponsoredPositions are ASIN-level and persist regardless of instance selection
       const shouldReplace = 
         // Case 1: Current is organic, existing is sponsored → always replace
         (isOrganic && !existing.isOrganic) ||
@@ -331,12 +343,14 @@ export function buildKeywordPageOne(
       
       if (shouldReplace) {
         existing.bestRank = currentRank;
-        existing.listing = listing; // Update to best canonical instance
+        // CRITICAL: When replacing, preserve ASIN-level sponsored data from the new listing
+        // appearsSponsored and sponsoredPositions are ASIN-level properties, not instance-level
+        existing.listing = listing; // Update to best canonical instance (includes appearsSponsored/sponsoredPositions)
         existing.isOrganic = isOrganic; // Update organic status
       }
     } else {
       asinMap.set(asin, { 
-        listing, 
+        listing, // Includes appearsSponsored and sponsoredPositions (ASIN-level properties)
         bestRank: currentRank,
         allRanks: [currentRank],
         appearanceCount: 1, // First appearance
@@ -424,11 +438,10 @@ export function buildKeywordPageOne(
   
   // Sort by organic rank (best rank first)
   // Filter to only organic listings for ranking, then slice to 49
-  // PART 4: Treat listings as organic if they're not explicitly sponsored
-  // Filter by isSponsored (canonical field, always boolean)
-  // Filter listings by isSponsored (canonical field, always boolean)
-  const organicListings = deduplicatedListings.filter(l => l.isSponsored === false);
-  const sponsoredListings = deduplicatedListings.filter(l => l.isSponsored === true);
+  // PART 4: Use appearsSponsored (ASIN-level) for filtering
+  // CRITICAL: Use appearsSponsored to reflect Page-1 advertising presence, not instance selection
+  const organicListings = deduplicatedListings.filter(l => l.appearsSponsored === false);
+  const sponsoredListings = deduplicatedListings.filter(l => l.appearsSponsored === true);
   
   // Sort organic listings by position (best rank first)
   organicListings.sort((a, b) => (a.position || 999) - (b.position || 999));
@@ -529,9 +542,10 @@ export function buildKeywordPageOne(
   // CALIBRATION LAYER: Normalize into trusted bands
   // ═══════════════════════════════════════════════════════════════════════════
   // Use capped listings for calibration
-  // PART 4: Filter by isSponsored (canonical field, always boolean)
-  const organicListingsForCalibration = cappedListings.filter(l => l.isSponsored === false);
-  const sponsoredCount = cappedListings.filter(l => l.isSponsored === true).length;
+  // PART 4: Filter by appearsSponsored (ASIN-level, not instance-level)
+  // CRITICAL: Use appearsSponsored to reflect Page-1 advertising presence
+  const organicListingsForCalibration = cappedListings.filter(l => l.appearsSponsored === false);
+  const sponsoredCount = cappedListings.filter(l => l.appearsSponsored === true).length;
   const sponsoredDensity = cappedListings.length > 0
     ? (sponsoredCount / cappedListings.length) * 100
     : 0;
@@ -645,14 +659,15 @@ export function buildKeywordPageOne(
   // ═══════════════════════════════════════════════════════════════════════════
   // PART 4: ORGANIC RANK CALCULATION
   // ═══════════════════════════════════════════════════════════════════════════
-  // CRITICAL: Increment organic_rank ONLY for listings where isSponsored === false
-  // Sponsored listings (isSponsored === true) MUST NOT affect organic ranking
+  // CRITICAL: Increment organic_rank ONLY for listings where appearsSponsored === false
+  // Sponsored listings (appearsSponsored === true) MUST NOT affect organic ranking
+  // Use appearsSponsored (ASIN-level) to reflect Page-1 advertising presence
   // Use capped listings with metadata
   const organicListingsWithMetadata = cappedListingsWithMetadata.filter(
-    item => item.listing.isSponsored === false
+    item => item.listing.appearsSponsored === false
   );
   const sponsoredListingsWithMetadata = cappedListingsWithMetadata.filter(
-    item => item.listing.isSponsored === true
+    item => item.listing.appearsSponsored === true
   );
   
   // Assign organic_rank to organic listings (1, 2, 3...)
@@ -792,24 +807,24 @@ export function buildKeywordPageOne(
     // NORMALIZE FULFILLMENT (Use fulfillment already inferred at ingest)
     // ═══════════════════════════════════════════════════════════════════════════
     // Fulfillment is already normalized at ingest time using:
-    // 1. is_prime === true → "FBA" (PRIMARY signal)
-    // 2. delivery text contains "Prime", "Get it", or "Amazon" → "FBA"
-    // 3. delivery info exists → "FBM"
-    // 4. Else → "UNKNOWN"
+    // 1. is_prime === true + delivery confirmation → "FBA" (high confidence)
+    // 2. delivery text strongly implies FBA → "FBA" (medium confidence)
+    // 3. delivery text explicitly indicates FBM → "FBM" (medium confidence)
+    // 4. Else → "UNKNOWN" (low confidence, NEVER defaults to FBM)
     // Map from ParsedListing fulfillment to CanonicalProduct fulfillment
+    // CRITICAL: Never default UNKNOWN to FBM - preserve uncertainty
     let fulfillment: "FBA" | "FBM" | "AMZ";
-    if (l.fulfillment === "Amazon") {
-      fulfillment = "AMZ";
-    } else if (l.fulfillment === "FBA") {
+    if (l.fulfillment === "FBA") {
       fulfillment = "FBA";
     } else if (l.fulfillment === "FBM") {
       fulfillment = "FBM";
     } else if (l.fulfillment === "UNKNOWN") {
-      // Map UNKNOWN to FBM as default (conservative assumption)
-      fulfillment = "FBM";
+      // CRITICAL: Map UNKNOWN to AMZ (Amazon Retail) as safe default, NOT FBM
+      // This preserves uncertainty and doesn't mislead users
+      fulfillment = "AMZ";
     } else {
-      // Fallback to FBM if fulfillment is somehow null/undefined
-      fulfillment = "FBM";
+      // Fallback to AMZ if fulfillment is somehow null/undefined (never FBM)
+      fulfillment = "AMZ";
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1149,7 +1164,8 @@ export function buildKeywordPageOne(
   
   // Get estimated total market units (use market demand estimate or totalPage1Units)
   // PART 4: Treat listings as organic if they're not explicitly sponsored (includes unknown/null)
-  const organicCountForDemand = cappedListings.filter(l => l.isSponsored === false).length;
+  // Use appearsSponsored (ASIN-level) for demand estimation
+  const organicCountForDemand = cappedListings.filter(l => l.appearsSponsored === false).length;
   const avgPriceForDemand = avgPrice ?? 0;
   const marketDemandEstimate = estimateMarketDemand({
     marketShape,

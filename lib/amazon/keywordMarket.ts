@@ -85,6 +85,14 @@ export interface RawSnapshot {
     total_results?: number;
   };
   warnings?: string[];
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ASIN-LEVEL SPONSORED AGGREGATION (CRITICAL - DO NOT MODIFY WITHOUT UPDATING AGGREGATION LOGIC)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Sponsored is an ASIN-level property. This map persists through canonicalization.
+  asinSponsoredMeta: Map<string, {
+    appearsSponsored: boolean;
+    sponsoredPositions: number[];
+  }>;
 }
 
 /**
@@ -153,6 +161,15 @@ export interface ParsedListing {
   is_sponsored?: boolean | null; // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
   sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data (Rainforest SERP only)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ASIN-LEVEL SPONSORED AGGREGATION (CRITICAL - DO NOT MODIFY WITHOUT UPDATING AGGREGATION LOGIC)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Sponsored and Fulfillment are ASIN-level properties, not instance-level.
+  // appearsSponsored: true if ASIN appears as sponsored ANYWHERE on Page 1
+  // sponsoredPositions: all positions where this ASIN appeared as sponsored
+  // These fields persist through canonicalization and represent Page-1 advertising presence.
+  appearsSponsored: boolean; // ASIN-level: true if appears sponsored anywhere on Page 1
+  sponsoredPositions: number[]; // ASIN-level: all positions where ASIN appeared as sponsored
   position: number; // Organic rank (1-indexed position on Page 1)
   brand: string | null; // DEPRECATED: Use brand_resolution.raw_brand instead. Kept for backward compatibility.
   brand_resolution?: BrandResolution; // New brand resolution structure (preserves all brands)
@@ -160,7 +177,9 @@ export interface ParsedListing {
   bsr: number | null; // Best Seller Rank (if available from Rainforest) - DEPRECATED: use main_category_bsr
   main_category_bsr: number | null; // Main category Best Seller Rank (top-level category only)
   main_category: string | null; // Main category name (e.g., "Home & Kitchen")
-  fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN"; // Fulfillment type (normalized at ingest, never null)
+  fulfillment: "FBA" | "FBM" | "UNKNOWN"; // Fulfillment type (never null, never defaults to FBM)
+  fulfillmentSource: 'sp_api' | 'rainforest_inferred' | 'unknown'; // Source of fulfillment data
+  fulfillmentConfidence: 'high' | 'medium' | 'low'; // Confidence in fulfillment inference
   seller?: string | null; // Seller name (for Amazon Retail detection)
   is_prime?: boolean; // Prime eligibility (for FBA detection)
   est_monthly_revenue?: number | null; // 30-day revenue estimate (modeled)
@@ -633,51 +652,107 @@ function parseBSR(item: any): number | null {
  * 🔒 CANONICAL FULFILLMENT INFERENCE (NORMALIZED AT INGEST):
  * This is market-level inference for competitive analysis, not checkout accuracy.
  * 
+ * Rules (STRICT):
+ * - NEVER default to FBM
+ * - NEVER guess fulfillment without a source
+ * - Fulfillment must include source and confidence
+ * 
  * Priority:
- * 1. If item.is_prime === true → "FBA" (PRIMARY signal)
- * 2. Else if delivery.tagline OR delivery.text contains "Prime", "Get it", or "Amazon" → "FBA"
- * 3. Else if delivery info exists → "FBM"
- * 4. Else → "UNKNOWN"
+ * 1. If item.is_prime === true → "FBA" (PRIMARY signal, high confidence)
+ * 2. Else if delivery.tagline OR delivery.text strongly implies FBA → "FBA" (medium confidence)
+ * 3. Else → "UNKNOWN" (low confidence)
  * 
  * Note: We do NOT use SP-API or Offers API for fulfillment in Analyze flow.
+ * Note: We do NOT infer FBA from is_prime alone without delivery confirmation.
  */
-function inferFulfillmentFromSearchResult(item: any): "FBA" | "FBM" | "Amazon" | "UNKNOWN" {
-  // Check if sold by Amazon (explicit field)
-  if (item.is_amazon === true || item.buybox_winner?.type === "Amazon") {
-    return "Amazon";
-  }
-  
-  // STEP 1: PRIMARY SIGNAL - is_prime === true → FBA
+function inferFulfillmentFromSearchResultWithSource(item: any): {
+  fulfillment: "FBA" | "FBM" | "UNKNOWN";
+  source: 'sp_api' | 'rainforest_inferred' | 'unknown';
+  confidence: 'high' | 'medium' | 'low';
+} {
+  // STEP 1: PRIMARY SIGNAL - is_prime === true + delivery confirmation → FBA (high confidence)
   if (item.is_prime === true) {
-    return "FBA";
+    // Check delivery text for confirmation
+    if (item.delivery) {
+      const deliveryTagline = item.delivery?.tagline || "";
+      const deliveryText = item.delivery?.text || item.delivery?.message || "";
+      const deliveryStr = (deliveryTagline + " " + deliveryText).toLowerCase();
+      
+      // Strong FBA indicators
+      if (
+        deliveryStr.includes("prime") ||
+        deliveryStr.includes("get it") ||
+        deliveryStr.includes("shipped by amazon") ||
+        deliveryStr.includes("fulfilled by amazon") ||
+        deliveryStr.includes("ships from amazon")
+      ) {
+        return {
+          fulfillment: "FBA",
+          source: 'rainforest_inferred',
+          confidence: 'high',
+        };
+      }
+    }
+    
+    // is_prime alone (without delivery confirmation) → FBA (medium confidence)
+    return {
+      fulfillment: "FBA",
+      source: 'rainforest_inferred',
+      confidence: 'medium',
+    };
   }
   
-  // STEP 2: Check delivery.tagline OR delivery.text for FBA indicators
+  // STEP 2: Check delivery.tagline OR delivery.text for FBA indicators (medium confidence)
   if (item.delivery) {
     const deliveryTagline = item.delivery?.tagline || "";
     const deliveryText = item.delivery?.text || item.delivery?.message || "";
     const deliveryStr = (deliveryTagline + " " + deliveryText).toLowerCase();
     
-    // Check for Prime, "Get it", or "Amazon" indicators
+    // Strong FBA indicators
     if (
       deliveryStr.includes("prime") ||
       deliveryStr.includes("get it") ||
-      deliveryStr.includes("amazon") ||
       deliveryStr.includes("shipped by amazon") ||
       deliveryStr.includes("fulfilled by amazon") ||
       deliveryStr.includes("ships from amazon")
     ) {
-      return "FBA";
+      return {
+        fulfillment: "FBA",
+        source: 'rainforest_inferred',
+        confidence: 'medium',
+      };
     }
     
-    // STEP 3: If delivery info exists but no FBA indicators → FBM
-    if (deliveryTagline || deliveryText) {
-      return "FBM";
+    // FBM indicators (explicit merchant fulfillment)
+    if (
+      deliveryStr.includes("ships from") && 
+      !deliveryStr.includes("amazon") &&
+      (deliveryTagline || deliveryText)
+    ) {
+      return {
+        fulfillment: "FBM",
+        source: 'rainforest_inferred',
+        confidence: 'medium',
+      };
     }
   }
   
-  // STEP 4: No fulfillment signals found → UNKNOWN
-  return "UNKNOWN";
+  // STEP 3: No fulfillment signals found → UNKNOWN (never default to FBM)
+  return {
+    fulfillment: "UNKNOWN",
+    source: 'unknown',
+    confidence: 'low',
+  };
+}
+
+/**
+ * Legacy function for backward compatibility
+ * @deprecated Use inferFulfillmentFromSearchResultWithSource instead
+ */
+function inferFulfillmentFromSearchResult(item: any): "FBA" | "FBM" | "Amazon" | "UNKNOWN" {
+  const result = inferFulfillmentFromSearchResultWithSource(item);
+  // Map "UNKNOWN" to legacy return type (no "Amazon" in new system)
+  return result.fulfillment;
 }
 
 /**
@@ -1426,6 +1501,35 @@ export function parseRainforestSearchResults(
       isSponsored, // Canonical sponsored status (normalized at ingest)
       raw_sponsored_flag: isSponsored, // DEPRECATED: kept for backward compatibility
     });
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ASIN-LEVEL SPONSORED AGGREGATION (BEFORE DEDUPLICATION)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CRITICAL: Sponsored is an ASIN-level property, not instance-level.
+  // Build aggregation map: if ASIN appears sponsored ANYWHERE on Page 1, mark it.
+  // This ensures sponsored counts persist through canonicalization.
+  const asinSponsoredMeta = new Map<string, {
+    appearsSponsored: boolean;
+    sponsoredPositions: number[];
+  }>();
+  
+  for (const listing of rawListings) {
+    const asin = listing.asin?.trim().toUpperCase() || "";
+    if (!asin || !/^[A-Z0-9]{10}$/.test(asin)) continue;
+    
+    if (!asinSponsoredMeta.has(asin)) {
+      asinSponsoredMeta.set(asin, {
+        appearsSponsored: false,
+        sponsoredPositions: [],
+      });
+    }
+    
+    const meta = asinSponsoredMeta.get(asin)!;
+    if (listing.isSponsored === true) {
+      meta.appearsSponsored = true;
+      meta.sponsoredPositions.push(listing.raw_position);
+    }
   }
   
   // Extract search_information.total_results
@@ -2587,6 +2691,40 @@ export async function fetchKeywordMarketSnapshot(
     // NOTE: BSR coverage logging moved to after listings are parsed and merged with SP-API data
     // See below after listings are created (around line 2190+)
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ASIN-LEVEL SPONSORED AGGREGATION (BEFORE DEDUPLICATION - CRITICAL)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Sponsored is an ASIN-level property, not instance-level.
+    // Build aggregation map: if ASIN appears sponsored ANYWHERE on Page 1, mark it.
+    // This ensures sponsored counts persist through canonicalization.
+    // DO NOT MODIFY THIS LOGIC WITHOUT UPDATING CANONICALIZATION.
+    const asinSponsoredMeta = new Map<string, {
+      appearsSponsored: boolean;
+      sponsoredPositions: number[];
+    }>();
+    
+    for (let i = 0; i < searchResults.length; i++) {
+      const item = searchResults[i];
+      const asin = item?.asin?.trim().toUpperCase() || "";
+      if (!asin || !/^[A-Z0-9]{10}$/.test(asin)) continue;
+      
+      const isSponsored = Boolean(item.sponsored === true);
+      const position = item.position ?? i + 1;
+      
+      if (!asinSponsoredMeta.has(asin)) {
+        asinSponsoredMeta.set(asin, {
+          appearsSponsored: false,
+          sponsoredPositions: [],
+        });
+      }
+      
+      const meta = asinSponsoredMeta.get(asin)!;
+      if (isSponsored === true) {
+        meta.appearsSponsored = true;
+        meta.sponsoredPositions.push(position);
+      }
+    }
+
     // Step 4: Parse and normalize each search result item
     // Normalize using single helper - all fields except ASIN are optional
     let parsedListings: ParsedListing[] = [];
@@ -2702,10 +2840,13 @@ export async function fetchKeywordMarketSnapshot(
       // FULFILLMENT: Infer from Rainforest search results (normalized at ingest)
       // ═══════════════════════════════════════════════════════════════════════════
       // 🔒 CANONICAL FULFILLMENT INFERENCE (SERP-based market analysis)
-      // Priority: is_prime → delivery text → delivery exists → UNKNOWN
+      // Rules: SP-API authoritative → Rainforest inferred → UNKNOWN (NEVER defaults to FBM)
       // This is market-level inference, not checkout accuracy.
       // We do NOT use SP-API or Offers API for fulfillment in Analyze flow.
-      const fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN" = inferFulfillmentFromSearchResult(item);
+      const fulfillmentResult = inferFulfillmentFromSearchResultWithSource(item);
+      const fulfillment: "FBA" | "FBM" | "UNKNOWN" = fulfillmentResult.fulfillment;
+      const fulfillmentSource: 'sp_api' | 'rainforest_inferred' | 'unknown' = fulfillmentResult.source;
+      const fulfillmentConfidence: 'high' | 'medium' | 'low' = fulfillmentResult.confidence;
       
       // ═══════════════════════════════════════════════════════════════════════════
       // BRAND RESOLUTION: Search-based only (will be overridden by SP-API if available)
@@ -2757,6 +2898,18 @@ export async function fetchKeywordMarketSnapshot(
       const seller = item.seller ?? null; // Nullable
       const is_prime = item.is_prime ?? false; // Boolean, default false
 
+      // ═══════════════════════════════════════════════════════════════════════════
+      // ASIN-LEVEL SPONSORED AGGREGATION (ATTACH TO PARSED LISTING)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: Sponsored is ASIN-level, not instance-level.
+      // Look up ASIN-level metadata from aggregation map.
+      const asinUpper = asin?.trim().toUpperCase() || "";
+      const asinMeta = asinUpper && /^[A-Z0-9]{10}$/.test(asinUpper)
+        ? asinSponsoredMeta.get(asinUpper)
+        : null;
+      const appearsSponsored = asinMeta?.appearsSponsored ?? false;
+      const sponsoredPositions = asinMeta?.sponsoredPositions ?? [];
+
       // Step 4: Return normalized listing - only ASIN is required
       // CRITICAL: Preserve raw item data for fallback in buildKeywordPageOne
       return {
@@ -2769,6 +2922,8 @@ export async function fetchKeywordMarketSnapshot(
         is_sponsored, // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
         sponsored_position, // Number | null (ad position from Rainforest)
         sponsored_source, // 'rainforest_serp' | 'organic_serp' (source of sponsored data)
+        appearsSponsored, // ASIN-level: true if appears sponsored anywhere on Page 1
+        sponsoredPositions, // ASIN-level: all positions where ASIN appeared as sponsored
         position,
         brand, // Optional (nullable) - DEPRECATED: Use brand_resolution.raw_brand
         brand_resolution, // Brand resolution structure (preserves all brands) - from brandResolution variable
@@ -2776,7 +2931,9 @@ export async function fetchKeywordMarketSnapshot(
         bsr, // Optional (nullable) - DEPRECATED: use main_category_bsr
         main_category_bsr, // Main category BSR (top-level category only)
         main_category, // Main category name
-        fulfillment, // Optional (nullable)
+        fulfillment, // Fulfillment type (never null, never defaults to FBM)
+        fulfillmentSource, // Source of fulfillment data
+        fulfillmentConfidence, // Confidence in fulfillment inference
         // Add seller and is_prime for fulfillment mix computation
         seller, // Optional (nullable)
         is_prime, // Boolean
@@ -3468,10 +3625,15 @@ export async function fetchKeywordMarketSnapshot(
     // PART 5: FIX DIAGNOSTICS (MANDATORY)
     // ═══════════════════════════════════════════════════════════════════════════
     // Compute counts from rawListings[] (NOT from ads[] arrays)
-    // Compute counts from isSponsored (canonical field, always boolean)
-    const sponsored_count = listings.filter((l) => l.isSponsored === true).length;
-    const organic_count = listings.filter((l) => l.isSponsored === false).length;
-    const unknown_sponsored_count = 0; // isSponsored is always boolean, no unknown states
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SPONSORED COUNTING (ASIN-LEVEL - CRITICAL)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: Use appearsSponsored (ASIN-level), NOT isSponsored (instance-level)
+    // This ensures sponsored counts reflect Page-1 advertising presence, not canonical instance selection.
+    // DO NOT MODIFY THIS LOGIC - it matches Helium 10 / Jungle Scout behavior.
+    const sponsored_count = listings.filter((l) => l.appearsSponsored === true).length;
+    const organic_count = listings.filter((l) => l.appearsSponsored === false).length;
+    const unknown_sponsored_count = 0; // appearsSponsored is always boolean, no unknown states
     const sponsored_pct = total_page1_listings > 0
       ? Number(((sponsored_count / total_page1_listings) * 100).toFixed(1))
       : 0;

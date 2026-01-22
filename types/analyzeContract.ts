@@ -43,6 +43,17 @@
  * This is the stable structure for individual product listings.
  * All fields are deterministic (no live API calls required).
  * Optional enrichment fields may be populated asynchronously.
+ * 
+ * ⚠️ CRITICAL: Sponsored and Fulfillment are ASIN-level properties, not instance-level.
+ * - appearsSponsored: true if ASIN appears sponsored ANYWHERE on Page 1
+ * - sponsoredPositions: all positions where ASIN appeared as sponsored
+ * - DO NOT modify canonicalization without updating aggregation logic
+ * - DO NOT use isSponsored (instance-level) for counting - use appearsSponsored (ASIN-level)
+ * 
+ * ⚠️ CRITICAL: Fulfillment NEVER defaults to FBM
+ * - fulfillment: "FBA" | "FBM" | "UNKNOWN" (never null, never defaults to FBM)
+ * - fulfillmentSource: indicates data source (sp_api, rainforest_inferred, unknown)
+ * - fulfillmentConfidence: indicates inference confidence (high, medium, low)
  */
 export interface ListingCard {
   // ═══════════════════════════════════════════════════════════════════════
@@ -67,17 +78,24 @@ export interface ListingCard {
   review_count: number; // Total review count (always present, may be 0)
   
   // ═══════════════════════════════════════════════════════════════════════
-  // SPONSORED STATUS (REQUIRED)
+  // SPONSORED STATUS (REQUIRED - ASIN-LEVEL)
   // ═══════════════════════════════════════════════════════════════════════
-  is_sponsored: boolean | null; // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CRITICAL: Sponsored and Fulfillment are ASIN-level properties, not instance-level.
+  // DO NOT MODIFY THIS LOGIC WITHOUT UPDATING AGGREGATION LOGIC.
+  // ═══════════════════════════════════════════════════════════════════════════
+  is_sponsored: boolean | null; // DEPRECATED: Use appearsSponsored instead. Kept for backward compatibility.
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
   sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data
-  // Note: isSponsored is not in ListingCard interface - it's normalized from is_sponsored at conversion time
+  appearsSponsored: boolean; // ASIN-level: true if appears sponsored anywhere on Page 1 (REQUIRED)
+  sponsoredPositions: number[]; // ASIN-level: all positions where ASIN appeared as sponsored (REQUIRED)
   
   // ═══════════════════════════════════════════════════════════════════════
-  // FULFILLMENT DATA (REQUIRED)
+  // FULFILLMENT DATA (REQUIRED - NEVER DEFAULTS TO FBM)
   // ═══════════════════════════════════════════════════════════════════════
-  fulfillment: "FBA" | "FBM" | "AMZ"; // Fulfillment type (always present)
+  fulfillment: "FBA" | "FBM" | "UNKNOWN"; // Fulfillment type (never null, never defaults to FBM)
+  fulfillmentSource: 'sp_api' | 'rainforest_inferred' | 'unknown'; // Source of fulfillment data (REQUIRED)
+  fulfillmentConfidence: 'high' | 'medium' | 'low'; // Confidence in fulfillment inference (REQUIRED)
   
   // ═══════════════════════════════════════════════════════════════════════
   // REVENUE & UNITS ESTIMATES (REQUIRED)

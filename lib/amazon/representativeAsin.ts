@@ -38,8 +38,9 @@ export function pickRepresentativeAsin(
   }
 
   // Strategy 1: Non-sponsored, rank <= 3
+  // CRITICAL: Use appearsSponsored (ASIN-level), NOT isSponsored (instance-level)
   const topNonSponsored = listingsWithAsin.find(
-    (listing) => listing.isSponsored === false && listing.position <= 3
+    (listing) => listing.appearsSponsored === false && listing.position <= 3
   );
   if (topNonSponsored) {
     return topNonSponsored.asin!;
@@ -47,7 +48,7 @@ export function pickRepresentativeAsin(
 
   // Strategy 2: Non-sponsored, rank <= 10
   const midNonSponsored = listingsWithAsin.find(
-    (listing) => listing.isSponsored === false && listing.position <= 10
+    (listing) => listing.appearsSponsored === false && listing.position <= 10
   );
   if (midNonSponsored) {
     return midNonSponsored.asin!;
@@ -55,7 +56,7 @@ export function pickRepresentativeAsin(
 
   // Strategy 3: Any non-sponsored (any rank)
   const anyNonSponsored = listingsWithAsin.find(
-    (listing) => listing.isSponsored === false
+    (listing) => listing.appearsSponsored === false
   );
   if (anyNonSponsored) {
     return anyNonSponsored.asin!;

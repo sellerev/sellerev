@@ -1587,17 +1587,25 @@ export async function POST(req: NextRequest) {
         // Don't block here - fresh market data might still be available
       }
       
-      // Compute sponsored_count and fulfillment_mix from cached products
-      // Use isSponsored if available, otherwise fall back to is_sponsored
+      // ═══════════════════════════════════════════════════════════════════════════
+      // SPONSORED COUNTING (ASIN-LEVEL - CRITICAL)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: Use appearsSponsored (ASIN-level), NOT isSponsored (instance-level)
+      // This ensures sponsored counts reflect Page-1 advertising presence, not canonical instance selection.
+      // DO NOT MODIFY THIS LOGIC - it matches Helium 10 / Jungle Scout behavior.
       const sponsoredCount = products.filter((p: any) => {
-        const isSponsored = typeof p.isSponsored === 'boolean' ? p.isSponsored : Boolean(p.is_sponsored === true);
-        return isSponsored === true;
+        const appearsSponsored = typeof p.appearsSponsored === 'boolean' 
+          ? p.appearsSponsored 
+          : Boolean(p.is_sponsored === true);
+        return appearsSponsored === true;
       }).length;
       const organicCount = products.filter((p: any) => {
-        const isSponsored = typeof p.isSponsored === 'boolean' ? p.isSponsored : Boolean(p.is_sponsored === true);
-        return isSponsored === false;
+        const appearsSponsored = typeof p.appearsSponsored === 'boolean' 
+          ? p.appearsSponsored 
+          : Boolean(p.is_sponsored === true);
+        return appearsSponsored === false;
       }).length;
-      const unknownSponsoredCount = 0; // isSponsored is always boolean, no unknown states
+      const unknownSponsoredCount = 0; // appearsSponsored is always boolean, no unknown states
       const sponsoredPct = products.length > 0 
         ? Number(((sponsoredCount / products.length) * 100).toFixed(1))
         : 0;

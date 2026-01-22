@@ -3,24 +3,11 @@
  * Ensures consistent field names and types across the application
  */
 
-import { BrandResolution } from "./keywordMarket";
+import { BrandResolution, ParsedListing } from "./keywordMarket";
 
-export interface ParsedListing {
-  asin: string;
-  title: string;
-  price: number | null;
-  rating: number | null;
-  reviews: number | null;
-  image: string | null;
-  bsr: number | null; // DEPRECATED: use main_category_bsr
-  main_category_bsr: number | null; // Main category Best Seller Rank (top-level category only)
-  main_category: string | null; // Main category name (e.g., "Home & Kitchen")
-  fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN"; // Fulfillment type (normalized at ingest, never null)
-  sponsored: boolean;
-  organic_rank: number | null;
-  brand: string | null; // DEPRECATED: Use brand_resolution.raw_brand instead. Kept for backward compatibility.
-  brand_resolution?: BrandResolution; // Brand resolution structure (preserves all brands)
-}
+// NOTE: ParsedListing interface is defined in keywordMarket.ts
+// This file exports normalizeListing function that returns ParsedListing
+// The interface is imported/exported from keywordMarket.ts to avoid duplication
 
 /**
  * Extracts main category BSR from product data (handles various formats)
@@ -157,54 +144,72 @@ export function normalizeListing(raw: any): ParsedListing {
   const raw_image_url = raw.raw_image_url ?? null;
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // FULFILLMENT NORMALIZATION: Infer from is_prime and delivery (canonical at ingest)
+  // FULFILLMENT NORMALIZATION: Never defaults to FBM, uses UNKNOWN if missing
   // ═══════════════════════════════════════════════════════════════════════════
   // 🔒 CANONICAL FULFILLMENT INFERENCE (SERP-based market analysis)
-  // Priority: is_prime → delivery text → delivery exists → UNKNOWN
+  // Rules: SP-API authoritative → Rainforest inferred → UNKNOWN (NEVER defaults to FBM)
   // This is market-level inference, not checkout accuracy.
-  let fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN" = raw.fulfillment ?? raw.Fulfillment ?? null;
+  // If raw already has fulfillment with source/confidence, use it
+  let fulfillment: "FBA" | "FBM" | "UNKNOWN" = raw.fulfillment === "FBA" || raw.fulfillment === "FBM" 
+    ? raw.fulfillment 
+    : null;
+  let fulfillmentSource: 'sp_api' | 'rainforest_inferred' | 'unknown' = raw.fulfillmentSource || 'unknown';
+  let fulfillmentConfidence: 'high' | 'medium' | 'low' = raw.fulfillmentConfidence || 'low';
   
   // If fulfillment is not already set, infer from Rainforest signals
   if (!fulfillment || fulfillment === null) {
-    // STEP 1: PRIMARY SIGNAL - is_prime === true → FBA
+    // Use the new inference function if available (from keywordMarket.ts)
+    // Otherwise, use simplified inference
     if (raw.is_prime === true) {
       fulfillment = "FBA";
-    }
-    // STEP 2: Check delivery.tagline OR delivery.text for FBA indicators
-    else if (raw.delivery) {
+      fulfillmentSource = 'rainforest_inferred';
+      fulfillmentConfidence = 'medium'; // is_prime alone is medium confidence
+    } else if (raw.delivery) {
       const deliveryTagline = raw.delivery?.tagline || "";
       const deliveryText = raw.delivery?.text || raw.delivery?.message || "";
       const deliveryStr = (deliveryTagline + " " + deliveryText).toLowerCase();
       
-      // Check for Prime, "Get it", or "Amazon" indicators
+      // Strong FBA indicators
       if (
         deliveryStr.includes("prime") ||
         deliveryStr.includes("get it") ||
-        deliveryStr.includes("amazon") ||
         deliveryStr.includes("shipped by amazon") ||
         deliveryStr.includes("fulfilled by amazon") ||
         deliveryStr.includes("ships from amazon")
       ) {
         fulfillment = "FBA";
+        fulfillmentSource = 'rainforest_inferred';
+        fulfillmentConfidence = 'medium';
       }
-      // STEP 3: If delivery info exists but no FBA indicators → FBM
-      else if (deliveryTagline || deliveryText) {
+      // Explicit FBM indicators
+      else if (
+        deliveryStr.includes("ships from") && 
+        !deliveryStr.includes("amazon") &&
+        (deliveryTagline || deliveryText)
+      ) {
         fulfillment = "FBM";
+        fulfillmentSource = 'rainforest_inferred';
+        fulfillmentConfidence = 'medium';
       }
     }
-    // STEP 4: Check explicit fulfillment fields
-    else if (raw.fba === true || raw.is_fba === true || raw.fulfillment_type === "FBA") {
+    
+    // Check explicit fulfillment fields
+    if (!fulfillment && (raw.fba === true || raw.is_fba === true || raw.fulfillment_type === "FBA")) {
       fulfillment = "FBA";
-    } else if (raw.fulfillment_type === "FBM") {
+      fulfillmentSource = 'rainforest_inferred';
+      fulfillmentConfidence = 'high';
+    } else if (!fulfillment && raw.fulfillment_type === "FBM") {
       fulfillment = "FBM";
-    } else if (raw.is_amazon === true || raw.buybox_winner?.type === "Amazon") {
-      fulfillment = "Amazon";
+      fulfillmentSource = 'rainforest_inferred';
+      fulfillmentConfidence = 'high';
     }
   }
   
-  // Fallback to UNKNOWN if still not set
+  // Fallback to UNKNOWN if still not set (NEVER default to FBM)
   if (!fulfillment || fulfillment === null) {
     fulfillment = "UNKNOWN";
+    fulfillmentSource = 'unknown';
+    fulfillmentConfidence = 'low';
   }
   
   return {
@@ -218,10 +223,18 @@ export function normalizeListing(raw: any): ParsedListing {
     main_category_bsr, // Main category BSR (top-level category only)
     main_category, // Main category name
     fulfillment,
+    fulfillmentSource,
+    fulfillmentConfidence,
     // Canonical sponsored status: Use isSponsored if available, otherwise normalize from is_sponsored
     isSponsored: typeof raw.isSponsored === 'boolean' ? raw.isSponsored : Boolean(raw.is_sponsored === true || raw.IsSponsored === true),
     sponsored: typeof raw.isSponsored === 'boolean' ? raw.isSponsored : Boolean(raw.is_sponsored === true || raw.IsSponsored === true), // DEPRECATED: Use isSponsored
     organic_rank: raw.organic_rank ?? raw.position ?? raw.Position ?? null,
+    // ASIN-level sponsored aggregation (if available, otherwise default to instance-level)
+    // CRITICAL: appearsSponsored is ASIN-level property, not instance-level
+    appearsSponsored: typeof raw.appearsSponsored === 'boolean' 
+      ? raw.appearsSponsored 
+      : Boolean(raw.is_sponsored === true || raw.IsSponsored === true || raw.sponsored === true),
+    sponsoredPositions: Array.isArray(raw.sponsoredPositions) ? raw.sponsoredPositions : [],
     brand, // DEPRECATED: Use brand_resolution.raw_brand instead
     brand_resolution, // Brand resolution structure (preserves all brands)
     // Preserve raw fields for presentation fallback

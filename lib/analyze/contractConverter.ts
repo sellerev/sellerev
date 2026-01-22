@@ -33,16 +33,27 @@ function convertListingToCard(listing: any): ListingCard {
     rating: listing.rating ?? 0,
     review_count: listing.review_count ?? listing.reviews ?? 0,
     
-    // Sponsored status (normalize to boolean at conversion time)
-    // Use isSponsored if available, otherwise normalize from is_sponsored or sponsored
-    is_sponsored: typeof listing.isSponsored === 'boolean' 
-      ? listing.isSponsored 
+    // Sponsored status (ASIN-level aggregation)
+    // CRITICAL: Use appearsSponsored (ASIN-level), NOT isSponsored (instance-level)
+    // appearsSponsored: true if ASIN appears sponsored ANYWHERE on Page 1
+    appearsSponsored: typeof listing.appearsSponsored === 'boolean' 
+      ? listing.appearsSponsored 
       : Boolean(listing.is_sponsored === true || listing.sponsored === true),
+    sponsoredPositions: Array.isArray(listing.sponsoredPositions) 
+      ? listing.sponsoredPositions 
+      : [],
+    is_sponsored: typeof listing.appearsSponsored === 'boolean' 
+      ? listing.appearsSponsored 
+      : Boolean(listing.is_sponsored === true || listing.sponsored === true), // DEPRECATED: Use appearsSponsored
     sponsored_position: listing.sponsored_position ?? null,
     sponsored_source: listing.sponsored_source ?? 'organic_serp',
     
-    // Fulfillment data
-    fulfillment: listing.fulfillment ?? "FBM",
+    // Fulfillment data (never defaults to FBM, uses UNKNOWN if missing)
+    fulfillment: listing.fulfillment === "FBA" || listing.fulfillment === "FBM" 
+      ? listing.fulfillment 
+      : "UNKNOWN",
+    fulfillmentSource: listing.fulfillmentSource ?? 'unknown',
+    fulfillmentConfidence: listing.fulfillmentConfidence ?? 'low',
     
     // Revenue & units estimates
     estimated_monthly_units: listing.estimated_monthly_units ?? listing.est_monthly_units ?? 0,

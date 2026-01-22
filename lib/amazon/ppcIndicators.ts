@@ -42,7 +42,7 @@ export function computePPCIndicators(
 
   // Calculate review_barrier: median reviews of top 10 organic listings
   const organicListings = listings
-    .filter(l => !l.is_sponsored)
+    .filter(l => !l.appearsSponsored) // Use appearsSponsored (ASIN-level), NOT is_sponsored
     .sort((a, b) => (a.position || 999) - (b.position || 999)) // Sort by organic rank
     .slice(0, 10); // Top 10 organic
 
