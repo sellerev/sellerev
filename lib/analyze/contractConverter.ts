@@ -115,10 +115,17 @@ function computeMarketSummary(listings: ListingCard[]): MarketSummary {
   const avgBsr = bsrs.length > 0 ? bsrs.reduce((a, b) => a + b, 0) / bsrs.length : null;
   const bsrCoveragePct = totalListings > 0 ? (bsrs.length / totalListings) * 100 : null;
   
+  // Amazon Retail is detected via seller or brand, not fulfillment
+  // fulfillment only has "FBA" | "FBM" | "UNKNOWN" (no "AMZ")
   const fulfillmentCounts = {
     fba: listings.filter(l => l.fulfillment === "FBA").length,
     fbm: listings.filter(l => l.fulfillment === "FBM").length,
-    amazon: listings.filter(l => l.fulfillment === "AMZ").length,
+    amazon: listings.filter(l => {
+      // Check seller or brand for Amazon Retail detection
+      const seller = (l as any).seller;
+      const brand = l.brand;
+      return seller === 'Amazon' || brand === 'Amazon';
+    }).length,
   };
   
   const brands = listings.map(l => l.brand).filter(b => b !== null && b !== undefined) as string[];
