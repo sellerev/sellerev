@@ -26,10 +26,10 @@ export interface FulfillmentMix {
  * DO NOT infer FBA from is_prime (Prime ≠ FBA).
  * 
  * Detection Logic:
- * 1. Amazon Retail: seller === 'Amazon' OR brand === 'Amazon' OR fulfillment === 'Amazon'
+ * 1. Amazon Retail: seller === 'Amazon' OR brand === 'Amazon' (fulfillment no longer includes "Amazon")
  * 2. FBA: fulfillment === 'FBA' (explicit only, from SP-API or Rainforest)
  * 3. FBM: fulfillment === 'FBM' (explicit only)
- * 4. Unknown: fulfillment === null (counted separately, not in mix)
+ * 4. Unknown: fulfillment === 'UNKNOWN' (counted separately, not in mix)
  * 
  * Always returns percentages, even if data is missing (uses defaults).
  */
@@ -41,7 +41,9 @@ export function computeFulfillmentMix(listings: ParsedListing[]): FulfillmentMix
   
   listings.forEach(l => {
     // Check for Amazon Retail first
-    const isAmazonRetail = l.seller === 'Amazon' || l.brand === 'Amazon' || l.fulfillment === 'Amazon';
+    // NOTE: fulfillment no longer includes "Amazon" - it's now "FBA" | "FBM" | "UNKNOWN"
+    // Amazon Retail is detected via seller or brand only
+    const isAmazonRetail = l.seller === 'Amazon' || l.brand === 'Amazon';
     
     if (isAmazonRetail) {
       amazon++;
