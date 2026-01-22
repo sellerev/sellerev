@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import ThemeToggle from "./ThemeToggle";
-import SellerevLogo from "./SellerevLogo";
 
 export default function PublicNavigation() {
   const pathname = usePathname();
@@ -18,7 +18,14 @@ export default function PublicNavigation() {
             className="flex items-center hover:opacity-80 transition-opacity"
             aria-label="Sellerev"
           >
-            <SellerevLogo className="w-8 h-8" />
+            <Image
+              src="/sellerev-logo.png"
+              alt="Sellerev"
+              width={120}
+              height={32}
+              className="h-8 w-auto"
+              priority
+            />
           </Link>
           
           {/* Right-aligned: Theme toggle and Auth buttons */}
