@@ -1,3 +1,5 @@
+"use client";
+
 import { motion } from "framer-motion";
 import PublicNavigation from "../components/PublicNavigation";
 import PublicFooter from "../components/PublicFooter";
