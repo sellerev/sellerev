@@ -1341,7 +1341,7 @@ export default function AnalyzeForm({
                         ...normalizeListing(l),
                         // Preserve title and image_url from original listing (may be empty, that's ok)
                         title: l.title || normalizeListing(l).title || null, // Never fabricate placeholders
-                        image_url: l.image_url || l.image || normalizeListing(l).image || null,
+                        image_url: l.image_url || normalizeListing(l).image_url || null,
                         est_monthly_revenue: l.est_monthly_revenue ?? l.estimated_monthly_revenue ?? null,
                         est_monthly_units: l.est_monthly_units ?? l.estimated_monthly_units ?? null,
                       }));
