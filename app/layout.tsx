@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sellerev - Actionable Amazon Insights for Every Seller",
-  description: "Sellerev gives Amazon sellers clear market signals, product opportunity guidance, and AI-driven recommendations to improve listings, understand fees, and make smarter decisions.",
+  title: "Sellerev - Designed for thinking",
+  description: "Sellerev is a generative AI platform that helps Amazon sellers understand markets, ask better questions, and make confident decisions.",
 };
 
 import ConditionalNavigation from "./components/ConditionalNavigation";
@@ -25,11 +25,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="h-full">
+    <html lang="en" className="h-full" data-theme="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased h-full bg-white`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased h-full`}
       >
-        <div className="h-full flex flex-col bg-white">
+        <div className="h-full flex flex-col">
           <ConditionalNavigation />
           <div className="flex-1 overflow-y-auto">
             {children}
