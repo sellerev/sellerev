@@ -103,6 +103,37 @@ export function buildCopilotSystemPrompt(
   const verdict = decision?.verdict || "UNKNOWN";
   const executiveSummary = decision?.executive_summary || "";
 
+  // Extract Analyze contract from context (stable, versioned format)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CRITICAL: AI MUST consume ONLY the stable contract format (analyze_contract)
+  // This ensures the AI does not depend on live API calls or raw responses
+  const analyzeContract = (ai_context.analyze_contract as {
+    contract_version: string;
+    listings: Array<{
+      asin: string;
+      title: string | null;
+      brand?: string | null;
+      price: number;
+      rating: number;
+      review_count: number;
+      bsr?: number | null;
+      is_sponsored: boolean | null;
+      page_position: number;
+      organic_rank: number | null;
+      estimated_monthly_revenue: number;
+      estimated_monthly_units: number;
+      fulfillment: string;
+      [key: string]: unknown;
+    }>;
+    market_summary: {
+      total_listings: number;
+      avg_price: number;
+      avg_reviews: number;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  } | undefined) || null;
+  
   // Extract selected ASINs from context (multi-select support)
   // ═══════════════════════════════════════════════════════════════════════════
   // CRITICAL: selected_asins is a structured array with full product data
@@ -946,7 +977,40 @@ When explaining why something works or fails:
 - Use structure to explain why, not generic advice
 - Tie structure to seller profile constraints
 
-${JSON.stringify(ai_context, null, 2)}
+${analyzeContract 
+  ? `=== ANALYZE RESULTS CONTRACT (v${analyzeContract.contract_version}) ===
+This is the stable, versioned data contract for Analyze results.
+The AI MUST consume ONLY this contract format - no live API calls or raw responses.
+
+Contract Version: ${analyzeContract.contract_version}
+Keyword: ${analyzeContract.keyword || 'N/A'}
+Marketplace: ${analyzeContract.marketplace || 'N/A'}
+Timestamp: ${analyzeContract.timestamp || 'N/A'}
+
+Market Summary:
+- Total listings: ${analyzeContract.market_summary?.total_listings || 0}
+- Average price: $${analyzeContract.market_summary?.avg_price?.toFixed(2) || '0.00'}
+- Average reviews: ${analyzeContract.market_summary?.avg_reviews?.toLocaleString() || 0}
+- Sponsored percentage: ${analyzeContract.market_summary?.sponsored_pct?.toFixed(1) || '0.0'}%
+- Organic percentage: ${analyzeContract.market_summary?.organic_pct?.toFixed(1) || '0.0'}%
+
+Listings: ${analyzeContract.listings?.length || 0} normalized ListingCard objects
+Each listing contains: asin, title, price, rating, review_count, is_sponsored, fulfillment, 
+estimated_monthly_revenue, estimated_monthly_units, and optional enrichment fields (brand, category, BSR, dimensions).
+
+Enrichment Status:
+- SP-API Catalog: ${analyzeContract.enrichment_status?.sp_api_catalog?.status || 'unknown'} (${analyzeContract.enrichment_status?.sp_api_catalog?.asin_count || 0} ASINs)
+- BSR Extraction: ${analyzeContract.enrichment_status?.bsr_extraction?.status || 'unknown'} (${analyzeContract.enrichment_status?.bsr_extraction?.asin_count || 0} ASINs)
+
+CRITICAL: All data in this contract is deterministic and pre-processed.
+The AI MUST NOT make live API calls or depend on raw API responses.
+Use only the data provided in this contract.
+
+Full contract structure available in ai_context.analyze_contract for detailed access.`
+  : `=== LEGACY CONTEXT (DEPRECATED) ===
+Using legacy context format. This should be migrated to analyze_contract format.
+
+${JSON.stringify(ai_context, null, 2)}`}
 
 ====================================================
 RESPONSE MODE

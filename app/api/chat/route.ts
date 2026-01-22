@@ -247,18 +247,21 @@ function buildCompactContext(
 }
 
 /**
- * Builds structured selected_asins array from analysis response products
+ * Builds structured selected_asins array from stable contract format
  * 
- * Matches selected ASINs to products in the analysis response and returns
+ * Matches selected ASINs to listings in the Analyze contract and returns
  * a structured array with all relevant product data for AI reasoning.
  * 
+ * CRITICAL: Uses stable contract format (ListingCard[]) instead of raw response.
+ * This ensures the AI does not depend on live API calls or raw responses.
+ * 
  * @param selectedAsins - Array of selected ASIN strings
- * @param analysisResponse - Full analysis response containing products/page_one_listings
+ * @param contract - Stable AnalyzeResultsContract containing normalized listings
  * @returns Structured array of selected ASIN data, or empty array if none selected
  */
-function buildSelectedAsinsArray(
+function buildSelectedAsinsArrayFromContract(
   selectedAsins: string[],
-  analysisResponse: Record<string, unknown>
+  contract: { listings: Array<{ asin: string; [key: string]: unknown }> }
 ): Array<{
   asin: string;
   title: string | null;
@@ -279,17 +282,15 @@ function buildSelectedAsinsArray(
     return [];
   }
 
-  // Get products from analysis response (try both field names)
-  const products = (analysisResponse.page_one_listings as any[]) || 
-                   (analysisResponse.products as any[]) || 
-                   [];
+  // Get listings from stable contract format
+  const listings = contract.listings || [];
 
   // Normalize ASINs for comparison (uppercase, trimmed)
   const normalizeAsin = (asin: string) => asin.trim().toUpperCase();
   const selectedAsinsNormalized = selectedAsins.map(normalizeAsin);
 
-  // Match selected ASINs to products
-  const selectedProducts = products
+  // Match selected ASINs to listings
+  const selectedProducts = listings
     .filter((product: any) => {
       if (!product || !product.asin) return false;
       const productAsin = normalizeAsin(product.asin);
@@ -2408,15 +2409,26 @@ export async function POST(req: NextRequest) {
       }
     }
     
-    // 8a. Extract ai_context from analyze contract (if available)
-    // The analyze contract stores ai_context in the response
+    // 8a. Convert Analyze response to stable contract format
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: AI Copilot MUST consume ONLY the stable contract format
+    // This ensures the AI does not depend on live API calls or raw responses
+    const { convertToAnalyzeContract } = await import("@/lib/analyze/contractConverter");
+    const analyzeContract = convertToAnalyzeContract(
+      analysisResponse,
+      analysisResponse.enrichment_status as any
+    );
+    
+    // 8b. Extract ai_context from analyze contract (if available)
+    // The analyze contract stores ai_context in the response (legacy support)
     const aiContext = (analysisResponse.ai_context as Record<string, unknown>) || null;
     
-    // 8b. Build structured selected_asins array from selected ASINs
+    // 8c. Build structured selected_asins array from contract listings
     // ═══════════════════════════════════════════════════════════════════════════
     // This creates a structured array of selected ASIN data that the AI can use
     // for product-specific and comparative reasoning
-    const selectedAsinsArray = buildSelectedAsinsArray(selectedAsins, analysisResponse);
+    // Uses the stable contract format (ListingCard[]) instead of raw response
+    const selectedAsinsArray = buildSelectedAsinsArrayFromContract(selectedAsins, analyzeContract);
     
     console.log("📌 SELECTED_ASINS_BUILT", {
       selected_count: selectedAsins.length,
@@ -2445,18 +2457,28 @@ export async function POST(req: NextRequest) {
     );
     
     // 8e. Build compact or full context based on mode
+    // CRITICAL: Use stable contract format for AI Copilot consumption
     const useCompactContext = responseMode === "concise";
     const contextToUse = useCompactContext
       ? {
+          // Compact mode: Use contract format with essential fields only
+          analyze_contract: analyzeContract, // Stable contract format
+          selected_asins: selectedAsinsArray, // Always include selected_asins even in compact mode
+          // Legacy fields for backward compatibility (deprecated)
           ...buildCompactContext(
             analysisResponse, 
             marketSnapshot, 
             body.selectedListing || null,
             analysisRun.rainforest_data as Record<string, unknown> | null
           ),
-          selected_asins: selectedAsinsArray, // Always include selected_asins even in compact mode
         }
-      : aiContextWithSelectedAsins;
+      : {
+          // Expanded mode: Use full contract format
+          analyze_contract: analyzeContract, // Stable contract format (primary)
+          selected_asins: selectedAsinsArray,
+          // Legacy ai_context for backward compatibility (deprecated)
+          ...(aiContextWithSelectedAsins || {}),
+        };
     
     // If ai_context is not available, fall back to legacy context building
     // But prefer the locked contract structure
