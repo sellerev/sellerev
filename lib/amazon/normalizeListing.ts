@@ -253,7 +253,7 @@ export function normalizeListing(raw: any): ParsedListing {
     // CRITICAL: appearsSponsored is ASIN-level property, not instance-level
     appearsSponsored: typeof raw.appearsSponsored === 'boolean' 
       ? raw.appearsSponsored 
-      : (raw.isSponsored ?? (raw.sponsored === true) ?? raw.is_sponsored ?? raw.IsSponsored ?? false),
+      : (raw.isSponsored ?? (raw.sponsored === true ? true : undefined) ?? raw.is_sponsored ?? raw.IsSponsored ?? false),
     sponsoredPositions: Array.isArray(raw.sponsoredPositions) ? raw.sponsoredPositions : [],
     brand, // DEPRECATED: Use brand_resolution.raw_brand instead
     brand_resolution, // Brand resolution structure (preserves all brands)
