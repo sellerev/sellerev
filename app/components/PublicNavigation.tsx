@@ -30,7 +30,7 @@ export default function PublicNavigation() {
           
           {/* Right-aligned: Theme toggle and Auth buttons */}
           <div className="flex items-center gap-4">
-            {pathname !== "/" && <ThemeToggle />}
+            {pathname !== "/" && pathname !== "/auth" && <ThemeToggle />}
             <Link
               href="/auth"
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
