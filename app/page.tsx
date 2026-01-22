@@ -31,7 +31,7 @@ export default function HomePage() {
             <p className="text-xl md:text-2xl text-muted-foreground mb-8 max-w-3xl mx-auto leading-relaxed">
               Sellerev is a generative AI platform that helps Amazon sellers understand markets, ask better questions, and make confident decisions
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-8">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-6">
               <Link
                 href="/auth"
                 className="bg-gradient-to-r from-primary to-primary-glow text-primary-foreground px-8 py-4 rounded-lg text-lg font-medium hover:opacity-90 transition-opacity"
@@ -50,6 +50,7 @@ export default function HomePage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.6, delay: 0.3 }}
+              className="mb-6"
             >
               <TypewriterText />
             </motion.div>
@@ -57,7 +58,7 @@ export default function HomePage() {
         </section>
 
         {/* Value Proposition Section */}
-        <section className="max-w-7xl mx-auto px-6 py-20 md:py-32">
+        <section className="max-w-7xl mx-auto px-6 pt-12 pb-20 md:pt-16 md:pb-32">
           <motion.div
             initial={{ opacity: 0 }}
             whileInView={{ opacity: 1 }}
