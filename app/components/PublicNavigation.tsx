@@ -10,8 +10,8 @@ export default function PublicNavigation() {
 
   return (
     <nav className="border-b border-border/50 bg-background/80 backdrop-blur-sm flex-shrink-0 z-50 sticky top-0">
-      <div className="w-full max-w-7xl mx-auto px-6 py-4">
-        <div className="flex items-center justify-between">
+      <div className="w-full max-w-7xl mx-auto px-6 py-4 lg:py-6">
+        <div className="flex items-center justify-between min-h-[64px] lg:min-h-[80px]">
           {/* Logo */}
           <Link
             href="/"
@@ -21,9 +21,9 @@ export default function PublicNavigation() {
             <Image
               src="/sellerev-logo.png"
               alt="Sellerev"
-              width={160}
-              height={48}
-              className="h-10 md:h-12 w-auto"
+              width={200}
+              height={64}
+              className="h-12 md:h-14 lg:h-16 w-auto"
               priority
             />
           </Link>
