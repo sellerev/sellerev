@@ -1557,6 +1557,7 @@ export function parseRainforestSearchResults(
       page: 1,
       total_results: totalResults,
     },
+    asinSponsoredMeta, // Include ASIN-level sponsored aggregation
     warnings: warnings.length > 0 ? warnings : undefined,
   };
 }
