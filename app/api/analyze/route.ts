@@ -3160,6 +3160,19 @@ export async function POST(req: NextRequest) {
     const warnings: string[] = [];
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // 🛡️ REQUIRED DIAGNOSTIC GUARDRAIL: Sponsored pipeline check
+    // This must log non-zero values for ad-heavy keywords like "kitchen towels"
+    const rawSponsored = rawRainforestListings.filter((l: any) => l.sponsored || l.is_sponsored).length;
+    const baseSponsored = baseListings.filter((l: any) => l.isSponsored || (l as any).sponsored).length;
+    const canonicalSponsored = canonicalProducts.filter((p: any) => p.appearsSponsored).length;
+    
+    console.log('SPONSORED_PIPELINE_CHECK', {
+      rawSponsored,
+      baseSponsored,
+      canonicalSponsored,
+      keyword: body.input_value,
+    });
+    
     // 🛡️ HARD VALIDATION: Sponsored flag preservation check
     // ═══════════════════════════════════════════════════════════════════════════
     // Validates sponsored flags are preserved through pipeline

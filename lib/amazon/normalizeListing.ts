@@ -214,7 +214,8 @@ export function normalizeListing(raw: any): ParsedListing {
   
   // Extract sponsored fields
   // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
-  // Normalization fallback: isSponsored ?? (sponsored === true) ?? is_sponsored ?? IsSponsored ?? false
+  // MANDATORY: Persist isSponsored through normalization
+  // Do not drop or rename this field
   const isSponsored = raw.isSponsored ?? 
     (raw.sponsored === true ? true : undefined) ?? 
     raw.is_sponsored ?? 

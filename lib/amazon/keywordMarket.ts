@@ -1455,9 +1455,14 @@ export function parseRainforestSearchResults(
     const image = item.image || item.image_url || null;
     
     // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
-    // Use ONLY item.sponsored (the authoritative field from Rainforest)
-    // Single source of truth: !!item.sponsored
-    const isSponsored: boolean = !!item.sponsored;
+    // MANDATORY: Capture sponsored at Rainforest ingestion before any normalization
+    // Check multiple field names as fallback (Rainforest may vary)
+    const isSponsored: boolean = Boolean(
+      item.sponsored === true ||
+      item.is_sponsored === true ||
+      item.ad === true ||
+      (typeof item.link === 'string' && (item.link.includes('/sspa/') || item.link.includes('-spons')))
+    );
     
     // Extract BSR/rank from bestsellers_rank (can be null)
     let rainforestRank: number = 0;
@@ -2818,9 +2823,14 @@ export async function fetchKeywordMarketSnapshot(
       // PART 2: NORMALIZE SPONSORED STATUS AT INGEST
       // ═══════════════════════════════════════════════════════════════════════════
       // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
-      // Use ONLY item.sponsored (the authoritative field from Rainforest)
-      // Single source of truth: !!item.sponsored
-      const isSponsored: boolean = !!item.sponsored;
+      // MANDATORY: Capture sponsored at Rainforest ingestion before any normalization
+      // Check multiple field names as fallback (Rainforest may vary)
+      const isSponsored: boolean = Boolean(
+        item.sponsored === true ||
+        item.is_sponsored === true ||
+        item.ad === true ||
+        (typeof item.link === 'string' && (item.link.includes('/sspa/') || item.link.includes('-spons')))
+      );
       const sponsored_position: number | null = isSponsored ? (item.ad_position ?? null) : null;
       const sponsored_source: 'rainforest_serp' | 'organic_serp' = 'rainforest_serp'; // Always from Rainforest SERP
       
