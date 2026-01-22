@@ -213,7 +213,13 @@ export function normalizeListing(raw: any): ParsedListing {
   }
   
   // Extract sponsored fields
-  const isSponsored = typeof raw.isSponsored === 'boolean' ? raw.isSponsored : Boolean(raw.is_sponsored === true || raw.IsSponsored === true);
+  // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
+  // Normalization fallback: isSponsored ?? (sponsored === true) ?? is_sponsored ?? IsSponsored ?? false
+  const isSponsored = raw.isSponsored ?? 
+    (raw.sponsored === true ? true : undefined) ?? 
+    raw.is_sponsored ?? 
+    raw.IsSponsored ?? 
+    false;
   const sponsoredPosition = isSponsored ? (raw.sponsored_position ?? raw.ad_position ?? null) : null;
   const sponsoredSource: 'rainforest_serp' | 'organic_serp' = raw.sponsored_source ?? (isSponsored ? 'rainforest_serp' : 'organic_serp');
   
@@ -247,7 +253,7 @@ export function normalizeListing(raw: any): ParsedListing {
     // CRITICAL: appearsSponsored is ASIN-level property, not instance-level
     appearsSponsored: typeof raw.appearsSponsored === 'boolean' 
       ? raw.appearsSponsored 
-      : Boolean(raw.is_sponsored === true || raw.IsSponsored === true || raw.sponsored === true),
+      : (raw.isSponsored ?? (raw.sponsored === true) ?? raw.is_sponsored ?? raw.IsSponsored ?? false),
     sponsoredPositions: Array.isArray(raw.sponsoredPositions) ? raw.sponsoredPositions : [],
     brand, // DEPRECATED: Use brand_resolution.raw_brand instead
     brand_resolution, // Brand resolution structure (preserves all brands)

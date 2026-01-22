@@ -113,9 +113,8 @@ export async function fetchSearchResults(
 
       // 🔒 CANONICAL SPONSORED DETECTION
       // Use ONLY item.sponsored (the authoritative field from Rainforest)
-      // If missing, treat as false (not sponsored)
-      // DO NOT use link parsing, is_sponsored, or any other heuristics
-      const isSponsoredResult = item.sponsored === true;
+      // Single source of truth: !!item.sponsored
+      const isSponsoredResult = !!item.sponsored;
 
       // Only include products with valid prices
       if (price > 0) {

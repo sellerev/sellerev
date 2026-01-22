@@ -1456,9 +1456,8 @@ export function parseRainforestSearchResults(
     
     // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
     // Use ONLY item.sponsored (the authoritative field from Rainforest)
-    // Normalize to boolean: true if item.sponsored === true, false otherwise
-    // This is the SINGLE SOURCE OF TRUTH for sponsored status
-    const isSponsored: boolean = Boolean(item.sponsored === true);
+    // Single source of truth: !!item.sponsored
+    const isSponsored: boolean = !!item.sponsored;
     
     // Extract BSR/rank from bestsellers_rank (can be null)
     let rainforestRank: number = 0;
@@ -2700,11 +2699,14 @@ export async function fetchKeywordMarketSnapshot(
     // ═══════════════════════════════════════════════════════════════════════════
     // CRITICAL: This is the moment sponsored data must be preserved.
     // Do not drop it later.
+    // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
+    // Use ONLY item.sponsored (the authoritative field from Rainforest)
+    // Single source of truth: !!item.sponsored
     const appearances: Appearance[] = searchResults.map((item: any, index: number) => ({
       asin: item.asin,
       position: item.position ?? index + 1,
-      isSponsored: Boolean(item.sponsored),
-      source: (item.sponsored ? 'sponsored' : 'organic') as 'organic' | 'sponsored'
+      isSponsored: !!item.sponsored,
+      source: (!!item.sponsored ? 'sponsored' : 'organic') as 'organic' | 'sponsored'
     })).filter((app: Appearance) => app.asin && /^[A-Z0-9]{10}$/i.test(app.asin.trim()));
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -2808,9 +2810,8 @@ export async function fetchKeywordMarketSnapshot(
       // ═══════════════════════════════════════════════════════════════════════════
       // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
       // Use ONLY item.sponsored (the authoritative field from Rainforest)
-      // Normalize to boolean: true if item.sponsored === true, false otherwise
-      // This is the SINGLE SOURCE OF TRUTH for sponsored status
-      const isSponsored: boolean = Boolean(item.sponsored === true);
+      // Single source of truth: !!item.sponsored
+      const isSponsored: boolean = !!item.sponsored;
       const sponsored_position: number | null = isSponsored ? (item.ad_position ?? null) : null;
       const sponsored_source: 'rainforest_serp' | 'organic_serp' = 'rainforest_serp'; // Always from Rainforest SERP
       

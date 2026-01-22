@@ -2094,11 +2094,21 @@ export default function AnalyzeForm({
                             // BSR source determines prefix (~ for estimated, no prefix for sp_api)
                             const bsrSource = (listing as any).bsr_source ?? (listing as any).bsrSource ?? null;
                             
-                            // Sponsored: use isSponsored (canonical field, always boolean)
-                            // If not available, normalize from is_sponsored or sponsored
-                            const isSponsored = typeof listing.isSponsored === 'boolean' 
-                              ? listing.isSponsored 
-                              : Boolean(listing.is_sponsored === true || listing.sponsored === true);
+                            // Sponsored: use normalization fallback
+                            // isSponsored ?? (sponsored === true) ?? is_sponsored ?? IsSponsored ?? false
+                            const isSponsored = listing.isSponsored ?? 
+                              (listing.sponsored === true ? true : undefined) ?? 
+                              listing.is_sponsored ?? 
+                              (listing as any).IsSponsored ?? 
+                              false;
+                            
+                            // ASIN-level sponsored aggregation (for UI badge)
+                            const appearsSponsored = typeof listing.appearsSponsored === 'boolean' 
+                              ? listing.appearsSponsored 
+                              : false;
+                            const sponsoredPositions = Array.isArray(listing.sponsoredPositions) 
+                              ? listing.sponsoredPositions 
+                              : [];
                             
                             return (
                               <motion.div
@@ -2125,6 +2135,8 @@ export default function AnalyzeForm({
                                   bsrSource={bsrSource}
                                   fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
                                   isSponsored={isSponsored}
+                                  appearsSponsored={appearsSponsored}
+                                  sponsoredPositions={sponsoredPositions}
                                   imageUrl={imageUrl}
                                   asin={asin}
                                   isSelected={isSelected}

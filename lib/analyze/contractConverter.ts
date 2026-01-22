@@ -38,13 +38,13 @@ function convertListingToCard(listing: any): ListingCard {
     // appearsSponsored: true if ASIN appears sponsored ANYWHERE on Page 1
     appearsSponsored: typeof listing.appearsSponsored === 'boolean' 
       ? listing.appearsSponsored 
-      : Boolean(listing.is_sponsored === true || listing.sponsored === true),
+      : (!!listing.sponsored || !!listing.is_sponsored),
     sponsoredPositions: Array.isArray(listing.sponsoredPositions) 
       ? listing.sponsoredPositions 
       : [],
     is_sponsored: typeof listing.appearsSponsored === 'boolean' 
       ? listing.appearsSponsored 
-      : Boolean(listing.is_sponsored === true || listing.sponsored === true), // DEPRECATED: Use appearsSponsored
+      : (!!listing.sponsored || !!listing.is_sponsored), // DEPRECATED: Use appearsSponsored
     sponsored_position: listing.sponsored_position ?? null,
     sponsored_source: listing.sponsored_source ?? 'organic_serp',
     

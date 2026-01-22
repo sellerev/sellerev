@@ -225,11 +225,8 @@ export async function processKeyword(
 
       // 🔒 CANONICAL SPONSORED DETECTION
       // Use ONLY item.sponsored (the authoritative field from Rainforest)
-      // If missing, treat as false (not sponsored)
-      // DO NOT use link parsing, is_sponsored, or any other heuristics
-      
-      // Determine sponsored status
-      const isSponsoredResult = item.sponsored === true;
+      // Single source of truth: !!item.sponsored
+      const isSponsoredResult = !!item.sponsored;
       const isSponsoredValue: boolean | null = isSponsoredResult ? true : false;
       const adPosition: number | null = isSponsoredResult ? (item.ad_position ?? null) : null;
       
@@ -546,11 +543,11 @@ export async function processKeyword(
       const fulfillmentConfidence = fulfillmentResult.confidence;
       
       // Extract sponsored fields from Rainforest
-      // Normalize isSponsored to boolean (canonical field, always boolean)
-      const isSponsored: boolean = Boolean(rf.sponsored === true);
+      // Single source of truth: !!rf.sponsored
+      const isSponsored: boolean = !!rf.sponsored;
       const sponsoredPosition = isSponsored ? rf.ad_position : null;
       // sponsored_source: 'rainforest_serp' for sponsored, 'organic_serp' for organic or unknown
-      const sponsoredSource: 'rainforest_serp' | 'organic_serp' = rf.sponsored === true ? 'rainforest_serp' : 'organic_serp';
+      const sponsoredSource: 'rainforest_serp' | 'organic_serp' = !!rf.sponsored ? 'rainforest_serp' : 'organic_serp';
       
       return {
         asin: rf.asin,
@@ -565,8 +562,8 @@ export async function processKeyword(
         sponsored_position: sponsoredPosition,
         sponsored_source: sponsoredSource,
         // ASIN-level sponsored aggregation (if available, otherwise default to instance-level)
-        appearsSponsored: typeof rf.sponsored === 'boolean' && rf.sponsored === true,
-        sponsoredPositions: typeof rf.sponsored === 'boolean' && rf.sponsored === true ? [rf.rank] : [],
+        appearsSponsored: !!rf.sponsored,
+        sponsoredPositions: !!rf.sponsored ? [rf.rank] : [],
         fulfillment, // Fulfillment type (never null, never defaults to FBM)
         fulfillmentSource, // Source of fulfillment data
         fulfillmentConfidence, // Confidence in fulfillment inference

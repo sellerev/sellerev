@@ -18,6 +18,8 @@ interface ProductCardProps {
   bsrSource?: string | null;
   fulfillment: "FBA" | "FBM" | "AMZ";
   isSponsored: boolean | null; // true = sponsored, false = organic, null = unknown
+  appearsSponsored?: boolean; // ASIN-level: true if appears sponsored anywhere on Page 1
+  sponsoredPositions?: number[]; // All positions where ASIN appeared as sponsored
   imageUrl?: string | null;
   asin?: string | null;
   isSelected?: boolean;
@@ -36,6 +38,8 @@ export function ProductCard({
   bsrSource,
   fulfillment,
   isSponsored,
+  appearsSponsored,
+  sponsoredPositions,
   imageUrl,
   asin,
   isSelected = false,
@@ -262,18 +266,35 @@ export function ProductCard({
               {fulfillment}
             </span>
           )}
-          {/* Sponsored/Organic/Unknown badge */}
-          {isSponsored === true && (
+          {/* SPONSORED badge (ASIN-level: show if appearsSponsored, even if also ranks organically) */}
+          {appearsSponsored && (
+            (() => {
+              // Calculate lowest sponsored position (sponsoredSlot)
+              const sponsoredSlot = sponsoredPositions && sponsoredPositions.length > 0
+                ? Math.min(...sponsoredPositions)
+                : null;
+              return (
+                <span 
+                  className="px-2 py-1 rounded-full text-[11px] font-medium bg-[#8B5CF6] text-white" 
+                  title="This product appears as sponsored on Page 1"
+                >
+                  SPONSORED{sponsoredSlot ? ` #${sponsoredSlot}` : ''}
+                </span>
+              );
+            })()
+          )}
+          {/* Legacy Sponsored/Organic/Unknown badge (fallback if appearsSponsored not available) */}
+          {!appearsSponsored && isSponsored === true && (
             <span className="px-2 py-1 rounded-full text-[11px] font-medium bg-[#FED7AA] text-[#9A3412]" title="This listing is sponsored">
               Sponsored
             </span>
           )}
-          {isSponsored === false && (
+          {!appearsSponsored && isSponsored === false && (
             <span className="px-2 py-1 rounded-full text-[11px] font-medium bg-gray-100 text-gray-700">
               Organic
             </span>
           )}
-          {isSponsored === null && (
+          {!appearsSponsored && isSponsored === null && (
             <span 
               className="px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-500"
               title="Sponsored status not detected for this listing."
