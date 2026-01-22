@@ -2,8 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import PublicNavigation from "../components/PublicNavigation";
+import PublicFooter from "../components/PublicFooter";
 
 export default function AuthPage() {
   const supabase = supabaseBrowser;
@@ -72,68 +75,90 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <div className="w-full max-w-sm space-y-4 border rounded-xl p-6">
-        <h1 className="text-xl font-semibold">Sellerev</h1>
-
-        {signupSuccess && (
-          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded text-sm">
-            Check your email to confirm your account
-          </div>
-        )}
-
-        <div className="flex gap-2">
-          <button
-            className={`flex-1 border rounded p-2 ${
-              mode === "signup" ? "bg-black text-white" : ""
-            }`}
-            onClick={() => {
-              setMode("signup");
-              setSignupSuccess(false);
-              setError(null);
-            }}
-          >
-            Sign up
-          </button>
-          <button
-            className={`flex-1 border rounded p-2 ${
-              mode === "signin" ? "bg-black text-white" : ""
-            }`}
-            onClick={() => {
-              setMode("signin");
-              setSignupSuccess(false);
-              setError(null);
-            }}
-          >
-            Sign in
-          </button>
-        </div>
-
-        <input
-          className="border rounded p-2 w-full"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-
-        <input
-          className="border rounded p-2 w-full"
-          placeholder="Password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-
-        <button
-          className="bg-black text-white rounded p-2 w-full disabled:opacity-50"
-          disabled={loading || !email || password.length < 6}
-          onClick={submit}
+    <div className="min-h-screen flex flex-col bg-background">
+      <PublicNavigation />
+      
+      <main className="flex-1 flex items-center justify-center px-6 py-20">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6 }}
+          className="w-full max-w-sm"
         >
-          {mode === "signup" ? "Create account" : "Sign in"}
-        </button>
+          <div className="backdrop-blur-sm bg-card/30 border border-border/50 rounded-2xl p-8 space-y-6">
+            <h1 className="text-xl font-semibold text-foreground">Sellerev</h1>
 
-        {error && <p className="text-red-500 text-sm">{error}</p>}
-      </div>
+            {signupSuccess && (
+              <div className="bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-3 rounded-lg text-sm">
+                Check your email to confirm your account
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                className={`flex-1 border border-border rounded-lg p-2 text-sm font-medium transition-colors ${
+                  mode === "signup"
+                    ? "bg-gradient-to-r from-primary to-primary-glow text-primary-foreground"
+                    : "bg-transparent text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => {
+                  setMode("signup");
+                  setSignupSuccess(false);
+                  setError(null);
+                }}
+              >
+                Sign up
+              </button>
+              <button
+                className={`flex-1 border border-border rounded-lg p-2 text-sm font-medium transition-colors ${
+                  mode === "signin"
+                    ? "bg-gradient-to-r from-primary to-primary-glow text-primary-foreground"
+                    : "bg-transparent text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => {
+                  setMode("signin");
+                  setSignupSuccess(false);
+                  setError(null);
+                }}
+              >
+                Sign in
+              </button>
+            </div>
+
+            <input
+              className="w-full px-4 py-2 bg-background/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition-colors"
+              placeholder="Email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+
+            <input
+              className="w-full px-4 py-2 bg-background/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition-colors"
+              placeholder="Password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+
+            <button
+              className="w-full bg-gradient-to-r from-primary to-primary-glow text-primary-foreground rounded-lg p-2 font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={loading || !email || password.length < 6}
+              onClick={submit}
+            >
+              {loading ? "Loading..." : mode === "signup" ? "Create account" : "Sign in"}
+            </button>
+
+            {error && (
+              <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 px-4 py-3 rounded-lg">
+                {error}
+              </p>
+            )}
+          </div>
+        </motion.div>
+      </main>
+
+      <PublicFooter />
     </div>
   );
 }
