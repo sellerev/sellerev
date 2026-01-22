@@ -505,16 +505,6 @@ export function buildKeywordPageOne(
       if (aRank !== bRank) return aRank - bRank;
       return a.bestPosition - b.bestPosition;
     });
-  
-  // Remove the old cappedAsinMap code - it's no longer needed
-  // const cappedListingsWithMetadata = Array.from(cappedAsinMap.entries())
-    .map(([asin, value]) => ({
-      listing: value.listing,
-      bestRank: value.bestRank,
-      appearanceCount: value.appearanceCount,
-      isAlgorithmBoosted: value.appearanceCount >= 2,
-    }))
-    .sort((a, b) => a.bestRank - b.bestRank);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 1: ESTIMATE TOTAL PAGE-1 DEMAND (Helium-10 Style)
