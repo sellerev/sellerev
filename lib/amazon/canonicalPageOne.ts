@@ -1117,10 +1117,18 @@ export function buildKeywordPageOne(
       page_position: pw.pagePosition, // Actual Page-1 position including sponsored - preserves original Amazon position
       // Sponsored visibility (for clarity, not estimation changes)
       // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
-      isSponsored: isSponsored, // Canonical sponsored status (always boolean, normalized at ingest)
+      isSponsored: isSponsored, // Instance-level sponsored status (always boolean, normalized at ingest)
       is_sponsored: isSponsored, // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
       sponsored_position: sponsoredPosition, // Ad position from Rainforest (null if not sponsored)
       sponsored_source: sponsoredSource, // Source of sponsored data ('rainforest_serp' | 'organic_serp')
+      // ═══════════════════════════════════════════════════════════════════════════
+      // ASIN-LEVEL SPONSORED AGGREGATION (CRITICAL - PRESERVE THROUGH CANONICALIZATION)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // CRITICAL: appearsSponsored and sponsoredPositions are ASIN-level properties.
+      // They persist through canonicalization and represent Page-1 advertising presence.
+      // DO NOT MODIFY THIS LOGIC - it matches Helium 10 / Jungle Scout behavior.
+      appearsSponsored: l.appearsSponsored, // ASIN-level: true if appears sponsored anywhere on Page 1
+      sponsoredPositions: Array.isArray(l.sponsoredPositions) ? l.sponsoredPositions : [], // ASIN-level: all positions where ASIN appeared as sponsored
       organicPosition: pw.organicRank, // Alias for organic_rank (null if sponsored)
       sponsoredSlot: isSponsored === true 
         ? (pw.pagePosition <= 4 ? 'top' : pw.pagePosition <= 16 ? 'middle' : 'bottom')
