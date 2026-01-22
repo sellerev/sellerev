@@ -190,7 +190,18 @@ export function convertToAnalyzeContract(
   const estimationNotes = (analysisResponse.estimation_notes as string[]) || [];
   
   // Extract enrichment status
-  const enrichment = enrichmentStatus || analysisResponse.enrichment_status || {};
+  type EnrichmentStatus = {
+    sp_api_catalog?: {
+      status?: string;
+      asin_count?: number;
+    };
+    bsr_extraction?: {
+      status?: string;
+      asin_count?: number;
+    };
+    [key: string]: unknown;
+  };
+  const enrichment: EnrichmentStatus = (enrichmentStatus || analysisResponse.enrichment_status || {}) as EnrichmentStatus;
   
   // Build rankings if available
   const rankings = {
@@ -231,11 +242,11 @@ export function convertToAnalyzeContract(
     market_summary: marketSummary,
     enrichment_status: {
       sp_api_catalog: {
-        status: (enrichment.sp_api_catalog?.status as any) || "skipped",
+        status: enrichment.sp_api_catalog?.status || "skipped",
         asin_count: enrichment.sp_api_catalog?.asin_count || 0,
       },
       bsr_extraction: {
-        status: (enrichment.bsr_extraction?.status as any) || "skipped",
+        status: enrichment.bsr_extraction?.status || "skipped",
         asin_count: enrichment.bsr_extraction?.asin_count || 0,
       },
     },
