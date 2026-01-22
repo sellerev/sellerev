@@ -198,8 +198,8 @@ export default function ProfileDropdown() {
         alert("Failed to sign out. Please try again.");
         return;
       }
-      // Redirect to auth page
-      router.push("/auth");
+      // Redirect to landing page
+      router.push("/");
     } catch (error) {
       console.error("Error during logout:", error);
       alert("An error occurred during logout.");

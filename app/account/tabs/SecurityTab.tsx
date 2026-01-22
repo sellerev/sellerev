@@ -98,7 +98,7 @@ export default function SecurityTab() {
         setLoggingOutAll(false);
         return;
       }
-      router.push("/auth");
+      router.push("/");
     } catch (error) {
       console.error("Error signing out:", error);
       alert("An error occurred. Please try again.");
