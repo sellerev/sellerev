@@ -10,6 +10,7 @@ import { createApiClient } from "@/lib/supabase/server-api";
 import { createClient } from "@supabase/supabase-js";
 import { encryptToken, getTokenLast4 } from "@/lib/amazon/tokenEncryption";
 import { getOAuthCallbackUrl } from "@/lib/utils/appUrl";
+import { getSellerProfile } from "@/lib/amazon/getSellerProfile";
 
 export async function GET(req: NextRequest) {
   let res = new NextResponse();
@@ -29,8 +30,9 @@ export async function GET(req: NextRequest) {
     }
 
     // Get query parameters
+    // Amazon Seller Central OAuth returns spapi_oauth_code, not code
     const searchParams = req.nextUrl.searchParams;
-    const code = searchParams.get("code");
+    const code = searchParams.get("spapi_oauth_code") || searchParams.get("code"); // Support both for compatibility
     const state = searchParams.get("state");
     const error = searchParams.get("error");
 
@@ -46,9 +48,22 @@ export async function GET(req: NextRequest) {
       return NextResponse.redirect(new URL(errorRedirect, req.url));
     }
 
-    if (!code || !state) {
+    // Only require code and state - do not require selling_partner_id or other fields before token exchange
+    if (!code) {
+      console.error("OAuth callback missing authorization code", {
+        has_spapi_oauth_code: !!searchParams.get("spapi_oauth_code"),
+        has_code: !!searchParams.get("code"),
+        params: Array.from(searchParams.keys()),
+      });
       return NextResponse.redirect(
         new URL(returnTo === "onboarding" ? "/connect-amazon?error=missing_params" : "/settings?error=missing_params", req.url)
+      );
+    }
+
+    if (!state) {
+      console.error("OAuth callback missing state parameter");
+      return NextResponse.redirect(
+        new URL(returnTo === "onboarding" ? "/connect-amazon?error=missing_state" : "/settings?error=missing_state", req.url)
       );
     }
 
@@ -118,6 +133,25 @@ export async function GET(req: NextRequest) {
     const encryptedToken = encryptToken(tokenData.refresh_token);
     const tokenLast4 = getTokenLast4(tokenData.refresh_token);
 
+    // Fetch seller account metadata after successful token exchange
+    let sellerDisplayName: string | null = null;
+    let marketplaceIds: string[] | null = null;
+    
+    try {
+      const sellerProfile = await getSellerProfile(tokenData.refresh_token, user.id);
+      if (sellerProfile) {
+        sellerDisplayName = sellerProfile.sellerDisplayName;
+        marketplaceIds = sellerProfile.marketplaceIds;
+        console.log("Fetched seller profile", {
+          has_display_name: !!sellerDisplayName,
+          marketplace_count: marketplaceIds?.length || 0,
+        });
+      }
+    } catch (error) {
+      // Non-fatal: continue even if seller profile fetch fails
+      console.warn("Failed to fetch seller profile (non-fatal):", error);
+    }
+
     // Store in database using service role (to bypass RLS for token storage)
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -141,6 +175,8 @@ export async function GET(req: NextRequest) {
         user_id: user.id,
         refresh_token_encrypted: encryptedToken,
         refresh_token_last4: tokenLast4,
+        seller_display_name: sellerDisplayName,
+        marketplace_ids: marketplaceIds,
         scopes: tokenData.scope ? [tokenData.scope] : [], // SP-API doesn't return scopes in token response
         status: "connected",
         revoked_at: null,

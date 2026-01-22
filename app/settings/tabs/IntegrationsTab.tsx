@@ -7,6 +7,8 @@ interface AmazonConnection {
   id: string;
   status: "connected" | "revoked" | "error";
   refresh_token_last4: string;
+  seller_display_name: string | null;
+  marketplace_ids: string[] | null;
   created_at: string;
   revoked_at: string | null;
 }
@@ -40,7 +42,7 @@ export default function IntegrationsTab() {
 
       const { data, error } = await supabaseBrowser
         .from("amazon_connections")
-        .select("id, status, refresh_token_last4, created_at, revoked_at")
+        .select("id, status, refresh_token_last4, seller_display_name, marketplace_ids, created_at, revoked_at")
         .eq("user_id", user.id)
         .single();
 
@@ -119,7 +121,9 @@ export default function IntegrationsTab() {
                 {loading ? (
                   <p className="text-sm text-gray-500">Loading...</p>
                 ) : isConnected ? (
-                  <p className="text-sm text-green-600">Connected</p>
+                  <p className="text-sm text-green-600">
+                    Connected{amazonConnection?.seller_display_name ? ` — ${amazonConnection.seller_display_name}` : ""}
+                  </p>
                 ) : (
                   <p className="text-sm text-gray-500">Not connected</p>
                 )}
