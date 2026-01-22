@@ -2704,7 +2704,7 @@ export async function fetchKeywordMarketSnapshot(
       asin: item.asin,
       position: item.position ?? index + 1,
       isSponsored: Boolean(item.sponsored),
-      source: item.sponsored ? 'sponsored' : 'organic'
+      source: (item.sponsored ? 'sponsored' : 'organic') as 'organic' | 'sponsored'
     })).filter((app: Appearance) => app.asin && /^[A-Z0-9]{10}$/i.test(app.asin.trim()));
 
     // ═══════════════════════════════════════════════════════════════════════════

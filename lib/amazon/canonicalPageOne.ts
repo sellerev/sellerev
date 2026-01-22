@@ -301,7 +301,7 @@ export function buildKeywordPageOne(
     asin: listing.asin || '',
     position: listing.position || index + 1,
     isSponsored: Boolean(listing.isSponsored),
-    source: listing.isSponsored ? 'sponsored' : 'organic'
+    source: (listing.isSponsored ? 'sponsored' : 'organic') as 'organic' | 'sponsored'
   })).filter((app: Appearance) => app.asin && /^[A-Z0-9]{10}$/i.test(app.asin.trim()));
 
   // ═══════════════════════════════════════════════════════════════════════════
