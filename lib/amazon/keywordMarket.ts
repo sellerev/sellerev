@@ -3285,10 +3285,10 @@ export async function fetchKeywordMarketSnapshot(
           (listing as any).price_confidence = 'fallback';
         }
         
-        // Fulfillment: Set to unknown (do NOT infer from Rainforest)
-        // Rainforest fulfillment inference is NOT canonical - only SP-API Pricing is authoritative
-        if (!listing.fulfillment || !(listing as any).fulfillment_source) {
-          listing.fulfillment = null; // Explicitly mark as unknown
+        // Fulfillment: Set to UNKNOWN if not already set
+        // Fulfillment should already be normalized at ingest, but ensure it's never null
+        if (!listing.fulfillment || listing.fulfillment === null || !(listing as any).fulfillment_source) {
+          listing.fulfillment = "UNKNOWN"; // Explicitly mark as unknown (never null)
           (listing as any).fulfillment_source = 'unknown';
           (listing as any).fulfillment_confidence = 'unknown';
         }

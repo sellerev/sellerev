@@ -23,7 +23,7 @@ export interface PageOneDemandInputs {
     reviews: number | null;
     rating: number | null;
     isSponsored?: boolean; // Canonical sponsored status (always boolean, normalized at ingest)
-    is_sponsored?: boolean | null; // DEPRECATED: Use isSponsored instead
+    is_sponsored?: boolean | null | undefined; // DEPRECATED: Use isSponsored instead (optional, can be undefined)
   }>;
   category?: string | null;
   avgPrice?: number | null;
