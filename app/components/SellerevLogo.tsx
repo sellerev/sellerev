@@ -9,8 +9,8 @@ export default function SellerevLogo({ className = "w-8 h-8" }: { className?: st
     >
       <defs>
         <linearGradient id="logo-purple" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" style="stop-color:hsl(229, 84%, 63%);stop-opacity:1" />
-          <stop offset="100%" style="stop-color:hsl(257, 69%, 71%);stop-opacity:1" />
+          <stop offset="0%" stopColor="hsl(229, 84%, 63%)" stopOpacity={1} />
+          <stop offset="100%" stopColor="hsl(257, 69%, 71%)" stopOpacity={1} />
         </linearGradient>
       </defs>
       
