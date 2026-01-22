@@ -1248,17 +1248,17 @@ export async function buildKeywordAnalyzeResponse(
   // These are factual, countable values that must NEVER be estimated, guessed, or revised
   // The AI must quote these values directly or refuse if unavailable
   
-  // Compute rankings from products array
-  const sortedByRevenue = [...products]
+  // Compute rankings from products array (use different variable names to avoid conflicts)
+  const rankedByRevenue = [...products]
     .filter(p => p.estimated_monthly_revenue > 0)
     .sort((a, b) => b.estimated_monthly_revenue - a.estimated_monthly_revenue);
-  const sortedByUnits = [...products]
+  const rankedByUnits = [...products]
     .filter(p => p.estimated_monthly_units > 0)
     .sort((a, b) => b.estimated_monthly_units - a.estimated_monthly_units);
-  const sortedByReviews = [...products]
+  const rankedByReviewsAsc = [...products]
     .filter(p => p.review_count > 0)
     .sort((a, b) => a.review_count - b.review_count); // Lowest first
-  const sortedByReviewsDesc = [...products]
+  const rankedByReviewsDesc = [...products]
     .filter(p => p.review_count > 0)
     .sort((a, b) => b.review_count - a.review_count); // Highest first
   
@@ -1294,10 +1294,10 @@ export async function buildKeywordAnalyzeResponse(
       price_cluster_width_pct: priceClusterWidthPct,
     },
     rankings: {
-      highest_revenue_asin: sortedByRevenue.length > 0 ? sortedByRevenue[0].asin : null,
-      highest_units_asin: sortedByUnits.length > 0 ? sortedByUnits[0].asin : null,
-      lowest_review_asin: sortedByReviews.length > 0 ? sortedByReviews[0].asin : null,
-      highest_review_asin: sortedByReviewsDesc.length > 0 ? sortedByReviewsDesc[0].asin : null,
+      highest_revenue_asin: rankedByRevenue.length > 0 ? rankedByRevenue[0].asin : null,
+      highest_units_asin: rankedByUnits.length > 0 ? rankedByUnits[0].asin : null,
+      lowest_review_asin: rankedByReviewsAsc.length > 0 ? rankedByReviewsAsc[0].asin : null,
+      highest_review_asin: rankedByReviewsDesc.length > 0 ? rankedByReviewsDesc[0].asin : null,
     },
     confidence: {
       data_completeness_score: dataCompletenessScore,
@@ -1315,9 +1315,9 @@ export async function buildKeywordAnalyzeResponse(
   
   console.log("🔒 AUTHORITATIVE_FACTS_BUILT", {
     keyword,
-    page1_total_listings: authoritativeFacts.page1_total_listings,
-    page1_distinct_brands: authoritativeFacts.page1_distinct_brands,
-    page1_sponsored_pct: authoritativeFacts.page1_sponsored_pct,
+    page1_total_listings: authoritativeFacts.page1.total_listings,
+    page1_distinct_brands: authoritativeFacts.page1.distinct_brand_count,
+    page1_sponsored_pct: authoritativeFacts.page1.sponsored_pct,
     note: "These values are READ-ONLY and IMMUTABLE - AI must quote directly or refuse",
   });
   
