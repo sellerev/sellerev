@@ -529,12 +529,14 @@ export async function processKeyword(
       
       // SP-API is authoritative for metadata (override, not fallback)
       // Use Pricing API fulfillment if available, otherwise Rainforest hint
-      const fulfillment = pricingEnriched?.fulfillment_channel 
+      // Ensure fulfillment is never null (use "UNKNOWN" as fallback)
+      const fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN" = pricingEnriched?.fulfillment_channel 
         ? (pricingEnriched.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM')
-        : (rf.fulfillment_hint === 'AMZ' ? 'Amazon' : rf.fulfillment_hint);
+        : (rf.fulfillment_hint === 'AMZ' ? 'Amazon' : (rf.fulfillment_hint || 'UNKNOWN'));
       
       // Extract sponsored fields from Rainforest
-      const isSponsored = rf.sponsored === true;
+      // Normalize isSponsored to boolean (canonical field, always boolean)
+      const isSponsored: boolean = Boolean(rf.sponsored === true);
       const sponsoredPosition = isSponsored ? rf.ad_position : null;
       // sponsored_source: 'rainforest_serp' for sponsored, 'organic_serp' for organic or unknown
       const sponsoredSource: 'rainforest_serp' | 'organic_serp' = rf.sponsored === true ? 'rainforest_serp' : 'organic_serp';
@@ -547,10 +549,11 @@ export async function processKeyword(
         image_url: catalogEnriched?.image_url || cached?.image_url || rf.image_hint || null,
         rating: rf.rating,
         reviews: rf.reviews,
-        is_sponsored: rf.sponsored, // boolean | null
+        isSponsored, // Canonical sponsored status (always boolean, normalized at ingest)
+        is_sponsored: isSponsored, // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
         sponsored_position: sponsoredPosition,
         sponsored_source: sponsoredSource,
-        fulfillment: fulfillment,
+        fulfillment: fulfillment || "UNKNOWN", // Ensure fulfillment is never null
         brand: catalogEnriched?.brand || cached?.brand || null, // SP-API only (no Rainforest inference)
         main_category: catalogEnriched?.category || cached?.category || null, // SP-API only
         main_category_bsr: catalogEnriched?.bsr || cached?.bsr || null, // SP-API only
