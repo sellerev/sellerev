@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { randomBytes } from "crypto";
+import { getOAuthCallbackUrl, getAppUrl } from "@/lib/utils/appUrl";
 
 export async function GET(req: NextRequest) {
   let res = new NextResponse();
@@ -29,9 +30,7 @@ export async function GET(req: NextRequest) {
     // SP-API seller authorization uses Seller Central consent, not Login With Amazon.
     // We need the SP-API application_id (amzn1.sp.solution.*), NOT the LWA client_id.
     const applicationId = process.env.SP_API_APPLICATION_ID || process.env.SP_API_APP_ID;
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : "http://localhost:3000";
+    const redirectUri = getOAuthCallbackUrl();
 
     if (!applicationId) {
       console.error("SP-API application ID not configured. Need SP_API_APPLICATION_ID or SP_API_APP_ID (format: amzn1.sp.solution.*)");
@@ -51,10 +50,6 @@ export async function GET(req: NextRequest) {
       maxAge: 600, // 10 minutes
       path: "/",
     });
-
-    // Build authorization URL for SP-API seller authorization
-    // SP-API seller authorization uses Seller Central consent, not Login With Amazon.
-    const redirectUri = `${appUrl}/api/amazon/callback`;
     
     // Check if user is in onboarding flow (no profile yet)
     const { data: profile } = await supabase
@@ -92,11 +87,16 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Production-safe logging: Always log computed URLs for verification
     console.log("Amazon OAuth connect initiated", {
       user_id: user.id,
       state: state.substring(0, 8) + "...",
       redirect_uri: redirectUri,
-      auth_url: authUrl, // Log the full URL for debugging
+      auth_url: authUrl,
+      environment: process.env.NODE_ENV,
+      computed_base_url: getOAuthCallbackUrl().replace("/api/amazon/callback", ""),
+      vercel_url_env: process.env.VERCEL_URL || "not set",
+      next_public_app_url_env: process.env.NEXT_PUBLIC_APP_URL || "not set",
     });
 
     // Redirect to Amazon (using string URL, not URL object)

@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { createClient } from "@supabase/supabase-js";
 import { encryptToken, getTokenLast4 } from "@/lib/amazon/tokenEncryption";
+import { getOAuthCallbackUrl } from "@/lib/utils/appUrl";
 
 export async function GET(req: NextRequest) {
   let res = new NextResponse();
@@ -69,10 +70,7 @@ export async function GET(req: NextRequest) {
     // Get OAuth configuration
     const clientId = process.env.SP_API_CLIENT_ID || process.env.SP_API_LWA_CLIENT_ID;
     const clientSecret = process.env.SP_API_CLIENT_SECRET || process.env.SP_API_LWA_CLIENT_SECRET;
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : "http://localhost:3000";
-    const redirectUri = `${appUrl}/api/amazon/callback`;
+    const redirectUri = getOAuthCallbackUrl();
 
     if (!clientId || !clientSecret) {
       console.error("SP-API credentials not configured");
@@ -159,9 +157,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.redirect(new URL(errorRedirect, req.url));
     }
 
+    // Production-safe logging: Always log computed URLs for verification
     console.log("Amazon OAuth connection successful", {
       user_id: user.id,
       token_last4: tokenLast4,
+      redirect_uri_used: redirectUri,
+      environment: process.env.NODE_ENV,
+      computed_base_url: getOAuthCallbackUrl().replace("/api/amazon/callback", ""),
     });
 
     // Clear return destination cookie (we already have returnTo from line 37)
