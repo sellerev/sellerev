@@ -2094,9 +2094,11 @@ export default function AnalyzeForm({
                             // BSR source determines prefix (~ for estimated, no prefix for sp_api)
                             const bsrSource = (listing as any).bsr_source ?? (listing as any).bsrSource ?? null;
                             
-                            // Sponsored: preserve exact value from listing (true/false/null)
-                            // CRITICAL: Do NOT coerce null to false - null means unknown
-                            const isSponsored = listing.is_sponsored ?? listing.sponsored ?? null;
+                            // Sponsored: use isSponsored (canonical field, always boolean)
+                            // If not available, normalize from is_sponsored or sponsored
+                            const isSponsored = typeof listing.isSponsored === 'boolean' 
+                              ? listing.isSponsored 
+                              : Boolean(listing.is_sponsored === true || listing.sponsored === true);
                             
                             return (
                               <motion.div

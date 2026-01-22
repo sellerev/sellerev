@@ -1588,9 +1588,16 @@ export async function POST(req: NextRequest) {
       }
       
       // Compute sponsored_count and fulfillment_mix from cached products
-      const sponsoredCount = products.filter((p: any) => p.is_sponsored === true).length;
-      const organicCount = products.filter((p: any) => p.is_sponsored === false).length;
-      const unknownSponsoredCount = products.filter((p: any) => p.is_sponsored === null || p.is_sponsored === undefined).length;
+      // Use isSponsored if available, otherwise fall back to is_sponsored
+      const sponsoredCount = products.filter((p: any) => {
+        const isSponsored = typeof p.isSponsored === 'boolean' ? p.isSponsored : Boolean(p.is_sponsored === true);
+        return isSponsored === true;
+      }).length;
+      const organicCount = products.filter((p: any) => {
+        const isSponsored = typeof p.isSponsored === 'boolean' ? p.isSponsored : Boolean(p.is_sponsored === true);
+        return isSponsored === false;
+      }).length;
+      const unknownSponsoredCount = 0; // isSponsored is always boolean, no unknown states
       const sponsoredPct = products.length > 0 
         ? Number(((sponsoredCount / products.length) * 100).toFixed(1))
         : 0;

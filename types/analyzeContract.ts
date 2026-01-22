@@ -69,9 +69,10 @@ export interface ListingCard {
   // ═══════════════════════════════════════════════════════════════════════
   // SPONSORED STATUS (REQUIRED)
   // ═══════════════════════════════════════════════════════════════════════
-  is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown
+  is_sponsored: boolean | null; // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
   sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data
+  // Note: isSponsored is not in ListingCard interface - it's normalized from is_sponsored at conversion time
   
   // ═══════════════════════════════════════════════════════════════════════
   // FULFILLMENT DATA (REQUIRED)

@@ -52,11 +52,10 @@ export interface CanonicalProduct {
   page_position: number; // Actual Page-1 position including sponsored listings (1, 2, 3...) - preserves original Amazon position
   // Sponsored visibility (for clarity, not estimation changes)
   // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
-  is_sponsored: boolean | null; // true = sponsored, false = organic, null = unknown (Rainforest SERP only)
+  isSponsored: boolean; // Canonical sponsored status (always boolean, normalized at ingest)
+  is_sponsored?: boolean | null; // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
   sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data
-  // Additional sponsored fields for clarity
-  isSponsored?: boolean | null; // Alias for is_sponsored (for compatibility)
   organicPosition?: number | null; // Alias for organic_rank (null if sponsored)
   sponsoredSlot?: 'top' | 'middle' | 'bottom' | null; // Sponsored ad slot position (null if not sponsored)
 }
@@ -313,8 +312,8 @@ export function buildKeywordPageOne(
     if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
 
     const currentRank = listing.position || index + 1;
-    // PART 4: Only count listings with is_sponsored === false as organic
-    const isOrganic = listing.is_sponsored === false;
+    // PART 4: Only count listings with isSponsored === false as organic
+    const isOrganic = listing.isSponsored === false;
     
     if (asinMap.has(asin)) {
       const existing = asinMap.get(asin)!;
@@ -426,10 +425,10 @@ export function buildKeywordPageOne(
   // Sort by organic rank (best rank first)
   // Filter to only organic listings for ranking, then slice to 49
   // PART 4: Treat listings as organic if they're not explicitly sponsored
-  // This includes both is_sponsored === false (explicitly organic) and is_sponsored === null (unknown)
-  // Unknown listings should be treated as organic for capping purposes since they're not explicitly sponsored
-  const organicListings = deduplicatedListings.filter(l => l.is_sponsored !== true);
-  const sponsoredListings = deduplicatedListings.filter(l => l.is_sponsored === true);
+  // Filter by isSponsored (canonical field, always boolean)
+  // Filter listings by isSponsored (canonical field, always boolean)
+  const organicListings = deduplicatedListings.filter(l => l.isSponsored === false);
+  const sponsoredListings = deduplicatedListings.filter(l => l.isSponsored === true);
   
   // Sort organic listings by position (best rank first)
   organicListings.sort((a, b) => (a.position || 999) - (b.position || 999));
@@ -530,9 +529,9 @@ export function buildKeywordPageOne(
   // CALIBRATION LAYER: Normalize into trusted bands
   // ═══════════════════════════════════════════════════════════════════════════
   // Use capped listings for calibration
-  // PART 4: Treat listings as organic if they're not explicitly sponsored (includes unknown/null)
-  const organicListingsForCalibration = cappedListings.filter(l => l.is_sponsored !== true);
-  const sponsoredCount = cappedListings.filter(l => l.is_sponsored).length;
+  // PART 4: Filter by isSponsored (canonical field, always boolean)
+  const organicListingsForCalibration = cappedListings.filter(l => l.isSponsored === false);
+  const sponsoredCount = cappedListings.filter(l => l.isSponsored === true).length;
   const sponsoredDensity = cappedListings.length > 0
     ? (sponsoredCount / cappedListings.length) * 100
     : 0;
@@ -646,15 +645,14 @@ export function buildKeywordPageOne(
   // ═══════════════════════════════════════════════════════════════════════════
   // PART 4: ORGANIC RANK CALCULATION
   // ═══════════════════════════════════════════════════════════════════════════
-  // CRITICAL: Increment organic_rank ONLY for listings where is_sponsored === false
-  // Sponsored listings (is_sponsored === true) MUST NOT affect organic ranking
-  // Unknown listings (is_sponsored === null) MUST NOT affect organic ranking
+  // CRITICAL: Increment organic_rank ONLY for listings where isSponsored === false
+  // Sponsored listings (isSponsored === true) MUST NOT affect organic ranking
   // Use capped listings with metadata
   const organicListingsWithMetadata = cappedListingsWithMetadata.filter(
-    item => item.listing.is_sponsored === false
+    item => item.listing.isSponsored === false
   );
   const sponsoredListingsWithMetadata = cappedListingsWithMetadata.filter(
-    item => item.listing.is_sponsored === true
+    item => item.listing.isSponsored === true
   );
   
   // Assign organic_rank to organic listings (1, 2, 3...)
@@ -667,15 +665,10 @@ export function buildKeywordPageOne(
     }));
   
   // Combine organic (with organic_rank) and sponsored (organic_rank = null)
-  // Unknown listings (is_sponsored === null) also get organic_rank = null
   // Sort by bestRank to maintain Page-1 order
   const allListingsWithRanks = [
     ...organicListingsRanked.map(item => ({ ...item, organicRank: item.organicRank })),
     ...sponsoredListingsWithMetadata.map(item => ({ ...item, organicRank: null })),
-    // Unknown listings (is_sponsored === null) also get organic_rank = null
-    ...cappedListingsWithMetadata
-      .filter(item => item.listing.is_sponsored === null)
-      .map(item => ({ ...item, organicRank: null })),
   ].sort((a, b) => a.bestRank - b.bestRank);
   
   // Build products with allocation weights (using capped listings)
@@ -825,8 +818,8 @@ export function buildKeywordPageOne(
     // ═══════════════════════════════════════════════════════════════════════════
     // SPONSORED DATA: Preserve from Rainforest SERP (SP-API has no ad data)
     // ═══════════════════════════════════════════════════════════════════════════
-    // CRITICAL: Preserve is_sponsored as-is (true/false/null), don't coerce null to false
-    const isSponsored = l.is_sponsored; // Preserve null (unknown) state
+    // CRITICAL: Use isSponsored (canonical field, always boolean)
+    const isSponsored = l.isSponsored; // Canonical sponsored status (always boolean)
     const sponsoredPosition = l.sponsored_position ?? null;
     // sponsored_source is now 'rainforest_serp' | 'organic_serp', default to 'organic_serp' if missing
     const sponsoredSource = l.sponsored_source ?? 'organic_serp';
@@ -1104,11 +1097,10 @@ export function buildKeywordPageOne(
       page_position: pw.pagePosition, // Actual Page-1 position including sponsored - preserves original Amazon position
       // Sponsored visibility (for clarity, not estimation changes)
       // CRITICAL: Sponsored data comes from Rainforest SERP ONLY (SP-API has no ad data)
-      is_sponsored: isSponsored, // true = sponsored, false = organic, null = unknown
+      isSponsored: isSponsored, // Canonical sponsored status (always boolean, normalized at ingest)
+      is_sponsored: isSponsored, // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
       sponsored_position: sponsoredPosition, // Ad position from Rainforest (null if not sponsored)
       sponsored_source: sponsoredSource, // Source of sponsored data ('rainforest_serp' | 'organic_serp')
-      // Additional sponsored fields for clarity
-      isSponsored: isSponsored, // Alias for is_sponsored (for compatibility)
       organicPosition: pw.organicRank, // Alias for organic_rank (null if sponsored)
       sponsoredSlot: isSponsored === true 
         ? (pw.pagePosition <= 4 ? 'top' : pw.pagePosition <= 16 ? 'middle' : 'bottom')
@@ -1152,7 +1144,7 @@ export function buildKeywordPageOne(
   
   // Get estimated total market units (use market demand estimate or totalPage1Units)
   // PART 4: Treat listings as organic if they're not explicitly sponsored (includes unknown/null)
-  const organicCountForDemand = cappedListings.filter(l => l.is_sponsored !== true).length;
+  const organicCountForDemand = cappedListings.filter(l => l.isSponsored === false).length;
   const avgPriceForDemand = avgPrice ?? 0;
   const marketDemandEstimate = estimateMarketDemand({
     marketShape,

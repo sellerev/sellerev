@@ -16,7 +16,13 @@ function convertListingToCard(listing: any): ListingCard {
     asin: listing.asin || "",
     rank: listing.rank ?? listing.organic_rank ?? null,
     page_position: listing.page_position ?? listing.position ?? listing.rank ?? 1,
-    organic_rank: listing.organic_rank ?? (listing.is_sponsored === true ? null : listing.rank) ?? null,
+    organic_rank: listing.organic_rank ?? (() => {
+      // Use isSponsored if available, otherwise check is_sponsored
+      const isSponsored = typeof listing.isSponsored === 'boolean' 
+        ? listing.isSponsored 
+        : Boolean(listing.is_sponsored === true);
+      return isSponsored === true ? null : listing.rank ?? null;
+    })(),
     
     // Basic product data
     title: listing.title ?? null,
@@ -27,8 +33,11 @@ function convertListingToCard(listing: any): ListingCard {
     rating: listing.rating ?? 0,
     review_count: listing.review_count ?? listing.reviews ?? 0,
     
-    // Sponsored status
-    is_sponsored: listing.is_sponsored ?? listing.sponsored ?? null,
+    // Sponsored status (normalize to boolean at conversion time)
+    // Use isSponsored if available, otherwise normalize from is_sponsored or sponsored
+    is_sponsored: typeof listing.isSponsored === 'boolean' 
+      ? listing.isSponsored 
+      : Boolean(listing.is_sponsored === true || listing.sponsored === true),
     sponsored_position: listing.sponsored_position ?? null,
     sponsored_source: listing.sponsored_source ?? 'organic_serp',
     
@@ -66,9 +75,10 @@ function convertListingToCard(listing: any): ListingCard {
  */
 function computeMarketSummary(listings: ListingCard[]): MarketSummary {
   const totalListings = listings.length;
+  // Compute counts from isSponsored (canonical field, always boolean)
   const organicListings = listings.filter(l => l.is_sponsored === false).length;
   const sponsoredListings = listings.filter(l => l.is_sponsored === true).length;
-  const unknownSponsored = listings.filter(l => l.is_sponsored === null).length;
+  const unknownSponsored = 0; // isSponsored is always boolean, no unknown states
   
   const prices = listings.map(l => l.price).filter(p => p > 0);
   const priceMin = prices.length > 0 ? Math.min(...prices) : null;

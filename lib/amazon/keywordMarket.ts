@@ -70,7 +70,8 @@ export interface RawListing {
   reviews: number | null;
   raw_badges: any[];
   raw_block_type?: string;
-  raw_sponsored_flag?: boolean;
+  isSponsored: boolean; // Canonical sponsored status (normalized at ingest from item.sponsored)
+  raw_sponsored_flag?: boolean; // DEPRECATED: Use isSponsored instead
 }
 
 export interface RawSnapshot {
@@ -148,7 +149,8 @@ export interface ParsedListing {
   price: number | null;
   rating: number | null;
   reviews: number | null;
-  is_sponsored: boolean | null; // Sponsored status from Rainforest SERP (null = unknown)
+  isSponsored: boolean; // Canonical sponsored status (always boolean, normalized at ingest from item.sponsored)
+  is_sponsored?: boolean | null; // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
   sponsored_position: number | null; // Ad position from Rainforest (null if not sponsored)
   sponsored_source: 'rainforest_serp' | 'organic_serp'; // Source of sponsored data (Rainforest SERP only)
   position: number; // Organic rank (1-indexed position on Page 1)
@@ -1365,17 +1367,11 @@ export function parseRainforestSearchResults(
     // Extract image (can be null)
     const image = item.image || item.image_url || null;
     
-    // 🔒 CANONICAL SPONSORED DETECTION
+    // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
     // Use ONLY item.sponsored (the authoritative field from Rainforest)
-    // If missing, treat as false (not sponsored)
-    // DO NOT use link parsing, is_sponsored, or any other heuristics
-    let rawSponsoredFlag: boolean | undefined = undefined;
-    if (item.sponsored === true) {
-      rawSponsoredFlag = true;
-    } else if (item.sponsored === false) {
-      rawSponsoredFlag = false;
-    }
-    // If item.sponsored is missing/undefined, leave as undefined (will be treated as false later)
+    // Normalize to boolean: true if item.sponsored === true, false otherwise
+    // This is the SINGLE SOURCE OF TRUTH for sponsored status
+    const isSponsored: boolean = Boolean(item.sponsored === true);
     
     // Extract BSR/rank from bestsellers_rank (can be null)
     let rainforestRank: number = 0;
@@ -1418,7 +1414,8 @@ export function parseRainforestSearchResults(
       reviews,
       raw_badges: badgesArray,
       raw_block_type: rawBlockType,
-      raw_sponsored_flag: rawSponsoredFlag,
+      isSponsored, // Canonical sponsored status (normalized at ingest)
+      raw_sponsored_flag: isSponsored, // DEPRECATED: kept for backward compatibility
     });
   }
   
@@ -1462,20 +1459,15 @@ export function detectSponsored(raw: RawListing): {
   sponsored: boolean | "unknown";
   confidence: "high" | "medium" | "low";
 } {
-  // 🔒 CANONICAL RULE: isSponsored = item.sponsored === true
-  // If the field is missing, treat as false (not sponsored)
+  // 🔒 CANONICAL RULE: Use isSponsored (normalized at ingest from item.sponsored)
+  // isSponsored is always boolean (true if item.sponsored === true, false otherwise)
   // DO NOT use link parsing, is_sponsored, badges, or any other heuristics
   
-  if (raw.raw_sponsored_flag === true) {
-    return { sponsored: true, confidence: "high" };
-  }
-  if (raw.raw_sponsored_flag === false) {
-    return { sponsored: false, confidence: "high" };
-  }
-  
-  // If missing/undefined, treat as false (not sponsored) with low confidence
-  // This ensures we never have "unknown" states that break aggregates
-  return { sponsored: false, confidence: "low" };
+  // isSponsored is always defined (boolean) - use it directly
+  return { 
+    sponsored: raw.isSponsored, 
+    confidence: "high" // Always high confidence since it's from Rainforest's authoritative field
+  };
 }
 
 /**
@@ -1985,12 +1977,12 @@ export async function fetchKeywordMarketSnapshot(
     // STEP 1 — CONFIRM RAW DATA (NO TRANSFORMS)
     // ═══════════════════════════════════════════════════════════════════════════
     // Log the raw Rainforest response immediately after it is fetched
-    // Extract first 5 products from all possible locations
+    // CRITICAL: Only use search_results[] array (contains both sponsored and organic)
+    // Do NOT use organic_results[] or ads[] arrays - Rainforest returns everything in search_results[]
     const allRawProducts: any[] = [];
     if (Array.isArray(raw.search_results)) allRawProducts.push(...raw.search_results);
-    if (Array.isArray(raw.organic_results)) allRawProducts.push(...raw.organic_results);
-    if (Array.isArray(raw.ads)) allRawProducts.push(...raw.ads);
-    if (Array.isArray(raw.results)) allRawProducts.push(...raw.results);
+    // Fallback to results array if search_results is not present
+    if (allRawProducts.length === 0 && Array.isArray(raw.results)) allRawProducts.push(...raw.results);
     
     const first5Raw = allRawProducts.slice(0, 5);
     console.log("🔍 STEP_1_RAW_RAINFOREST_DATA", {
@@ -2025,9 +2017,8 @@ export async function fetchKeywordMarketSnapshot(
       has_search_information: !!raw.search_information,
       search_results_count: Array.isArray(raw.search_results) ? raw.search_results.length : "not an array",
       search_results_type: typeof raw.search_results,
-      organic_results_count: Array.isArray(raw.organic_results) ? raw.organic_results.length : "not an array",
-      ads_count: Array.isArray(raw.ads) ? raw.ads.length : "not an array",
       results_count: Array.isArray(raw.results) ? raw.results.length : "not an array",
+      // NOTE: organic_results and ads arrays are not used - all listings come from search_results[]
       raw_keys: Object.keys(raw),
       error: raw.error || null,
     });
@@ -2126,10 +2117,14 @@ export async function fetchKeywordMarketSnapshot(
         reconstructed.reviews = listing.reviews;
       }
       
-      // Reconstruct sponsored flags
-      if (listing.raw_sponsored_flag !== undefined) {
-        reconstructed.sponsored = listing.raw_sponsored_flag;
-        reconstructed.is_sponsored = listing.raw_sponsored_flag;
+      // Reconstruct sponsored flags (use isSponsored as canonical field)
+      if (listing.isSponsored !== undefined) {
+        reconstructed.isSponsored = listing.isSponsored;
+        reconstructed.is_sponsored = listing.isSponsored; // DEPRECATED: kept for backward compatibility
+      } else if (listing.raw_sponsored_flag !== undefined) {
+        const isSponsored = Boolean(listing.raw_sponsored_flag === true);
+        reconstructed.isSponsored = isSponsored;
+        reconstructed.is_sponsored = isSponsored; // DEPRECATED: kept for backward compatibility
       }
       
       return reconstructed;
@@ -2639,16 +2634,18 @@ export async function fetchKeywordMarketSnapshot(
       const reviews = parseReviews(item); // Nullable
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // PART 2: DETECT SPONSORED INSIDE search_results[]
+      // PART 2: NORMALIZE SPONSORED STATUS AT INGEST
       // ═══════════════════════════════════════════════════════════════════════════
-      // 🔒 CANONICAL SPONSORED DETECTION
+      // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
       // Use ONLY item.sponsored (the authoritative field from Rainforest)
-      // If missing, treat as false (not sponsored)
-      // DO NOT use link parsing, is_sponsored, or any other heuristics
-      const isSponsoredResult = item.sponsored === true;
-      const is_sponsored: boolean = isSponsoredResult; // Always boolean - no nulls
-      const sponsored_position: number | null = is_sponsored === true ? (item.ad_position ?? null) : null;
+      // Normalize to boolean: true if item.sponsored === true, false otherwise
+      // This is the SINGLE SOURCE OF TRUTH for sponsored status
+      const isSponsored: boolean = Boolean(item.sponsored === true);
+      const sponsored_position: number | null = isSponsored ? (item.ad_position ?? null) : null;
       const sponsored_source: 'rainforest_serp' | 'organic_serp' = 'rainforest_serp'; // Always from Rainforest SERP
+      
+      // DEPRECATED: Keep is_sponsored for backward compatibility, but use isSponsored as canonical
+      const is_sponsored: boolean = isSponsored;
       
       const position = item.position ?? index + 1; // Organic rank (1-indexed)
       
@@ -2757,7 +2754,8 @@ export async function fetchKeywordMarketSnapshot(
         price, // Optional (nullable)
         rating, // Optional (nullable)
         reviews, // Optional (nullable)
-        is_sponsored, // Boolean | null (null = unknown, Rainforest SERP only)
+        isSponsored, // Canonical sponsored status (always boolean, normalized at ingest)
+        is_sponsored, // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
         sponsored_position, // Number | null (ad position from Rainforest)
         sponsored_source, // 'rainforest_serp' | 'organic_serp' (source of sponsored data)
         position,
@@ -3459,9 +3457,10 @@ export async function fetchKeywordMarketSnapshot(
     // PART 5: FIX DIAGNOSTICS (MANDATORY)
     // ═══════════════════════════════════════════════════════════════════════════
     // Compute counts from rawListings[] (NOT from ads[] arrays)
-    const sponsored_count = listings.filter((l) => l.is_sponsored === true).length;
-    const organic_count = listings.filter((l) => l.is_sponsored === false).length;
-    const unknown_sponsored_count = listings.filter((l) => l.is_sponsored === null).length;
+    // Compute counts from isSponsored (canonical field, always boolean)
+    const sponsored_count = listings.filter((l) => l.isSponsored === true).length;
+    const organic_count = listings.filter((l) => l.isSponsored === false).length;
+    const unknown_sponsored_count = 0; // isSponsored is always boolean, no unknown states
     const sponsored_pct = total_page1_listings > 0
       ? Number(((sponsored_count / total_page1_listings) * 100).toFixed(1))
       : 0;

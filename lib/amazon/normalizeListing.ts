@@ -210,7 +210,9 @@ export function normalizeListing(raw: any): ParsedListing {
     main_category_bsr, // Main category BSR (top-level category only)
     main_category, // Main category name
     fulfillment,
-    sponsored: !!raw.is_sponsored || !!raw.IsSponsored || false,
+    // Canonical sponsored status: Use isSponsored if available, otherwise normalize from is_sponsored
+    isSponsored: typeof raw.isSponsored === 'boolean' ? raw.isSponsored : Boolean(raw.is_sponsored === true || raw.IsSponsored === true),
+    sponsored: typeof raw.isSponsored === 'boolean' ? raw.isSponsored : Boolean(raw.is_sponsored === true || raw.IsSponsored === true), // DEPRECATED: Use isSponsored
     organic_rank: raw.organic_rank ?? raw.position ?? raw.Position ?? null,
     brand, // DEPRECATED: Use brand_resolution.raw_brand instead
     brand_resolution, // Brand resolution structure (preserves all brands)
