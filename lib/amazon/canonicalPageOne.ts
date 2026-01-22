@@ -297,11 +297,12 @@ export function buildKeywordPageOne(
   // ═══════════════════════════════════════════════════════════════════════════
   // CRITICAL: This is the moment sponsored data must be preserved.
   // Do not drop it later.
+  // 🔒 Capture isSponsored here or lose it forever
   const appearances: Appearance[] = listings.map((listing, index) => ({
     asin: listing.asin || '',
     position: listing.position || index + 1,
-    isSponsored: Boolean(listing.isSponsored),
-    source: (listing.isSponsored ? 'sponsored' : 'organic') as 'organic' | 'sponsored'
+    isSponsored: !!listing.isSponsored,
+    source: (!!listing.isSponsored ? 'sponsored' : 'organic') as 'organic' | 'sponsored'
   })).filter((app: Appearance) => app.asin && /^[A-Z0-9]{10}$/i.test(app.asin.trim()));
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1142,6 +1143,11 @@ export function buildKeywordPageOne(
     
     // Store mapping for parent-child normalization (use ASIN as key)
     asinToListingMap.set(asin, l);
+    
+    // 🛡️ GUARDRAIL: Prevent sponsored signal loss (one-time check to prevent future regressions)
+    if (appearsSponsored && sponsoredPositions.length === 0) {
+      throw new Error(`Sponsored signal lost before canonical build: ASIN ${asin} has appearsSponsored=true but sponsoredPositions is empty`);
+    }
     
     return product;
   });
