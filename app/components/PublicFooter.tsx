@@ -25,9 +25,6 @@ export default function PublicFooter() {
               Support
             </Link>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Sellerev is an independent tool and is not affiliated with or endorsed by Amazon.com, Inc.
-          </p>
         </div>
       </div>
     </footer>
