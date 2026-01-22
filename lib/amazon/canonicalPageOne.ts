@@ -1084,6 +1084,16 @@ export function buildKeywordPageOne(
       });
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Get canonical data from appearances (ASIN-LEVEL SPONSORED AGGREGATION)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const canonical = asinMap.get(asin);
+    const appearsSponsored = canonical?.appearsSponsored ?? false;
+    const sponsoredPositions = canonical?.sponsoredPositions ?? [];
+    const sponsoredSlot = sponsoredPositions.length > 0
+      ? Math.min(...sponsoredPositions)
+      : null;
+
     const product: CanonicalProduct = {
       rank: pw.organicRank ?? null, // Legacy field - equals organic_rank for organic, null for sponsored
       asin, // Real ASIN only
@@ -1146,13 +1156,6 @@ export function buildKeywordPageOne(
       // CRITICAL: appearsSponsored and sponsoredPositions are ASIN-level properties.
       // They persist through canonicalization and represent Page-1 advertising presence.
       // DO NOT MODIFY THIS LOGIC - it matches Helium 10 / Jungle Scout behavior.
-      // Get canonical data from appearances
-      const canonical = asinMap.get(asin);
-      const appearsSponsored = canonical?.appearsSponsored ?? false;
-      const sponsoredPositions = canonical?.sponsoredPositions ?? [];
-      const sponsoredSlot = sponsoredPositions.length > 0
-        ? Math.min(...sponsoredPositions)
-        : null;
       appearsSponsored: appearsSponsored, // ASIN-level: true if appears sponsored anywhere on Page 1
       sponsoredPositions: sponsoredPositions, // ASIN-level: all positions where ASIN appeared as sponsored
       organicPosition: pw.organicRank, // Alias for organic_rank (null if sponsored)
