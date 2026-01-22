@@ -212,13 +212,24 @@ export function normalizeListing(raw: any): ParsedListing {
     fulfillmentConfidence = 'low';
   }
   
+  // Extract sponsored fields
+  const isSponsored = typeof raw.isSponsored === 'boolean' ? raw.isSponsored : Boolean(raw.is_sponsored === true || raw.IsSponsored === true);
+  const sponsoredPosition = isSponsored ? (raw.sponsored_position ?? raw.ad_position ?? null) : null;
+  const sponsoredSource: 'rainforest_serp' | 'organic_serp' = raw.sponsored_source ?? (isSponsored ? 'rainforest_serp' : 'organic_serp');
+  
+  // Extract position (required field)
+  const position = raw.position ?? raw.organic_rank ?? raw.Position ?? 0;
+  
+  // Extract image_url (required field, not image)
+  const image_url = raw.image_url ?? raw.image ?? raw.Image ?? raw.images?.[0] ?? null;
+
   return {
     asin: raw.asin ?? raw.ASIN ?? "",
     title,
     price: raw.price?.value ?? raw.price ?? raw.Price ?? null,
     rating: raw.rating ?? raw.Rating ?? null,
     reviews: raw.reviews?.count ?? raw.reviews ?? raw.Reviews ?? raw.review_count ?? null,
-    image: raw.image ?? raw.image_url ?? raw.Image ?? raw.images?.[0] ?? null,
+    image_url, // Required field: use image_url, not image
     bsr, // DEPRECATED: use main_category_bsr
     main_category_bsr, // Main category BSR (top-level category only)
     main_category, // Main category name
@@ -226,9 +237,12 @@ export function normalizeListing(raw: any): ParsedListing {
     fulfillmentSource,
     fulfillmentConfidence,
     // Canonical sponsored status: Use isSponsored if available, otherwise normalize from is_sponsored
-    isSponsored: typeof raw.isSponsored === 'boolean' ? raw.isSponsored : Boolean(raw.is_sponsored === true || raw.IsSponsored === true),
-    sponsored: typeof raw.isSponsored === 'boolean' ? raw.isSponsored : Boolean(raw.is_sponsored === true || raw.IsSponsored === true), // DEPRECATED: Use isSponsored
-    organic_rank: raw.organic_rank ?? raw.position ?? raw.Position ?? null,
+    isSponsored,
+    is_sponsored: isSponsored, // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
+    sponsored_position: sponsoredPosition, // Required field
+    sponsored_source: sponsoredSource, // Required field
+    position, // Required field: organic rank (1-indexed position on Page 1)
+    organic_rank: raw.organic_rank ?? raw.position ?? raw.Position ?? null, // Legacy field
     // ASIN-level sponsored aggregation (if available, otherwise default to instance-level)
     // CRITICAL: appearsSponsored is ASIN-level property, not instance-level
     appearsSponsored: typeof raw.appearsSponsored === 'boolean' 
