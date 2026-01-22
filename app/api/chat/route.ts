@@ -261,7 +261,7 @@ function buildCompactContext(
  */
 function buildSelectedAsinsArrayFromContract(
   selectedAsins: string[],
-  contract: { listings: Array<{ asin: string; [key: string]: unknown }> }
+  contract: { listings: Array<{ asin: string } & Record<string, unknown>> } | { listings: any[] }
 ): Array<{
   asin: string;
   title: string | null;
@@ -283,14 +283,16 @@ function buildSelectedAsinsArrayFromContract(
   }
 
   // Get listings from stable contract format
-  const listings = contract.listings || [];
+  // Type assertion needed because ListingCard doesn't have index signature
+  const listings = (contract.listings as any[]) || [];
 
   // Normalize ASINs for comparison (uppercase, trimmed)
   const normalizeAsin = (asin: string) => asin.trim().toUpperCase();
   const selectedAsinsNormalized = selectedAsins.map(normalizeAsin);
 
   // Match selected ASINs to listings
-  const selectedProducts = listings
+  // Use type assertion to handle both contract format and legacy format
+  const selectedProducts = (listings as any[])
     .filter((product: any) => {
       if (!product || !product.asin) return false;
       const productAsin = normalizeAsin(product.asin);
@@ -304,7 +306,8 @@ function buildSelectedAsinsArrayFromContract(
       rating: typeof product.rating === 'number' ? product.rating : 0,
       reviews: typeof product.review_count === 'number' ? product.review_count : 
                (typeof product.reviews === 'number' ? product.reviews : 0),
-      bsr: typeof product.bsr === 'number' ? product.bsr : null,
+      bsr: typeof product.main_category_bsr === 'number' ? product.main_category_bsr :
+           (typeof product.bsr === 'number' ? product.bsr : null),
       is_sponsored: product.is_sponsored === true ? true : 
                     (product.is_sponsored === false ? false : null),
       prime_eligible: product.is_prime === true ? true : 
