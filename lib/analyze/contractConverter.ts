@@ -242,11 +242,11 @@ export function convertToAnalyzeContract(
     market_summary: marketSummary,
     enrichment_status: {
       sp_api_catalog: {
-        status: enrichment.sp_api_catalog?.status || "skipped",
+        status: (enrichment.sp_api_catalog?.status as "pending" | "complete" | "skipped" | "failed") || "skipped",
         asin_count: enrichment.sp_api_catalog?.asin_count || 0,
       },
       bsr_extraction: {
-        status: enrichment.bsr_extraction?.status || "skipped",
+        status: (enrichment.bsr_extraction?.status as "pending" | "complete" | "skipped" | "failed") || "skipped",
         asin_count: enrichment.bsr_extraction?.asin_count || 0,
       },
     },
