@@ -1415,6 +1415,7 @@ export function parseRainforestSearchResults(
         page: 1,
         total_results: undefined,
       },
+      asinSponsoredMeta: new Map(), // Empty map if no results
       warnings: ["NO_RESULTS_RETURNED"],
     };
   }
