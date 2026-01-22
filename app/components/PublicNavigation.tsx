@@ -21,9 +21,9 @@ export default function PublicNavigation() {
             <Image
               src="/sellerev-logo.png"
               alt="Sellerev"
-              width={120}
-              height={32}
-              className="h-8 w-auto"
+              width={160}
+              height={48}
+              className="h-10 md:h-12 w-auto"
               priority
             />
           </Link>
