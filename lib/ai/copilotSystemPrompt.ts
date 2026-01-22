@@ -129,6 +129,8 @@ export function buildCopilotSystemPrompt(
       total_listings: number;
       avg_price: number;
       avg_reviews: number;
+      sponsored_pct: number;
+      organic_pct: number;
       [key: string]: unknown;
     };
     [key: string]: unknown;
@@ -991,8 +993,8 @@ Market Summary:
 - Total listings: ${analyzeContract.market_summary?.total_listings || 0}
 - Average price: $${analyzeContract.market_summary?.avg_price?.toFixed(2) || '0.00'}
 - Average reviews: ${analyzeContract.market_summary?.avg_reviews?.toLocaleString() || 0}
-- Sponsored percentage: ${analyzeContract.market_summary?.sponsored_pct?.toFixed(1) || '0.0'}%
-- Organic percentage: ${analyzeContract.market_summary?.organic_pct?.toFixed(1) || '0.0'}%
+- Sponsored percentage: ${typeof analyzeContract.market_summary?.sponsored_pct === 'number' ? analyzeContract.market_summary.sponsored_pct.toFixed(1) : '0.0'}%
+- Organic percentage: ${typeof analyzeContract.market_summary?.organic_pct === 'number' ? analyzeContract.market_summary.organic_pct.toFixed(1) : '0.0'}%
 
 Listings: ${analyzeContract.listings?.length || 0} normalized ListingCard objects
 Each listing contains: asin, title, price, rating, review_count, is_sponsored, fulfillment, 
