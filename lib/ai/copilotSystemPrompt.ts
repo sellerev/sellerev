@@ -133,6 +133,17 @@ export function buildCopilotSystemPrompt(
       organic_pct: number;
       [key: string]: unknown;
     };
+    enrichment_status?: {
+      sp_api_catalog?: {
+        status: string;
+        asin_count: number;
+      };
+      bsr_extraction?: {
+        status: string;
+        asin_count: number;
+      };
+      [key: string]: unknown;
+    };
     [key: string]: unknown;
   } | undefined) || null;
   
