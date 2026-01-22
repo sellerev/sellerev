@@ -15,7 +15,7 @@ export interface ParsedListing {
   bsr: number | null; // DEPRECATED: use main_category_bsr
   main_category_bsr: number | null; // Main category Best Seller Rank (top-level category only)
   main_category: string | null; // Main category name (e.g., "Home & Kitchen")
-  fulfillment: "FBA" | "FBM" | "Amazon" | null;
+  fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN"; // Fulfillment type (normalized at ingest, never null)
   sponsored: boolean;
   organic_rank: number | null;
   brand: string | null; // DEPRECATED: Use brand_resolution.raw_brand instead. Kept for backward compatibility.
@@ -157,35 +157,43 @@ export function normalizeListing(raw: any): ParsedListing {
   const raw_image_url = raw.raw_image_url ?? null;
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // FULFILLMENT NORMALIZATION: Infer FBA from delivery text (e.g., "shipped by Amazon")
+  // FULFILLMENT NORMALIZATION: Infer from is_prime and delivery (canonical at ingest)
   // ═══════════════════════════════════════════════════════════════════════════
-  // Use delivery text to infer FBA status, not Prime flags
-  let fulfillment: "FBA" | "FBM" | "Amazon" | null = raw.fulfillment ?? raw.Fulfillment ?? null;
+  // 🔒 CANONICAL FULFILLMENT INFERENCE (SERP-based market analysis)
+  // Priority: is_prime → delivery text → delivery exists → UNKNOWN
+  // This is market-level inference, not checkout accuracy.
+  let fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN" = raw.fulfillment ?? raw.Fulfillment ?? null;
   
-  // If fulfillment is not already set, check delivery text for FBA indicators
-  if (!fulfillment && raw.delivery) {
-    const deliveryStr = typeof raw.delivery === 'string' 
-      ? raw.delivery 
-      : (raw.delivery?.text || raw.delivery?.message || String(raw.delivery));
-    
-    if (typeof deliveryStr === 'string') {
-      const deliveryLower = deliveryStr.toLowerCase();
-      // Check for "shipped by Amazon" or similar FBA indicators
-      if (deliveryLower.includes('shipped by amazon') || 
-          deliveryLower.includes('fulfilled by amazon') ||
-          deliveryLower.includes('ships from amazon')) {
+  // If fulfillment is not already set, infer from Rainforest signals
+  if (!fulfillment || fulfillment === null) {
+    // STEP 1: PRIMARY SIGNAL - is_prime === true → FBA
+    if (raw.is_prime === true) {
+      fulfillment = "FBA";
+    }
+    // STEP 2: Check delivery.tagline OR delivery.text for FBA indicators
+    else if (raw.delivery) {
+      const deliveryTagline = raw.delivery?.tagline || "";
+      const deliveryText = raw.delivery?.text || raw.delivery?.message || "";
+      const deliveryStr = (deliveryTagline + " " + deliveryText).toLowerCase();
+      
+      // Check for Prime, "Get it", or "Amazon" indicators
+      if (
+        deliveryStr.includes("prime") ||
+        deliveryStr.includes("get it") ||
+        deliveryStr.includes("amazon") ||
+        deliveryStr.includes("shipped by amazon") ||
+        deliveryStr.includes("fulfilled by amazon") ||
+        deliveryStr.includes("ships from amazon")
+      ) {
         fulfillment = "FBA";
       }
-      // Check for FBM indicators
-      else if (deliveryLower.includes('ships from') && !deliveryLower.includes('amazon')) {
+      // STEP 3: If delivery info exists but no FBA indicators → FBM
+      else if (deliveryTagline || deliveryText) {
         fulfillment = "FBM";
       }
     }
-  }
-  
-  // Check explicit fulfillment fields if still not set
-  if (!fulfillment) {
-    if (raw.fba === true || raw.is_fba === true || raw.fulfillment_type === "FBA") {
+    // STEP 4: Check explicit fulfillment fields
+    else if (raw.fba === true || raw.is_fba === true || raw.fulfillment_type === "FBA") {
       fulfillment = "FBA";
     } else if (raw.fulfillment_type === "FBM") {
       fulfillment = "FBM";
@@ -194,9 +202,9 @@ export function normalizeListing(raw: any): ParsedListing {
     }
   }
   
-  // Fallback to existing fulfillment if still null
-  if (!fulfillment) {
-    fulfillment = null;
+  // Fallback to UNKNOWN if still not set
+  if (!fulfillment || fulfillment === null) {
+    fulfillment = "UNKNOWN";
   }
   
   return {

@@ -22,7 +22,8 @@ export interface PageOneDemandInputs {
     price: number | null;
     reviews: number | null;
     rating: number | null;
-    is_sponsored: boolean | null; // null = unknown (excluded from organic count)
+    isSponsored?: boolean; // Canonical sponsored status (always boolean, normalized at ingest)
+    is_sponsored?: boolean | null; // DEPRECATED: Use isSponsored instead
   }>;
   category?: string | null;
   avgPrice?: number | null;
@@ -82,8 +83,12 @@ export function estimatePageOneDemand({
   category,
   avgPrice,
 }: PageOneDemandInputs): PageOneDemandEstimate {
-  // Filter organic listings only (exclude sponsored and unknown)
-  const organicListings = listings.filter(l => l.is_sponsored === false);
+  // Filter organic listings only (exclude sponsored)
+  // Use isSponsored if available, otherwise fall back to is_sponsored
+  const organicListings = listings.filter(l => {
+    const isSponsored = typeof l.isSponsored === 'boolean' ? l.isSponsored : Boolean(l.is_sponsored === true);
+    return isSponsored === false;
+  });
   const organicCount = organicListings.length;
 
   if (organicCount === 0) {

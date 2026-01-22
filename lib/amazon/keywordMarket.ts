@@ -160,7 +160,7 @@ export interface ParsedListing {
   bsr: number | null; // Best Seller Rank (if available from Rainforest) - DEPRECATED: use main_category_bsr
   main_category_bsr: number | null; // Main category Best Seller Rank (top-level category only)
   main_category: string | null; // Main category name (e.g., "Home & Kitchen")
-  fulfillment: "FBA" | "FBM" | "Amazon" | null; // Fulfillment type (if available)
+  fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN"; // Fulfillment type (normalized at ingest, never null)
   seller?: string | null; // Seller name (for Amazon Retail detection)
   is_prime?: boolean; // Prime eligibility (for FBA detection)
   est_monthly_revenue?: number | null; // 30-day revenue estimate (modeled)
@@ -628,47 +628,56 @@ function parseBSR(item: any): number | null {
 }
 
 /**
- * Safely parses fulfillment type (FBA/FBM/Amazon).
+ * Infers fulfillment type from Rainforest search results (SERP-based market analysis).
  * 
- * 🔒 STRICT RULE: Rainforest does NOT guarantee fulfillment data.
- * Only return fulfillment if explicitly provided by Rainforest or SP-API.
- * DO NOT infer fulfillment from is_prime (Prime ≠ FBA).
+ * 🔒 CANONICAL FULFILLMENT INFERENCE (NORMALIZED AT INGEST):
+ * This is market-level inference for competitive analysis, not checkout accuracy.
+ * 
+ * Priority:
+ * 1. If item.is_prime === true → "FBA" (PRIMARY signal)
+ * 2. Else if delivery.tagline OR delivery.text contains "Prime", "Get it", or "Amazon" → "FBA"
+ * 3. Else if delivery info exists → "FBM"
+ * 4. Else → "UNKNOWN"
+ * 
+ * Note: We do NOT use SP-API or Offers API for fulfillment in Analyze flow.
  */
-function parseFulfillment(item: any): "FBA" | "FBM" | "Amazon" | null {
+function inferFulfillmentFromSearchResult(item: any): "FBA" | "FBM" | "Amazon" | "UNKNOWN" {
   // Check if sold by Amazon (explicit field)
   if (item.is_amazon === true || item.buybox_winner?.type === "Amazon") {
     return "Amazon";
   }
   
-  // Try explicit fulfillment field from Rainforest (if provided)
-  if (item.fulfillment) {
-    const fulfillment = item.fulfillment.toString().toUpperCase();
-    if (fulfillment.includes("FBA") || fulfillment.includes("FULFILLED BY AMAZON")) {
-      return "FBA";
-    }
-    if (fulfillment.includes("FBM") || fulfillment.includes("MERCHANT")) {
-      return "FBM";
-    }
-    if (fulfillment.includes("AMAZON")) {
-      return "Amazon";
-    }
-  }
-  
-  // Check explicit FBA/FBM flags (if provided)
-  if (item.fba === true || item.is_fba === true || item.fulfillment_type === "FBA") {
+  // STEP 1: PRIMARY SIGNAL - is_prime === true → FBA
+  if (item.is_prime === true) {
     return "FBA";
   }
-  if (item.fulfillment_type === "FBM") {
-    return "FBM";
+  
+  // STEP 2: Check delivery.tagline OR delivery.text for FBA indicators
+  if (item.delivery) {
+    const deliveryTagline = item.delivery?.tagline || "";
+    const deliveryText = item.delivery?.text || item.delivery?.message || "";
+    const deliveryStr = (deliveryTagline + " " + deliveryText).toLowerCase();
+    
+    // Check for Prime, "Get it", or "Amazon" indicators
+    if (
+      deliveryStr.includes("prime") ||
+      deliveryStr.includes("get it") ||
+      deliveryStr.includes("amazon") ||
+      deliveryStr.includes("shipped by amazon") ||
+      deliveryStr.includes("fulfilled by amazon") ||
+      deliveryStr.includes("ships from amazon")
+    ) {
+      return "FBA";
+    }
+    
+    // STEP 3: If delivery info exists but no FBA indicators → FBM
+    if (deliveryTagline || deliveryText) {
+      return "FBM";
+    }
   }
   
-  // ❌ DO NOT infer from is_prime - Prime ≠ FBA
-  // ❌ DO NOT parse delivery.text - not guaranteed
-  // ❌ DO NOT parse badges - not guaranteed
-  
-  // Return null if fulfillment cannot be determined
-  // This is honest and credible - UI will show "Unknown" or Prime badge only
-  return null;
+  // STEP 4: No fulfillment signals found → UNKNOWN
+  return "UNKNOWN";
 }
 
 /**
@@ -2690,11 +2699,13 @@ export async function fetchKeywordMarketSnapshot(
       }
       
       // ═══════════════════════════════════════════════════════════════════════════
-      // FULFILLMENT: Do NOT infer from Rainforest - only SP-API Pricing is authoritative
+      // FULFILLMENT: Infer from Rainforest search results (normalized at ingest)
       // ═══════════════════════════════════════════════════════════════════════════
-      // CRITICAL: Rainforest fulfillment inference is NOT canonical
-      // Set to null initially - will be set by SP-API Pricing if available
-      const fulfillment: "FBA" | "FBM" | "Amazon" | null = null;
+      // 🔒 CANONICAL FULFILLMENT INFERENCE (SERP-based market analysis)
+      // Priority: is_prime → delivery text → delivery exists → UNKNOWN
+      // This is market-level inference, not checkout accuracy.
+      // We do NOT use SP-API or Offers API for fulfillment in Analyze flow.
+      const fulfillment: "FBA" | "FBM" | "Amazon" | "UNKNOWN" = inferFulfillmentFromSearchResult(item);
       
       // ═══════════════════════════════════════════════════════════════════════════
       // BRAND RESOLUTION: Search-based only (will be overridden by SP-API if available)

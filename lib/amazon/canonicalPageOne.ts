@@ -789,22 +789,27 @@ export function buildKeywordPageOne(
     const asin = (l.asin as string).trim().toUpperCase();
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // NORMALIZE FULFILLMENT (Helium-10 Style)
+    // NORMALIZE FULFILLMENT (Use fulfillment already inferred at ingest)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Rule: If Prime-eligible → "FBA", else → "FBM"
-    // Do NOT infer from seller name - use is_prime flag only
+    // Fulfillment is already normalized at ingest time using:
+    // 1. is_prime === true → "FBA" (PRIMARY signal)
+    // 2. delivery text contains "Prime", "Get it", or "Amazon" → "FBA"
+    // 3. delivery info exists → "FBM"
+    // 4. Else → "UNKNOWN"
+    // Map from ParsedListing fulfillment to CanonicalProduct fulfillment
     let fulfillment: "FBA" | "FBM" | "AMZ";
-    if (l.is_prime === true) {
-      fulfillment = "FBA"; // Prime-eligible = FBA
-    } else {
-      fulfillment = "FBM"; // Not Prime = FBM (default)
-    }
-    
-    // Special case: Amazon Retail (sold by Amazon)
-    // Check seller name or brand for Amazon Retail
-    const isAmazonRetail = l.seller === "Amazon" || l.brand === "Amazon";
-    if (isAmazonRetail) {
+    if (l.fulfillment === "Amazon") {
       fulfillment = "AMZ";
+    } else if (l.fulfillment === "FBA") {
+      fulfillment = "FBA";
+    } else if (l.fulfillment === "FBM") {
+      fulfillment = "FBM";
+    } else if (l.fulfillment === "UNKNOWN") {
+      // Map UNKNOWN to FBM as default (conservative assumption)
+      fulfillment = "FBM";
+    } else {
+      // Fallback to FBM if fulfillment is somehow null/undefined
+      fulfillment = "FBM";
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
