@@ -130,11 +130,17 @@ export function buildTier1Products(
     const estimatedUnits = estimateUnitsFast(estimatedRevenue, price);
     
     // Determine fulfillment (simplified for Tier-1)
+    // Map from ParsedListing fulfillment (UNKNOWN) to Tier1Product fulfillment (Unknown)
     let fulfillment: 'FBA' | 'FBM' | 'Amazon' | 'Unknown' = 'Unknown';
     if (listing.is_prime === true) {
       fulfillment = 'FBA';
     } else if (listing.fulfillment) {
-      fulfillment = listing.fulfillment;
+      // Map "UNKNOWN" to "Unknown" for Tier1Product type
+      if (listing.fulfillment === 'UNKNOWN') {
+        fulfillment = 'Unknown';
+      } else {
+        fulfillment = listing.fulfillment as 'FBA' | 'FBM' | 'Amazon';
+      }
     } else {
       fulfillment = 'FBM'; // Default assumption
     }
