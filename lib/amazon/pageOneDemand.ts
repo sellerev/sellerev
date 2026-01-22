@@ -24,6 +24,7 @@ export interface PageOneDemandInputs {
     rating: number | null;
     isSponsored?: boolean; // Canonical sponsored status (always boolean, normalized at ingest)
     is_sponsored?: boolean | null | undefined; // DEPRECATED: Use isSponsored instead (optional, can be undefined)
+    appearsSponsored?: boolean; // ASIN-level: true if appears sponsored anywhere on Page 1
   }>;
   category?: string | null;
   avgPrice?: number | null;
