@@ -157,38 +157,40 @@ export function normalizeListing(raw: any): ParsedListing {
   const raw_image_url = raw.raw_image_url ?? null;
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // FULFILLMENT NORMALIZATION: Infer FBA from Prime eligibility indicators
+  // FULFILLMENT NORMALIZATION: Infer FBA from delivery text (e.g., "shipped by Amazon")
   // ═══════════════════════════════════════════════════════════════════════════
-  // Cached listings may lack fulfillment_channel but have Prime indicators
-  // Check for Prime eligibility to infer FBA
+  // Use delivery text to infer FBA status, not Prime flags
   let fulfillment: "FBA" | "FBM" | "Amazon" | null = raw.fulfillment ?? raw.Fulfillment ?? null;
   
-  // If fulfillment is not already set, check for Prime indicators
+  // If fulfillment is not already set, check delivery text for FBA indicators
+  if (!fulfillment && raw.delivery) {
+    const deliveryStr = typeof raw.delivery === 'string' 
+      ? raw.delivery 
+      : (raw.delivery?.text || raw.delivery?.message || String(raw.delivery));
+    
+    if (typeof deliveryStr === 'string') {
+      const deliveryLower = deliveryStr.toLowerCase();
+      // Check for "shipped by Amazon" or similar FBA indicators
+      if (deliveryLower.includes('shipped by amazon') || 
+          deliveryLower.includes('fulfilled by amazon') ||
+          deliveryLower.includes('ships from amazon')) {
+        fulfillment = "FBA";
+      }
+      // Check for FBM indicators
+      else if (deliveryLower.includes('ships from') && !deliveryLower.includes('amazon')) {
+        fulfillment = "FBM";
+      }
+    }
+  }
+  
+  // Check explicit fulfillment fields if still not set
   if (!fulfillment) {
-    // Check is_prime flag
-    if (raw.is_prime === true || raw.isPrime === true) {
+    if (raw.fba === true || raw.is_fba === true || raw.fulfillment_type === "FBA") {
       fulfillment = "FBA";
-    }
-    // Check delivery field for "Prime" text
-    else if (raw.delivery) {
-      const deliveryStr = typeof raw.delivery === 'string' 
-        ? raw.delivery 
-        : (raw.delivery?.text || raw.delivery?.message || String(raw.delivery));
-      if (typeof deliveryStr === 'string' && deliveryStr.toLowerCase().includes('prime')) {
-        fulfillment = "FBA";
-      }
-    }
-    // Check badges array for "Prime" badge
-    else if (raw.badges && Array.isArray(raw.badges)) {
-      const hasPrimeBadge = raw.badges.some((badge: any) => {
-        const badgeText = typeof badge === 'string' 
-          ? badge 
-          : (badge?.text || badge?.label || String(badge));
-        return typeof badgeText === 'string' && badgeText.toLowerCase().includes('prime');
-      });
-      if (hasPrimeBadge) {
-        fulfillment = "FBA";
-      }
+    } else if (raw.fulfillment_type === "FBM") {
+      fulfillment = "FBM";
+    } else if (raw.is_amazon === true || raw.buybox_winner?.type === "Amazon") {
+      fulfillment = "Amazon";
     }
   }
   

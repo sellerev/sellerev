@@ -5,7 +5,6 @@ import { fetchKeywordMarketSnapshot, KeywordMarketData, KeywordMarketSnapshot, P
 import { pickRepresentativeAsin } from "@/lib/amazon/representativeAsin";
 import { calculateCPI } from "@/lib/amazon/competitivePressureIndex";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
-import { resolveFbaFees } from "@/lib/spapi/resolveFbaFees";
 import { buildMarginSnapshot } from "@/lib/margins/buildMarginSnapshot";
 import { buildKeywordAnalyzeResponse } from "@/lib/analyze/dataContract";
 import { normalizeRisks } from "@/lib/analyze/normalizeRisks";
@@ -16,7 +15,6 @@ import { buildTier1Snapshot } from "@/lib/analyze/tier1Snapshot";
 import { refineTier2Estimates, Tier2RefinementContext } from "@/lib/estimators/tier2Refinement";
 import { TieredAnalyzeResponse } from "@/types/tierContracts";
 import { batchEnrichCatalogItems } from "@/lib/spapi/catalogItems";
-import { batchEnrichPricing } from "@/lib/spapi/pricing";
 
 // TODO: AI PROMPTS DISABLED - Re-enable when AI processing is needed
 // PASS 1: Decision Brain - Plain text verdict and reasoning
@@ -1335,162 +1333,10 @@ export async function POST(req: NextRequest) {
             timestamp: new Date().toISOString(),
           });
           
-          // FIRE-AND-FORGET: SP-API Catalog and Pricing enrichment (do NOT await)
+          // ASYNC ENRICHMENT: SP-API Catalog enrichment runs in background (after response)
           // This enrichment is for cache refresh - not needed for immediate response
           // Cached data is already sufficient for rendering
-          (async () => {
-            try {
-              const [_, pricingResult] = await Promise.all([
-                batchEnrichCatalogItems(asins, spApiCatalogResults, marketplaceId, 2000, normalizedKeyword),
-                batchEnrichPricing(asins, marketplaceId, 2000, undefined, user.id),
-              ]);
-              
-              // Apply enrichment in background (for cache updates, not blocking response)
-              const listingMap = new Map<string, ParsedListing>();
-              realMarketData?.listings.forEach((listing: ParsedListing) => {
-                if (listing.asin) {
-                  listingMap.set(normalizeAsin(listing.asin), listing);
-                }
-              });
-              
-              // ═══════════════════════════════════════════════════════════════════════
-              // APPLY SP-API CATALOG ENRICHMENT (CANONICAL SOURCE)
-              // ═══════════════════════════════════════════════════════════════════════
-              // SP-API always overrides Rainforest for: title, brand, image, category, BSR
-              // Rainforest used for: ASIN discovery, rank, sponsored/organic, reviews, rating
-              for (const [asin, metadata] of spApiCatalogResults.entries()) {
-                const asinKey = normalizeAsin(asin);
-                const listing = listingMap.get(asinKey);
-                if (listing) {
-                  (listing as any).had_sp_api_response = true;
-                  if (!(listing as any).enrichment_state || (listing as any).enrichment_state === 'raw') {
-                    (listing as any).enrichment_state = 'sp_api_catalog_enriched';
-                  }
-                  
-                  // ✅ TITLE: SP-API always overrides Rainforest
-                  if (metadata.title) {
-                    listing.title = metadata.title;
-                    (listing as any).title_source = 'sp_api';
-                    (listing as any).title_confidence = 'high';
-                  }
-                  
-                  // ✅ BRAND: SP-API always overrides, never parse titles if SP-API brand exists
-                  if (metadata.brand) {
-                    listing.brand = metadata.brand;
-                    (listing as any).brand_source = 'sp_api';
-                    (listing as any).brand_confidence = 'high';
-                    listing.brand_resolution = {
-                      raw_brand: metadata.brand,
-                      normalized_brand: metadata.brand,
-                      brand_status: 'canonical',
-                      brand_source: 'sp_api'
-                    };
-                  }
-                  
-                  // ✅ IMAGE: SP-API preferred, fallback to Rainforest
-                  if (metadata.image_url) {
-                    listing.image_url = metadata.image_url;
-                    (listing as any).image_source = 'sp_api';
-                    (listing as any).image_confidence = 'high';
-                  }
-                  
-                  // ✅ CATEGORY: SP-API is authoritative
-                  if (metadata.category) {
-                    listing.main_category = metadata.category;
-                    (listing as any).category_source = 'sp_api_catalog';
-                    (listing as any).category_confidence = 'high';
-                  }
-                  
-                  // ✅ BSR: Only category-based from SP-API, mark unavailable if missing
-                  if (metadata.bsr != null && metadata.bsr > 0) {
-                    listing.bsr = metadata.bsr;
-                    listing.main_category_bsr = metadata.bsr;
-                    (listing as any).bsr_source = 'sp_api';
-                    (listing as any).bsr_confidence = 'high';
-                    (listing as any).had_sp_api_response = true;
-                    if (!(listing as any).enrichment_sources) {
-                      (listing as any).enrichment_sources = {};
-                    }
-                    (listing as any).enrichment_sources.sp_api_catalog = true;
-                    (listing as any).enrichment_state = 'sp_api_catalog_enriched';
-                  } else {
-                    // SP-API BSR missing - mark as unavailable
-                    listing.bsr = null;
-                    listing.main_category_bsr = null;
-                    (listing as any).bsr_source = 'unavailable';
-                    (listing as any).bsr_confidence = 'unknown';
-                  }
-                  
-                  // Source tracking for fields not set above
-                  if (!(listing as any).title_source) {
-                    (listing as any).title_source = 'rainforest';
-                    (listing as any).title_confidence = 'fallback';
-                  }
-                  if (!(listing as any).image_source) {
-                    (listing as any).image_source = 'rainforest';
-                    (listing as any).image_confidence = 'fallback';
-                  }
-                }
-              }
-              
-              // ═══════════════════════════════════════════════════════════════════════
-              // APPLY SP-API PRICING ENRICHMENT (AUTHORITATIVE SOURCE)
-              // ═══════════════════════════════════════════════════════════════════════
-              // SP-API Pricing provides: Buy Box price, FBA/FBM fulfillment
-              // If unavailable: use Rainforest price fallback, set fulfillment = unknown
-              if (pricingResult && pricingResult.enriched && pricingResult.enriched.size > 0) {
-                for (const [asin, metadata] of pricingResult.enriched.entries()) {
-                  const listing = listingMap.get(normalizeAsin(asin));
-                  if (listing) {
-                    // ✅ FULFILLMENT: SP-API Pricing is authoritative (never infer from Rainforest)
-                    if (metadata.fulfillment_channel) {
-                      listing.fulfillment = metadata.fulfillment_channel === 'FBA' ? 'FBA' : 'FBM';
-                      (listing as any).fulfillment_source = 'sp_api_pricing';
-                      (listing as any).fulfillment_confidence = 'high';
-                    }
-                    
-                    // ✅ PRICE: SP-API Pricing (Buy Box) is authoritative
-                    if (metadata.buy_box_price !== null) {
-                      listing.price = metadata.buy_box_price;
-                      (listing as any).price_source = 'sp_api_pricing';
-                      (listing as any).price_confidence = 'high';
-                    } else if (metadata.lowest_price !== null) {
-                      listing.price = metadata.lowest_price;
-                      (listing as any).price_source = 'sp_api_pricing';
-                      (listing as any).price_confidence = 'high';
-                    }
-                  }
-                }
-              } else {
-                // SP-API Pricing unavailable - mark fulfillment as unknown
-                for (const listing of listingMap.values()) {
-                  if (!listing.fulfillment || !(listing as any).fulfillment_source || (listing as any).fulfillment_source !== 'sp_api_pricing') {
-                    listing.fulfillment = null;
-                    (listing as any).fulfillment_source = 'unknown';
-                    (listing as any).fulfillment_confidence = 'unknown';
-                  }
-                  // Price source tracking (already set from cache or will use Rainforest fallback)
-                  if (listing.price !== null && listing.price !== undefined && !(listing as any).price_source) {
-                    (listing as any).price_source = 'rainforest';
-                    (listing as any).price_confidence = 'fallback';
-                  }
-                }
-              }
-              
-              console.log("SP_API_ENRICHMENT_COMPLETE_AFTER_CACHE", {
-                keyword: normalizedKeyword,
-                catalog_enriched: spApiCatalogResults.size,
-                pricing_enriched: pricingResult?.enriched?.size || 0,
-              });
-            } catch (err: any) {
-              // Log error but continue - SP-API enrichment is non-fatal and non-blocking
-              const errorMessage = err?.message || String(err) || 'Unknown error';
-              console.warn("SP_API_ENRICHMENT_ERROR_AFTER_CACHE (non-blocking)", {
-                keyword: normalizedKeyword,
-                error: errorMessage,
-              });
-            }
-          })();
+          // NOTE: This will be triggered after response is sent (see async enrichment section below)
         }
       } else {
         // No cache - fetch from Rainforest (only if confidence is not HIGH)
@@ -1915,28 +1761,9 @@ export async function POST(req: NextRequest) {
     let contractResponse: any = null;
     let marginSnapshot: any = null;
     
-    // First, calculate margin snapshot (needed for contract response)
+    // Build margin snapshot (FBA fees removed - no longer blocking)
     try {
-      const priceForMargin = marketSnapshot?.avg_price || 25.0;
-      
-      // Fetch FBA fees first (needed for margin calculation)
-      let fbaFees: { total_fba_fees: number | null; source: "sp_api" | "estimated" | "unknown" } | null = null;
-      
-      if (keywordMarketData && marketSnapshot) {
-        const representativeAsin = pickRepresentativeAsin(keywordMarketData.listings);
-        if (representativeAsin) {
-          // Use default US marketplace ID (ATVPDKIKX0DER) for FBA fee resolution
-          const fbaFeesResult = await resolveFbaFees(representativeAsin, priceForMargin, "ATVPDKIKX0DER");
-          if (fbaFeesResult) {
-            fbaFees = {
-              total_fba_fees: fbaFeesResult.total_fba_fees,
-              source: "sp_api",
-            };
-          }
-        }
-      }
-      
-      // Build margin snapshot
+      // Build margin snapshot without FBA fees (removed from Analyze flow)
       marginSnapshot = buildMarginSnapshot({
         analysisMode: 'KEYWORD',
         sellerProfile: {
@@ -1946,7 +1773,7 @@ export async function POST(req: NextRequest) {
         marketSnapshot: marketSnapshot ? {
           avg_price: marketSnapshot.avg_price,
         } : null,
-        fbaFees,
+        fbaFees: null, // FBA fees removed from Analyze flow
         userOverrides: null,
       });
     } catch (error) {
@@ -3373,12 +3200,98 @@ export async function POST(req: NextRequest) {
     });
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 6: Return listings immediately (no AI blocking)
+    // STEP 6: Prepare async enrichment (runs after response is sent)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Extract ASINs for async SP-API catalog enrichment (BSR extraction)
+    const page1Asins = Array.from(new Set(
+      finalListings
+        .map((l: any) => l.asin)
+        .filter((asin: string | null) => asin && /^[A-Z0-9]{10}$/i.test(asin.trim().toUpperCase()))
+        .map((asin: string) => asin.trim().toUpperCase())
+    ));
+    
+    // Track enrichment status
+    const enrichmentStatus = {
+      sp_api_catalog: {
+        status: page1Asins.length > 0 ? "pending" : "skipped",
+        asin_count: page1Asins.length,
+      },
+      bsr_extraction: {
+        status: page1Asins.length > 0 ? "pending" : "skipped",
+        asin_count: page1Asins.length,
+      },
+    };
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 7: Return listings immediately (no blocking on SP-API or BSR)
     // ═══════════════════════════════════════════════════════════════════════════
     // CRITICAL: Always return success with listings if listings.length > 0
     // Response shape MUST always include listings and snapshot
     // AI-related fields will be null (decision, summary, insights, etc.)
+    // SP-API catalog and BSR enrichment run asynchronously AFTER response is sent
     console.timeEnd("ANALYZE_TOTAL");
+    
+    // Trigger async enrichment AFTER response is sent (fire-and-forget)
+    // SP-API catalog enrichment and BSR extraction run asynchronously
+    if (page1Asins.length > 0 && keywordMarketData && keywordMarketData.listings) {
+      const marketplaceId = marketplace === 'amazon.com' ? 'ATVPDKIKX0DER' : 'ATVPDKIKX0DER';
+      const spApiCatalogResults = new Map<string, any>();
+      const normalizeAsin = (a: string) => a.trim().toUpperCase();
+      const listingsForEnrichment = keywordMarketData.listings; // Capture for async closure
+      const keywordForEnrichment = normalizedKeyword; // Capture for async closure
+      
+      // Fire-and-forget: SP-API catalog enrichment (includes BSR extraction)
+      (async () => {
+        try {
+          console.log("ASYNC_SP_API_ENRICHMENT_START", {
+            keyword: keywordForEnrichment,
+            asin_count: page1Asins.length,
+            timestamp: new Date().toISOString(),
+          });
+          
+          await batchEnrichCatalogItems(page1Asins, spApiCatalogResults, marketplaceId, 2000, keywordForEnrichment);
+          
+          // Apply enrichment to listings in memory (for cache updates)
+          const listingMap = new Map<string, ParsedListing>();
+          listingsForEnrichment.forEach((listing: ParsedListing) => {
+            if (listing.asin) {
+              listingMap.set(normalizeAsin(listing.asin), listing);
+            }
+          });
+          
+          // Apply SP-API catalog enrichment (title, brand, image, category, BSR)
+          for (const [asin, metadata] of spApiCatalogResults.entries()) {
+            const asinKey = normalizeAsin(asin);
+            const listing = listingMap.get(asinKey);
+            if (listing) {
+              // Update listing with SP-API data (for cache updates)
+              if (metadata.title) listing.title = metadata.title;
+              if (metadata.brand) listing.brand = metadata.brand;
+              if (metadata.image_url) listing.image_url = metadata.image_url;
+              if (metadata.category) listing.main_category = metadata.category;
+              if (metadata.bsr != null && metadata.bsr > 0) {
+                listing.bsr = metadata.bsr;
+                listing.main_category_bsr = metadata.bsr;
+              }
+            }
+          }
+          
+          console.log("ASYNC_SP_API_ENRICHMENT_COMPLETE", {
+            keyword: keywordForEnrichment,
+            catalog_enriched: spApiCatalogResults.size,
+            bsr_enriched: Array.from(spApiCatalogResults.values()).filter(m => m.bsr != null && m.bsr > 0).length,
+            timestamp: new Date().toISOString(),
+          });
+        } catch (err: any) {
+          const errorMessage = err?.message || String(err) || 'Unknown error';
+          console.warn("ASYNC_SP_API_ENRICHMENT_ERROR (non-blocking)", {
+            keyword: keywordForEnrichment,
+            error: errorMessage,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      })();
+    }
     
     return NextResponse.json(
       {
@@ -3395,6 +3308,8 @@ export async function POST(req: NextRequest) {
         products: finalListings,
         listings: finalListings, // Ensure listings field is always present
         aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
+        // Enrichment status indicating pending background tasks
+        enrichment_status: enrichmentStatus,
         // Spread contractResponse but ensure AI fields are null if not present
         ...(contractResponse ? {
           ...contractResponse,
