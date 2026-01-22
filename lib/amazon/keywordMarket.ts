@@ -10,6 +10,8 @@
  * - If data cannot be computed, omit it (do NOT fake it)
  */
 
+import { Appearance } from "@/types/search";
+
 /**
  * 🔒 CANONICAL RAINFOREST DATA CONTRACT
  * 
@@ -2694,6 +2696,29 @@ export async function fetchKeywordMarketSnapshot(
     // See below after listings are created (around line 2190+)
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // STEP 1: Convert Rainforest results → appearances (PRESERVE SPONSORED DATA)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: This is the moment sponsored data must be preserved.
+    // Do not drop it later.
+    const appearances: Appearance[] = searchResults.map((item: any, index: number) => ({
+      asin: item.asin,
+      position: item.position ?? index + 1,
+      isSponsored: Boolean(item.sponsored),
+      source: item.sponsored ? 'sponsored' : 'organic'
+    })).filter((app: Appearance) => app.asin && /^[A-Z0-9]{10}$/i.test(app.asin.trim()));
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SPONSORED DIAGNOSTICS (MANDATORY)
+    // ═══════════════════════════════════════════════════════════════════════════
+    console.log('SPONSORED_DIAGNOSTICS', {
+      totalAppearances: appearances.length,
+      sponsoredAppearances: appearances.filter(a => a.isSponsored).length,
+      uniqueSponsoredAsins: new Set(
+        appearances.filter(a => a.isSponsored).map(a => a.asin)
+      ).size
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // ASIN-LEVEL SPONSORED AGGREGATION (BEFORE DEDUPLICATION - CRITICAL)
     // ═══════════════════════════════════════════════════════════════════════════
     // CRITICAL: Sponsored is an ASIN-level property, not instance-level.
@@ -2705,13 +2730,9 @@ export async function fetchKeywordMarketSnapshot(
       sponsoredPositions: number[];
     }>();
     
-    for (let i = 0; i < searchResults.length; i++) {
-      const item = searchResults[i];
-      const asin = item?.asin?.trim().toUpperCase() || "";
+    for (const appearance of appearances) {
+      const asin = appearance.asin.trim().toUpperCase();
       if (!asin || !/^[A-Z0-9]{10}$/.test(asin)) continue;
-      
-      const isSponsored = Boolean(item.sponsored === true);
-      const position = item.position ?? i + 1;
       
       if (!asinSponsoredMeta.has(asin)) {
         asinSponsoredMeta.set(asin, {
@@ -2721,9 +2742,9 @@ export async function fetchKeywordMarketSnapshot(
       }
       
       const meta = asinSponsoredMeta.get(asin)!;
-      if (isSponsored === true) {
+      if (appearance.isSponsored === true) {
         meta.appearsSponsored = true;
-        meta.sponsoredPositions.push(position);
+        meta.sponsoredPositions.push(appearance.position);
       }
     }
 
@@ -3630,10 +3651,11 @@ export async function fetchKeywordMarketSnapshot(
     // ═══════════════════════════════════════════════════════════════════════════
     // SPONSORED COUNTING (ASIN-LEVEL - CRITICAL)
     // ═══════════════════════════════════════════════════════════════════════════
-    // CRITICAL: Use appearsSponsored (ASIN-level), NOT isSponsored (instance-level)
-    // This ensures sponsored counts reflect Page-1 advertising presence, not canonical instance selection.
+    // CRITICAL: Use appearances for metrics, NOT listings after deduplication
+    // This ensures sponsored counts reflect all Page-1 appearances, not canonical instance selection.
     // DO NOT MODIFY THIS LOGIC - it matches Helium 10 / Jungle Scout behavior.
-    const sponsored_count = listings.filter((l) => l.appearsSponsored === true).length;
+    // Note: appearances variable is created earlier in this function from searchResults
+    const sponsored_count = appearances.filter(a => a.isSponsored).length;
     const organic_count = listings.filter((l) => l.appearsSponsored === false).length;
     const unknown_sponsored_count = 0; // appearsSponsored is always boolean, no unknown states
     const sponsored_pct = total_page1_listings > 0

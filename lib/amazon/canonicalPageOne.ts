@@ -23,6 +23,7 @@
 import { ParsedListing, KeywordMarketSnapshot, BrandResolution } from "./keywordMarket";
 import { estimatePageOneDemand } from "./pageOneDemand";
 import { calibrateMarketTotals, calculateReviewDispersionFromListings, validateInvariants } from "./calibration";
+import { Appearance } from "@/types/search";
 
 export interface CanonicalProduct {
   rank: number | null; // Legacy field - kept for backward compatibility (equals organic_rank for organic, null for sponsored)
@@ -292,109 +293,128 @@ export function buildKeywordPageOne(
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 0: ASIN DEDUPLICATION (BEFORE ANY ESTIMATION)
+  // STEP 0: Convert listings → appearances (PRESERVE SPONSORED DATA)
   // ═══════════════════════════════════════════════════════════════════════════
-  // Core rule: One ASIN = one canonical product
-  // Selection priority:
-  // 1. Organic listings over sponsored listings
-  // 2. Best (lowest) rank among listings of the same type
-  // 
-  // For each ASIN:
-  // - If it appears multiple times: keep organic if available, else keep best rank
-  // - If both are same type: keep the one with LOWEST rank number
-  // - Example: organic rank 8 beats sponsored rank 3
-  // - Example: organic rank 3 beats organic rank 8
+  // CRITICAL: This is the moment sponsored data must be preserved.
+  // Do not drop it later.
+  const appearances: Appearance[] = listings.map((listing, index) => ({
+    asin: listing.asin || '',
+    position: listing.position || index + 1,
+    isSponsored: Boolean(listing.isSponsored),
+    source: listing.isSponsored ? 'sponsored' : 'organic'
+  })).filter((app: Appearance) => app.asin && /^[A-Z0-9]{10}$/i.test(app.asin.trim()));
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 1: Group appearances by ASIN (REPLACE ASIN DEDUP LOGIC)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const appearancesByAsin = new Map<string, Appearance[]>();
+  
+  for (const appearance of appearances) {
+    const asin = appearance.asin.trim().toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
+    
+    if (!appearancesByAsin.has(asin)) {
+      appearancesByAsin.set(asin, []);
+    }
+    appearancesByAsin.get(asin)!.push(appearance);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2: Select canonical listing from appearances (FIX CANONICAL RANK SELECTION)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 🚨 Delete any logic that prefers organic "by design."
+  // Amazon does not work that way.
   const rawCount = listings.length;
   const asinMap = new Map<string, { 
     listing: ParsedListing; 
-    bestRank: number; // Best (lowest) rank this ASIN appears at
-    allRanks: number[]; // Track all ranks for logging
+    organicRank: number | null; // Best organic rank (null if no organic appearances)
+    appearsSponsored: boolean; // True if ASIN appears sponsored anywhere
+    sponsoredPositions: number[]; // All positions where ASIN appeared as sponsored
     appearanceCount: number; // Track how many times ASIN appeared (for algorithm boost insight)
-    isOrganic: boolean; // Track if the canonical listing is organic
   }>();
   
-  // Track all instances to find best canonical instance per ASIN
-  for (let index = 0; index < listings.length; index++) {
-    const listing = listings[index];
-    const asinRaw = listing.asin;
-    const asin = typeof asinRaw === "string" ? asinRaw.trim().toUpperCase() : "";
-    // Hard requirement: no synthetic ASINs on Page-1; skip rows without a valid ASIN.
-    if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
-
-    const currentRank = listing.position || index + 1;
-    // PART 4: Use appearsSponsored (ASIN-level) for organic detection
-    // NOTE: appearsSponsored (ASIN-level) is preserved through canonicalization
-    const isOrganic = listing.appearsSponsored === false;
+  // Select canonical listing for each ASIN from appearances
+  for (const [asin, asinAppearances] of appearancesByAsin.entries()) {
+    // Find the listing that matches the best appearance
+    const organic = asinAppearances.filter(a => !a.isSponsored);
+    const sponsored = asinAppearances.filter(a => a.isSponsored);
     
-    if (asinMap.has(asin)) {
-      const existing = asinMap.get(asin)!;
-      existing.allRanks.push(currentRank);
-      existing.appearanceCount += 1; // Increment appearance count
-      
-      // Selection logic:
-      // 1. Prefer organic over sponsored
-      // 2. If same type, prefer better (lower) rank
-      // CRITICAL: appearsSponsored and sponsoredPositions are ASIN-level and persist regardless of instance selection
-      const shouldReplace = 
-        // Case 1: Current is organic, existing is sponsored → always replace
-        (isOrganic && !existing.isOrganic) ||
-        // Case 2: Both same type, current has better (lower) rank → replace
-        (isOrganic === existing.isOrganic && currentRank < existing.bestRank);
-      
-      if (shouldReplace) {
-        existing.bestRank = currentRank;
-        // CRITICAL: When replacing, preserve ASIN-level sponsored data from the new listing
-        // appearsSponsored and sponsoredPositions are ASIN-level properties, not instance-level
-        existing.listing = listing; // Update to best canonical instance (includes appearsSponsored/sponsoredPositions)
-        existing.isOrganic = isOrganic; // Update organic status
-      }
-    } else {
-      asinMap.set(asin, { 
-        listing, // Includes appearsSponsored and sponsoredPositions (ASIN-level properties)
-        bestRank: currentRank,
-        allRanks: [currentRank],
-        appearanceCount: 1, // First appearance
-        isOrganic, // Track if this instance is organic
-      });
-    }
+    const organicRank = organic.length > 0
+      ? Math.min(...organic.map(a => a.position))
+      : null;
+    
+    // Find the listing with the best organic rank, or best sponsored rank if no organic
+    const bestPosition = organicRank ?? (sponsored.length > 0 ? Math.min(...sponsored.map(a => a.position)) : null);
+    if (bestPosition === null) continue;
+    
+    // Find the listing that matches this position
+    const canonicalListing = listings.find(l => {
+      const listingAsin = (l.asin || '').trim().toUpperCase();
+      const listingPosition = l.position;
+      return listingAsin === asin && listingPosition === bestPosition;
+    });
+    
+    if (!canonicalListing) continue;
+    
+    asinMap.set(asin, {
+      listing: canonicalListing,
+      organicRank,
+      appearsSponsored: sponsored.length > 0,
+      sponsoredPositions: sponsored.map(a => a.position),
+      appearanceCount: asinAppearances.length,
+    });
   }
   
   // Log canonical rank selection for each ASIN
   asinMap.forEach((value, asin) => {
-    if (value.allRanks.length > 1) {
+    const appearancesForAsin = appearancesByAsin.get(asin) || [];
+    if (appearancesForAsin.length > 1) {
       // ASIN appeared multiple times - log the selection
+      const allPositions = appearancesForAsin.map(a => a.position).sort((a, b) => a - b);
       console.log("📊 CANONICAL RANK SELECTED", {
         asin,
-        rank: value.bestRank,
-        all_ranks: value.allRanks.sort((a, b) => a - b),
-        is_organic: value.isOrganic,
-        selection_reason: value.isOrganic 
-          ? `Organic listing with best rank selected from ${value.allRanks.length} appearances`
-          : `Sponsored listing with best rank selected from ${value.allRanks.length} appearances (no organic found)`,
+        organicRank: value.organicRank,
+        appearsSponsored: value.appearsSponsored,
+        all_positions: allPositions,
+        selection_reason: value.organicRank !== null
+          ? `Organic listing with rank ${value.organicRank} selected from ${appearancesForAsin.length} appearances`
+          : `Sponsored listing selected from ${appearancesForAsin.length} appearances (no organic found)`,
       });
     } else {
       // Single appearance - still log for consistency
       console.log("📊 CANONICAL RANK SELECTED", {
         asin,
-        rank: value.bestRank,
-        all_ranks: [value.bestRank],
-        is_organic: value.isOrganic,
+        organicRank: value.organicRank,
+        appearsSponsored: value.appearsSponsored,
+        all_positions: appearancesForAsin.map(a => a.position),
         selection_reason: "Single appearance",
       });
     }
   });
   
-  // Convert back to array and sort by best rank (canonical order)
+  // Convert back to array and sort by organic rank (canonical order)
   // This ensures products are ordered by their best Page-1 visibility
   // Preserve appearance metadata for algorithm boost insights
   const deduplicatedListingsWithMetadata = Array.from(asinMap.entries())
-    .map(([asin, value]) => ({
-      listing: value.listing,
-      bestRank: value.bestRank,
-      appearanceCount: value.appearanceCount,
-      isAlgorithmBoosted: value.appearanceCount >= 2,
-    }))
-    .sort((a, b) => a.bestRank - b.bestRank); // Sort by best rank
+    .map(([asin, value]) => {
+      const bestPosition = value.organicRank ?? (value.sponsoredPositions.length > 0 
+        ? Math.min(...value.sponsoredPositions) 
+        : value.listing.position || 999);
+      return {
+        listing: value.listing,
+        canonical: value,
+        bestPosition,
+        appearanceCount: value.appearanceCount,
+        isAlgorithmBoosted: value.appearanceCount >= 2,
+      };
+    })
+    .sort((a, b) => {
+      // Sort by organic rank first, then by position
+      const aRank = a.canonical.organicRank ?? 999;
+      const bRank = b.canonical.organicRank ?? 999;
+      if (aRank !== bRank) return aRank - bRank;
+      return a.bestPosition - b.bestPosition;
+    });
   
   const deduplicatedListings = deduplicatedListingsWithMetadata.map(item => item.listing);
   
@@ -659,39 +679,38 @@ export function buildKeywordPageOne(
   // ═══════════════════════════════════════════════════════════════════════════
   // PART 4: ORGANIC RANK CALCULATION
   // ═══════════════════════════════════════════════════════════════════════════
-  // CRITICAL: Increment organic_rank ONLY for listings where appearsSponsored === false
-  // Sponsored listings (appearsSponsored === true) MUST NOT affect organic ranking
+  // CRITICAL: Use canonical data from appearances
   // Use appearsSponsored (ASIN-level) to reflect Page-1 advertising presence
   // Use capped listings with metadata
   const organicListingsWithMetadata = cappedListingsWithMetadata.filter(
-    item => item.listing.appearsSponsored === false
+    item => item.canonical.organicRank !== null
   );
   const sponsoredListingsWithMetadata = cappedListingsWithMetadata.filter(
-    item => item.listing.appearsSponsored === true
+    item => item.canonical.organicRank === null
   );
   
   // Assign organic_rank to organic listings (1, 2, 3...)
-  // Sort by bestRank to maintain Page-1 order
+  // Sort by organicRank to maintain Page-1 order
   const organicListingsRanked = organicListingsWithMetadata
-    .sort((a, b) => a.bestRank - b.bestRank)
+    .sort((a, b) => (a.canonical.organicRank ?? 999) - (b.canonical.organicRank ?? 999))
     .map((item, i) => ({
       ...item,
-      organicRank: i + 1, // Organic rank starts at 1
+      organicRank: item.canonical.organicRank ?? i + 1, // Use canonical organic rank
     }));
   
   // Combine organic (with organic_rank) and sponsored (organic_rank = null)
-  // Sort by bestRank to maintain Page-1 order
+  // Sort by bestPosition to maintain Page-1 order
   const allListingsWithRanks = [
     ...organicListingsRanked.map(item => ({ ...item, organicRank: item.organicRank })),
     ...sponsoredListingsWithMetadata.map(item => ({ ...item, organicRank: null })),
-  ].sort((a, b) => a.bestRank - b.bestRank);
+  ].sort((a, b) => a.bestPosition - b.bestPosition);
   
   // Build products with allocation weights (using capped listings)
   // Use organic_rank for estimation logic
   const productsWithWeights = allListingsWithRanks.map((item, i) => {
     const l = item.listing;
     const bsr = l.bsr ?? l.main_category_bsr ?? null; // Used internally for estimation only
-    const pagePosition = item.bestRank; // Actual Page-1 position including sponsored
+    const pagePosition = item.bestPosition; // Actual Page-1 position including sponsored
     const organicRank = item.organicRank; // Position among organic listings only (null for sponsored)
     const price = l.price ?? 0;
     // Review count: use reviews field from ParsedListing (matches Amazon Page-1 count)
@@ -1127,11 +1146,18 @@ export function buildKeywordPageOne(
       // CRITICAL: appearsSponsored and sponsoredPositions are ASIN-level properties.
       // They persist through canonicalization and represent Page-1 advertising presence.
       // DO NOT MODIFY THIS LOGIC - it matches Helium 10 / Jungle Scout behavior.
-      appearsSponsored: l.appearsSponsored, // ASIN-level: true if appears sponsored anywhere on Page 1
-      sponsoredPositions: Array.isArray(l.sponsoredPositions) ? l.sponsoredPositions : [], // ASIN-level: all positions where ASIN appeared as sponsored
+      // Get canonical data from appearances
+      const canonical = asinMap.get(asin);
+      const appearsSponsored = canonical?.appearsSponsored ?? false;
+      const sponsoredPositions = canonical?.sponsoredPositions ?? [];
+      const sponsoredSlot = sponsoredPositions.length > 0
+        ? Math.min(...sponsoredPositions)
+        : null;
+      appearsSponsored: appearsSponsored, // ASIN-level: true if appears sponsored anywhere on Page 1
+      sponsoredPositions: sponsoredPositions, // ASIN-level: all positions where ASIN appeared as sponsored
       organicPosition: pw.organicRank, // Alias for organic_rank (null if sponsored)
-      sponsoredSlot: isSponsored === true 
-        ? (pw.pagePosition <= 4 ? 'top' : pw.pagePosition <= 16 ? 'middle' : 'bottom')
+      sponsoredSlot: sponsoredSlot !== null
+        ? (sponsoredSlot <= 4 ? 'top' : sponsoredSlot <= 16 ? 'middle' : 'bottom')
         : null, // Sponsored ad slot position (null if not sponsored)
     };
     
