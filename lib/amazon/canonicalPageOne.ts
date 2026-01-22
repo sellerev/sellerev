@@ -485,43 +485,29 @@ export function buildKeywordPageOne(
     cap: PAGE1_HARD_CAP,
   });
 
-  // Rebuild metadata structure from capped listings
-  // Create a map of ASIN -> metadata for capped listings
-  const cappedAsinMap = new Map<string, { 
-    listing: ParsedListing; 
-    bestRank: number;
-    appearanceCount: number;
-    isAlgorithmBoosted: boolean;
-  }>();
+  // Create capped listings with metadata from deduplicatedListingsWithMetadata
+  // This preserves the canonical data structure
+  const cappedAsinSet = new Set(cappedListings.map(l => {
+    const asinRaw = l.asin;
+    return typeof asinRaw === "string" ? asinRaw.trim().toUpperCase() : "";
+  }).filter(asin => /^[A-Z0-9]{10}$/.test(asin)));
   
-  cappedListings.forEach((listing, index) => {
-    const asinRaw = listing.asin;
-    const asin = typeof asinRaw === "string" ? asinRaw.trim().toUpperCase() : "";
-    // Hard requirement: no synthetic ASINs on Page-1; skip rows without a valid ASIN.
-    if (!/^[A-Z0-9]{10}$/.test(asin)) return;
-    const position = listing.position || index + 1;
-    
-    if (cappedAsinMap.has(asin)) {
-      const existing = cappedAsinMap.get(asin)!;
-      // Keep the one with better (lower) rank
-      if (position < existing.bestRank) {
-        existing.bestRank = position;
-        existing.listing = listing;
-      }
-      existing.appearanceCount += 1;
-      existing.isAlgorithmBoosted = existing.appearanceCount >= 2;
-    } else {
-      cappedAsinMap.set(asin, {
-        listing,
-        bestRank: position,
-        appearanceCount: 1,
-        isAlgorithmBoosted: false,
-      });
-    }
-  });
+  const cappedListingsWithMetadata = deduplicatedListingsWithMetadata
+    .filter(item => {
+      const asinRaw = item.listing.asin;
+      const asin = typeof asinRaw === "string" ? asinRaw.trim().toUpperCase() : "";
+      return /^[A-Z0-9]{10}$/.test(asin) && cappedAsinSet.has(asin);
+    })
+    .sort((a, b) => {
+      // Sort by organic rank first, then by position
+      const aRank = a.canonical.organicRank ?? 999;
+      const bRank = b.canonical.organicRank ?? 999;
+      if (aRank !== bRank) return aRank - bRank;
+      return a.bestPosition - b.bestPosition;
+    });
   
-  // Create capped listings with metadata
-  const cappedListingsWithMetadata = Array.from(cappedAsinMap.entries())
+  // Remove the old cappedAsinMap code - it's no longer needed
+  // const cappedListingsWithMetadata = Array.from(cappedAsinMap.entries())
     .map(([asin, value]) => ({
       listing: value.listing,
       bestRank: value.bestRank,
