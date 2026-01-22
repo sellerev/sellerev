@@ -2462,6 +2462,10 @@ export async function POST(req: NextRequest) {
     // 8e. Build compact or full context based on mode
     // CRITICAL: Use stable contract format for AI Copilot consumption
     const useCompactContext = responseMode === "concise";
+    
+    // Remove selected_asins from aiContextWithSelectedAsins to avoid duplicate
+    const { selected_asins: _, ...aiContextWithoutSelectedAsins } = aiContextWithSelectedAsins || {};
+    
     const contextToUse = useCompactContext
       ? {
           // Compact mode: Use contract format with essential fields only
@@ -2479,8 +2483,8 @@ export async function POST(req: NextRequest) {
           // Expanded mode: Use full contract format
           analyze_contract: analyzeContract, // Stable contract format (primary)
           selected_asins: selectedAsinsArray,
-          // Legacy ai_context for backward compatibility (deprecated)
-          ...(aiContextWithSelectedAsins || {}),
+          // Legacy ai_context for backward compatibility (deprecated, without selected_asins to avoid duplicate)
+          ...aiContextWithoutSelectedAsins,
         };
     
     // If ai_context is not available, fall back to legacy context building
