@@ -10,7 +10,7 @@ import { createApiClient } from "@/lib/supabase/server-api";
 import { createClient } from "@supabase/supabase-js";
 import { encryptToken, getTokenLast4 } from "@/lib/amazon/tokenEncryption";
 import { getOAuthCallbackUrl } from "@/lib/utils/appUrl";
-import { getSellerProfile } from "@/lib/amazon/getSellerProfile";
+import { getMarketplaceParticipations } from "@/lib/amazon/seller";
 
 export async function GET(req: NextRequest) {
   let res = new NextResponse();
@@ -136,20 +136,23 @@ export async function GET(req: NextRequest) {
     // Fetch seller account metadata after successful token exchange
     let sellerDisplayName: string | null = null;
     let marketplaceIds: string[] | null = null;
+    let primaryMarketplaceName: string | null = null;
     
     try {
-      const sellerProfile = await getSellerProfile(tokenData.refresh_token, user.id);
-      if (sellerProfile) {
-        sellerDisplayName = sellerProfile.sellerDisplayName;
-        marketplaceIds = sellerProfile.marketplaceIds;
-        console.log("Fetched seller profile", {
-          has_display_name: !!sellerDisplayName,
+      const sellerInfo = await getMarketplaceParticipations(tokenData.refresh_token, user.id);
+      if (sellerInfo) {
+        sellerDisplayName = sellerInfo.storeName;
+        marketplaceIds = sellerInfo.marketplaces.map((m) => m.marketplaceId);
+        primaryMarketplaceName = sellerInfo.primaryMarketplace?.name || null;
+        console.log("Fetched seller info", {
+          store_name: sellerDisplayName,
           marketplace_count: marketplaceIds?.length || 0,
+          primary_marketplace: primaryMarketplaceName,
         });
       }
     } catch (error) {
-      // Non-fatal: continue even if seller profile fetch fails
-      console.warn("Failed to fetch seller profile (non-fatal):", error);
+      // Non-fatal: continue even if seller info fetch fails
+      console.warn("Failed to fetch seller info (non-fatal):", error);
     }
 
     // Store in database using service role (to bypass RLS for token storage)
@@ -176,6 +179,7 @@ export async function GET(req: NextRequest) {
         refresh_token_encrypted: encryptedToken,
         refresh_token_last4: tokenLast4,
         seller_display_name: sellerDisplayName,
+        primary_marketplace_name: primaryMarketplaceName,
         marketplace_ids: marketplaceIds,
         scopes: tokenData.scope ? [tokenData.scope] : [], // SP-API doesn't return scopes in token response
         status: "connected",
