@@ -1541,26 +1541,38 @@ export async function POST(req: NextRequest) {
       // Convert snapshot to KeywordMarketData format
       // Hard requirement: if keyword_products is empty, return a hard error (no synthetic listings).
       // CRITICAL: Use cached fields from keyword_products for full product card rendering
-      let listings: ParsedListing[] = products.map((p) => ({
-        asin: p.asin || '',
-        title: p.title || null, // From cache
-        price: p.price,
-        rating: p.rating || null, // From cache
-        reviews: p.review_count || null, // From cache (mapped from review_count)
-        is_sponsored: p.is_sponsored ?? null, // From cache (null if unknown)
-        sponsored_position: p.sponsored_position ?? null, // From cache (null if unknown)
-        sponsored_source: p.sponsored_source ?? 'organic_serp', // From cache ('organic_serp' if not stored)
-        position: p.rank,
-        brand: p.brand || null, // From cache
-        image_url: p.image_url || null, // From cache
-        bsr: p.main_category_bsr,
-        main_category_bsr: p.main_category_bsr,
-        main_category: p.main_category,
-        fulfillment: p.fulfillment || null, // From cache (not assumed null)
-        est_monthly_revenue: p.estimated_monthly_revenue,
-        est_monthly_units: p.estimated_monthly_units,
-        revenue_confidence: 'medium' as const,
-      } as ParsedListing));
+      let listings: ParsedListing[] = products.map((p) => {
+        // Normalize sponsored status: default to false (organic) if null/undefined
+        const isSponsored = p.is_sponsored === true;
+        const appearsSponsored = p.is_sponsored === true; // ASIN-level: true if sponsored anywhere
+        const sponsoredPositions = p.is_sponsored === true && p.sponsored_position !== null
+          ? [p.sponsored_position]
+          : [];
+        
+        return {
+          asin: p.asin || '',
+          title: p.title || null, // From cache
+          price: p.price,
+          rating: p.rating || null, // From cache
+          reviews: p.review_count || null, // From cache (mapped from review_count)
+          isSponsored, // Canonical sponsored status (always boolean)
+          is_sponsored: isSponsored, // DEPRECATED: Use isSponsored instead
+          sponsored_position: p.sponsored_position ?? null, // From cache (null if unknown)
+          sponsored_source: p.sponsored_source ?? 'organic_serp', // From cache ('organic_serp' if not stored)
+          appearsSponsored, // ASIN-level: true if appears sponsored anywhere on Page 1
+          sponsoredPositions, // ASIN-level: all positions where ASIN appeared as sponsored
+          position: p.rank,
+          brand: p.brand || null, // From cache
+          image_url: p.image_url || null, // From cache
+          bsr: p.main_category_bsr,
+          main_category_bsr: p.main_category_bsr,
+          main_category: p.main_category,
+          fulfillment: p.fulfillment || null, // From cache (not assumed null)
+          est_monthly_revenue: p.estimated_monthly_revenue,
+          est_monthly_units: p.estimated_monthly_units,
+          revenue_confidence: 'medium' as const,
+        } as ParsedListing;
+      });
       
       // REMOVED: Reliability gate that blocked listings
       // If listings exist, we'll return them (even if from cache/snapshot)
