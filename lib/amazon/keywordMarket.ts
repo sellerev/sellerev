@@ -649,6 +649,39 @@ function parseBSR(item: any): number | null {
 }
 
 /**
+ * Infers fulfillment type from Rainforest listing using delivery tagline.
+ * 
+ * 🔒 CANONICAL FULFILLMENT INFERENCE (NORMALIZED AT INGEST):
+ * This is market-level inference for competitive analysis, not checkout accuracy.
+ * Uses ONLY delivery.tagline for inference.
+ * 
+ * @param listing - Rainforest listing object with delivery field
+ * @returns Fulfillment type: 'FBA' | 'FBM' | 'UNKNOWN'
+ */
+function inferFulfillment(listing: any): "FBA" | "FBM" | "UNKNOWN" {
+  const text = `${listing.delivery?.tagline || ''}`.toLowerCase();
+
+  // Strong FBA indicators
+  if (
+    text.includes('amazon') ||
+    text.includes('prime') ||
+    (text.includes('free delivery') && !text.includes('ships from'))
+  ) {
+    return 'FBA';
+  }
+
+  // Strong FBM indicators
+  if (
+    text.includes('ships from') ||
+    text.includes('sold by')
+  ) {
+    return 'FBM';
+  }
+
+  return 'UNKNOWN';
+}
+
+/**
  * Infers fulfillment type from Rainforest search results (SERP-based market analysis).
  * 
  * 🔒 CANONICAL FULFILLMENT INFERENCE (NORMALIZED AT INGEST):
@@ -666,6 +699,8 @@ function parseBSR(item: any): number | null {
  * 
  * Note: We do NOT use SP-API or Offers API for fulfillment in Analyze flow.
  * Note: We do NOT infer FBA from is_prime alone without delivery confirmation.
+ * 
+ * @deprecated Use inferFulfillment instead for simpler tagline-based inference
  */
 function inferFulfillmentFromSearchResultWithSource(item: any): {
   fulfillment: "FBA" | "FBM" | "UNKNOWN";
@@ -2886,10 +2921,15 @@ export async function fetchKeywordMarketSnapshot(
       // Rules: SP-API authoritative → Rainforest inferred → UNKNOWN (NEVER defaults to FBM)
       // This is market-level inference, not checkout accuracy.
       // We do NOT use SP-API or Offers API for fulfillment in Analyze flow.
-      const fulfillmentResult = inferFulfillmentFromSearchResultWithSource(item);
-      const fulfillment: "FBA" | "FBM" | "UNKNOWN" = fulfillmentResult.fulfillment;
-      const fulfillmentSource: 'sp_api' | 'rainforest_inferred' | 'unknown' = fulfillmentResult.source;
-      const fulfillmentConfidence: 'high' | 'medium' | 'low' = fulfillmentResult.confidence;
+      // Use delivery.tagline for inference
+      const fulfillment: "FBA" | "FBM" | "UNKNOWN" = inferFulfillment(item);
+      const fulfillmentSource: 'sp_api' | 'rainforest_inferred' | 'unknown' = 'rainforest_inferred';
+      const fulfillmentConfidence: 'high' | 'medium' | 'low' = fulfillment !== 'UNKNOWN' ? 'medium' : 'low';
+      
+      // CRITICAL: Set both camelCase and snake_case to prevent overwrite later in pipeline
+      // The check at line 3577 uses fulfillment_source (snake_case), so we need both
+      const fulfillment_source = fulfillmentSource; // snake_case version for DB compatibility
+      const fulfillment_confidence = fulfillmentConfidence; // snake_case version for DB compatibility
       
       // ═══════════════════════════════════════════════════════════════════════════
       // BRAND RESOLUTION: Search-based only (will be overridden by SP-API if available)
@@ -2975,8 +3015,10 @@ export async function fetchKeywordMarketSnapshot(
         main_category_bsr, // Main category BSR (top-level category only)
         main_category, // Main category name
         fulfillment, // Fulfillment type (never null, never defaults to FBM)
-        fulfillmentSource, // Source of fulfillment data
-        fulfillmentConfidence, // Confidence in fulfillment inference
+        fulfillmentSource, // Source of fulfillment data (camelCase)
+        fulfillmentConfidence, // Confidence in fulfillment inference (camelCase)
+        fulfillment_source, // Source of fulfillment data (snake_case for DB compatibility - prevents overwrite at line 3577)
+        fulfillment_confidence, // Confidence (snake_case for DB compatibility)
         // Add seller and is_prime for fulfillment mix computation
         seller, // Optional (nullable)
         is_prime, // Boolean
@@ -2987,7 +3029,13 @@ export async function fetchKeywordMarketSnapshot(
         raw_image_url, // Raw image URL from search result (for presentation fallback)
         // PRESERVE RAW ITEM DATA for fallback in buildKeywordPageOne
         _rawItem: item, // Preserve original Rainforest item for title/image fallback
-      } as ParsedListing & { seller?: string | null; is_prime?: boolean; _rawItem?: any };
+      } as ParsedListing & { 
+        seller?: string | null; 
+        is_prime?: boolean; 
+        _rawItem?: any;
+        fulfillment_source?: string; // snake_case for DB compatibility (prevents overwrite at line 3577)
+        fulfillment_confidence?: string; // snake_case for DB compatibility
+      };
     });
     } catch (parseError) {
       console.error("Error parsing search results:", {

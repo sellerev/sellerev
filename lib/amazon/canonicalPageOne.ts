@@ -802,13 +802,19 @@ export function buildKeywordPageOne(
     // ═══════════════════════════════════════════════════════════════════════════
     // NORMALIZE FULFILLMENT (Use fulfillment already inferred at ingest)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Fulfillment is already normalized at ingest time using:
-    // 1. is_prime === true + delivery confirmation → "FBA" (high confidence)
-    // 2. delivery text strongly implies FBA → "FBA" (medium confidence)
-    // 3. delivery text explicitly indicates FBM → "FBM" (medium confidence)
-    // 4. Else → "UNKNOWN" (low confidence, NEVER defaults to FBM)
+    // Fulfillment is already normalized at ingest time using delivery.tagline inference
     // Map from ParsedListing fulfillment to CanonicalProduct fulfillment
     // CRITICAL: Never default UNKNOWN to FBM - preserve uncertainty
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SANITY CHECK: Verify fulfillment exists and is valid
+    // ═══════════════════════════════════════════════════════════════════════════
+    const validFulfillmentValues: ("FBA" | "FBM" | "UNKNOWN")[] = ["FBA", "FBM", "UNKNOWN"];
+    if (!l.fulfillment || !validFulfillmentValues.includes(l.fulfillment)) {
+      console.warn(`⚠️ FULFILLMENT_SANITY_CHECK_FAILED: ASIN ${l.asin} has invalid fulfillment: ${l.fulfillment}, defaulting to UNKNOWN`);
+      l.fulfillment = "UNKNOWN";
+    }
+    
     let fulfillment: "FBA" | "FBM" | "AMZ";
     if (l.fulfillment === "FBA") {
       fulfillment = "FBA";
