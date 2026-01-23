@@ -1542,10 +1542,13 @@ export async function POST(req: NextRequest) {
       // Hard requirement: if keyword_products is empty, return a hard error (no synthetic listings).
       // CRITICAL: Use cached fields from keyword_products for full product card rendering
       let listings: ParsedListing[] = products.map((p) => {
-        // Normalize sponsored status: default to false (organic) if null/undefined
-        const isSponsored = p.is_sponsored === true;
-        const appearsSponsored = p.is_sponsored === true; // ASIN-level: true if sponsored anywhere
-        const sponsoredPositions = p.is_sponsored === true && p.sponsored_position !== null
+        // Normalize sponsored status: default to false (organic) if null/undefined/not true
+        // CRITICAL: appearsSponsored must be a boolean (true or false) for canonicalPageOne filtering
+        // The filter uses: l.appearsSponsored === false, so undefined/null will be filtered out
+        const isSponsoredValue = p.is_sponsored === true; // Explicit boolean check
+        const isSponsored = isSponsoredValue; // Canonical sponsored status (always boolean)
+        const appearsSponsored = isSponsoredValue; // ASIN-level: true if appears sponsored anywhere
+        const sponsoredPositions = isSponsoredValue && p.sponsored_position !== null && p.sponsored_position !== undefined
           ? [p.sponsored_position]
           : [];
         
