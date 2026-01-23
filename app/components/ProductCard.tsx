@@ -24,6 +24,8 @@ interface ProductCardProps {
   asin?: string | null;
   isSelected?: boolean;
   onSelect?: (e: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement>) => void;
+  primeEligible?: boolean; // Prime eligibility (from is_prime heuristic)
+  fulfillment_status?: 'PRIME' | 'NON_PRIME'; // Prime/Non-Prime status (heuristic from is_prime)
 }
 
 export function ProductCard({
@@ -44,6 +46,8 @@ export function ProductCard({
   asin,
   isSelected = false,
   onSelect,
+  primeEligible,
+  fulfillment_status,
 }: ProductCardProps) {
   const [copied, setCopied] = useState(false);
 
@@ -297,7 +301,16 @@ export function ProductCard({
               Unknown
             </span>
           )}
-          {/* Fulfillment Badge (FBA or FBM only, not AMZ) */}
+          {/* Prime Badge (from is_prime heuristic) */}
+          {(primeEligible === true || fulfillment_status === 'PRIME') && (
+            <span 
+              className="px-2 py-1 rounded-full text-[11px] font-medium bg-[#FFD700] text-[#B8860B] border border-[#DAA520]"
+              title="Prime eligible (heuristic from is_prime, not a guarantee of FBA)"
+            >
+              Prime
+            </span>
+          )}
+          {/* Fulfillment Badge (FBA or FBM only, not AMZ) - Keep for backward compatibility */}
           {(fulfillment === "FBA" || fulfillment === "FBM") && (
             <span 
               className={`px-2 py-1 rounded-full text-[11px] font-medium ${getFulfillmentBadgeStyle()}`}

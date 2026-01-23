@@ -561,7 +561,7 @@ export default function AnalyzeForm({
   
   // Filter state for Page 1 Results
   const [selectedBrands, setSelectedBrands] = useState<Set<string>>(new Set());
-  const [selectedFulfillment, setSelectedFulfillment] = useState<Set<"FBA" | "FBM">>(new Set());
+  const [selectedFulfillment, setSelectedFulfillment] = useState<Set<"PRIME" | "NON_PRIME">>(new Set());
   const [sponsoredFilter, setSponsoredFilter] = useState<"only" | "exclude" | null>(null);
   const [brandDropdownOpen, setBrandDropdownOpen] = useState(false);
   const brandDropdownRef = useRef<HTMLDivElement>(null);
@@ -1801,22 +1801,18 @@ export default function AnalyzeForm({
                         }
                       }
                       
-                      // Fulfillment filter
+                      // Fulfillment filter (Prime/Non-Prime)
                       if (selectedFulfillment.size > 0) {
-                        const fulfillment = listing.fulfillment === "AMZ" 
-                          ? "AMZ" 
-                          : (listing.fulfillment === "FBA" 
-                            ? "FBA" 
-                            : (listing.fulfillment === "FBM" ? "FBM" : "FBM"));
+                        // Use fulfillment_status if available, otherwise infer from primeEligible or is_prime
+                        const fulfillmentStatus = listing.fulfillment_status 
+                          ? listing.fulfillment_status 
+                          : (listing.primeEligible === true || listing.is_prime === true 
+                            ? 'PRIME' 
+                            : 'NON_PRIME');
                         
-                        // Always include AMZ items regardless of filter
-                        if (fulfillment === "AMZ") {
-                          // AMZ always passes through
-                        } else if (fulfillment === "FBA" || fulfillment === "FBM") {
-                          // Filter FBA/FBM items based on selection
-                          if (!selectedFulfillment.has(fulfillment as "FBA" | "FBM")) {
-                            return false;
-                          }
+                        // Filter based on Prime/Non-Prime selection
+                        if (!selectedFulfillment.has(fulfillmentStatus as "PRIME" | "NON_PRIME")) {
+                          return false;
                         }
                       }
                       
@@ -1919,41 +1915,41 @@ export default function AnalyzeForm({
                               </div>
                             )}
                             
-                            {/* Fulfillment Filter */}
+                            {/* Fulfillment Filter (Prime/Non-Prime) */}
                             <div className="flex items-center gap-2">
                               <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
                                 <input
                                   type="checkbox"
-                                  checked={selectedFulfillment.has("FBA")}
+                                  checked={selectedFulfillment.has("PRIME")}
                                   onChange={(e) => {
                                     const newSelected = new Set(selectedFulfillment);
                                     if (e.target.checked) {
-                                      newSelected.add("FBA");
+                                      newSelected.add("PRIME");
                                     } else {
-                                      newSelected.delete("FBA");
+                                      newSelected.delete("PRIME");
                                     }
                                     setSelectedFulfillment(newSelected);
                                   }}
                                   className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                                 />
-                                <span>FBA</span>
+                                <span>Prime</span>
                               </label>
                               <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
                                 <input
                                   type="checkbox"
-                                  checked={selectedFulfillment.has("FBM")}
+                                  checked={selectedFulfillment.has("NON_PRIME")}
                                   onChange={(e) => {
                                     const newSelected = new Set(selectedFulfillment);
                                     if (e.target.checked) {
-                                      newSelected.add("FBM");
+                                      newSelected.add("NON_PRIME");
                                     } else {
-                                      newSelected.delete("FBM");
+                                      newSelected.delete("NON_PRIME");
                                     }
                                     setSelectedFulfillment(newSelected);
                                   }}
                                   className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                                 />
-                                <span>FBM</span>
+                                <span>Non-Prime</span>
                               </label>
                             </div>
                             
@@ -2110,6 +2106,12 @@ export default function AnalyzeForm({
                               ? listing.sponsoredPositions 
                               : [];
                             
+                            // Prime eligibility and fulfillment status (for Prime badge and filtering)
+                            const primeEligible = listing.primeEligible ?? (listing.is_prime === true);
+                            const fulfillmentStatus = listing.fulfillment_status 
+                              ? listing.fulfillment_status 
+                              : (primeEligible ? 'PRIME' : 'NON_PRIME');
+                            
                             return (
                               <motion.div
                                 key={stableKey}
@@ -2140,6 +2142,8 @@ export default function AnalyzeForm({
                                   imageUrl={imageUrl}
                                   asin={asin}
                                   isSelected={isSelected}
+                                  primeEligible={primeEligible}
+                                  fulfillment_status={fulfillmentStatus}
                                   onSelect={(e) => {
                                   // CRITICAL: Use the extracted asin (not listing.asin) for consistency
                                   if (!asin) return;
