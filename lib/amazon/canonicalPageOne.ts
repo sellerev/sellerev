@@ -69,6 +69,9 @@ export interface CanonicalProduct {
   sponsoredPositions: number[]; // ASIN-level: all positions where ASIN appeared as sponsored
   organicPosition?: number | null; // Alias for organic_rank (null if sponsored)
   sponsoredSlot?: 'top' | 'middle' | 'bottom' | null; // Sponsored ad slot position (null if not sponsored)
+  // Prime eligibility and fulfillment status (from is_prime heuristic)
+  primeEligible: boolean; // Prime eligibility (from is_prime, for UI display and AI reasoning)
+  fulfillment_status: 'PRIME' | 'NON_PRIME'; // Prime/Non-Prime status (heuristic from is_prime, NOT FBA guarantee)
 }
 
 /**
@@ -1145,6 +1148,13 @@ export function buildKeywordPageOne(
       sponsoredSlot: sponsoredSlot !== null
         ? (sponsoredSlot <= 4 ? 'top' : sponsoredSlot <= 16 ? 'middle' : 'bottom')
         : null, // Sponsored ad slot position (null if not sponsored)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // PRIME ELIGIBILITY AND FULFILLMENT STATUS (PRESERVE FROM LISTING)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Preserve primeEligible and fulfillment_status from raw listing
+      // These fields flow through canonical processing for UI display and AI reasoning
+      primeEligible: l.primeEligible ?? (l.is_prime === true),
+      fulfillment_status: l.fulfillment_status ?? (l.primeEligible || l.is_prime === true ? 'PRIME' : 'NON_PRIME'),
     };
     
     // Store mapping for parent-child normalization (use ASIN as key)

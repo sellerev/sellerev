@@ -184,6 +184,8 @@ export interface ParsedListing {
   fulfillmentConfidence: 'high' | 'medium' | 'low'; // Confidence in fulfillment inference
   seller?: string | null; // Seller name (for Amazon Retail detection)
   is_prime?: boolean; // Prime eligibility (for FBA detection)
+  primeEligible?: boolean; // Prime eligibility (from is_prime, for UI display and AI reasoning)
+  fulfillment_status?: 'PRIME' | 'NON_PRIME'; // Prime/Non-Prime status (heuristic from is_prime, NOT FBA guarantee)
   est_monthly_revenue?: number | null; // 30-day revenue estimate (modeled)
   est_monthly_units?: number | null; // 30-day units estimate (modeled)
   revenue_confidence?: "low" | "medium"; // Confidence level for revenue estimate
@@ -2980,6 +2982,14 @@ export async function fetchKeywordMarketSnapshot(
       // Extract seller and is_prime for fulfillment mix detection
       const seller = item.seller ?? null; // Nullable
       const is_prime = item.is_prime ?? false; // Boolean, default false
+      
+      // ═══════════════════════════════════════════════════════════════════════════
+      // PRIME ELIGIBILITY MAPPING (RAW RAINFOREST INGESTION)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Map is_prime to primeEligible and fulfillment (PRIME/NON_PRIME)
+      // This is a heuristic for UI display and AI reasoning, NOT a guarantee of FBA
+      const primeEligible = is_prime === true;
+      const fulfillmentStatus: 'PRIME' | 'NON_PRIME' = primeEligible ? 'PRIME' : 'NON_PRIME';
 
       // ═══════════════════════════════════════════════════════════════════════════
       // ASIN-LEVEL SPONSORED AGGREGATION (ATTACH TO PARSED LISTING)
@@ -3022,6 +3032,9 @@ export async function fetchKeywordMarketSnapshot(
         // Add seller and is_prime for fulfillment mix computation
         seller, // Optional (nullable)
         is_prime, // Boolean
+        // Prime eligibility and fulfillment status (from is_prime heuristic)
+        primeEligible, // Boolean: true if is_prime === true
+        fulfillment_status: fulfillmentStatus, // 'PRIME' | 'NON_PRIME' (heuristic, not FBA guarantee)
         // PHASE 1: BSR invalid reason (if BSR was marked invalid)
         bsr_invalid_reason, // Optional (nullable) - reason why BSR is invalid
         // PRESENTATION FALLBACK: Store raw fields from search result
@@ -3031,7 +3044,9 @@ export async function fetchKeywordMarketSnapshot(
         _rawItem: item, // Preserve original Rainforest item for title/image fallback
       } as ParsedListing & { 
         seller?: string | null; 
-        is_prime?: boolean; 
+        is_prime?: boolean;
+        primeEligible?: boolean;
+        fulfillment_status?: 'PRIME' | 'NON_PRIME';
         _rawItem?: any;
         fulfillment_source?: string; // snake_case for DB compatibility (prevents overwrite at line 3577)
         fulfillment_confidence?: string; // snake_case for DB compatibility

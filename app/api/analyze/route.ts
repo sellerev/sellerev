@@ -1552,6 +1552,15 @@ export async function POST(req: NextRequest) {
           ? [p.sponsored_position]
           : [];
         
+        // ═══════════════════════════════════════════════════════════════════════════
+        // PRIME ELIGIBILITY MAPPING (SNAPSHOT PATH)
+        // ═══════════════════════════════════════════════════════════════════════════
+        // For cached products, is_prime may not be stored. Default to NON_PRIME if unavailable.
+        // This is a heuristic for UI display and AI reasoning, NOT a guarantee of FBA.
+        const is_prime = p.is_prime ?? false; // Default to false if not stored
+        const primeEligible = is_prime === true;
+        const fulfillmentStatus: 'PRIME' | 'NON_PRIME' = primeEligible ? 'PRIME' : 'NON_PRIME';
+        
         return {
           asin: p.asin || '',
           title: p.title || null, // From cache
@@ -1571,6 +1580,9 @@ export async function POST(req: NextRequest) {
           main_category_bsr: p.main_category_bsr,
           main_category: p.main_category,
           fulfillment: p.fulfillment || null, // From cache (not assumed null)
+          primeEligible, // Prime eligibility (from is_prime heuristic)
+          fulfillment_status: fulfillmentStatus, // 'PRIME' | 'NON_PRIME' (heuristic, not FBA guarantee)
+          is_prime, // Preserve is_prime for backward compatibility
           est_monthly_revenue: p.estimated_monthly_revenue,
           est_monthly_units: p.estimated_monthly_units,
           revenue_confidence: 'medium' as const,
@@ -2489,6 +2501,18 @@ export async function POST(req: NextRequest) {
             raw_listings_count: rawListings.length,
           });
         }
+        
+        // ═══════════════════════════════════════════════════════════════════════════
+        // CANONICAL FULFILLMENT COUNTS (VERIFICATION)
+        // ═══════════════════════════════════════════════════════════════════════════
+        console.log("CANONICAL_FULFILLMENT_COUNTS", {
+          PRIME: pageOneProducts.filter((p: any) => p.fulfillment_status === 'PRIME').length,
+          NON_PRIME: pageOneProducts.filter((p: any) => p.fulfillment_status === 'NON_PRIME').length,
+          total: pageOneProducts.length,
+          primeEligible_count: pageOneProducts.filter((p: any) => p.primeEligible === true).length,
+          keyword: body.input_value,
+          timestamp: new Date().toISOString(),
+        });
         
         // ═══════════════════════════════════════════════════════════════════════════
         // TIER-1 SNAPSHOT BUILD (FAST PATH - ≤10s)

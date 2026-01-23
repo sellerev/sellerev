@@ -229,6 +229,17 @@ export function normalizeListing(raw: any): ParsedListing {
   
   // Extract image_url (required field, not image)
   const image_url = raw.image_url ?? raw.image ?? raw.Image ?? raw.images?.[0] ?? null;
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIME ELIGIBILITY MAPPING (PRESERVE FROM RAW OR INFER FROM is_prime)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Preserve primeEligible and fulfillment_status if already set, otherwise infer from is_prime
+  const primeEligible = raw.primeEligible !== undefined 
+    ? raw.primeEligible 
+    : (raw.is_prime === true);
+  const fulfillmentStatus: 'PRIME' | 'NON_PRIME' = raw.fulfillment_status 
+    ? raw.fulfillment_status 
+    : (primeEligible ? 'PRIME' : 'NON_PRIME');
 
   return {
     asin: raw.asin ?? raw.ASIN ?? "",
@@ -243,6 +254,8 @@ export function normalizeListing(raw: any): ParsedListing {
     fulfillment,
     fulfillmentSource,
     fulfillmentConfidence,
+    primeEligible, // Prime eligibility (from is_prime heuristic)
+    fulfillment_status: fulfillmentStatus, // 'PRIME' | 'NON_PRIME' (heuristic, not FBA guarantee)
     // Canonical sponsored status: Use isSponsored if available, otherwise normalize from is_sponsored
     isSponsored,
     is_sponsored: isSponsored, // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
