@@ -297,6 +297,15 @@ export function ProductCard({
               Unknown
             </span>
           )}
+          {/* Fulfillment Badge (FBA or FBM only, not AMZ) */}
+          {(fulfillment === "FBA" || fulfillment === "FBM") && (
+            <span 
+              className={`px-2 py-1 rounded-full text-[11px] font-medium ${getFulfillmentBadgeStyle()}`}
+              title={fulfillment === "FBA" ? "Fulfilled by Amazon" : "Fulfilled by Merchant"}
+            >
+              {fulfillment}
+            </span>
+          )}
         </div>
       </div>
     </div>
