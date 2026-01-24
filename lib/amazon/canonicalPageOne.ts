@@ -1136,8 +1136,8 @@ export function buildKeywordPageOne(
       page_one_appearances: pw.appearanceCount, // appearance_count
       is_algorithm_boosted: pw.isAlgorithmBoosted, // true if appearances >= 2
       appeared_multiple_times: pw.appearanceCount > 1, // Explicit flag for dominance/defense reasoning
-      // Sponsored visibility tracking
-      appears_sponsored: pw.canonical?.appearsSponsored ?? false,
+      // Sponsored visibility tracking (uses existing appearsSponsored field from interface)
+      appearsSponsored: pw.canonical?.appearsSponsored ?? false,
       has_organic_appearance: pw.canonical?.hasOrganicAppearance ?? (pw.organicRank !== null),
       // Helium-10 style rank semantics
       organic_rank: pw.organicRank, // Position among organic listings only (null for sponsored)
