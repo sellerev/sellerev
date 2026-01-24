@@ -1339,7 +1339,10 @@ export function buildKeywordPageOne(
       
       if (bsr != null && bsr > 0 && bsrCategory) {
         // Use BSR-based units calculation
-        const categoryKey = normalizeCategoryForEstimation(bsrCategory);
+        const categoryNormalization = normalizeCategoryForEstimation({
+          spCategoryName: bsrCategory,
+        });
+        const categoryKey = categoryNormalization.estimation_category_key;
         const bsrUnits = estimateMonthlySalesFromBSR(bsr, categoryKey);
         
         if (bsrUnits != null && bsrUnits > 0) {
