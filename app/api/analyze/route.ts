@@ -1249,7 +1249,7 @@ export async function POST(req: NextRequest) {
       // Top brands (none in cache, so dominance_score = 0)
       const dominance_score = 0;
 
-      const snapshot: KeywordMarketSnapshot = {
+      const cachedSnapshot: KeywordMarketSnapshot = {
         keyword,
         avg_price: avg_price !== null ? Math.round(avg_price * 100) / 100 : null,
         avg_reviews,
@@ -1265,7 +1265,7 @@ export async function POST(req: NextRequest) {
       };
 
       return {
-        snapshot,
+        snapshot: cachedSnapshot,
         listings,
       };
     }
@@ -3468,23 +3468,23 @@ export async function POST(req: NextRequest) {
     }
     
     // Log snapshot structure and totals
-    const snapshot = finalResponse.snapshot;
-    if (snapshot) {
+    const finalSnapshot = finalResponse.snapshot;
+    if (finalSnapshot) {
       console.log("FINAL_SNAPSHOT_KEYS", {
-        snapshot_keys: Object.keys(snapshot),
+        snapshot_keys: Object.keys(finalSnapshot),
         keyword: normalizedKeyword,
       });
       
       console.log("FINAL_SNAPSHOT_TOTALS", {
-        total_monthly_units: snapshot.total_units,
-        est_total_monthly_units_min: snapshot.est_total_monthly_units_min,
-        est_total_monthly_units_max: snapshot.est_total_monthly_units_max,
-        total_monthly_revenue: snapshot.total_page1_revenue,
-        est_total_monthly_revenue_min: snapshot.est_total_monthly_revenue_min,
-        est_total_monthly_revenue_max: snapshot.est_total_monthly_revenue_max,
-        sponsored_count: snapshot.sponsored_count,
-        organic_count: snapshot.organic_count,
-        total_page1_listings: snapshot.total_page1_listings,
+        total_monthly_units: finalSnapshot.total_units,
+        est_total_monthly_units_min: finalSnapshot.est_total_monthly_units_min,
+        est_total_monthly_units_max: finalSnapshot.est_total_monthly_units_max,
+        total_monthly_revenue: finalSnapshot.total_page1_revenue,
+        est_total_monthly_revenue_min: finalSnapshot.est_total_monthly_revenue_min,
+        est_total_monthly_revenue_max: finalSnapshot.est_total_monthly_revenue_max,
+        sponsored_count: finalSnapshot.sponsored_count,
+        organic_count: finalSnapshot.organic_count,
+        total_page1_listings: finalSnapshot.total_page1_listings,
         keyword: normalizedKeyword,
       });
     } else {
