@@ -227,6 +227,13 @@ export interface KeywordMarketSnapshot {
   est_total_monthly_revenue_max?: number | null;
   est_total_monthly_units_min?: number | null;
   est_total_monthly_units_max?: number | null;
+  // Computed totals from final listings (sum of per-product estimates)
+  total_units?: number | null; // Total monthly units from all listings
+  total_page1_revenue?: number | null; // Total monthly revenue from all listings
+  // BSR metrics with category context
+  median_bsr?: number | null; // Median BSR across all listings
+  median_bsr_category?: string | null; // Most common category for median BSR listings
+  top10_bsr_category?: string | null; // Most common category for top-10 listings with BSR
   // Search volume estimation (modeled, not exact)
   search_demand?: {
     search_volume_range: string; // e.g., "10k–20k"
