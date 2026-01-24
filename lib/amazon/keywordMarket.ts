@@ -1838,7 +1838,14 @@ export async function estimateDemand(
     }
     
     // Convert BSR → units
-    const rawUnits = estimateMonthlySalesFromBSR(listing.bsr, listing.bsr_category);
+    // Use normalized estimation_category_key if available, otherwise fallback to bsr_category
+    const categoryKey = (listing as any).estimation_category_key || listing.bsr_category || 'default';
+    const rawUnits = estimateMonthlySalesFromBSR(listing.bsr, categoryKey);
+    
+    // Skip if units estimation failed (null)
+    if (rawUnits === null) {
+      continue;
+    }
     
     // Calculate raw revenue
     const rawRevenue = rawUnits * listing.price;
@@ -4092,7 +4099,7 @@ export async function fetchKeywordMarketSnapshot(
     
     try {
       // Import BSR-to-sales calculator
-      const { estimateMonthlySalesFromBSR } = await import("@/lib/revenue/bsr-calculator");
+      const { estimateMonthlySalesFromBSR, estimateMonthlySalesFromBSRWithMeta } = await import("@/lib/revenue/bsr-calculator");
       
       listingsWithEstimates = listingsWithValidBSR.map((listing) => {
         // CRITICAL: Only estimate if we have BOTH main_category_bsr AND price
@@ -4123,15 +4130,36 @@ export async function fetchKeywordMarketSnapshot(
           monthlyUnits = Math.round((listing as any).estimated_units);
           confidence = "low"; // Estimated BSR has lower confidence
         } else if (bsrSource === 'sp_api' || bsrSource === 'sp_api_catalog') {
-          // For real SP-API BSR: convert BSR → units using standard formula
-          const category = listing.main_category || 'default';
-          monthlyUnits = estimateMonthlySalesFromBSR(listing.main_category_bsr, category);
+          // For real SP-API BSR: convert BSR → units using power-law model
+          // Use normalized estimation_category_key if available, otherwise fallback to main_category
+          const categoryKey = (listing as any).estimation_category_key || listing.main_category || 'default';
+          const bsrMeta = estimateMonthlySalesFromBSRWithMeta(listing.main_category_bsr, categoryKey);
+          
+          monthlyUnits = bsrMeta.units || 0;
+          
+          // Store BSR units metadata
+          (listing as any).bsr_units_model = bsrMeta.model;
+          (listing as any).bsr_units_raw = bsrMeta.raw_units;
+          (listing as any).bsr_units_clamped = bsrMeta.clamped;
+          
+          // Log BSR to units estimation
+          console.log("BSR_TO_UNITS_ESTIMATED", {
+            asin: listing.asin,
+            bsr: listing.main_category_bsr,
+            categoryKey: categoryKey,
+            units: bsrMeta.units,
+            raw_units: bsrMeta.raw_units,
+            clamped: bsrMeta.clamped,
+            A: bsrMeta.A,
+            B: bsrMeta.B,
+          });
+          
           // Confidence: "medium" if BSR is reasonable, "low" if very high BSR
           confidence = listing.main_category_bsr <= 100000 ? "medium" : "low";
         } else {
           // Fallback: use BSR → units conversion for any other BSR source
-          const category = listing.main_category || 'default';
-          monthlyUnits = estimateMonthlySalesFromBSR(listing.main_category_bsr, category);
+          const categoryKey = (listing as any).estimation_category_key || listing.main_category || 'default';
+          monthlyUnits = estimateMonthlySalesFromBSR(listing.main_category_bsr, categoryKey) || 0;
           confidence = listing.main_category_bsr <= 100000 ? "medium" : "low";
         }
         
@@ -4220,11 +4248,16 @@ export async function fetchKeywordMarketSnapshot(
           // If we replaced estimated BSR, we need to recalculate units from real BSR
           if (currentBsrSource === 'estimated' && listing.price !== null && listing.price > 0) {
             const category = listing.main_category || 'default';
-            const monthlyUnits = estimateMonthlySalesFromBSR(catalog.bsr, category);
-            const monthlyRevenue = monthlyUnits * listing.price;
-            listing.est_monthly_units = monthlyUnits;
-            listing.est_monthly_revenue = Math.round(monthlyRevenue * 100) / 100;
-            listing.revenue_confidence = catalog.bsr <= 100000 ? "medium" : "low";
+            // Use normalized estimation_category_key if available
+            const categoryKey = (listing as any).estimation_category_key || category || 'default';
+            const monthlyUnits = estimateMonthlySalesFromBSR(catalog.bsr, categoryKey);
+            // Skip if units estimation failed (null)
+            if (monthlyUnits !== null) {
+              const monthlyRevenue = monthlyUnits * listing.price;
+              listing.est_monthly_units = monthlyUnits;
+              listing.est_monthly_revenue = Math.round(monthlyRevenue * 100) / 100;
+              listing.revenue_confidence = catalog.bsr <= 100000 ? "medium" : "low";
+            }
           }
           
           console.log("🟢 SAFETY_MERGE_BSR_APPLIED", {
