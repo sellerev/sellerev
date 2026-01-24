@@ -1137,8 +1137,7 @@ export function buildKeywordPageOne(
       page_one_appearances: pw.appearanceCount, // appearance_count
       is_algorithm_boosted: pw.isAlgorithmBoosted, // true if appearances >= 2
       appeared_multiple_times: pw.appearanceCount > 1, // Explicit flag for dominance/defense reasoning
-      // Sponsored visibility tracking (uses existing appearsSponsored field from interface)
-      appearsSponsored: pw.canonical?.appearsSponsored ?? false,
+      // Sponsored visibility tracking
       has_organic_appearance: pw.canonical?.hasOrganicAppearance ?? (pw.organicRank !== null),
       // Helium-10 style rank semantics
       organic_rank: pw.organicRank, // Position among organic listings only (null for sponsored)
@@ -1155,8 +1154,8 @@ export function buildKeywordPageOne(
       // CRITICAL: appearsSponsored and sponsoredPositions are ASIN-level properties.
       // They persist through canonicalization and represent Page-1 advertising presence.
       // DO NOT MODIFY THIS LOGIC - it matches Helium 10 / Jungle Scout behavior.
-      appearsSponsored: appearsSponsored, // ASIN-level: true if appears sponsored anywhere on Page 1
-      sponsoredPositions: sponsoredPositions, // ASIN-level: all positions where ASIN appeared as sponsored
+      appearsSponsored: pw.canonical?.appearsSponsored ?? l.appearsSponsored ?? false, // ASIN-level: true if appears sponsored anywhere on Page 1
+      sponsoredPositions: pw.canonical?.sponsoredPositions ?? l.sponsoredPositions ?? [], // ASIN-level: all positions where ASIN appeared as sponsored
       organicPosition: pw.organicRank, // Alias for organic_rank (null if sponsored)
       sponsoredSlot: sponsoredSlot !== null
         ? (sponsoredSlot <= 4 ? 'top' : sponsoredSlot <= 16 ? 'middle' : 'bottom')
