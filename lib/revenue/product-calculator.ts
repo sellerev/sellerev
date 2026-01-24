@@ -75,6 +75,10 @@ export function calculateProductRevenue(product: any): ProductRevenue | null {
   }
   
   const monthlySales = estimateMonthlySalesFromBSR(mainBSR.rank, mainBSR.category);
+  // Skip if units estimation failed (null)
+  if (monthlySales === null) {
+    return null;
+  }
   const monthlyRevenue = monthlySales * price;
   const dailySales = Math.round(monthlySales / 30);
   const dailyRevenue = (monthlySales / 30) * price;
