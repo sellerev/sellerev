@@ -107,11 +107,12 @@ export function ProductCard({
   // Determine if we should show ~ prefix (for estimated, not for sp_api)
   const showEstimatePrefix = bsrSource !== 'sp_api' || bsrContext === null || bsrContext === undefined;
   
-  // Subcategory Rank: prefer subcategoryRank, fallback to subcategoryBsr, then bsr
-  const displaySubcategoryRank = subcategoryRank ?? subcategoryBsr ?? bsr;
-  const displaySubcategoryName = subcategoryName ?? bsrContext?.chosen_category_name;
+  // Subcategory Rank: prefer subcategoryBsr (from subcategory_bsr field), fallback to subcategoryRank, then bsr
+  const displaySubcategoryBsr = subcategoryBsr ?? subcategoryRank ?? bsr ?? null;
+  const displaySubcategoryName = subcategoryName ?? bsrContext?.chosen_category_name ?? null;
   
-  // Main Category BSR: prefer mainCategoryBsr/mainCategoryName, fallback to rootRank/rootDisplayGroup, then bsrRoot/bsrRootCategory
+  // Main Category BSR: prefer mainCategoryBsr/mainCategoryName (from main_category_bsr/main_category_name fields)
+  // Fallback to rootRank/rootDisplayGroup, then bsrRoot/bsrRootCategory
   const displayMainCategoryBsr = mainCategoryBsr ?? rootRank ?? bsrRoot ?? null;
   const displayMainCategoryName = mainCategoryName ?? rootDisplayGroup ?? bsrRootCategory ?? null;
 
@@ -247,9 +248,9 @@ export function ProductCard({
       {/* BSR Display */}
       <div className="text-sm text-[#6B7280] mb-3 space-y-1">
         {/* Subcategory Rank */}
-        {displaySubcategoryRank !== null && displaySubcategoryRank !== undefined && displaySubcategoryRank > 0 ? (
+        {displaySubcategoryBsr !== null && displaySubcategoryBsr !== undefined && displaySubcategoryBsr > 0 ? (
           <div>
-            Subcategory Rank: #{displaySubcategoryRank.toLocaleString()}
+            Subcategory Rank: #{displaySubcategoryBsr.toLocaleString()}
             {displaySubcategoryName ? ` in ${displaySubcategoryName}` : ''}
           </div>
         ) : (

@@ -3580,6 +3580,78 @@ export async function POST(req: NextRequest) {
     });
     
     // ═══════════════════════════════════════════════════════════════════════════
+    // MAP FINAL LISTINGS TO INCLUDE MERGED BSR FIELDS
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CRITICAL: finalListings may be built from canonicalProducts which don't have merged fields
+    // Map listings to include merged BSR fields from keywordMarketData.listings (merged by fetchKeywordMarketSnapshot)
+    const normalizeAsin = (a: string) => a.trim().toUpperCase();
+    
+    // Build a map of merged listings by ASIN for fast lookup
+    const mergedListingsByAsin = new Map<string, any>();
+    if (keywordMarketData?.listings && Array.isArray(keywordMarketData.listings)) {
+      for (const listing of keywordMarketData.listings) {
+        if (listing.asin) {
+          mergedListingsByAsin.set(normalizeAsin(listing.asin), listing);
+        }
+      }
+    }
+    
+    const listingsWithMergedFields = finalListings.map((listing: any) => {
+      const asinKey = listing.asin ? normalizeAsin(listing.asin) : null;
+      if (!asinKey) {
+        // Ensure fields are present even if no ASIN
+        return {
+          ...listing,
+          subcategory_rank: listing.subcategory_rank ?? listing.subcategory_bsr ?? null,
+          subcategory_name: listing.subcategory_name ?? null,
+          subcategory_bsr: listing.subcategory_bsr ?? null,
+          root_rank: listing.root_rank ?? listing.bsr_root ?? null,
+          root_display_group: listing.root_display_group ?? listing.bsr_root_category ?? null,
+          bsr_root: listing.bsr_root ?? null,
+          bsr_root_category: listing.bsr_root_category ?? null,
+          main_category_bsr: listing.main_category_bsr ?? listing.root_rank ?? listing.bsr_root ?? null,
+          main_category_name: listing.main_category_name ?? listing.root_display_group ?? listing.bsr_root_category ?? null,
+        };
+      }
+      
+      // Try to find merged listing from keywordMarketData.listings (merged by fetchKeywordMarketSnapshot)
+      const mergedListing = mergedListingsByAsin.get(asinKey);
+      
+      // If merged listing found, include merged BSR fields with proper fallbacks
+      if (mergedListing) {
+        return {
+          ...listing,
+          // Subcategory fields (prefer merged, fallback to existing)
+          subcategory_rank: (mergedListing as any).subcategory_rank ?? (mergedListing as any).subcategory_bsr ?? listing.subcategory_rank ?? listing.subcategory_bsr ?? null,
+          subcategory_name: (mergedListing as any).subcategory_name ?? listing.subcategory_name ?? null,
+          subcategory_bsr: (mergedListing as any).subcategory_bsr ?? listing.subcategory_bsr ?? null,
+          // Root/main category fields (prefer merged, fallback to existing)
+          root_rank: (mergedListing as any).root_rank ?? (mergedListing as any).bsr_root ?? listing.root_rank ?? listing.bsr_root ?? null,
+          root_display_group: (mergedListing as any).root_display_group ?? (mergedListing as any).bsr_root_category ?? listing.root_display_group ?? listing.bsr_root_category ?? null,
+          bsr_root: (mergedListing as any).bsr_root ?? listing.bsr_root ?? null,
+          bsr_root_category: (mergedListing as any).bsr_root_category ?? listing.bsr_root_category ?? null,
+          // Backwards-compatible aliases (prefer merged, fallback to existing)
+          main_category_bsr: (mergedListing as any).main_category_bsr ?? (mergedListing as any).root_rank ?? (mergedListing as any).bsr_root ?? listing.main_category_bsr ?? listing.root_rank ?? listing.bsr_root ?? null,
+          main_category_name: (mergedListing as any).main_category_name ?? (mergedListing as any).root_display_group ?? (mergedListing as any).bsr_root_category ?? listing.main_category_name ?? listing.root_display_group ?? listing.bsr_root_category ?? null,
+        };
+      }
+      
+      // If no merged listing found, ensure fields are present (may be null)
+      return {
+        ...listing,
+        subcategory_rank: listing.subcategory_rank ?? listing.subcategory_bsr ?? null,
+        subcategory_name: listing.subcategory_name ?? null,
+        subcategory_bsr: listing.subcategory_bsr ?? null,
+        root_rank: listing.root_rank ?? listing.bsr_root ?? null,
+        root_display_group: listing.root_display_group ?? listing.bsr_root_category ?? null,
+        bsr_root: listing.bsr_root ?? null,
+        bsr_root_category: listing.bsr_root_category ?? null,
+        main_category_bsr: listing.main_category_bsr ?? listing.root_rank ?? listing.bsr_root ?? null,
+        main_category_name: listing.main_category_name ?? listing.root_display_group ?? listing.bsr_root_category ?? null,
+      };
+    });
+    
+    // ═══════════════════════════════════════════════════════════════════════════
     // FINAL RESPONSE DIAGNOSTICS (BEFORE RETURNING TO FRONTEND)
     // ═══════════════════════════════════════════════════════════════════════════
     // Build the response object first to inspect it
@@ -3592,10 +3664,10 @@ export async function POST(req: NextRequest) {
       snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
       snapshot_last_updated: snapshotLastUpdated,
       // CRITICAL: Always include listings - never drop them (required for UI rendering)
-      // Use finalListings (canonicalProducts if available, otherwise baseListings)
-      page_one_listings: finalListings,
-      products: finalListings,
-      listings: finalListings, // Ensure listings field is always present
+      // Use listingsWithMergedFields (includes merged BSR fields from SP-API)
+      page_one_listings: listingsWithMergedFields,
+      products: listingsWithMergedFields,
+      listings: listingsWithMergedFields, // Ensure listings field is always present
       aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
       // Enrichment status indicating pending background tasks
       enrichment_status: enrichmentStatus,
@@ -3725,20 +3797,20 @@ export async function POST(req: NextRequest) {
       snapshot_rev_min: marketSnapshot?.est_total_monthly_revenue_min 
     });
     
-    // Debug log: Show first 2 listings with BSR fields before returning response
-    const debugListings = finalListings.slice(0, 2);
-    if (debugListings.length > 0) {
-      console.log("RESPONSE_BSR_FIELDS_DEBUG", {
+    // Debug log: Show first 3 card objects with BSR fields before returning response
+    const debugCards = listingsWithMergedFields.slice(0, 3);
+    if (debugCards.length > 0) {
+      console.log("RESPONSE_CARD_BSR_FIELDS_DEBUG", {
         keyword: normalizedKeyword,
-        sample_count: debugListings.length,
-        samples: debugListings.map((l: any) => ({
-          asin: l.asin,
-          subcategory_rank: (l as any).subcategory_rank ?? (l as any).subcategory_bsr ?? null,
-          subcategory_name: (l as any).subcategory_name ?? null,
-          root_rank: (l as any).root_rank ?? (l as any).bsr_root ?? null,
-          root_display_group: (l as any).root_display_group ?? (l as any).bsr_root_category ?? null,
-          main_category_bsr: (l as any).main_category_bsr ?? null,
-          main_category_name: (l as any).main_category_name ?? null,
+        sample_count: debugCards.length,
+        samples: debugCards.map((card: any) => ({
+          asin: card.asin,
+          subcategory_bsr: card.subcategory_bsr ?? card.subcategory_rank ?? null,
+          subcategory_name: card.subcategory_name ?? null,
+          main_category_bsr: card.main_category_bsr ?? null,
+          main_category_name: card.main_category_name ?? null,
+          root_rank: card.root_rank ?? card.bsr_root ?? null,
+          root_display_group: card.root_display_group ?? card.bsr_root_category ?? null,
         })),
       });
     }
