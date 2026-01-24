@@ -74,6 +74,7 @@ export interface RawListing {
   raw_badges: any[];
   raw_block_type?: string;
   isSponsored: boolean; // Canonical sponsored status (normalized at ingest from item.sponsored)
+  sponsored_source?: "explicit_flag" | "link_sspa" | "carousel" | "none"; // Source of sponsored detection
   raw_sponsored_flag?: boolean; // DEPRECATED: Use isSponsored instead
 }
 
@@ -1495,13 +1496,27 @@ export function parseRainforestSearchResults(
     
     // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
     // MANDATORY: Capture sponsored at Rainforest ingestion before any normalization
-    // Check multiple field names as fallback (Rainforest may vary)
-    const isSponsored: boolean = Boolean(
-      item.sponsored === true ||
-      item.is_sponsored === true ||
-      item.ad === true ||
-      (typeof item.link === 'string' && (item.link.includes('/sspa/') || item.link.includes('-spons')))
-    );
+    // Standardized detection with source tracking
+    let isSponsored: boolean = false;
+    let sponsored_source: "explicit_flag" | "link_sspa" | "carousel" | "none" = "none";
+    
+    // Rule 1: Check explicit sponsored flag
+    if (item.sponsored === true || item.is_sponsored === true || item.ad === true) {
+      isSponsored = true;
+      sponsored_source = "explicit_flag";
+    }
+    // Rule 2: Check link for /sspa/ or sp_csd= query param
+    else if (typeof item.link === 'string') {
+      if (item.link.includes('/sspa/') || item.link.includes('sp_csd=')) {
+        isSponsored = true;
+        sponsored_source = "link_sspa";
+      }
+    }
+    // Rule 3: Check carousel sponsored flag
+    else if (item.carousel?.sponsored === true) {
+      isSponsored = true;
+      sponsored_source = "carousel";
+    }
     
     // Extract BSR/rank from bestsellers_rank (can be null)
     let rainforestRank: number = 0;
@@ -1545,6 +1560,7 @@ export function parseRainforestSearchResults(
       raw_badges: badgesArray,
       raw_block_type: rawBlockType,
       isSponsored, // Canonical sponsored status (normalized at ingest)
+      sponsored_source, // Source of sponsored detection
       raw_sponsored_flag: isSponsored, // DEPRECATED: kept for backward compatibility
     });
   }
@@ -2870,13 +2886,28 @@ export async function fetchKeywordMarketSnapshot(
       // ═══════════════════════════════════════════════════════════════════════════
       // 🔒 CANONICAL SPONSORED DETECTION (NORMALIZED AT INGEST)
       // MANDATORY: Capture sponsored at Rainforest ingestion before any normalization
-      // Check multiple field names as fallback (Rainforest may vary)
-      const isSponsored: boolean = Boolean(
-        item.sponsored === true ||
-        item.is_sponsored === true ||
-        item.ad === true ||
-        (typeof item.link === 'string' && (item.link.includes('/sspa/') || item.link.includes('-spons')))
-      );
+      // Standardized detection with source tracking
+      let isSponsored: boolean = false;
+      let sponsored_source_detection: "explicit_flag" | "link_sspa" | "carousel" | "none" = "none";
+      
+      // Rule 1: Check explicit sponsored flag
+      if (item.sponsored === true || item.is_sponsored === true || item.ad === true) {
+        isSponsored = true;
+        sponsored_source_detection = "explicit_flag";
+      }
+      // Rule 2: Check link for /sspa/ or sp_csd= query param
+      else if (typeof item.link === 'string') {
+        if (item.link.includes('/sspa/') || item.link.includes('sp_csd=')) {
+          isSponsored = true;
+          sponsored_source_detection = "link_sspa";
+        }
+      }
+      // Rule 3: Check carousel sponsored flag
+      else if (item.carousel?.sponsored === true) {
+        isSponsored = true;
+        sponsored_source_detection = "carousel";
+      }
+      
       const sponsored_position: number | null = isSponsored ? (item.ad_position ?? null) : null;
       const sponsored_source: 'rainforest_serp' | 'organic_serp' = 'rainforest_serp'; // Always from Rainforest SERP
       
@@ -3024,6 +3055,7 @@ export async function fetchKeywordMarketSnapshot(
         is_sponsored, // DEPRECATED: Use isSponsored instead. Kept for backward compatibility.
         sponsored_position, // Number | null (ad position from Rainforest)
         sponsored_source, // 'rainforest_serp' | 'organic_serp' (source of sponsored data)
+        sponsored_source_detection, // Source of sponsored detection: "explicit_flag" | "link_sspa" | "carousel" | "none"
         appearsSponsored, // ASIN-level: true if appears sponsored anywhere on Page 1
         sponsoredPositions, // ASIN-level: all positions where ASIN appeared as sponsored
         position,
@@ -3084,6 +3116,30 @@ export async function fetchKeywordMarketSnapshot(
     // ═══════════════════════════════════════════════════════════════════════════
     // SP-API data is foundational - merge it immediately after parsing
     // SP-API overwrites Rainforest data (authoritative source)
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SPONSORED_CLASSIFICATION_SUMMARY (MANDATORY DIAGNOSTICS)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const sponsoredListings = listings.filter(l => l.isSponsored === true);
+    const organicListings = listings.filter(l => l.isSponsored === false);
+    const unknownListings = listings.filter(l => l.isSponsored === undefined || l.isSponsored === null);
+    
+    // Sample sponsored listings for diagnostics
+    const sponsoredSample = sponsoredListings.slice(0, 5).map(l => ({
+      asin: l.asin,
+      is_sponsored: l.isSponsored,
+      sponsored_source: (l as any).sponsored_source_detection || l.sponsored_source || "unknown",
+      positions: l.sponsoredPositions || [],
+    }));
+    
+    console.log("SPONSORED_CLASSIFICATION_SUMMARY", {
+      keyword,
+      total: listings.length,
+      sponsored_count: sponsoredListings.length,
+      organic_count: organicListings.length,
+      unknown_count: unknownListings.length,
+      sample: sponsoredSample,
+    });
     
     // ═══════════════════════════════════════════════════════════════════════════
     // 🔥 HARD ASSERTION LOG: CATALOG_MAP_DIAGNOSTIC (REQUIRED TO PREVENT REGRESSIONS)

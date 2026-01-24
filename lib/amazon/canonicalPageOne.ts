@@ -333,6 +333,7 @@ export function buildKeywordPageOne(
     listing: ParsedListing; 
     organicRank: number | null; // Best organic rank (null if no organic appearances)
     appearsSponsored: boolean; // True if ASIN appears sponsored anywhere
+    hasOrganicAppearance: boolean; // True if ASIN has at least one organic appearance
     sponsoredPositions: number[]; // All positions where ASIN appeared as sponsored
     appearanceCount: number; // Track how many times ASIN appeared (for algorithm boost insight)
   }>();
@@ -364,6 +365,7 @@ export function buildKeywordPageOne(
       listing: canonicalListing,
       organicRank,
       appearsSponsored: sponsored.length > 0,
+      hasOrganicAppearance: organic.length > 0,
       sponsoredPositions: sponsored.map(a => a.position),
       appearanceCount: asinAppearances.length,
     });
@@ -733,8 +735,14 @@ export function buildKeywordPageOne(
       : 0;
     const priceWeight = Math.max(0.8, 1.0 - priceDeviation * 0.2);
 
+    // Sponsored discount: Apply 0.55x weight if appearsSponsored and no organic appearance
+    // If has organic appearance, treat as organic for weighting
+    const appearsSponsored = item.canonical.appearsSponsored;
+    const hasOrganicAppearance = item.canonical.hasOrganicAppearance ?? (item.canonical.organicRank !== null);
+    const sponsoredDiscount = (appearsSponsored && !hasOrganicAppearance) ? 0.55 : 1.0;
+
     // Combined weight
-    const allocationWeight = rankWeight * reviewWeight * ratingPenalty * priceWeight;
+    const allocationWeight = rankWeight * reviewWeight * ratingPenalty * priceWeight * sponsoredDiscount;
 
     return {
       listing: l,
@@ -747,6 +755,7 @@ export function buildKeywordPageOne(
       allocationWeight,
       appearanceCount,
       isAlgorithmBoosted,
+      canonical: item.canonical, // Preserve canonical metadata for sponsored tracking
     };
   });
 
@@ -1127,6 +1136,9 @@ export function buildKeywordPageOne(
       page_one_appearances: pw.appearanceCount, // appearance_count
       is_algorithm_boosted: pw.isAlgorithmBoosted, // true if appearances >= 2
       appeared_multiple_times: pw.appearanceCount > 1, // Explicit flag for dominance/defense reasoning
+      // Sponsored visibility tracking
+      appears_sponsored: pw.canonical?.appearsSponsored ?? false,
+      has_organic_appearance: pw.canonical?.hasOrganicAppearance ?? (pw.organicRank !== null),
       // Helium-10 style rank semantics
       organic_rank: pw.organicRank, // Position among organic listings only (null for sponsored)
       page_position: pw.pagePosition, // Actual Page-1 position including sponsored - preserves original Amazon position
