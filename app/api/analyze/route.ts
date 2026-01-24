@@ -3389,20 +3389,24 @@ export async function POST(req: NextRequest) {
         insights: contractResponse.insights || null,
       } : {}),
       // CRITICAL: Always include snapshot with required fields, even if some are null
-      snapshot: {
-        ...marketSnapshot,
-        avg_price: marketSnapshot?.avg_price ?? null,
-        total_page1_revenue: contractResponse?.aggregates_derived_from_page_one?.total_page1_revenue ||
-                            marketSnapshot?.est_total_monthly_revenue_min ||
-                            marketSnapshot?.est_total_monthly_revenue_max ||
-                            null,
-        total_units: marketSnapshot?.est_total_monthly_units_min ||
-                    marketSnapshot?.est_total_monthly_units_max ||
-                    null,
+      snapshot: (() => {
+        const agg = contractResponse?.aggregates_derived_from_page_one;
+        return {
+          ...marketSnapshot,
+          avg_price: marketSnapshot?.avg_price ?? null,
+          total_page1_revenue: agg?.total_page1_revenue ?? 
+                              marketSnapshot?.est_total_monthly_revenue_min ?? 
+                              marketSnapshot?.est_total_monthly_revenue_max ?? 
+                              null,
+          total_units: agg?.total_page1_units ?? 
+                      marketSnapshot?.est_total_monthly_units_min ?? 
+                      marketSnapshot?.est_total_monthly_units_max ?? 
+                      null,
         bsr_coverage_percent: marketSnapshot?.bsr_sample_size && canonicalProducts.length > 0
           ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
           : null,
-      },
+        };
+      })(),
       // Include warnings if any
       ...(warnings.length > 0 ? { warnings } : {}),
       message: "Market data loaded. Product cards ready.",
@@ -3493,6 +3497,14 @@ export async function POST(req: NextRequest) {
         keyword: normalizedKeyword,
       });
     }
+    
+    const agg = contractResponse?.aggregates_derived_from_page_one;
+    console.log("SNAPSHOT_TOTALS_SOURCE_CHECK", { 
+      agg_total_units: agg?.total_page1_units, 
+      agg_total_revenue: agg?.total_page1_revenue, 
+      snapshot_units_min: marketSnapshot?.est_total_monthly_units_min, 
+      snapshot_rev_min: marketSnapshot?.est_total_monthly_revenue_min 
+    });
     
     return NextResponse.json(
       finalResponse,
