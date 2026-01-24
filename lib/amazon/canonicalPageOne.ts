@@ -67,6 +67,7 @@ export interface CanonicalProduct {
   // DO NOT MODIFY THIS LOGIC - it matches Helium 10 / Jungle Scout behavior.
   appearsSponsored: boolean; // ASIN-level: true if appears sponsored anywhere on Page 1
   sponsoredPositions: number[]; // ASIN-level: all positions where ASIN appeared as sponsored
+  has_organic_appearance?: boolean; // True if ASIN has at least one organic appearance (for allocation weighting)
   organicPosition?: number | null; // Alias for organic_rank (null if sponsored)
   sponsoredSlot?: 'top' | 'middle' | 'bottom' | null; // Sponsored ad slot position (null if not sponsored)
   // Prime eligibility and fulfillment status (from is_prime heuristic)
