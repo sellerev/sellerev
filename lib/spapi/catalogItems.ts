@@ -591,15 +591,20 @@ async function fetchBatch(
           ...metadata,
           asin: asinKey, // Ensure normalized ASIN is used as key
           // Persist structured BSR context - subcategory rank
-          main_category_bsr: bsrContext.chosen_rank_value,
           bsr: bsrContext.chosen_rank_value,
           subcategory_bsr: bsrContext.chosen_rank_value,
+          subcategory_rank: bsrContext.chosen_rank_value, // Explicit field name for UI
           subcategory_name: bsrContext.chosen_category_name,
           subcategory_browse_node_id: bsrContext.chosen_browse_classification_id,
           subcategory_rank_source: bsrContext.chosen_rank_source,
-          // Root/main category BSR
+          // Root/main category BSR - explicit field names
           bsr_root: bsrContext.root_rank,
           bsr_root_category: bsrContext.root_display_group,
+          root_rank: bsrContext.root_rank, // Explicit field name for UI
+          root_display_group: bsrContext.root_display_group, // Explicit field name for UI
+          // Backwards-compatible aliases (root rank, NOT subcategory)
+          main_category_bsr: bsrContext.root_rank, // Root rank, NOT subcategory
+          main_category_name: bsrContext.root_display_group, // Root display group
           bsr_source: "sp_api",
           bsr_context: bsrContext,
         });

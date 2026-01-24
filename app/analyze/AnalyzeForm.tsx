@@ -2122,11 +2122,16 @@ export default function AnalyzeForm({
                             const bsrContext = (listing as any).bsr_context ?? null;
                             // Subcategory and root rank (with fallbacks)
                             // Subcategory: prefer subcategory_rank, fallback to subcategory_bsr
-                            const subcategoryBsr = (listing as any).subcategory_rank ?? (listing as any).subcategory_bsr ?? null;
+                            const subcategoryRank = (listing as any).subcategory_rank ?? null;
+                            const subcategoryBsr = (listing as any).subcategory_bsr ?? null;
                             const subcategoryName = (listing as any).subcategory_name ?? null;
                             // Main category: prefer main_category_bsr/main_category_name, fallback to root_rank/root_display_group, then bsr_root/bsr_root_category
-                            const bsrRoot = (listing as any).main_category_bsr ?? (listing as any).root_rank ?? (listing as any).bsr_root ?? null;
-                            const bsrRootCategory = (listing as any).main_category_name ?? (listing as any).root_display_group ?? (listing as any).bsr_root_category ?? null;
+                            const mainCategoryBsr = (listing as any).main_category_bsr ?? null;
+                            const mainCategoryName = (listing as any).main_category_name ?? null;
+                            const rootRank = (listing as any).root_rank ?? null;
+                            const rootDisplayGroup = (listing as any).root_display_group ?? null;
+                            const bsrRoot = (listing as any).bsr_root ?? null;
+                            const bsrRootCategory = (listing as any).bsr_root_category ?? null;
                             
                             // Sponsored: use normalization fallback
                             // isSponsored ?? (sponsored === true) ?? is_sponsored ?? IsSponsored ?? false
@@ -2175,8 +2180,13 @@ export default function AnalyzeForm({
                                   bsrSource={bsrSource}
                                   bsr={bsr}
                                   bsrContext={bsrContext}
+                                  subcategoryRank={subcategoryRank}
                                   subcategoryBsr={subcategoryBsr}
                                   subcategoryName={subcategoryName}
+                                  mainCategoryBsr={mainCategoryBsr}
+                                  mainCategoryName={mainCategoryName}
+                                  rootRank={rootRank}
+                                  rootDisplayGroup={rootDisplayGroup}
                                   bsrRoot={bsrRoot}
                                   bsrRootCategory={bsrRootCategory}
                                   fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}

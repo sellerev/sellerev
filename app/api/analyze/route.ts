@@ -3378,31 +3378,24 @@ export async function POST(req: NextRequest) {
                 listing.bsr = metadata.bsr;
                 // NOTE: main_category_bsr will be set below from root rank, not subcategory rank
               }
-              // Merge subcategory rank fields (explicit field names)
-              if (metadata.subcategory_bsr != null && metadata.subcategory_bsr > 0) {
-                (listing as any).subcategory_bsr = metadata.subcategory_bsr;
-                (listing as any).subcategory_rank = metadata.subcategory_bsr; // UI-compatible alias
-              }
-              if (metadata.subcategory_name) {
-                (listing as any).subcategory_name = metadata.subcategory_name;
-              }
+              // Merge subcategory rank fields (explicit field names with null coalescing)
+              (listing as any).subcategory_rank = metadata.subcategory_rank ?? metadata.subcategory_bsr ?? null;
+              (listing as any).subcategory_name = metadata.subcategory_name ?? null;
+              (listing as any).subcategory_bsr = metadata.subcategory_bsr ?? null;
               if (metadata.subcategory_browse_node_id) {
                 (listing as any).subcategory_browse_node_id = metadata.subcategory_browse_node_id;
               }
               if (metadata.subcategory_rank_source) {
                 (listing as any).subcategory_rank_source = metadata.subcategory_rank_source;
               }
-              // Merge root/main category BSR (explicit field names + UI-compatible aliases)
-              if (metadata.bsr_root != null && metadata.bsr_root > 0) {
-                (listing as any).bsr_root = metadata.bsr_root;
-                (listing as any).root_rank = metadata.bsr_root; // Explicit field name
-                (listing as any).main_category_bsr = metadata.bsr_root; // UI-compatible alias (root rank, NOT subcategory)
-              }
-              if (metadata.bsr_root_category) {
-                (listing as any).bsr_root_category = metadata.bsr_root_category;
-                (listing as any).root_display_group = metadata.bsr_root_category; // Explicit field name
-                (listing as any).main_category_name = metadata.bsr_root_category; // UI-compatible alias
-              }
+              // Merge root/main category BSR (explicit field names + UI-compatible aliases with null coalescing)
+              (listing as any).root_rank = metadata.root_rank ?? metadata.bsr_root ?? null;
+              (listing as any).root_display_group = metadata.root_display_group ?? metadata.bsr_root_category ?? null;
+              (listing as any).bsr_root = metadata.bsr_root ?? null;
+              (listing as any).bsr_root_category = metadata.bsr_root_category ?? null;
+              // Backwards-compatible aliases (always set, even if null)
+              (listing as any).main_category_bsr = metadata.main_category_bsr ?? metadata.root_rank ?? metadata.bsr_root ?? null;
+              (listing as any).main_category_name = metadata.main_category_name ?? metadata.root_display_group ?? metadata.bsr_root_category ?? null;
             }
           }
           

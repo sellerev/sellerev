@@ -3449,14 +3449,10 @@ export async function fetchKeywordMarketSnapshot(
           // NOTE: main_category_bsr will be set below from root rank, not subcategory rank
           listing.bsr = catalog.bsr;
           
-          // Merge subcategory rank fields (explicit field names)
-          if (catalog.subcategory_bsr != null && catalog.subcategory_bsr > 0) {
-            (listing as any).subcategory_bsr = catalog.subcategory_bsr;
-            (listing as any).subcategory_rank = catalog.subcategory_bsr; // UI-compatible alias
-          }
-          if (catalog.subcategory_name) {
-            (listing as any).subcategory_name = catalog.subcategory_name;
-          }
+          // Merge subcategory rank fields (explicit field names with null coalescing)
+          (listing as any).subcategory_rank = catalog.subcategory_rank ?? catalog.subcategory_bsr ?? null;
+          (listing as any).subcategory_name = catalog.subcategory_name ?? null;
+          (listing as any).subcategory_bsr = catalog.subcategory_bsr ?? null;
           if (catalog.subcategory_browse_node_id) {
             (listing as any).subcategory_browse_node_id = catalog.subcategory_browse_node_id;
           }
@@ -3464,18 +3460,15 @@ export async function fetchKeywordMarketSnapshot(
             (listing as any).subcategory_rank_source = catalog.subcategory_rank_source;
           }
           
-          // Merge root/main category BSR (explicit field names + UI-compatible aliases)
+          // Merge root/main category BSR (explicit field names + UI-compatible aliases with null coalescing)
           // CRITICAL: main_category_bsr should be root rank, NOT subcategory rank
-          if (catalog.bsr_root != null && catalog.bsr_root > 0) {
-            (listing as any).bsr_root = catalog.bsr_root;
-            (listing as any).root_rank = catalog.bsr_root; // Explicit field name
-            (listing as any).main_category_bsr = catalog.bsr_root; // UI-compatible alias (root rank, NOT subcategory)
-          }
-          if (catalog.bsr_root_category) {
-            (listing as any).bsr_root_category = catalog.bsr_root_category;
-            (listing as any).root_display_group = catalog.bsr_root_category; // Explicit field name
-            (listing as any).main_category_name = catalog.bsr_root_category; // UI-compatible alias
-          }
+          (listing as any).root_rank = catalog.root_rank ?? catalog.bsr_root ?? null;
+          (listing as any).root_display_group = catalog.root_display_group ?? catalog.bsr_root_category ?? null;
+          (listing as any).bsr_root = catalog.bsr_root ?? null;
+          (listing as any).bsr_root_category = catalog.bsr_root_category ?? null;
+          // Backwards-compatible aliases (always set, even if null)
+          (listing as any).main_category_bsr = catalog.main_category_bsr ?? catalog.root_rank ?? catalog.bsr_root ?? null;
+          (listing as any).main_category_name = catalog.main_category_name ?? catalog.root_display_group ?? catalog.bsr_root_category ?? null;
           
           // Persist structured BSR context to listing
           if (catalog.bsr_context) {
@@ -3960,27 +3953,20 @@ export async function fetchKeywordMarketSnapshot(
         (target as any).bsr_source = "sp_api";
         (target as any).had_sp_api_response = true;
         
-        // Merge subcategory rank fields (explicit field names)
-        if (catalog.subcategory_bsr != null && catalog.subcategory_bsr > 0) {
-          (target as any).subcategory_bsr = catalog.subcategory_bsr;
-          (target as any).subcategory_rank = catalog.subcategory_bsr; // UI-compatible alias
-        }
-        if (catalog.subcategory_name) {
-          (target as any).subcategory_name = catalog.subcategory_name;
-        }
+        // Merge subcategory rank fields (explicit field names with null coalescing)
+        (target as any).subcategory_rank = catalog.subcategory_rank ?? catalog.subcategory_bsr ?? null;
+        (target as any).subcategory_name = catalog.subcategory_name ?? null;
+        (target as any).subcategory_bsr = catalog.subcategory_bsr ?? null;
         
-        // Merge root/main category BSR (explicit field names + UI-compatible aliases)
+        // Merge root/main category BSR (explicit field names + UI-compatible aliases with null coalescing)
         // CRITICAL: main_category_bsr should be root rank, NOT subcategory rank
-        if (catalog.bsr_root != null && catalog.bsr_root > 0) {
-          (target as any).bsr_root = catalog.bsr_root;
-          (target as any).root_rank = catalog.bsr_root; // Explicit field name
-          target.main_category_bsr = catalog.bsr_root; // UI-compatible alias (root rank, NOT subcategory)
-        }
-        if (catalog.bsr_root_category) {
-          (target as any).bsr_root_category = catalog.bsr_root_category;
-          (target as any).root_display_group = catalog.bsr_root_category; // Explicit field name
-          (target as any).main_category_name = catalog.bsr_root_category; // UI-compatible alias
-        }
+        (target as any).root_rank = catalog.root_rank ?? catalog.bsr_root ?? null;
+        (target as any).root_display_group = catalog.root_display_group ?? catalog.bsr_root_category ?? null;
+        (target as any).bsr_root = catalog.bsr_root ?? null;
+        (target as any).bsr_root_category = catalog.bsr_root_category ?? null;
+        // Backwards-compatible aliases (always set, even if null)
+        target.main_category_bsr = catalog.main_category_bsr ?? catalog.root_rank ?? catalog.bsr_root ?? null;
+        (target as any).main_category_name = catalog.main_category_name ?? catalog.root_display_group ?? catalog.bsr_root_category ?? null;
         
         // Ensure enrichment_sources object exists
         if (!(target as any).enrichment_sources) {
