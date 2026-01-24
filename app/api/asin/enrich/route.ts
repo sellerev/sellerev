@@ -326,6 +326,10 @@ export async function POST(req: NextRequest) {
           } else if (bsr && price && price > 0) {
             const { estimateMonthlySalesFromBSR } = await import("@/lib/revenue/bsr-calculator");
             const units = estimateMonthlySalesFromBSR(bsr, mainCategory || "default");
+            // Skip if units estimation failed (null)
+            if (units === null) {
+              return; // insufficient; don't cache junk
+            }
             unitsSource = "bsr_curve";
             unitsRange = { min: units, max: units };
             refinedRevenue = units * price;

@@ -180,6 +180,7 @@ export interface ParsedListing {
   bsr: number | null; // Best Seller Rank (if available from Rainforest) - DEPRECATED: use main_category_bsr
   main_category_bsr: number | null; // Main category Best Seller Rank (top-level category only)
   main_category: string | null; // Main category name (e.g., "Home & Kitchen")
+  bsr_category?: string | null; // Category name for BSR calculator (e.g., "Home & Kitchen", "Kitchen & Dining")
   fulfillment: "FBA" | "FBM" | "UNKNOWN"; // Fulfillment type (never null, never defaults to FBM)
   fulfillmentSource: 'sp_api' | 'rainforest_inferred' | 'unknown'; // Source of fulfillment data
   fulfillmentConfidence: 'high' | 'medium' | 'low'; // Confidence in fulfillment inference
