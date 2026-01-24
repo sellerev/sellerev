@@ -3434,23 +3434,80 @@ export async function POST(req: NextRequest) {
     const medianBsr = bsrs.length > 0 ? median(bsrs) : null;
     const bsrSampleSize = bsrs.length;
     
-    // Decide final snapshot totals precedence
+    // Compute BSR category labels (most common main_category among listings with BSR)
+    const listingsWithBSR = finalListings.filter(p => {
+      const bsr = safeNum(p.main_category_bsr ?? p.bsr);
+      return bsr !== null && bsr > 0;
+    });
+    
+    const categoryCounts = new Map<string, number>();
+    listingsWithBSR.forEach(p => {
+      const category = p.main_category;
+      if (category && typeof category === 'string' && category.trim().length > 0) {
+        categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1);
+      }
+    });
+    
+    // Find most common category
+    let medianBsrCategory: string | null = null;
+    let maxCount = 0;
+    categoryCounts.forEach((count, category) => {
+      if (count > maxCount) {
+        maxCount = count;
+        medianBsrCategory = category;
+      }
+    });
+    
+    // Top-10 BSR category (same logic but from top 10 listings)
+    const top10Listings = finalListings
+      .filter(p => p.organic_rank != null)
+      .sort((a, b) => (a.organic_rank ?? Infinity) - (b.organic_rank ?? Infinity))
+      .slice(0, 10)
+      .filter(p => {
+        const bsr = safeNum(p.main_category_bsr ?? p.bsr);
+        return bsr !== null && bsr > 0;
+      });
+    
+    const top10CategoryCounts = new Map<string, number>();
+    top10Listings.forEach(p => {
+      const category = p.main_category;
+      if (category && typeof category === 'string' && category.trim().length > 0) {
+        top10CategoryCounts.set(category, (top10CategoryCounts.get(category) || 0) + 1);
+      }
+    });
+    
+    let top10BsrCategory: string | null = null;
+    let top10MaxCount = 0;
+    top10CategoryCounts.forEach((count, category) => {
+      if (count > top10MaxCount) {
+        top10MaxCount = count;
+        top10BsrCategory = category;
+      }
+    });
+    
+    // Compute totals from final listings (set to null if 0)
+    const computedUnitsFinal = computedUnits > 0 ? computedUnits : null;
+    const computedRevenueFinal = computedRev > 0 ? computedRev : null;
+    
+    // Decide final snapshot totals precedence (computed values as last fallback)
     const totalUnits = agg?.total_page1_units ?? 
                       marketSnapshot?.est_total_monthly_units_min ?? 
                       marketSnapshot?.est_total_monthly_units_max ?? 
-                      (computedUnits > 0 ? computedUnits : null);
+                      computedUnitsFinal;
     
     const totalRevenue = agg?.total_page1_revenue ?? 
                         marketSnapshot?.est_total_monthly_revenue_min ?? 
                         marketSnapshot?.est_total_monthly_revenue_max ?? 
-                        (computedRev > 0 ? computedRev : null);
+                        computedRevenueFinal;
     
     console.log("SNAPSHOT_TOTALS_AND_MEDIAN_CHECK", { 
       agg_units: agg?.total_page1_units, 
       agg_rev: agg?.total_page1_revenue, 
-      computedUnits, 
-      computedRev, 
+      computedUnits: computedUnitsFinal, 
+      computedRev: computedRevenueFinal, 
       medianBsr, 
+      medianBsrCategory,
+      top10BsrCategory,
       bsrSampleSize 
     });
     
@@ -3490,6 +3547,8 @@ export async function POST(req: NextRequest) {
           total_page1_revenue: totalRevenue ?? null,
           total_units: totalUnits ?? null,
           median_bsr: medianBsr ?? null,
+          median_bsr_category: medianBsrCategory ?? null,
+          top10_bsr_category: top10BsrCategory ?? null,
           bsr_sample_size: bsrSampleSize,
           bsr_coverage_percent: marketSnapshot?.bsr_sample_size && canonicalProducts.length > 0
             ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)

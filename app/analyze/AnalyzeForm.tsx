@@ -1374,81 +1374,25 @@ export default function AnalyzeForm({
                           : 0))
                       : 0;
                     
-                    // Median BSR - calculate from page-one listings with BSR
-                    const bsrListings = pageOneListings.filter((l: any) => 
-                      l.bsr !== null && l.bsr !== undefined && typeof l.bsr === 'number' && l.bsr > 0
-                    );
-                    const medianBSR = hasListings && bsrListings.length > 0
-                      ? median(bsrListings.map((l: any) => l.bsr))
-                      : null;
+                    // Use snapshot values for totals and BSR (computed in backend)
+                    const monthlyUnits = snapshot?.total_units ?? null;
+                    const monthlyRevenue = snapshot?.total_page1_revenue ?? null;
+                    const medianBSR = snapshot?.median_bsr ?? null;
+                    const medianBsrCategory = snapshot?.median_bsr_category ?? null;
                     
-                    // Top-10 Median BSR - calculate from top 10 by organic rank
+                    // Top-10 Median BSR - calculate from top 10 by organic rank (for display)
                     const top10Listings = pageOneListings
                       .filter((l: any) => l.organic_rank !== null && l.organic_rank !== undefined)
                       .sort((a: any, b: any) => (a.organic_rank ?? Infinity) - (b.organic_rank ?? Infinity))
                       .slice(0, 10)
-                      .filter((l: any) => l.bsr !== null && l.bsr !== undefined && typeof l.bsr === 'number' && l.bsr > 0);
-                    const top10MedianBSR = top10Listings.length > 0
-                      ? median(top10Listings.map((l: any) => l.bsr))
-                      : null;
-                    
-                    // Confidence-weighted totals
-                    // Weight by source: sp_api -> 1.0, estimated/fallback -> 0.75, missing -> 0
-                    const getConfidenceWeight = (product: any): number => {
-                      const source = (product as any).bsr_source ?? (product as any).bsrSource;
-                      if (source === 'sp_api') return 1.0;
-                      if (source === 'estimated' || source === 'fallback' || source === 'unavailable') return 0.75;
-                      return 0; // missing or unknown
-                    };
-                    
-                    // Calculate confidence-weighted totals
-                    let totalUnits = 0;
-                    let totalRevenue = 0;
-                    let coverageCount = 0; // Count of listings with estimates
-                    let spApiCount = 0; // Count of listings with sp_api source
-                    
-                    if (hasListings && pageOneListings.length > 0) {
-                      pageOneListings.forEach((product: any) => {
-                        const units = product.estimated_monthly_units;
-                        const revenue = product.estimated_monthly_revenue;
-                        const weight = getConfidenceWeight(product);
-                        
-                        if (typeof units === 'number') {
-                          totalUnits += units * weight;
-                          if (units > 0) coverageCount++;
-                        }
-                        if (typeof revenue === 'number') {
-                          totalRevenue += revenue * weight;
-                        }
-                        if (weight === 1.0) spApiCount++;
+                      .filter((l: any) => {
+                        const bsr = l.main_category_bsr ?? l.bsr;
+                        return bsr !== null && bsr !== undefined && typeof bsr === 'number' && bsr > 0;
                       });
-                    }
-                    
-                    const monthlyUnits = hasListings && pageOneListings.length > 0 ? totalUnits : null;
-                    const monthlyRevenue = hasListings && pageOneListings.length > 0 ? totalRevenue : null;
-                    const coveragePct = pageOneListings.length > 0 
-                      ? (coverageCount / pageOneListings.length) * 100 
-                      : 0;
-                    const confidenceLevel = coveragePct >= 80 && spApiCount >= pageOneListings.length * 0.5
-                      ? 'High'
-                      : coveragePct >= 50 && spApiCount >= pageOneListings.length * 0.25
-                      ? 'Medium'
-                      : 'Low';
-                    
-                    // Log snapshot totals
-                    console.log("SNAPSHOT_TOTALS_COMPUTED", {
-                      keyword: (snapshot as any)?.keyword ?? 'unknown',
-                      total_units: monthlyUnits,
-                      total_revenue: monthlyRevenue,
-                      coverage_pct: coveragePct.toFixed(1),
-                      coverage_count: coverageCount,
-                      total_listings: pageOneListings.length,
-                      median_bsr: medianBSR,
-                      top10_median_bsr: top10MedianBSR,
-                      confidence: confidenceLevel,
-                      sp_api_count: spApiCount,
-                      timestamp: new Date().toISOString(),
-                    });
+                    const top10MedianBSR = top10Listings.length > 0
+                      ? median(top10Listings.map((l: any) => l.main_category_bsr ?? l.bsr))
+                      : null;
+                    const top10BsrCategory = snapshot?.top10_bsr_category ?? null;
                     
                     // Average Rating - calculate from page_one_listings (canonical products) or aggregates
                     // Filter to listings with numeric ratings only (typeof rating === 'number')
@@ -1628,34 +1572,24 @@ export default function AnalyzeForm({
                             )}
                           </div>
                           
-                          {/* 8. Median BSR */}
+                          {/* 8. Median Subcategory Rank */}
                           <div>
-                            <div className="text-xs text-gray-500 mb-1">Median BSR</div>
+                            <div className="text-xs text-gray-500 mb-1">Median Subcategory Rank</div>
                             <div className="text-lg font-semibold text-gray-900">
                               {medianBSR !== null && medianBSR !== undefined
-                                ? `#${Math.round(medianBSR).toLocaleString()}`
+                                ? `#${Math.round(medianBSR).toLocaleString()}${medianBsrCategory ? ` in ${medianBsrCategory}` : ''}`
                                 : "—"}
                             </div>
                             {top10MedianBSR !== null && top10MedianBSR !== undefined && (
                               <div className="text-xs text-gray-400 mt-0.5">
-                                Top-10: #{Math.round(top10MedianBSR).toLocaleString()}
+                                Top-10: #{Math.round(top10MedianBSR).toLocaleString()}{top10BsrCategory ? ` in ${top10BsrCategory}` : ''}
                               </div>
                             )}
-                          </div>
-                          
-                          {/* 9. Coverage & Confidence */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Coverage</div>
-                            <div className="text-lg font-semibold text-gray-900">
-                              {coverageCount > 0 ? `${coverageCount}/${pageOneListings.length} listings` : "—"}
-                            </div>
-                            <div className="text-xs text-gray-400 mt-0.5">
-                              Confidence: <span className={`font-medium ${
-                                confidenceLevel === 'High' ? 'text-green-600' :
-                                confidenceLevel === 'Medium' ? 'text-yellow-600' :
-                                'text-red-600'
-                              }`}>{confidenceLevel}</span>
-                            </div>
+                            {(medianBSR !== null || top10MedianBSR !== null) && (
+                              <div className="text-xs text-gray-400 mt-0.5 italic">
+                                Subcategory rank from Amazon category node (not root category BSR)
+                              </div>
+                            )}
                           </div>
                           
                           {/* 10. Top 5 Brands Control */}
