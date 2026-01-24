@@ -234,6 +234,9 @@ export interface KeywordMarketSnapshot {
   median_bsr?: number | null; // Median BSR across all listings
   median_bsr_category?: string | null; // Most common category for median BSR listings
   top10_bsr_category?: string | null; // Most common category for top-10 listings with BSR
+  median_root_bsr?: number | null; // Median root/main category BSR
+  median_root_bsr_category?: string | null; // Most common root category for median root BSR
+  root_bsr_sample_size?: number; // Count of listings with root BSR
   // Search volume estimation (modeled, not exact)
   search_demand?: {
     search_volume_range: string; // e.g., "10k–20k"
@@ -3446,6 +3449,28 @@ export async function fetchKeywordMarketSnapshot(
           listing.main_category_bsr = catalog.bsr;
           listing.bsr = catalog.bsr;
           
+          // Merge subcategory rank fields
+          if (catalog.subcategory_bsr != null && catalog.subcategory_bsr > 0) {
+            (listing as any).subcategory_bsr = catalog.subcategory_bsr;
+          }
+          if (catalog.subcategory_name) {
+            (listing as any).subcategory_name = catalog.subcategory_name;
+          }
+          if (catalog.subcategory_browse_node_id) {
+            (listing as any).subcategory_browse_node_id = catalog.subcategory_browse_node_id;
+          }
+          if (catalog.subcategory_rank_source) {
+            (listing as any).subcategory_rank_source = catalog.subcategory_rank_source;
+          }
+          
+          // Merge root/main category BSR (only if present, do NOT reuse subcategory rank)
+          if (catalog.bsr_root != null && catalog.bsr_root > 0) {
+            (listing as any).bsr_root = catalog.bsr_root;
+          }
+          if (catalog.bsr_root_category) {
+            (listing as any).bsr_root_category = catalog.bsr_root_category;
+          }
+          
           // Persist structured BSR context to listing
           if (catalog.bsr_context) {
             (listing as any).bsr_context = catalog.bsr_context;
@@ -3470,9 +3495,14 @@ export async function fetchKeywordMarketSnapshot(
             console.log("MERGE_BSR_FROM_SP_API", {
               asin: listing.asin,
               bsr: listing.main_category_bsr,
+              subcategory_bsr: (listing as any).subcategory_bsr,
+              subcategory_name: (listing as any).subcategory_name,
+              bsr_root: (listing as any).bsr_root,
+              bsr_root_category: (listing as any).bsr_root_category,
               category: finalCategory || listing.main_category,
               category_from_context: categoryFromContext,
               bsr_source: catalog.bsr_context?.chosen_rank_source,
+              root_rank_source: catalog.bsr_context?.root_rank_source,
               source: 'sp_api',
             });
           }

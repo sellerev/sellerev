@@ -21,6 +21,10 @@ interface ProductCardProps {
     chosen_category_name?: string | null;
     chosen_rank_source?: string | null;
   } | null; // BSR context with category name
+  subcategoryBsr?: number | null; // Subcategory rank
+  subcategoryName?: string | null; // Subcategory name
+  bsrRoot?: number | null; // Main/root category BSR
+  bsrRootCategory?: string | null; // Main/root category name
   fulfillment: "FBA" | "FBM" | "AMZ";
   isSponsored: boolean | null; // true = sponsored, false = organic, null = unknown
   appearsSponsored?: boolean; // ASIN-level: true if appears sponsored anywhere on Page 1
@@ -45,6 +49,10 @@ export function ProductCard({
   bsrSource,
   bsr,
   bsrContext,
+  subcategoryBsr,
+  subcategoryName,
+  bsrRoot,
+  bsrRootCategory,
   fulfillment,
   isSponsored,
   appearsSponsored,
@@ -89,17 +97,9 @@ export function ProductCard({
   // Determine if we should show ~ prefix (for estimated, not for sp_api)
   const showEstimatePrefix = bsrSource !== 'sp_api' || bsrContext === null || bsrContext === undefined;
   
-  // Format BSR display
-  const formatBSR = () => {
-    if (bsr === null || bsr === undefined) {
-      return "BSR: —";
-    }
-    const prefix = showEstimatePrefix ? "~" : "";
-    const categoryLabel = bsrContext?.chosen_category_name 
-      ? ` (${bsrContext.chosen_category_name})`
-      : "";
-    return `BSR: ${prefix}#${bsr.toLocaleString()}${categoryLabel}`;
-  };
+  // Use subcategory rank if available, otherwise fallback to bsr
+  const displaySubcategoryBsr = subcategoryBsr ?? bsr;
+  const displaySubcategoryName = subcategoryName ?? bsrContext?.chosen_category_name;
 
   return (
     <div
@@ -231,8 +231,25 @@ export function ProductCard({
       ) : null}
 
       {/* BSR Display */}
-      <div className="text-sm text-[#6B7280] mb-3">
-        {formatBSR()}
+      <div className="text-sm text-[#6B7280] mb-3 space-y-1">
+        {/* Subcategory Rank */}
+        {displaySubcategoryBsr !== null && displaySubcategoryBsr !== undefined && displaySubcategoryBsr > 0 ? (
+          <div>
+            Subcategory Rank: #{displaySubcategoryBsr.toLocaleString()}
+            {displaySubcategoryName ? ` in ${displaySubcategoryName}` : ''}
+          </div>
+        ) : (
+          <div>Subcategory Rank: —</div>
+        )}
+        {/* Main Category BSR */}
+        {bsrRoot !== null && bsrRoot !== undefined && bsrRoot > 0 ? (
+          <div>
+            Main Category BSR: #{bsrRoot.toLocaleString()}
+            {bsrRootCategory ? ` in ${bsrRootCategory}` : ''}
+          </div>
+        ) : (
+          <div>Main Category BSR: —</div>
+        )}
       </div>
 
       {/* Spacer to push revenue section to bottom */}

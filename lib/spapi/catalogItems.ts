@@ -590,22 +590,33 @@ async function fetchBatch(
           ...(spApiCatalogResults!.get(asinKey) ?? {}), // Preserve existing data
           ...metadata,
           asin: asinKey, // Ensure normalized ASIN is used as key
-          // Persist structured BSR context
+          // Persist structured BSR context - subcategory rank
           main_category_bsr: bsrContext.chosen_rank_value,
           bsr: bsrContext.chosen_rank_value,
+          subcategory_bsr: bsrContext.chosen_rank_value,
+          subcategory_name: bsrContext.chosen_category_name,
+          subcategory_browse_node_id: bsrContext.chosen_browse_classification_id,
+          subcategory_rank_source: bsrContext.chosen_rank_source,
+          // Root/main category BSR
+          bsr_root: bsrContext.root_rank,
+          bsr_root_category: bsrContext.root_display_group,
           bsr_source: "sp_api",
           bsr_context: bsrContext,
         });
         
-        // Log structured BSR context extraction
+        // Log structured BSR context extraction (both subcategory and root)
         console.log("SP_API_BSR_CONTEXT_EXTRACTED", {
           asin,
+          // Subcategory rank
           chosen_rank_value: bsrContext.chosen_rank_value,
-          
           chosen_category_name: bsrContext.chosen_category_name,
           chosen_rank_source: bsrContext.chosen_rank_source,
           chosen_browse_classification_id: bsrContext.chosen_browse_classification_id,
           chosen_display_group: bsrContext.chosen_display_group,
+          // Root rank
+          root_rank: bsrContext.root_rank,
+          root_display_group: bsrContext.root_display_group,
+          root_rank_source: bsrContext.root_rank_source,
           debug_reason: bsrContext.debug_reason,
         });
         

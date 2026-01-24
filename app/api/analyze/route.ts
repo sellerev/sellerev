@@ -3378,6 +3378,26 @@ export async function POST(req: NextRequest) {
                 listing.bsr = metadata.bsr;
                 listing.main_category_bsr = metadata.bsr;
               }
+              // Merge subcategory rank fields
+              if (metadata.subcategory_bsr != null && metadata.subcategory_bsr > 0) {
+                (listing as any).subcategory_bsr = metadata.subcategory_bsr;
+              }
+              if (metadata.subcategory_name) {
+                (listing as any).subcategory_name = metadata.subcategory_name;
+              }
+              if (metadata.subcategory_browse_node_id) {
+                (listing as any).subcategory_browse_node_id = metadata.subcategory_browse_node_id;
+              }
+              if (metadata.subcategory_rank_source) {
+                (listing as any).subcategory_rank_source = metadata.subcategory_rank_source;
+              }
+              // Merge root/main category BSR (only if present)
+              if (metadata.bsr_root != null && metadata.bsr_root > 0) {
+                (listing as any).bsr_root = metadata.bsr_root;
+              }
+              if (metadata.bsr_root_category) {
+                (listing as any).bsr_root_category = metadata.bsr_root_category;
+              }
             }
           }
           
@@ -3433,6 +3453,35 @@ export async function POST(req: NextRequest) {
     
     const medianBsr = bsrs.length > 0 ? median(bsrs) : null;
     const bsrSampleSize = bsrs.length;
+    
+    // Compute root/main category BSR array
+    const rootBsrs = finalListings
+      .map(p => safeNum((p as any).bsr_root))
+      .filter(n => n !== null && n > 0) as number[];
+    
+    const medianRootBsr = rootBsrs.length > 0 ? median(rootBsrs) : null;
+    const rootBsrSampleSize = rootBsrs.length;
+    
+    // Compute root BSR category (most common bsr_root_category)
+    const rootCategoryCounts = new Map<string, number>();
+    finalListings.forEach(p => {
+      const rootCategory = (p as any).bsr_root_category;
+      if (rootCategory && typeof rootCategory === 'string' && rootCategory.trim().length > 0) {
+        const rootBsr = safeNum((p as any).bsr_root);
+        if (rootBsr !== null && rootBsr > 0) {
+          rootCategoryCounts.set(rootCategory, (rootCategoryCounts.get(rootCategory) || 0) + 1);
+        }
+      }
+    });
+    
+    let medianRootBsrCategory: string | null = null;
+    let rootMaxCount = 0;
+    rootCategoryCounts.forEach((count, category) => {
+      if (count > rootMaxCount) {
+        rootMaxCount = count;
+        medianRootBsrCategory = category;
+      }
+    });
     
     // Compute BSR category labels (most common main_category among listings with BSR)
     const listingsWithBSR = finalListings.filter(p => {
@@ -3508,7 +3557,10 @@ export async function POST(req: NextRequest) {
       medianBsr, 
       medianBsrCategory,
       top10BsrCategory,
-      bsrSampleSize 
+      bsrSampleSize,
+      medianRootBsr,
+      medianRootBsrCategory,
+      rootBsrSampleSize
     });
     
     // ═══════════════════════════════════════════════════════════════════════════
@@ -3550,6 +3602,9 @@ export async function POST(req: NextRequest) {
           median_bsr_category: medianBsrCategory ?? null,
           top10_bsr_category: top10BsrCategory ?? null,
           bsr_sample_size: bsrSampleSize,
+          median_root_bsr: medianRootBsr ?? null,
+          median_root_bsr_category: medianRootBsrCategory ?? null,
+          root_bsr_sample_size: rootBsrSampleSize,
           bsr_coverage_percent: marketSnapshot?.bsr_sample_size && canonicalProducts.length > 0
             ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
             : null,

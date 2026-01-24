@@ -29,6 +29,10 @@ export interface BSRContext {
   chosen_website_display_group_name: string | null;
   chosen_website_display_group_code: string | null;
   debug_reason: string;
+  // Root/main category BSR from displayGroupRanks
+  root_rank: number | null;
+  root_display_group: string | null;
+  root_rank_source: "displayGroupRanks" | "none";
 }
 
 /**
@@ -74,6 +78,10 @@ export function extractBSRContext(item: any): BSRContext {
   let chosen_website_display_group_name: string | null = null;
   let chosen_website_display_group_code: string | null = null;
   let debug_reason = "";
+  // Root/main category BSR from displayGroupRanks
+  let root_rank: number | null = null;
+  let root_display_group: string | null = null;
+  let root_rank_source: "displayGroupRanks" | "none" = "none";
 
   // Extract website display group info (for reference, but never use as category)
   const summaries = item?.summaries || [];
@@ -131,6 +139,45 @@ export function extractBSRContext(item: any): BSRContext {
       chosen_browse_classification_id = chosen.classificationId;
       chosen_display_group = chosen.displayGroup;
       debug_reason = `Selected lowest rank from salesRanks.classificationRanks (${candidates.length} candidates)`;
+    }
+  }
+
+  // Extract root/main category BSR from displayGroupRanks (separate from subcategory rank)
+  if (raw_salesRanks.length > 0) {
+    const rootCandidates: Array<{
+      rank: number;
+      displayGroup: string | null;
+      label: string | null;
+    }> = [];
+
+    for (const salesRank of raw_salesRanks) {
+      const displayGroupRanks = salesRank?.displayGroupRanks || [];
+      
+      if (Array.isArray(displayGroupRanks) && displayGroupRanks.length > 0) {
+        for (const dgr of displayGroupRanks) {
+          const rank = dgr?.rank;
+          if (typeof rank === "number" && rank > 0) {
+            const displayGroup = dgr?.displayGroup || salesRank?.displayGroup || null;
+            const label = dgr?.label || dgr?.displayName || dgr?.title || null;
+            
+            rootCandidates.push({
+              rank,
+              displayGroup,
+              label,
+            });
+          }
+        }
+      }
+    }
+
+    if (rootCandidates.length > 0) {
+      // Choose the lowest (best) rank
+      rootCandidates.sort((a, b) => a.rank - b.rank);
+      const chosenRoot = rootCandidates[0];
+      
+      root_rank = chosenRoot.rank;
+      root_display_group = chosenRoot.label || chosenRoot.displayGroup || null;
+      root_rank_source = "displayGroupRanks";
     }
   }
 
@@ -210,6 +257,9 @@ export function extractBSRContext(item: any): BSRContext {
     chosen_website_display_group_name,
     chosen_website_display_group_code,
     debug_reason,
+    root_rank,
+    root_display_group,
+    root_rank_source,
   };
 }
 

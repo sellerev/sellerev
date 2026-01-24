@@ -233,6 +233,9 @@ interface AnalysisResponse {
     median_bsr?: number | null; // Median BSR across all listings
     median_bsr_category?: string | null; // Most common category for median BSR listings
     top10_bsr_category?: string | null; // Most common category for top-10 listings with BSR
+    median_root_bsr?: number | null; // Median root/main category BSR
+    median_root_bsr_category?: string | null; // Most common root category for median root BSR
+    root_bsr_sample_size?: number; // Count of listings with root BSR
     // Top 5 Brands Revenue Control
     top_5_brand_revenue_share_pct?: number | null; // % of total page-1 revenue controlled by top 5 brands
     top_5_brands?: Array<{
@@ -1386,6 +1389,9 @@ export default function AnalyzeForm({
                     const monthlyRevenue = snapshot?.total_page1_revenue ?? null;
                     const medianBSR = snapshot?.median_bsr ?? null;
                     const medianBsrCategory = snapshot?.median_bsr_category ?? null;
+                    const medianRootBsr = snapshot?.median_root_bsr ?? null;
+                    const medianRootBsrCategory = snapshot?.median_root_bsr_category ?? null;
+                    const rootBsrSampleSize = snapshot?.root_bsr_sample_size ?? 0;
                     
                     // Top-10 Median BSR - calculate from top 10 by organic rank (for display)
                     const top10Listings = pageOneListings
@@ -1598,6 +1604,19 @@ export default function AnalyzeForm({
                               </div>
                             )}
                           </div>
+                          
+                          {/* 9. Median Main Category BSR (only show if we have enough data) */}
+                          {medianRootBsr !== null && medianRootBsr !== undefined && rootBsrSampleSize >= 3 && (
+                            <div>
+                              <div className="text-xs text-gray-500 mb-1">Median Main Category BSR</div>
+                              <div className="text-lg font-semibold text-gray-900">
+                                #{Math.round(medianRootBsr).toLocaleString()}{medianRootBsrCategory ? ` in ${medianRootBsrCategory}` : ''}
+                              </div>
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                Based on {rootBsrSampleSize} {rootBsrSampleSize === 1 ? 'listing' : 'listings'}
+                              </div>
+                            </div>
+                          )}
                           
                           {/* 10. Top 5 Brands Control */}
                           {top5BrandSharePct !== null && (
@@ -2101,6 +2120,11 @@ export default function AnalyzeForm({
                             const bsrSource = (listing as any).bsr_source ?? (listing as any).bsrSource ?? null;
                             const bsr = listing.bsr ?? null;
                             const bsrContext = (listing as any).bsr_context ?? null;
+                            // Subcategory and root rank
+                            const subcategoryBsr = (listing as any).subcategory_bsr ?? null;
+                            const subcategoryName = (listing as any).subcategory_name ?? null;
+                            const bsrRoot = (listing as any).bsr_root ?? null;
+                            const bsrRootCategory = (listing as any).bsr_root_category ?? null;
                             
                             // Sponsored: use normalization fallback
                             // isSponsored ?? (sponsored === true) ?? is_sponsored ?? IsSponsored ?? false
@@ -2149,6 +2173,10 @@ export default function AnalyzeForm({
                                   bsrSource={bsrSource}
                                   bsr={bsr}
                                   bsrContext={bsrContext}
+                                  subcategoryBsr={subcategoryBsr}
+                                  subcategoryName={subcategoryName}
+                                  bsrRoot={bsrRoot}
+                                  bsrRootCategory={bsrRootCategory}
                                   fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
                                   isSponsored={isSponsored}
                                   appearsSponsored={appearsSponsored}
