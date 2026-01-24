@@ -3411,7 +3411,7 @@ export async function POST(req: NextRequest) {
         : sorted[mid];
     };
     
-    const finalListings = canonicalProducts.length > 0 ? canonicalProducts : baseListings;
+    // finalListings is already defined earlier (line 3199) - reuse it
     const agg = contractResponse?.aggregates_derived_from_page_one;
     
     // Compute units total from final listings
@@ -3587,7 +3587,7 @@ export async function POST(req: NextRequest) {
       });
     }
     
-    const agg = contractResponse?.aggregates_derived_from_page_one;
+    // agg is already defined in the computation block above (line 3415)
     console.log("SNAPSHOT_TOTALS_SOURCE_CHECK", { 
       agg_total_units: agg?.total_page1_units, 
       agg_total_revenue: agg?.total_page1_revenue, 
