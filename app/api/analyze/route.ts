@@ -2684,6 +2684,44 @@ export async function POST(req: NextRequest) {
       canonicalProducts = pageOneProducts;
       
       // ═══════════════════════════════════════════════════════════════════════════
+      // POST-CANONICAL BSR PATCH: Ensure BSR fields are present from rawListings
+      // ═══════════════════════════════════════════════════════════════════════════
+      const rawByAsin = new Map<string, any>();
+      for (const listing of rawListings) {
+        if (listing.asin) {
+          rawByAsin.set(listing.asin.toUpperCase(), listing);
+        }
+      }
+      
+      let patchedCount = 0;
+      for (const p of canonicalProducts) {
+        if (!p.asin) continue;
+        const raw = rawByAsin.get(p.asin.toUpperCase());
+        if (!raw) continue;
+        
+        if ((p.main_category_bsr == null || p.main_category_bsr === undefined) && (raw.main_category_bsr != null || raw.bsr != null)) {
+          p.main_category_bsr = raw.main_category_bsr ?? raw.bsr;
+          patchedCount++;
+        }
+        if ((p.bsr == null || p.bsr === undefined) && (raw.bsr != null || raw.main_category_bsr != null)) {
+          p.bsr = raw.bsr ?? raw.main_category_bsr;
+          patchedCount++;
+        }
+        if ((p.main_category == null || p.main_category === undefined) && raw.main_category != null) {
+          p.main_category = raw.main_category;
+        }
+        if ((p.bsr_source == null || p.bsr_source === undefined) && raw.bsr_source != null) {
+          p.bsr_source = raw.bsr_source;
+        }
+      }
+      
+      console.log("POST_CANONICAL_BSR_PATCH", { 
+        patched: patchedCount, 
+        total: canonicalProducts.length, 
+        with_bsr: canonicalProducts.filter(p => (p.main_category_bsr ?? p.bsr) > 0).length 
+      });
+      
+      // ═══════════════════════════════════════════════════════════════════════════
       // UPSERT canonical products to keyword_products cache
       // ═══════════════════════════════════════════════════════════════════════════
       if (canonicalProducts.length > 0 && body.input_type === "keyword") {
@@ -3361,6 +3399,62 @@ export async function POST(req: NextRequest) {
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
+    // COMPUTE SNAPSHOT TOTALS AND MEDIAN BSR FROM FINAL LISTINGS
+    // ═══════════════════════════════════════════════════════════════════════════
+    const safeNum = (v: any) => (typeof v === "number" && isFinite(v) ? v : null);
+    const median = (nums: number[]) => {
+      if (nums.length === 0) return null;
+      const sorted = [...nums].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 0 
+        ? (sorted[mid - 1] + sorted[mid]) / 2 
+        : sorted[mid];
+    };
+    
+    const finalListings = canonicalProducts.length > 0 ? canonicalProducts : baseListings;
+    const agg = contractResponse?.aggregates_derived_from_page_one;
+    
+    // Compute units total from final listings
+    const computedUnits = finalListings.reduce((s, p) => {
+      const units = safeNum(p.estimated_monthly_units ?? p.est_monthly_units ?? p.monthly_units);
+      return s + (units ?? 0);
+    }, 0);
+    
+    // Compute revenue total from final listings
+    const computedRev = finalListings.reduce((s, p) => {
+      const rev = safeNum(p.estimated_monthly_revenue ?? p.est_monthly_revenue ?? p.monthly_revenue);
+      return s + (rev ?? 0);
+    }, 0);
+    
+    // Compute BSR array (prefer main_category_bsr)
+    const bsrs = finalListings
+      .map(p => safeNum(p.main_category_bsr ?? p.bsr))
+      .filter(n => n !== null && n > 0) as number[];
+    
+    const medianBsr = bsrs.length > 0 ? median(bsrs) : null;
+    const bsrSampleSize = bsrs.length;
+    
+    // Decide final snapshot totals precedence
+    const totalUnits = agg?.total_page1_units ?? 
+                      marketSnapshot?.est_total_monthly_units_min ?? 
+                      marketSnapshot?.est_total_monthly_units_max ?? 
+                      (computedUnits > 0 ? computedUnits : null);
+    
+    const totalRevenue = agg?.total_page1_revenue ?? 
+                        marketSnapshot?.est_total_monthly_revenue_min ?? 
+                        marketSnapshot?.est_total_monthly_revenue_max ?? 
+                        (computedRev > 0 ? computedRev : null);
+    
+    console.log("SNAPSHOT_TOTALS_AND_MEDIAN_CHECK", { 
+      agg_units: agg?.total_page1_units, 
+      agg_rev: agg?.total_page1_revenue, 
+      computedUnits, 
+      computedRev, 
+      medianBsr, 
+      bsrSampleSize 
+    });
+    
+    // ═══════════════════════════════════════════════════════════════════════════
     // FINAL RESPONSE DIAGNOSTICS (BEFORE RETURNING TO FRONTEND)
     // ═══════════════════════════════════════════════════════════════════════════
     // Build the response object first to inspect it
@@ -3390,21 +3484,16 @@ export async function POST(req: NextRequest) {
       } : {}),
       // CRITICAL: Always include snapshot with required fields, even if some are null
       snapshot: (() => {
-        const agg = contractResponse?.aggregates_derived_from_page_one;
         return {
           ...marketSnapshot,
           avg_price: marketSnapshot?.avg_price ?? null,
-          total_page1_revenue: agg?.total_page1_revenue ?? 
-                              marketSnapshot?.est_total_monthly_revenue_min ?? 
-                              marketSnapshot?.est_total_monthly_revenue_max ?? 
-                              null,
-          total_units: agg?.total_page1_units ?? 
-                      marketSnapshot?.est_total_monthly_units_min ?? 
-                      marketSnapshot?.est_total_monthly_units_max ?? 
-                      null,
-        bsr_coverage_percent: marketSnapshot?.bsr_sample_size && canonicalProducts.length > 0
-          ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
-          : null,
+          total_page1_revenue: totalRevenue ?? null,
+          total_units: totalUnits ?? null,
+          median_bsr: medianBsr ?? null,
+          bsr_sample_size: bsrSampleSize,
+          bsr_coverage_percent: marketSnapshot?.bsr_sample_size && canonicalProducts.length > 0
+            ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
+            : null,
         };
       })(),
       // Include warnings if any
