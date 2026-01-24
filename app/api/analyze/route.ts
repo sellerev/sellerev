@@ -3360,50 +3360,142 @@ export async function POST(req: NextRequest) {
       })();
     }
     
-    return NextResponse.json(
-      {
-        success: true,
-        status: "complete", // Data-only processing complete (no AI)
-        analysisRunId: insertedRun?.id,
-        data_quality: dataQuality,
-        dataSource: dataSource,
-        snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
-        snapshot_last_updated: snapshotLastUpdated,
-        // CRITICAL: Always include listings - never drop them (required for UI rendering)
-        // Use finalListings (canonicalProducts if available, otherwise baseListings)
-        page_one_listings: finalListings,
-        products: finalListings,
-        listings: finalListings, // Ensure listings field is always present
-        aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
-        // Enrichment status indicating pending background tasks
-        enrichment_status: enrichmentStatus,
-        // Spread contractResponse but ensure AI fields are null if not present
-        ...(contractResponse ? {
-          ...contractResponse,
-          // Explicitly null out AI-related fields if not present
-          decision: contractResponse.decision || null,
-          summary: contractResponse.summary || null,
-          insights: contractResponse.insights || null,
-        } : {}),
-        // CRITICAL: Always include snapshot with required fields, even if some are null
-        snapshot: {
-          ...marketSnapshot,
-          avg_price: marketSnapshot?.avg_price ?? null,
-          total_page1_revenue: contractResponse?.aggregates_derived_from_page_one?.total_page1_revenue ||
-                              marketSnapshot?.est_total_monthly_revenue_min ||
-                              marketSnapshot?.est_total_monthly_revenue_max ||
-                              null,
-          total_units: marketSnapshot?.est_total_monthly_units_min ||
-                      marketSnapshot?.est_total_monthly_units_max ||
-                      null,
-          bsr_coverage_percent: marketSnapshot?.bsr_sample_size && canonicalProducts.length > 0
-            ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
-            : null,
-        },
-        // Include warnings if any
-        ...(warnings.length > 0 ? { warnings } : {}),
-        message: "Market data loaded. Product cards ready.",
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FINAL RESPONSE DIAGNOSTICS (BEFORE RETURNING TO FRONTEND)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Build the response object first to inspect it
+    const finalResponse = {
+      success: true,
+      status: "complete", // Data-only processing complete (no AI)
+      analysisRunId: insertedRun?.id,
+      data_quality: dataQuality,
+      dataSource: dataSource,
+      snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
+      snapshot_last_updated: snapshotLastUpdated,
+      // CRITICAL: Always include listings - never drop them (required for UI rendering)
+      // Use finalListings (canonicalProducts if available, otherwise baseListings)
+      page_one_listings: finalListings,
+      products: finalListings,
+      listings: finalListings, // Ensure listings field is always present
+      aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
+      // Enrichment status indicating pending background tasks
+      enrichment_status: enrichmentStatus,
+      // Spread contractResponse but ensure AI fields are null if not present
+      ...(contractResponse ? {
+        ...contractResponse,
+        // Explicitly null out AI-related fields if not present
+        decision: contractResponse.decision || null,
+        summary: contractResponse.summary || null,
+        insights: contractResponse.insights || null,
+      } : {}),
+      // CRITICAL: Always include snapshot with required fields, even if some are null
+      snapshot: {
+        ...marketSnapshot,
+        avg_price: marketSnapshot?.avg_price ?? null,
+        total_page1_revenue: contractResponse?.aggregates_derived_from_page_one?.total_page1_revenue ||
+                            marketSnapshot?.est_total_monthly_revenue_min ||
+                            marketSnapshot?.est_total_monthly_revenue_max ||
+                            null,
+        total_units: marketSnapshot?.est_total_monthly_units_min ||
+                    marketSnapshot?.est_total_monthly_units_max ||
+                    null,
+        bsr_coverage_percent: marketSnapshot?.bsr_sample_size && canonicalProducts.length > 0
+          ? Math.round((marketSnapshot.bsr_sample_size / canonicalProducts.length) * 100)
+          : null,
       },
+      // Include warnings if any
+      ...(warnings.length > 0 ? { warnings } : {}),
+      message: "Market data loaded. Product cards ready.",
+    };
+    
+    // Log top-level response keys
+    console.log("FINAL_RESPONSE_KEYS", {
+      top_level_keys: Object.keys(finalResponse),
+      keyword: normalizedKeyword,
+    });
+    
+    // Log listings array structure (check all possible paths)
+    const listingsFromPageOne = finalResponse.page_one_listings;
+    const listingsFromProducts = finalResponse.products;
+    const listingsFromListings = finalResponse.listings;
+    
+    console.log("FINAL_LISTINGS_ARRAY_PATHS", {
+      page_one_listings_exists: Array.isArray(listingsFromPageOne),
+      page_one_listings_length: Array.isArray(listingsFromPageOne) ? listingsFromPageOne.length : 0,
+      products_exists: Array.isArray(listingsFromProducts),
+      products_length: Array.isArray(listingsFromProducts) ? listingsFromProducts.length : 0,
+      listings_exists: Array.isArray(listingsFromListings),
+      listings_length: Array.isArray(listingsFromListings) ? listingsFromListings.length : 0,
+      keyword: normalizedKeyword,
+    });
+    
+    // Get first listing from any available array
+    const firstListing = listingsFromPageOne?.[0] || listingsFromProducts?.[0] || listingsFromListings?.[0];
+    
+    if (firstListing) {
+      // Log first listing's keys
+      console.log("FINAL_LISTING_KEYS", {
+        first_listing_keys: Object.keys(firstListing),
+        keyword: normalizedKeyword,
+      });
+      
+      // Log metrics sample from first listing
+      console.log("FINAL_LISTING_METRICS_SAMPLE", {
+        asin: firstListing.asin,
+        title: firstListing.title,
+        is_sponsored: (firstListing as any).is_sponsored,
+        sponsored: (firstListing as any).sponsored,
+        isSponsored: (firstListing as any).isSponsored,
+        sponsored_source: (firstListing as any).sponsored_source,
+        appearsSponsored: (firstListing as any).appearsSponsored,
+        bsr: (firstListing as any).bsr,
+        main_category_bsr: (firstListing as any).main_category_bsr,
+        bsr_source: (firstListing as any).bsr_source,
+        estimated_monthly_units: (firstListing as any).estimated_monthly_units,
+        estimated_monthly_revenue: (firstListing as any).estimated_monthly_revenue,
+        monthly_units: (firstListing as any).monthly_units,
+        monthly_revenue: (firstListing as any).monthly_revenue,
+        est_monthly_units: (firstListing as any).est_monthly_units,
+        est_monthly_revenue: (firstListing as any).est_monthly_revenue,
+        price: (firstListing as any).price,
+        keyword: normalizedKeyword,
+      });
+    } else {
+      console.log("FINAL_LISTING_METRICS_SAMPLE", {
+        error: "No listings found in response",
+        keyword: normalizedKeyword,
+      });
+    }
+    
+    // Log snapshot structure and totals
+    const snapshot = finalResponse.snapshot;
+    if (snapshot) {
+      console.log("FINAL_SNAPSHOT_KEYS", {
+        snapshot_keys: Object.keys(snapshot),
+        keyword: normalizedKeyword,
+      });
+      
+      console.log("FINAL_SNAPSHOT_TOTALS", {
+        total_monthly_units: snapshot.total_units,
+        est_total_monthly_units_min: snapshot.est_total_monthly_units_min,
+        est_total_monthly_units_max: snapshot.est_total_monthly_units_max,
+        total_monthly_revenue: snapshot.total_page1_revenue,
+        est_total_monthly_revenue_min: snapshot.est_total_monthly_revenue_min,
+        est_total_monthly_revenue_max: snapshot.est_total_monthly_revenue_max,
+        sponsored_count: snapshot.sponsored_count,
+        organic_count: snapshot.organic_count,
+        total_page1_listings: snapshot.total_page1_listings,
+        keyword: normalizedKeyword,
+      });
+    } else {
+      console.log("FINAL_SNAPSHOT_TOTALS", {
+        error: "No snapshot found in response",
+        keyword: normalizedKeyword,
+      });
+    }
+    
+    return NextResponse.json(
+      finalResponse,
       { 
         status: 200,
         headers: res.headers,
