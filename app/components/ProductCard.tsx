@@ -16,6 +16,11 @@ interface ProductCardProps {
    * BSR source to determine prefix (~ for estimated, no prefix for sp_api)
    */
   bsrSource?: string | null;
+  bsr?: number | null; // Best Seller Rank
+  bsrContext?: {
+    chosen_category_name?: string | null;
+    chosen_rank_source?: string | null;
+  } | null; // BSR context with category name
   fulfillment: "FBA" | "FBM" | "AMZ";
   isSponsored: boolean | null; // true = sponsored, false = organic, null = unknown
   appearsSponsored?: boolean; // ASIN-level: true if appears sponsored anywhere on Page 1
@@ -38,6 +43,8 @@ export function ProductCard({
   monthlyRevenue,
   monthlyUnits,
   bsrSource,
+  bsr,
+  bsrContext,
   fulfillment,
   isSponsored,
   appearsSponsored,
@@ -80,7 +87,19 @@ export function ProductCard({
   };
 
   // Determine if we should show ~ prefix (for estimated, not for sp_api)
-  const showEstimatePrefix = bsrSource === 'estimated' || bsrSource === null || bsrSource === undefined;
+  const showEstimatePrefix = bsrSource !== 'sp_api' || bsrContext === null || bsrContext === undefined;
+  
+  // Format BSR display
+  const formatBSR = () => {
+    if (bsr === null || bsr === undefined) {
+      return "BSR: —";
+    }
+    const prefix = showEstimatePrefix ? "~" : "";
+    const categoryLabel = bsrContext?.chosen_category_name 
+      ? ` (${bsrContext.chosen_category_name})`
+      : "";
+    return `BSR: ${prefix}#${bsr.toLocaleString()}${categoryLabel}`;
+  };
 
   return (
     <div
@@ -210,6 +229,11 @@ export function ProductCard({
           )}
         </div>
       ) : null}
+
+      {/* BSR Display */}
+      <div className="text-sm text-[#6B7280] mb-3">
+        {formatBSR()}
+      </div>
 
       {/* Spacer to push revenue section to bottom */}
       <div className="flex-1" />

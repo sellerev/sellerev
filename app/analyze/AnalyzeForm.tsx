@@ -12,6 +12,7 @@ import SearchBar from "@/app/components/SearchBar";
 import { MetricSkeleton, TextSkeleton } from "./components/MetricSkeleton";
 import AIThinkingMessage from "./components/AIThinkingMessage";
 import ResultsLoadingState from "./components/ResultsLoadingState";
+import { median } from "@/lib/ui/stats";
 
 // Hard safety check: Prevent localhost calls in production
 if (typeof window !== 'undefined' && process.env.NODE_ENV === 'production') {
@@ -1373,43 +1374,81 @@ export default function AnalyzeForm({
                           : 0))
                       : 0;
                     
-                    // Average BSR - use aggregates or calculate from listings (null is valid when no BSRs available)
-                    const bsrListings = normalizedListings.filter((l: any) => l.bsr !== null && l.bsr !== undefined && l.bsr > 0);
-                    const avgBSR = hasListings
-                      ? (aggregates?.avg_bsr ?? (bsrListings.length > 0
-                          ? Math.round(bsrListings.reduce((sum: number, l: any) => sum + (l.bsr || 0), 0) / bsrListings.length)
-                          : null))
+                    // Median BSR - calculate from page-one listings with BSR
+                    const bsrListings = pageOneListings.filter((l: any) => 
+                      l.bsr !== null && l.bsr !== undefined && typeof l.bsr === 'number' && l.bsr > 0
+                    );
+                    const medianBSR = hasListings && bsrListings.length > 0
+                      ? median(bsrListings.map((l: any) => l.bsr))
                       : null;
                     
-                    // Monthly Units - SUM from page-one products (EXPLICIT: estimated_monthly_units only)
-                    // Use the actual pageOneListings array (canonical source) - SAME source as cards
-                    // Do NOT use snapshot aggregates, legacy fields, or calculated values
-                    const monthlyUnits = hasListings && pageOneListings.length > 0
-                      ? pageOneListings.reduce((sum: number, product: any) => {
-                          // EXPLICIT: Only use estimated_monthly_units field - no fallbacks
-                          const units = product.estimated_monthly_units;
-                          // Include ALL numeric values (including 0) - only exclude null/undefined
-                          if (typeof units === 'number') {
-                            return sum + units; // Include 0 values too
-                          }
-                          return sum; // Skip null/undefined
-                        }, 0)
+                    // Top-10 Median BSR - calculate from top 10 by organic rank
+                    const top10Listings = pageOneListings
+                      .filter((l: any) => l.organic_rank !== null && l.organic_rank !== undefined)
+                      .sort((a: any, b: any) => (a.organic_rank ?? Infinity) - (b.organic_rank ?? Infinity))
+                      .slice(0, 10)
+                      .filter((l: any) => l.bsr !== null && l.bsr !== undefined && typeof l.bsr === 'number' && l.bsr > 0);
+                    const top10MedianBSR = top10Listings.length > 0
+                      ? median(top10Listings.map((l: any) => l.bsr))
                       : null;
                     
-                    // Monthly Revenue - SUM from page-one products (EXPLICIT: estimated_monthly_revenue only)
-                    // Use the actual pageOneListings array (canonical source) - SAME source as cards
-                    // Do NOT use snapshot aggregates, legacy fields, or calculated values
-                    const monthlyRevenue = hasListings && pageOneListings.length > 0
-                      ? pageOneListings.reduce((sum: number, product: any) => {
-                          // EXPLICIT: Only use estimated_monthly_revenue field - no fallbacks
-                          const revenue = product.estimated_monthly_revenue;
-                          // Include ALL numeric values (including 0) - only exclude null/undefined
-                          if (typeof revenue === 'number') {
-                            return sum + revenue; // Include 0 values too
-                          }
-                          return sum; // Skip null/undefined
-                        }, 0)
-                      : null;
+                    // Confidence-weighted totals
+                    // Weight by source: sp_api -> 1.0, estimated/fallback -> 0.75, missing -> 0
+                    const getConfidenceWeight = (product: any): number => {
+                      const source = (product as any).bsr_source ?? (product as any).bsrSource;
+                      if (source === 'sp_api') return 1.0;
+                      if (source === 'estimated' || source === 'fallback' || source === 'unavailable') return 0.75;
+                      return 0; // missing or unknown
+                    };
+                    
+                    // Calculate confidence-weighted totals
+                    let totalUnits = 0;
+                    let totalRevenue = 0;
+                    let coverageCount = 0; // Count of listings with estimates
+                    let spApiCount = 0; // Count of listings with sp_api source
+                    
+                    if (hasListings && pageOneListings.length > 0) {
+                      pageOneListings.forEach((product: any) => {
+                        const units = product.estimated_monthly_units;
+                        const revenue = product.estimated_monthly_revenue;
+                        const weight = getConfidenceWeight(product);
+                        
+                        if (typeof units === 'number') {
+                          totalUnits += units * weight;
+                          if (units > 0) coverageCount++;
+                        }
+                        if (typeof revenue === 'number') {
+                          totalRevenue += revenue * weight;
+                        }
+                        if (weight === 1.0) spApiCount++;
+                      });
+                    }
+                    
+                    const monthlyUnits = hasListings && pageOneListings.length > 0 ? totalUnits : null;
+                    const monthlyRevenue = hasListings && pageOneListings.length > 0 ? totalRevenue : null;
+                    const coveragePct = pageOneListings.length > 0 
+                      ? (coverageCount / pageOneListings.length) * 100 
+                      : 0;
+                    const confidenceLevel = coveragePct >= 80 && spApiCount >= pageOneListings.length * 0.5
+                      ? 'High'
+                      : coveragePct >= 50 && spApiCount >= pageOneListings.length * 0.25
+                      ? 'Medium'
+                      : 'Low';
+                    
+                    // Log snapshot totals
+                    console.log("SNAPSHOT_TOTALS_COMPUTED", {
+                      keyword: (snapshot as any)?.keyword ?? 'unknown',
+                      total_units: monthlyUnits,
+                      total_revenue: monthlyRevenue,
+                      coverage_pct: coveragePct.toFixed(1),
+                      coverage_count: coverageCount,
+                      total_listings: pageOneListings.length,
+                      median_bsr: medianBSR,
+                      top10_median_bsr: top10MedianBSR,
+                      confidence: confidenceLevel,
+                      sp_api_count: spApiCount,
+                      timestamp: new Date().toISOString(),
+                    });
                     
                     // Average Rating - calculate from page_one_listings (canonical products) or aggregates
                     // Filter to listings with numeric ratings only (typeof rating === 'number')
@@ -1589,7 +1628,37 @@ export default function AnalyzeForm({
                             )}
                           </div>
                           
-                          {/* 8. Top 5 Brands Control */}
+                          {/* 8. Median BSR */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Median BSR</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {medianBSR !== null && medianBSR !== undefined
+                                ? `#${Math.round(medianBSR).toLocaleString()}`
+                                : "—"}
+                            </div>
+                            {top10MedianBSR !== null && top10MedianBSR !== undefined && (
+                              <div className="text-xs text-gray-400 mt-0.5">
+                                Top-10: #{Math.round(top10MedianBSR).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                          
+                          {/* 9. Coverage & Confidence */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Coverage</div>
+                            <div className="text-lg font-semibold text-gray-900">
+                              {coverageCount > 0 ? `${coverageCount}/${pageOneListings.length} listings` : "—"}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              Confidence: <span className={`font-medium ${
+                                confidenceLevel === 'High' ? 'text-green-600' :
+                                confidenceLevel === 'Medium' ? 'text-yellow-600' :
+                                'text-red-600'
+                              }`}>{confidenceLevel}</span>
+                            </div>
+                          </div>
+                          
+                          {/* 10. Top 5 Brands Control */}
                           {top5BrandSharePct !== null && (
                             <div>
                               <div className="text-xs text-gray-500 mb-1">Top 5 Brands Control</div>
@@ -2089,6 +2158,8 @@ export default function AnalyzeForm({
                             const monthlyUnits = (listing as any).estimated_monthly_units ?? null;
                             // BSR source determines prefix (~ for estimated, no prefix for sp_api)
                             const bsrSource = (listing as any).bsr_source ?? (listing as any).bsrSource ?? null;
+                            const bsr = listing.bsr ?? null;
+                            const bsrContext = (listing as any).bsr_context ?? null;
                             
                             // Sponsored: use normalization fallback
                             // isSponsored ?? (sponsored === true) ?? is_sponsored ?? IsSponsored ?? false
@@ -2135,6 +2206,8 @@ export default function AnalyzeForm({
                                   monthlyRevenue={monthlyRevenue}
                                   monthlyUnits={monthlyUnits}
                                   bsrSource={bsrSource}
+                                  bsr={bsr}
+                                  bsrContext={bsrContext}
                                   fulfillment={fulfillment as "FBA" | "FBM" | "AMZ"}
                                   isSponsored={isSponsored}
                                   appearsSponsored={appearsSponsored}
