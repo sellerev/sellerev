@@ -24,6 +24,8 @@ import { ParsedListing, KeywordMarketSnapshot, BrandResolution } from "./keyword
 import { estimatePageOneDemand } from "./pageOneDemand";
 import { calibrateMarketTotals, calculateReviewDispersionFromListings, validateInvariants } from "./calibration";
 import { Appearance } from "@/types/search";
+import { estimateMonthlySalesFromBSR } from "@/lib/revenue/bsr-calculator";
+import { normalizeCategoryForEstimation } from "@/lib/revenue/category-normalizer";
 
 export interface CanonicalProduct {
   rank: number | null; // Legacy field - kept for backward compatibility (equals organic_rank for organic, null for sponsored)
@@ -477,9 +479,9 @@ export function buildKeywordPageOne(
   const cappedOrganicListings = organicListings.slice(0, PAGE1_HARD_CAP);
   
   // Combine: capped organic + all sponsored (sponsored don't expand Page-1, but we include them)
-  // Actually, per requirements: "Sponsored listings do not expand Page-1"
-  // So we only take organic listings up to 49
-  const cappedListings = cappedOrganicListings;
+  // CRITICAL: Include sponsored listings in response (they should display BSR, units, revenue)
+  // Sponsored listings don't expand the 49 organic cap, but they are included in the response
+  const cappedListings = [...cappedOrganicListings, ...sponsoredListings];
   
   console.log("PAGE1_PRE_CAP_COUNT", {
     count: preCapCount,
@@ -1326,13 +1328,37 @@ export function buildKeywordPageOne(
     tail_product_count: phase2TailProducts.length,
   });
   
-  // Allocate sponsored units (equal distribution, capped at 15% of total)
-  const sponsoredTargetUnits = Math.round(estimatedTotalMarketUnits * 0.15);
+  // Allocate sponsored units: Use BSR-based calculation if BSR is available, otherwise use fixed allocation
+  // CRITICAL: Sponsored listings should get BSR-based units (from BSR model) if BSR exists
+  // Do NOT zero out sponsored units - they should display BSR, units, and revenue
   if (sponsoredProducts.length > 0) {
-    const sponsoredUnitsPerProduct = sponsoredTargetUnits / sponsoredProducts.length;
     sponsoredProducts.forEach(p => {
-      p.estimated_monthly_units = Math.round(sponsoredUnitsPerProduct);
-      p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+      // Try BSR-based calculation first (if BSR is available)
+      const bsr = p.bsr;
+      const bsrCategory = (p as any).bsr_category || (p as any).bsrCategory;
+      
+      if (bsr != null && bsr > 0 && bsrCategory) {
+        // Use BSR-based units calculation
+        const categoryKey = normalizeCategoryForEstimation(bsrCategory);
+        const bsrUnits = estimateMonthlySalesFromBSR(bsr, categoryKey);
+        
+        if (bsrUnits != null && bsrUnits > 0) {
+          p.estimated_monthly_units = bsrUnits;
+          p.estimated_monthly_revenue = Math.round(bsrUnits * p.price);
+        } else {
+          // Fallback to fixed allocation if BSR calculation fails
+          const sponsoredTargetUnits = Math.round(estimatedTotalMarketUnits * 0.15);
+          const sponsoredUnitsPerProduct = sponsoredTargetUnits / sponsoredProducts.length;
+          p.estimated_monthly_units = Math.round(sponsoredUnitsPerProduct);
+          p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+        }
+      } else {
+        // No BSR available - use fixed allocation (15% of total)
+        const sponsoredTargetUnits = Math.round(estimatedTotalMarketUnits * 0.15);
+        const sponsoredUnitsPerProduct = sponsoredTargetUnits / sponsoredProducts.length;
+        p.estimated_monthly_units = Math.round(sponsoredUnitsPerProduct);
+        p.estimated_monthly_revenue = Math.round(p.estimated_monthly_units * p.price);
+      }
     });
   }
   
@@ -1877,6 +1903,25 @@ export function buildKeywordPageOne(
       totalUnitsFinal > 0
         ? Math.round((sponsoredUnitsFinal / totalUnitsFinal) * 10000) / 100
         : 0
+  });
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FINAL SPONSORED VERIFICATION LOG (BEFORE RETURNING RESPONSE)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Log counts of sponsored vs organic listings actually being returned
+  const finalSponsoredCount = products.filter(p => p.appearsSponsored === true || p.isSponsored === true).length;
+  const finalOrganicCount = products.filter(p => p.appearsSponsored === false && p.isSponsored !== true).length;
+  const finalUnknownCount = products.length - finalSponsoredCount - finalOrganicCount;
+  
+  console.log("FINAL_SPONSORED_COUNTS_BEFORE_RESPONSE", {
+    total_products_returned: products.length,
+    sponsored_count: finalSponsoredCount,
+    organic_count: finalOrganicCount,
+    unknown_count: finalUnknownCount,
+    sponsored_sample_asins: products
+      .filter(p => p.appearsSponsored === true || p.isSponsored === true)
+      .slice(0, 5)
+      .map(p => p.asin),
   });
 
   // ═══════════════════════════════════════════════════════════════════════════

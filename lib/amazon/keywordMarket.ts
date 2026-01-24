@@ -74,7 +74,7 @@ export interface RawListing {
   raw_badges: any[];
   raw_block_type?: string;
   isSponsored: boolean; // Canonical sponsored status (normalized at ingest from item.sponsored)
-  sponsored_source?: "explicit_flag" | "link_sspa" | "carousel" | "none"; // Source of sponsored detection
+  sponsored_source?: "explicit_flag" | "link_pattern" | "carousel" | "none"; // Source of sponsored detection
   raw_sponsored_flag?: boolean; // DEPRECATED: Use isSponsored instead
 }
 
@@ -1498,22 +1498,26 @@ export function parseRainforestSearchResults(
     // MANDATORY: Capture sponsored at Rainforest ingestion before any normalization
     // Standardized detection with source tracking
     let isSponsored: boolean = false;
-    let sponsored_source: "explicit_flag" | "link_sspa" | "carousel" | "none" = "none";
+    let sponsored_source: "explicit_flag" | "link_pattern" | "carousel" | "none" = "none";
     
     // Rule 1: Check explicit sponsored flag
     if (item.sponsored === true || item.is_sponsored === true || item.ad === true) {
       isSponsored = true;
       sponsored_source = "explicit_flag";
     }
-    // Rule 2: Check link for /sspa/ or sp_csd= query param
-    else if (typeof item.link === 'string') {
-      if (item.link.includes('/sspa/') || item.link.includes('sp_csd=')) {
+    // Rule 2: Check link for sponsored patterns (check ALL conditions, not just else-if)
+    if (!isSponsored && typeof item.link === 'string') {
+      if (item.link.includes('/sspa/') || 
+          item.link.includes('sp_csd=') || 
+          item.link.includes('spc=') || 
+          item.link.includes('adId=') || 
+          item.link.includes('/gp/slredirect/')) {
         isSponsored = true;
-        sponsored_source = "link_sspa";
+        sponsored_source = "link_pattern";
       }
     }
     // Rule 3: Check carousel sponsored flag
-    else if (item.carousel?.sponsored === true) {
+    if (!isSponsored && item.carousel?.sponsored === true) {
       isSponsored = true;
       sponsored_source = "carousel";
     }
@@ -1566,6 +1570,109 @@ export function parseRainforestSearchResults(
   }
   
   // ═══════════════════════════════════════════════════════════════════════════
+  // INGEST ADDITIONAL AD BLOCKS (video_blocks, etc.)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Some Rainforest responses may put ads in additional blocks (e.g. video_blocks or other ad blocks).
+  // If those blocks exist and contain ASIN+link, ingest them into the same listings array (mark as sponsored).
+  const additionalAdBlocks: any[] = [];
+  
+  // Check for video_blocks
+  if (Array.isArray(raw.video_blocks) && raw.video_blocks.length > 0) {
+    additionalAdBlocks.push(...raw.video_blocks);
+  }
+  
+  // Check for other potential ad block fields
+  if (Array.isArray(raw.ad_blocks) && raw.ad_blocks.length > 0) {
+    additionalAdBlocks.push(...raw.ad_blocks);
+  }
+  
+  // Process additional ad blocks
+  for (let i = 0; i < additionalAdBlocks.length; i++) {
+    const block = additionalAdBlocks[i];
+    // Check if block contains items with ASIN and link
+    const blockItems = Array.isArray(block.items) ? block.items : 
+                      Array.isArray(block.products) ? block.products :
+                      Array.isArray(block) ? block : [];
+    
+    for (let j = 0; j < blockItems.length; j++) {
+      const item = blockItems[j];
+      if (!item?.asin) continue; // Skip items without ASIN
+      
+      // Extract price (can be null)
+      let price: number | null = null;
+      if (item.price?.value) {
+        const parsed = parseFloat(item.price.value);
+        price = isNaN(parsed) ? null : parsed;
+      } else if (item.price?.raw) {
+        const parsed = parseFloat(item.price.raw);
+        price = isNaN(parsed) ? null : parsed;
+      } else if (typeof item.price === "number") {
+        price = isNaN(item.price) ? null : item.price;
+      } else if (typeof item.price === "string") {
+        const parsed = parseFloat(item.price.replace(/[^0-9.]/g, ""));
+        price = isNaN(parsed) ? null : parsed;
+      }
+      
+      // Extract title (can be empty string, but we'll use null for missing)
+      const title = item.title || item.product_title || "";
+      
+      // Extract image (can be null)
+      const image = item.image || item.image_url || null;
+      
+      // Mark as sponsored (these are from ad blocks)
+      const isSponsored = true;
+      const sponsored_source: "explicit_flag" | "link_pattern" | "carousel" | "none" = "explicit_flag";
+      
+      // Extract BSR/rank from bestsellers_rank (can be null)
+      let rainforestRank: number = 0;
+      if (item.bestsellers_rank) {
+        if (Array.isArray(item.bestsellers_rank) && item.bestsellers_rank.length > 0) {
+          const firstRank = item.bestsellers_rank[0];
+          const rankValue = firstRank?.rank ?? firstRank?.Rank ?? firstRank?.rank_value ?? firstRank?.value;
+          if (rankValue !== undefined && rankValue !== null) {
+            const parsed = parseInt(rankValue.toString().replace(/,/g, ""), 10);
+            if (!isNaN(parsed) && parsed > 0) {
+              rainforestRank = parsed;
+            }
+          }
+        } else if (typeof item.bestsellers_rank === "number") {
+          rainforestRank = item.bestsellers_rank;
+        }
+      }
+      
+      // Extract badges (can be empty array)
+      const rawBadges = item.badges || item.prime_badge || [];
+      const badgesArray = Array.isArray(rawBadges) ? rawBadges : (rawBadges ? [rawBadges] : []);
+      
+      // Extract block type if available
+      const rawBlockType = item.block_type || item.type || "ad_block";
+      
+      // Extract ratings & reviews from raw Rainforest item
+      const rating = parseRating(item);   // Nullable
+      const reviews = parseReviews(item); // Nullable
+      
+      // Calculate position (append after main search results)
+      const position = searchResults.length + rawListings.length + 1;
+      
+      rawListings.push({
+        asin: item.asin,
+        title,
+        price,
+        image,
+        raw_position: position,
+        rainforest_rank: rainforestRank,
+        rating,
+        reviews,
+        raw_badges: badgesArray,
+        raw_block_type: rawBlockType,
+        isSponsored, // Always true for ad blocks
+        sponsored_source, // Source of sponsored detection
+        raw_sponsored_flag: isSponsored, // DEPRECATED: kept for backward compatibility
+      });
+    }
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
   // ASIN-LEVEL SPONSORED AGGREGATION (BEFORE DEDUPLICATION)
   // ═══════════════════════════════════════════════════════════════════════════
   // CRITICAL: Sponsored is an ASIN-level property, not instance-level.
@@ -1607,6 +1714,23 @@ export function parseRainforestSearchResults(
       }
     }
   }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SPONSORED_CLASSIFICATION_SUMMARY (AFTER RAINFOREST PARSING)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const sponsoredListings = rawListings.filter(l => l.isSponsored === true);
+  const sponsoredSample = sponsoredListings.slice(0, 5).map(l => ({
+    asin: l.asin,
+    sponsored_source: l.sponsored_source || "none",
+  }));
+  
+  console.log("SPONSORED_CLASSIFICATION_SUMMARY", {
+    keyword,
+    total_listings: rawListings.length,
+    sponsored_count: sponsoredListings.length,
+    sample_sponsored_asins: sponsoredSample.map(s => s.asin),
+    sample_sponsored_sources: sponsoredSample.map(s => s.sponsored_source),
+  });
   
   return {
     keyword,
@@ -2888,22 +3012,26 @@ export async function fetchKeywordMarketSnapshot(
       // MANDATORY: Capture sponsored at Rainforest ingestion before any normalization
       // Standardized detection with source tracking
       let isSponsored: boolean = false;
-      let sponsored_source_detection: "explicit_flag" | "link_sspa" | "carousel" | "none" = "none";
+      let sponsored_source_detection: "explicit_flag" | "link_pattern" | "carousel" | "none" = "none";
       
       // Rule 1: Check explicit sponsored flag
       if (item.sponsored === true || item.is_sponsored === true || item.ad === true) {
         isSponsored = true;
         sponsored_source_detection = "explicit_flag";
       }
-      // Rule 2: Check link for /sspa/ or sp_csd= query param
-      else if (typeof item.link === 'string') {
-        if (item.link.includes('/sspa/') || item.link.includes('sp_csd=')) {
+      // Rule 2: Check link for sponsored patterns (check ALL conditions, not just else-if)
+      if (!isSponsored && typeof item.link === 'string') {
+        if (item.link.includes('/sspa/') || 
+            item.link.includes('sp_csd=') || 
+            item.link.includes('spc=') || 
+            item.link.includes('adId=') || 
+            item.link.includes('/gp/slredirect/')) {
           isSponsored = true;
-          sponsored_source_detection = "link_sspa";
+          sponsored_source_detection = "link_pattern";
         }
       }
       // Rule 3: Check carousel sponsored flag
-      else if (item.carousel?.sponsored === true) {
+      if (!isSponsored && item.carousel?.sponsored === true) {
         isSponsored = true;
         sponsored_source_detection = "carousel";
       }
@@ -3124,11 +3252,11 @@ export async function fetchKeywordMarketSnapshot(
     const organicListings = listings.filter(l => l.isSponsored === false);
     const unknownListings = listings.filter(l => l.isSponsored === undefined || l.isSponsored === null);
     
-    // Sample sponsored listings for diagnostics
+    // Sample sponsored listings for diagnostics (5 sample ASINs + sponsored_source)
     const sponsoredSample = sponsoredListings.slice(0, 5).map(l => ({
       asin: l.asin,
       is_sponsored: l.isSponsored,
-      sponsored_source: (l as any).sponsored_source_detection || l.sponsored_source || "unknown",
+      sponsored_source: (l as any).sponsored_source_detection || (l as any).sponsored_source || "unknown",
       positions: l.sponsoredPositions || [],
     }));
     
@@ -3138,7 +3266,8 @@ export async function fetchKeywordMarketSnapshot(
       sponsored_count: sponsoredListings.length,
       organic_count: organicListings.length,
       unknown_count: unknownListings.length,
-      sample: sponsoredSample,
+      sample_sponsored_asins: sponsoredSample.map(s => s.asin),
+      sample_sponsored_sources: sponsoredSample.map(s => s.sponsored_source),
     });
     
     // ═══════════════════════════════════════════════════════════════════════════
