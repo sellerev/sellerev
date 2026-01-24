@@ -328,14 +328,32 @@ export async function POST(req: NextRequest) {
             const units = estimateMonthlySalesFromBSR(bsr, mainCategory || "default");
             // Skip if units estimation failed (null)
             if (units === null) {
-              return; // insufficient; don't cache junk
+              return {
+                success: true,
+                status: "insufficient_data",
+                credits_charged: 1,
+                served_from_cache: false,
+                cache_age_seconds: null,
+                signals_used: signalsUsed,
+                data_timestamp: nowIso(),
+                data: undefined,
+              };
             }
             unitsSource = "bsr_curve";
             unitsRange = { min: units, max: units };
             refinedRevenue = units * price;
             confidence = "medium";
           } else {
-            return; // insufficient; don't cache junk
+            return {
+              success: true,
+              status: "insufficient_data",
+              credits_charged: 1,
+              served_from_cache: false,
+              cache_age_seconds: null,
+              signals_used: signalsUsed,
+              data_timestamp: nowIso(),
+              data: undefined,
+            };
           }
 
           const payloadHash = crypto
@@ -703,7 +721,16 @@ export async function POST(req: NextRequest) {
       const units = estimateMonthlySalesFromBSR(bsr, mainCategory || "default");
       // Skip if units estimation failed (null)
       if (units === null) {
-        return; // insufficient; don't cache junk
+        return {
+          success: true,
+          status: "insufficient_data",
+          credits_charged: 1,
+          served_from_cache: false,
+          cache_age_seconds: null,
+          signals_used: signalsUsed,
+          data_timestamp: nowIso(),
+          data: undefined,
+        };
       }
       unitsSource = "bsr_curve";
       unitsRange = { min: units, max: units };
