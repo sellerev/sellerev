@@ -2125,9 +2125,10 @@ export default function AnalyzeForm({
                             const subcategoryRank = (listing as any).subcategory_rank ?? null;
                             const subcategoryBsr = (listing as any).subcategory_bsr ?? null;
                             const subcategoryName = (listing as any).subcategory_name ?? null;
-                            // Main category: prefer main_category_bsr/main_category_name, fallback to root_rank/root_display_group, then bsr_root/bsr_root_category
-                            const mainCategoryBsr = (listing as any).main_category_bsr ?? null;
-                            const mainCategoryName = (listing as any).main_category_name ?? null;
+                            // Main category: read both snake_case and camelCase, with fallbacks
+                            // Try mainCategoryBsr (camelCase) first, then main_category_bsr (snake_case), then fallbacks
+                            const mainCategoryBsr = (listing as any).mainCategoryBsr ?? (listing as any).main_category_bsr ?? (listing as any).bsr_root ?? (listing as any).root_rank ?? null;
+                            const mainCategoryName = (listing as any).mainCategoryName ?? (listing as any).main_category_name ?? (listing as any).bsr_root_category ?? (listing as any).root_display_group ?? null;
                             const rootRank = (listing as any).root_rank ?? null;
                             const rootDisplayGroup = (listing as any).root_display_group ?? null;
                             const bsrRoot = (listing as any).bsr_root ?? null;

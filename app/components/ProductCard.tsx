@@ -111,8 +111,8 @@ export function ProductCard({
   const displaySubcategoryBsr = subcategoryBsr ?? subcategoryRank ?? bsr ?? null;
   const displaySubcategoryName = subcategoryName ?? bsrContext?.chosen_category_name ?? null;
   
-  // Main Category BSR: prefer mainCategoryBsr/mainCategoryName (from main_category_bsr/main_category_name fields)
-  // Fallback to rootRank/rootDisplayGroup, then bsrRoot/bsrRootCategory
+  // Main Category BSR: use props (already extracted from listing with both snake_case and camelCase support)
+  // Fallback to rootRank/rootDisplayGroup, then bsrRoot/bsrRootCategory for backwards compatibility
   const displayMainCategoryBsr = mainCategoryBsr ?? rootRank ?? bsrRoot ?? null;
   const displayMainCategoryName = mainCategoryName ?? rootDisplayGroup ?? bsrRootCategory ?? null;
 
