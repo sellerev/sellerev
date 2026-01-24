@@ -226,6 +226,13 @@ interface AnalysisResponse {
     est_total_monthly_revenue_max?: number | null;
     est_total_monthly_units_min?: number | null;
     est_total_monthly_units_max?: number | null;
+    // Computed totals from final listings (sum of per-product estimates)
+    total_units?: number | null; // Total monthly units from all listings
+    total_page1_revenue?: number | null; // Total monthly revenue from all listings
+    // BSR metrics with category context
+    median_bsr?: number | null; // Median BSR across all listings
+    median_bsr_category?: string | null; // Most common category for median BSR listings
+    top10_bsr_category?: string | null; // Most common category for top-10 listings with BSR
     // Top 5 Brands Revenue Control
     top_5_brand_revenue_share_pct?: number | null; // % of total page-1 revenue controlled by top 5 brands
     top_5_brands?: Array<{
