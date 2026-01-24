@@ -302,7 +302,7 @@ export function ProductCard({
             </span>
           )}
           {/* Prime Badge (from is_prime heuristic) */}
-          {(primeEligible === true || fulfillment_status === 'PRIME') && (
+          {((primeEligible === true) || (fulfillment_status === 'PRIME')) && (
             <span 
               className="px-2 py-1 rounded-full text-[11px] font-medium bg-[#FFD700] text-[#B8860B] border border-[#DAA520]"
               title="Prime eligible (heuristic from is_prime, not a guarantee of FBA)"

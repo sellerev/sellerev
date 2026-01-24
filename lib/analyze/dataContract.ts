@@ -621,6 +621,9 @@ export async function buildKeywordAnalyzeResponse(
         is_sponsored: p.is_sponsored ?? null, // true = sponsored, false = organic, null = unknown
         sponsored_position: p.sponsored_position ?? null, // Ad position from Rainforest
         sponsored_source: p.sponsored_source ?? 'organic_serp', // Source of sponsored data
+        // Prime eligibility and fulfillment status (from is_prime heuristic)
+        primeEligible: p.primeEligible ?? false, // Prime eligibility (from is_prime, for UI display and AI reasoning)
+        fulfillment_status: p.fulfillment_status ?? 'NON_PRIME', // Prime/Non-Prime status (heuristic from is_prime, NOT FBA guarantee)
       };
     }) as any; // Type assertion to bypass interface requirement (Phase 2: brand removed at API boundary)
   } else if (canonicalProducts && canonicalProducts.length === 0) {
@@ -685,6 +688,9 @@ export async function buildKeywordAnalyzeResponse(
         is_sponsored: listing.is_sponsored ?? null, // true = sponsored, false = organic, null = unknown
         sponsored_position: listing.sponsored_position ?? null, // Ad position from Rainforest
         sponsored_source: listing.sponsored_source ?? 'organic_serp', // Source of sponsored data
+        // Prime eligibility and fulfillment status (from is_prime heuristic)
+        primeEligible: listing.primeEligible ?? (listing.is_prime === true), // Prime eligibility (from is_prime, for UI display and AI reasoning)
+        fulfillment_status: listing.fulfillment_status ?? (listing.primeEligible || listing.is_prime === true ? 'PRIME' : 'NON_PRIME'), // Prime/Non-Prime status (heuristic from is_prime, NOT FBA guarantee)
       };
     }) as any; // Type assertion to bypass interface requirement (Phase 2: brand removed at API boundary)
   }
