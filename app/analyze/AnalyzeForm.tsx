@@ -1838,7 +1838,7 @@ export default function AnalyzeForm({
                     });
                     
                     // Check if any filters are active
-                    const hasActiveFilters = selectedBrands.size > 0 || selectedFulfillment.size > 0 || sponsoredFilter !== null;
+                    const hasActiveFilters = selectedBrands.size > 0 || sponsoredFilter !== null; // selectedFulfillment filter is hidden for now
                     
                     // Helper function to clear all filters
                     const clearFilters = () => {
@@ -1915,8 +1915,8 @@ export default function AnalyzeForm({
                               </div>
                             )}
                             
-                            {/* Fulfillment Filter (Prime/Non-Prime) */}
-                            <div className="flex items-center gap-2">
+                            {/* Fulfillment Filter (Prime/Non-Prime) - HIDDEN FOR NOW */}
+                            {/* <div className="flex items-center gap-2">
                               <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
                                 <input
                                   type="checkbox"
@@ -1951,7 +1951,7 @@ export default function AnalyzeForm({
                                 />
                                 <span>Non-Prime</span>
                               </label>
-                            </div>
+                            </div> */}
                             
                             {/* Sponsored Filter */}
                             <div className="flex items-center gap-2">
