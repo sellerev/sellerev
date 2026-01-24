@@ -216,18 +216,6 @@ export function ProductCard({
 
       {/* Revenue Section - Always shows monthly units and revenue */}
       <div className="bg-[#F9FAFB] -mx-4 -mb-4 px-4 py-3 mt-3 rounded-b-xl border-t border-[#E5E7EB]">
-        {/* Tooltip explaining estimates */}
-        <div className="mb-2 flex items-center gap-1 group relative">
-          <div className="text-[11px] text-[#6B7280]">
-            These figures are estimates based on category demand and ranking signals.
-            {asin && (
-              <span className="ml-1 text-[#3B82F6] underline cursor-help" title="Connect seller data for higher accuracy.">
-                Learn more
-              </span>
-            )}
-          </div>
-        </div>
-
         {/* Monthly Revenue - Always shown */}
         <div className="mb-2">
           <div className="text-xs text-[#6B7280] mb-1 flex items-center gap-1">
