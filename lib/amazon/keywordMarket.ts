@@ -3219,26 +3219,39 @@ export async function fetchKeywordMarketSnapshot(
         // Fallback is handled automatically - Rainforest image_url remains if SP-API doesn't provide one
         
         // ✅ CATEGORY: SP-API is authoritative (always override when available)
-        if (catalog.category && typeof catalog.category === 'string' && catalog.category.trim().length > 0) {
-          listing.main_category = catalog.category.trim();
+        // CRITICAL: Use chosen_category_name from BSR context (never website_display_group codes)
+        const categoryFromContext = catalog.bsr_context?.chosen_category_name;
+        const categoryFromCatalog = catalog.category;
+        // Prefer category from BSR context (human-readable), fallback to catalog.category
+        const finalCategory = categoryFromContext || categoryFromCatalog;
+        
+        if (finalCategory && typeof finalCategory === 'string' && finalCategory.trim().length > 0) {
+          listing.main_category = finalCategory.trim();
           (listing as any).category_source = 'sp_api_catalog';
           (listing as any).category_confidence = 'high';
         }
+        
         // ═══════════════════════════════════════════════════════════════════════════
         // ✅ BSR RULES: Only category-based BSR from SP-API, mark unavailable if missing
         // ═══════════════════════════════════════════════════════════════════════════
-        // CRITICAL: BSR from SP-API CatalogItems is authoritative (category-based only)
+        // CRITICAL: BSR from SP-API CatalogItems is authoritative (category-specific)
         // - Only use BSR if it's from SP-API (category-specific)
         // - If SP-API BSR missing: mark as unavailable, do NOT estimate silently
         // - Never overwrite a valid SP-API BSR with null or estimated values
+        // - Persist full BSR context for debugging and analysis
         if (catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
           bsrMergeCount++;
           // SP-API BSR is authoritative - always set when available
           listing.main_category_bsr = catalog.bsr;
           listing.bsr = catalog.bsr;
           
+          // Persist structured BSR context to listing
+          if (catalog.bsr_context) {
+            (listing as any).bsr_context = catalog.bsr_context;
+          }
+          
           // Set source tags for SP-API BSR
-          (listing as any).bsr_source = 'sp_api';
+          (listing as any).bsr_source = catalog.bsr_source || 'sp_api';
           (listing as any).bsr_confidence = 'high';
           (listing as any).had_sp_api_response = true;
           
@@ -3256,7 +3269,9 @@ export async function fetchKeywordMarketSnapshot(
             console.log("MERGE_BSR_FROM_SP_API", {
               asin: listing.asin,
               bsr: listing.main_category_bsr,
-              category: catalog.category || listing.main_category,
+              category: finalCategory || listing.main_category,
+              category_from_context: categoryFromContext,
+              bsr_source: catalog.bsr_context?.chosen_rank_source,
               source: 'sp_api',
             });
           }
@@ -3273,7 +3288,12 @@ export async function fetchKeywordMarketSnapshot(
             console.warn("⚠️ CATALOG_EXISTS_BUT_NO_BSR", {
               asin: listing.asin,
               catalog_bsr: catalog.bsr,
-              catalog_category: catalog.category,
+              catalog_category: finalCategory,
+              bsr_context: catalog.bsr_context ? {
+                chosen_rank_value: catalog.bsr_context.chosen_rank_value,
+                chosen_rank_source: catalog.bsr_context.chosen_rank_source,
+                debug_reason: catalog.bsr_context.debug_reason,
+              } : null,
               message: "SP-API Catalog returned item but no category-based BSR - marked unavailable",
             });
           }

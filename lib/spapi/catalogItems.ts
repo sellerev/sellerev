@@ -15,7 +15,7 @@
 import { createHmac, createHash } from "crypto";
 import { getSpApiAccessToken } from "./auth";
 import { logSpApiEvent, extractSpApiHeaders } from "./logging";
-import { normalizeCatalogItem, extractBSRData } from "./catalogNormalize";
+import { normalizeCatalogItem, extractBSRData, extractBSRContext } from "./catalogNormalize";
 import { bulkPersistCatalogRecords, bulkLookupCatalogCache, isCatalogDataFresh } from "./catalogPersist";
 import type { AsinCatalogRecord } from "./catalogModels";
 
@@ -533,9 +533,12 @@ async function fetchBatch(
         normalizedRecords.push(normalizedRecord);
       }
 
-      // Extract BSR for backward compatibility (existing code expects this)
+      // Extract structured BSR context
+      const bsrContext = extractBSRContext(item);
+      const bsr = bsrContext.chosen_rank_value;
+      
+      // For backward compatibility, also extract using old method
       const bsrData = extractBSRData(item);
-      const bsr = bsrData.primary_rank;
       
       // Check if item has salesRanks (BSR data) - counts as enriched for keyword mode
       const hasSalesRanks = Array.isArray(item?.salesRanks) && item.salesRanks.length > 0;
@@ -566,12 +569,15 @@ async function fetchBatch(
         hasAnyEnrichment = true;
       }
       
+      // Use chosen_category_name from BSR context (never use website_display_group codes)
+      const category = bsrContext.chosen_category_name || extractCategory(item);
+      
       const metadata: CatalogItemMetadata = {
         asin,
         title: extractTitle(item),
         brand: extractBrand(item),
         image_url: extractImageUrl(item),
-        category: extractCategory(item),
+        category,
         bsr,
       };
 
@@ -584,9 +590,25 @@ async function fetchBatch(
           ...(spApiCatalogResults!.get(asinKey) ?? {}), // Preserve existing data
           ...metadata,
           asin: asinKey, // Ensure normalized ASIN is used as key
+          // Persist structured BSR context
+          main_category_bsr: bsrContext.chosen_rank_value,
+          bsr: bsrContext.chosen_rank_value,
+          bsr_source: "sp_api",
+          bsr_context: bsrContext,
         });
         
-        // Debug log for BSR extraction - log immediately when BSR is found and added
+        // Log structured BSR context extraction
+        console.log("SP_API_BSR_CONTEXT_EXTRACTED", {
+          asin,
+          chosen_rank_value: bsrContext.chosen_rank_value,
+          chosen_category_name: bsrContext.chosen_category_name,
+          chosen_rank_source: bsrContext.chosen_rank_source,
+          chosen_browse_classification_id: bsrContext.chosen_browse_classification_id,
+          chosen_display_group: bsrContext.chosen_display_group,
+          debug_reason: bsrContext.debug_reason,
+        });
+        
+        // Legacy debug log for backward compatibility
         if (bsr !== null && bsr > 0) {
           console.log("🔵 SP_API_BSR_EXTRACTED", {
             asin,
@@ -786,14 +808,19 @@ function extractImageUrl(item: any): string | null {
 
 /**
  * Extract category from SP-API Catalog Item
+ * 
+ * CRITICAL: Never use website_display_group codes (like wireless_display_on_website)
+ * as category names. Only use human-readable category names from classifications.
  */
 function extractCategory(item: any): string | null {
-  // Try browse classification
+  // Try browse classification from attributes (human-readable names)
   const browseClassification =
     item?.attributes?.product_type_name?.[0]?.value ||
     item?.attributes?.item_type_name?.[0]?.value ||
-    item?.summaries?.[0]?.websiteDisplayGroup ||
     null;
+
+  // Never use websiteDisplayGroup codes - they are not human-readable category names
+  // websiteDisplayGroup contains codes like "wireless_display_on_website" which are not categories
 
   if (typeof browseClassification === "string" && browseClassification.trim().length > 0) {
     return browseClassification.trim();

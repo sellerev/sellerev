@@ -17,7 +17,28 @@ import {
 } from "./catalogModels";
 
 /**
- * Extract BSR data from SP-API salesRanks structure
+ * Structured BSR context extracted from SP-API Catalog Items
+ */
+export interface BSRContext {
+  raw_salesRanks: any[];
+  chosen_rank_value: number | null;
+  chosen_rank_source: "salesRanks" | "classificationRanks" | "displayRank" | "fallback" | "none";
+  chosen_category_name: string | null;
+  chosen_browse_classification_id: string | null;
+  chosen_display_group: string | null;
+  chosen_website_display_group_name: string | null;
+  chosen_website_display_group_code: string | null;
+  debug_reason: string;
+}
+
+/**
+ * Extract structured BSR context from SP-API salesRanks structure
+ * 
+ * Selection rules (deterministic):
+ * 1. Prefer salesRanks with classificationRanks (lowest rank with classification name/id)
+ * 2. If salesRanks missing/empty, use classificationRanks if present
+ * 3. If neither, use displayRank/rank fallback if present
+ * 4. Never use website_display_group codes as category key/name
  */
 export function extractBSRData(item: any): {
   primary_category: string | null;
@@ -25,70 +46,170 @@ export function extractBSRData(item: any): {
   root_category: string | null;
   root_rank: number | null;
 } {
+  // For backward compatibility, use the structured extraction and map to old format
+  const context = extractBSRContext(item);
+  
+  return {
+    primary_category: context.chosen_category_name,
+    primary_rank: context.chosen_rank_value,
+    root_category: context.chosen_category_name, // Use chosen category as root for backward compat
+    root_rank: context.chosen_rank_value, // Use chosen rank as root for backward compat
+  };
+}
+
+/**
+ * Extract structured BSR context from SP-API Catalog Items
+ * Returns full context including source, category name, and debug information
+ */
+export function extractBSRContext(item: any): BSRContext {
   const salesRanks = item?.salesRanks || [];
-  if (!Array.isArray(salesRanks) || salesRanks.length === 0) {
-    return {
-      primary_category: null,
-      primary_rank: null,
-      root_category: null,
-      root_rank: null,
-    };
+  const raw_salesRanks = Array.isArray(salesRanks) ? salesRanks : [];
+
+  // Initialize return values
+  let chosen_rank_value: number | null = null;
+  let chosen_rank_source: BSRContext["chosen_rank_source"] = "none";
+  let chosen_category_name: string | null = null;
+  let chosen_browse_classification_id: string | null = null;
+  let chosen_display_group: string | null = null;
+  let chosen_website_display_group_name: string | null = null;
+  let chosen_website_display_group_code: string | null = null;
+  let debug_reason = "";
+
+  // Extract website display group info (for reference, but never use as category)
+  const summaries = item?.summaries || [];
+  if (summaries.length > 0) {
+    const summary = summaries[0];
+    chosen_website_display_group_name = summary?.websiteDisplayGroupName || null;
+    chosen_website_display_group_code = summary?.websiteDisplayGroup || null;
   }
 
-  let primaryRank: number | null = null;
-  let primaryCategory: string | null = null;
-  let rootRank: number | null = null;
-  let rootCategory: string | null = null;
+  // RULE 1: Prefer salesRanks with classificationRanks (lowest rank with classification name/id)
+  if (raw_salesRanks.length > 0) {
+    const candidates: Array<{
+      rank: number;
+      categoryName: string | null;
+      classificationId: string | null;
+      displayGroup: string | null;
+      salesRank: any;
+    }> = [];
 
-  // Check all salesRank entries for classificationRanks
-  for (const salesRank of salesRanks) {
-    const classificationRanks = salesRank?.classificationRanks || [];
-    if (Array.isArray(classificationRanks) && classificationRanks.length > 0) {
-      // Get primary classification (first entry)
-      const primaryClassification = classificationRanks[0];
-      const primaryRankValue = primaryClassification?.rank;
+    for (const salesRank of raw_salesRanks) {
+      const classificationRanks = salesRank?.classificationRanks || [];
       
-      if (typeof primaryRankValue === "number" && primaryRankValue > 0 && !primaryRank) {
-        primaryRank = primaryRankValue;
-        primaryCategory = primaryClassification?.displayName || 
-                         primaryClassification?.title || 
-                         salesRank?.displayName ||
-                         null;
-      }
-
-      // Find root category (last entry in classificationRanks, or use displayRank)
-      if (classificationRanks.length > 1) {
-        const rootClassification = classificationRanks[classificationRanks.length - 1];
-        const rootRankValue = rootClassification?.rank;
-        if (typeof rootRankValue === "number" && rootRankValue > 0 && !rootRank) {
-          rootRank = rootRankValue;
-          rootCategory = rootClassification?.displayName || 
-                        rootClassification?.title || 
-                        null;
+      if (Array.isArray(classificationRanks) && classificationRanks.length > 0) {
+        // Find all valid classification ranks with category context
+        for (const cr of classificationRanks) {
+          const rank = cr?.rank;
+          if (typeof rank === "number" && rank > 0) {
+            const categoryName = cr?.displayName || cr?.title || null;
+            const classificationId = cr?.classificationId || cr?.id || null;
+            const displayGroup = salesRank?.displayGroup || null;
+            
+            // Only consider entries with category name/id (classification context)
+            if (categoryName || classificationId) {
+              candidates.push({
+                rank,
+                categoryName,
+                classificationId,
+                displayGroup,
+                salesRank,
+              });
+            }
+          }
         }
-      } else if (salesRank?.displayRank && typeof salesRank.displayRank === "number" && salesRank.displayRank > 0) {
-        // Use displayRank as root if only one classification
-        rootRank = salesRank.displayRank;
-        rootCategory = primaryCategory;
       }
+    }
 
-      break; // Use first salesRank entry that has classificationRanks
+    if (candidates.length > 0) {
+      // Choose the lowest (best) rank
+      candidates.sort((a, b) => a.rank - b.rank);
+      const chosen = candidates[0];
+      
+      chosen_rank_value = chosen.rank;
+      chosen_rank_source = "salesRanks";
+      chosen_category_name = chosen.categoryName;
+      chosen_browse_classification_id = chosen.classificationId;
+      chosen_display_group = chosen.displayGroup;
+      debug_reason = `Selected lowest rank from salesRanks.classificationRanks (${candidates.length} candidates)`;
     }
   }
 
-  // Fallback to direct rank if no classificationRanks found
-  if (!primaryRank && salesRanks[0]?.rank && typeof salesRanks[0].rank === "number" && salesRanks[0].rank > 0) {
-    primaryRank = salesRanks[0].rank;
-    primaryCategory = salesRanks[0]?.displayName || null;
-    rootRank = primaryRank;
-    rootCategory = primaryCategory;
+  // RULE 2: If salesRanks missing/empty or no valid classificationRanks, try classificationRanks directly
+  if (!chosen_rank_value && raw_salesRanks.length > 0) {
+    for (const salesRank of raw_salesRanks) {
+      const classificationRanks = salesRank?.classificationRanks || [];
+      
+      if (Array.isArray(classificationRanks) && classificationRanks.length > 0) {
+        // Find lowest rank with any category name/id
+        const validRanks = classificationRanks
+          .map((cr: any) => ({
+            rank: cr?.rank,
+            categoryName: cr?.displayName || cr?.title || null,
+            classificationId: cr?.classificationId || cr?.id || null,
+            displayGroup: salesRank?.displayGroup || null,
+          }))
+          .filter((r: any) => 
+            typeof r.rank === "number" && 
+            r.rank > 0 && 
+            (r.categoryName || r.classificationId)
+          );
+
+        if (validRanks.length > 0) {
+          validRanks.sort((a: any, b: any) => a.rank - b.rank);
+          const chosen = validRanks[0];
+          
+          chosen_rank_value = chosen.rank;
+          chosen_rank_source = "classificationRanks";
+          chosen_category_name = chosen.categoryName;
+          chosen_browse_classification_id = chosen.classificationId;
+          chosen_display_group = chosen.displayGroup;
+          debug_reason = `Selected from classificationRanks (${validRanks.length} valid entries)`;
+          break;
+        }
+      }
+    }
+  }
+
+  // RULE 3: Fallback to displayRank or rank
+  if (!chosen_rank_value && raw_salesRanks.length > 0) {
+    for (const salesRank of raw_salesRanks) {
+      // Try displayRank first
+      if (salesRank?.displayRank && typeof salesRank.displayRank === "number" && salesRank.displayRank > 0) {
+        chosen_rank_value = salesRank.displayRank;
+        chosen_rank_source = "displayRank";
+        chosen_category_name = salesRank?.displayName || null;
+        chosen_display_group = salesRank?.displayGroup || null;
+        debug_reason = "Fallback to displayRank from salesRanks";
+        break;
+      }
+      
+      // Try direct rank property
+      if (salesRank?.rank && typeof salesRank.rank === "number" && salesRank.rank > 0) {
+        chosen_rank_value = salesRank.rank;
+        chosen_rank_source = "fallback";
+        chosen_category_name = salesRank?.displayName || null;
+        chosen_display_group = salesRank?.displayGroup || null;
+        debug_reason = "Fallback to rank property from salesRanks";
+        break;
+      }
+    }
+  }
+
+  // If still no rank found
+  if (!chosen_rank_value) {
+    debug_reason = "No valid rank found in salesRanks structure";
   }
 
   return {
-    primary_category: primaryCategory,
-    primary_rank: primaryRank,
-    root_category: rootCategory !== primaryCategory ? rootCategory : null,
-    root_rank: rootRank !== primaryRank ? rootRank : null,
+    raw_salesRanks,
+    chosen_rank_value,
+    chosen_rank_source,
+    chosen_category_name,
+    chosen_browse_classification_id,
+    chosen_display_group,
+    chosen_website_display_group_name,
+    chosen_website_display_group_code,
+    debug_reason,
   };
 }
 
