@@ -11,6 +11,7 @@
  */
 
 import { Appearance } from "@/types/search";
+import { normalizeCategoryForEstimation } from "@/lib/revenue/category-normalizer";
 
 /**
  * 🔒 CANONICAL RAINFOREST DATA CONTRACT
@@ -3400,33 +3401,92 @@ export async function fetchKeywordMarketSnapshot(
     const CATEGORY_BASE_UNITS: Record<string, number> = {
       electronics_tv: 80000,
       electronics_general: 60000,
+      electronics_cell_phone_accessories: 55000, // Cell phone cases, bumpers, etc.
       kitchen_appliance: 25000,
-      kitchen_display_on_website: 22000,
+      kitchen_display_on_website: 22000, // Legacy support (will be rejected by normalizer)
       home_decor: 18000,
       tools: 12000,
       industrial: 4000,
     };
 
-    // Map main_category to category_key
+    // 4.5. NORMALIZE CATEGORIES FOR ESTIMATION (BEFORE category key determination)
+    // Apply category normalization to each listing
+    // This ensures stable estimation category keys and prevents display_group codes from being used
+    for (const listing of listings) {
+      // Extract category information from BSR context (preferred) or main_category
+      const bsrContext = (listing as any).bsr_context;
+      const spCategoryName = bsrContext?.chosen_category_name || listing.main_category;
+      const spBrowseNodeId = bsrContext?.chosen_browse_classification_id || null;
+      const productType = (listing as any).product_type || null;
+      
+      // Get fallback category from existing mapCategoryToKey logic (for backward compatibility)
+      // But we'll reject display_group codes in the normalizer
+      const fallbackKeywordCategory = listing.main_category || null;
+      
+      // Normalize category for estimation
+      const categoryNormalization = normalizeCategoryForEstimation({
+        spCategoryName,
+        spBrowseNodeId,
+        productType,
+        fallbackKeywordCategory,
+      });
+      
+      // Set normalized category fields on listing
+      (listing as any).estimation_category_key = categoryNormalization.estimation_category_key;
+      (listing as any).display_category_name = categoryNormalization.display_category_name;
+      (listing as any).category_normalization_reason = categoryNormalization.normalization_reason;
+      
+      // Set bsr_category to display_category_name for BSR calculator compatibility
+      // The BSR calculator expects category names like "Home & Kitchen", "Kitchen & Dining", etc.
+      listing.bsr_category = categoryNormalization.display_category_name;
+      
+      // Log category normalization
+      console.log("CATEGORY_NORMALIZED_FOR_ESTIMATION", {
+        asin: listing.asin,
+        spCategoryName: spCategoryName || null,
+        spBrowseNodeId: spBrowseNodeId || null,
+        fallbackKeywordCategory: fallbackKeywordCategory || null,
+        estimation_category_key: categoryNormalization.estimation_category_key,
+        display_category_name: categoryNormalization.display_category_name,
+        reason: categoryNormalization.normalization_reason,
+      });
+    }
+
+    // Map main_category to category_key (legacy fallback, rejects display_group codes)
     const mapCategoryToKey = (category: string | null): string => {
       if (!category) return "default";
       const lower = category.toLowerCase();
+      // Reject display_group codes
+      if (lower.endsWith("_display_on_website")) return "default";
       if (lower.includes("television") || lower.includes("tv") || lower.includes("display")) return "electronics_tv";
       if (lower.includes("electronics") || lower.includes("electronic")) return "electronics_general";
       if (lower.includes("appliance")) return "kitchen_appliance";
-      if (lower.includes("kitchen") || lower.includes("dining")) return "kitchen_display_on_website";
+      if (lower.includes("kitchen") || lower.includes("dining")) return "kitchen_appliance"; // Changed from kitchen_display_on_website
       if (lower.includes("home") || lower.includes("decor")) return "home_decor";
       if (lower.includes("tool")) return "tools";
       if (lower.includes("industrial")) return "industrial";
       return "default";
     };
 
-    // Determine category_key from listings
+    // Determine category_key from listings (use normalized estimation_category_key)
     const categories = listings
-      .map(l => l.main_category)
-      .filter((c): c is string => c !== null && c !== undefined);
+      .map(l => (l as any).estimation_category_key)
+      .filter((c): c is string => c !== null && c !== undefined && c !== "unknown");
     const primaryCategory = categories.length > 0 ? categories[0] : null;
-    const categoryKey = mapCategoryToKey(primaryCategory);
+    
+    // Use normalized category key if available, otherwise fallback to mapCategoryToKey
+    let categoryKey: string;
+    if (primaryCategory && !primaryCategory.endsWith("_display_on_website")) {
+      // Use normalized category key if it's not a display_group code
+      categoryKey = primaryCategory;
+    } else {
+      // Fallback to old mapping logic (but reject display_group codes)
+      const fallbackCategory = listings
+        .map(l => l.main_category)
+        .filter((c): c is string => c !== null && c !== undefined)[0] || null;
+      categoryKey = mapCategoryToKey(fallbackCategory);
+    }
+    
     const categoryBaseUnits = CATEGORY_BASE_UNITS[categoryKey] ?? 20000;
 
     // 2. PAGE-1 CTR CURVE (industry standard)
