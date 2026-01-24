@@ -2120,11 +2120,13 @@ export default function AnalyzeForm({
                             const bsrSource = (listing as any).bsr_source ?? (listing as any).bsrSource ?? null;
                             const bsr = listing.bsr ?? null;
                             const bsrContext = (listing as any).bsr_context ?? null;
-                            // Subcategory and root rank
-                            const subcategoryBsr = (listing as any).subcategory_bsr ?? null;
+                            // Subcategory and root rank (with fallbacks)
+                            // Subcategory: prefer subcategory_rank, fallback to subcategory_bsr
+                            const subcategoryBsr = (listing as any).subcategory_rank ?? (listing as any).subcategory_bsr ?? null;
                             const subcategoryName = (listing as any).subcategory_name ?? null;
-                            const bsrRoot = (listing as any).bsr_root ?? null;
-                            const bsrRootCategory = (listing as any).bsr_root_category ?? null;
+                            // Main category: prefer main_category_bsr/main_category_name, fallback to root_rank/root_display_group, then bsr_root/bsr_root_category
+                            const bsrRoot = (listing as any).main_category_bsr ?? (listing as any).root_rank ?? (listing as any).bsr_root ?? null;
+                            const bsrRootCategory = (listing as any).main_category_name ?? (listing as any).root_display_group ?? (listing as any).bsr_root_category ?? null;
                             
                             // Sponsored: use normalization fallback
                             // isSponsored ?? (sponsored === true) ?? is_sponsored ?? IsSponsored ?? false

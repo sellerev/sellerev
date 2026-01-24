@@ -3376,11 +3376,12 @@ export async function POST(req: NextRequest) {
               if (metadata.category) listing.main_category = metadata.category;
               if (metadata.bsr != null && metadata.bsr > 0) {
                 listing.bsr = metadata.bsr;
-                listing.main_category_bsr = metadata.bsr;
+                // NOTE: main_category_bsr will be set below from root rank, not subcategory rank
               }
-              // Merge subcategory rank fields
+              // Merge subcategory rank fields (explicit field names)
               if (metadata.subcategory_bsr != null && metadata.subcategory_bsr > 0) {
                 (listing as any).subcategory_bsr = metadata.subcategory_bsr;
+                (listing as any).subcategory_rank = metadata.subcategory_bsr; // UI-compatible alias
               }
               if (metadata.subcategory_name) {
                 (listing as any).subcategory_name = metadata.subcategory_name;
@@ -3391,12 +3392,16 @@ export async function POST(req: NextRequest) {
               if (metadata.subcategory_rank_source) {
                 (listing as any).subcategory_rank_source = metadata.subcategory_rank_source;
               }
-              // Merge root/main category BSR (only if present)
+              // Merge root/main category BSR (explicit field names + UI-compatible aliases)
               if (metadata.bsr_root != null && metadata.bsr_root > 0) {
                 (listing as any).bsr_root = metadata.bsr_root;
+                (listing as any).root_rank = metadata.bsr_root; // Explicit field name
+                (listing as any).main_category_bsr = metadata.bsr_root; // UI-compatible alias (root rank, NOT subcategory)
               }
               if (metadata.bsr_root_category) {
                 (listing as any).bsr_root_category = metadata.bsr_root_category;
+                (listing as any).root_display_group = metadata.bsr_root_category; // Explicit field name
+                (listing as any).main_category_name = metadata.bsr_root_category; // UI-compatible alias
               }
             }
           }
@@ -3726,6 +3731,24 @@ export async function POST(req: NextRequest) {
       snapshot_units_min: marketSnapshot?.est_total_monthly_units_min, 
       snapshot_rev_min: marketSnapshot?.est_total_monthly_revenue_min 
     });
+    
+    // Debug log: Show first 2 listings with BSR fields before returning response
+    const debugListings = finalListings.slice(0, 2);
+    if (debugListings.length > 0) {
+      console.log("RESPONSE_BSR_FIELDS_DEBUG", {
+        keyword: normalizedKeyword,
+        sample_count: debugListings.length,
+        samples: debugListings.map((l: any) => ({
+          asin: l.asin,
+          subcategory_rank: (l as any).subcategory_rank ?? (l as any).subcategory_bsr ?? null,
+          subcategory_name: (l as any).subcategory_name ?? null,
+          root_rank: (l as any).root_rank ?? (l as any).bsr_root ?? null,
+          root_display_group: (l as any).root_display_group ?? (l as any).bsr_root_category ?? null,
+          main_category_bsr: (l as any).main_category_bsr ?? null,
+          main_category_name: (l as any).main_category_name ?? null,
+        })),
+      });
+    }
     
     return NextResponse.json(
       finalResponse,
