@@ -601,6 +601,7 @@ async function fetchBatch(
         console.log("SP_API_BSR_CONTEXT_EXTRACTED", {
           asin,
           chosen_rank_value: bsrContext.chosen_rank_value,
+          
           chosen_category_name: bsrContext.chosen_category_name,
           chosen_rank_source: bsrContext.chosen_rank_source,
           chosen_browse_classification_id: bsrContext.chosen_browse_classification_id,
