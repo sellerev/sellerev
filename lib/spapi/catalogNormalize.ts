@@ -56,8 +56,8 @@ export function extractBSRData(item: any): {
   return {
     primary_category: context.chosen_category_name,
     primary_rank: context.chosen_rank_value,
-    root_category: context.chosen_category_name, // Use chosen category as root for backward compat
-    root_rank: context.chosen_rank_value, // Use chosen rank as root for backward compat
+    root_category: context.root_display_group || context.chosen_category_name, // Use root display group if available
+    root_rank: context.root_rank, // Use actual root_rank from displayGroupRanks, NOT chosen_rank_value
   };
 }
 

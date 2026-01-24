@@ -3401,6 +3401,24 @@ export async function POST(req: NextRequest) {
             }
           }
           
+          // Debug log: Show sample listings with BSR fields after merge
+          const sampleListings = Array.from(listingMap.values())
+            .filter((l: any) => l.asin && ((l as any).bsr_root !== null || (l as any).subcategory_bsr !== null))
+            .slice(0, 3);
+          if (sampleListings.length > 0) {
+            console.log("SP_API_BSR_MERGE_DEBUG", {
+              keyword: keywordForEnrichment,
+              sample_count: sampleListings.length,
+              samples: sampleListings.map((l: any) => ({
+                asin: l.asin,
+                subcategory_bsr: (l as any).subcategory_bsr ?? null,
+                subcategory_name: (l as any).subcategory_name ?? null,
+                bsr_root: (l as any).bsr_root ?? null,
+                bsr_root_category: (l as any).bsr_root_category ?? null,
+              })),
+            });
+          }
+          
           console.log("ASYNC_SP_API_ENRICHMENT_COMPLETE", {
             keyword: keywordForEnrichment,
             catalog_enriched: spApiCatalogResults.size,

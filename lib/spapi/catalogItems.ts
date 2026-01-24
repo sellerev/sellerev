@@ -620,13 +620,16 @@ async function fetchBatch(
           debug_reason: bsrContext.debug_reason,
         });
         
-        // Legacy debug log for backward compatibility
+        // Legacy debug log for backward compatibility - show both subcategory and root rank
         if (bsr !== null && bsr > 0) {
           console.log("🔵 SP_API_BSR_EXTRACTED", {
             asin,
             bsr,
+            subcategory_rank: bsrContext.chosen_rank_value,
+            subcategory_name: bsrContext.chosen_category_name,
+            root_rank: bsrContext.root_rank, // Use root_rank from context, NOT bsrData.root_rank
+            root_display_group: bsrContext.root_display_group,
             primary_category: bsrData.primary_category,
-            root_rank: bsrData.root_rank,
             has_salesRanks: Array.isArray(item?.salesRanks) && item.salesRanks.length > 0,
             salesRanks_count: item?.salesRanks?.length || 0,
             has_classificationRanks: Array.isArray(item?.salesRanks?.[0]?.classificationRanks) && item.salesRanks[0].classificationRanks.length > 0,
