@@ -2962,24 +2962,26 @@ CRITICAL RULES FOR ESCALATED DATA:
           
           if (equals) {
             responseText = `Yes, all equals organic + sponsored.\n\nMath:\n`;
-            responseText += `- All: ${leftValue.known_count}${leftValue.unknown_count > 0 ? ` (${leftValue.unknown_count} unknown)` : ''}\n`;
-            responseText += `- Organic: ${organicValue}${mentionsReviews && organicUnknown > 0 ? ` (${organicUnknown} unknown)` : ''}\n`;
-            responseText += `- Sponsored: ${sponsoredValue}${mentionsReviews && sponsoredUnknown > 0 ? ` (${sponsoredUnknown} unknown)` : ''}\n`;
-            responseText += `- Sum: ${rightValue.known_count}${rightValue.unknown_count > 0 ? ` (${rightValue.unknown_count} unknown)` : ''}\n\n`;
+            responseText += `- All: ${leftValue.known_count}${leftValue.unknown_count > 0 ? ` (${leftValue.unknown_count} listings with missing data)` : ''}\n`;
+            responseText += `- Organic: ${organicValue}${mentionsReviews && organicUnknown > 0 ? ` (${organicUnknown} listings with missing data)` : ''}\n`;
+            responseText += `- Sponsored: ${sponsoredValue}${mentionsReviews && sponsoredUnknown > 0 ? ` (${sponsoredUnknown} listings with missing data)` : ''}\n`;
+            responseText += `- Sum: ${rightValue.known_count}${rightValue.unknown_count > 0 ? ` (${rightValue.unknown_count} listings with missing data)` : ''}\n\n`;
             responseText += `${leftValue.known_count} = ${rightValue.known_count}`;
             if (leftValue.unknown_count > 0 || rightValue.unknown_count > 0) {
-              responseText += `\n\nNote: Equality is for known_count only. Unknown counts: All=${leftValue.unknown_count}, Organic+Sponsored=${rightValue.unknown_count}`;
+              responseText += `\n\nNote: Some listings don't show this data on Page-1, so the true numbers could be slightly different.`;
             }
+            responseText += `\n\nWant me to break this down by organic vs sponsored, or by the top brands?`;
           } else {
             responseText = `No, all does not equal organic + sponsored.\n\nMath:\n`;
-            responseText += `- All: ${leftValue.known_count}${leftValue.unknown_count > 0 ? ` (${leftValue.unknown_count} unknown)` : ''}\n`;
-            responseText += `- Organic: ${organicValue}${mentionsReviews && organicUnknown > 0 ? ` (${organicUnknown} unknown)` : ''}\n`;
-            responseText += `- Sponsored: ${sponsoredValue}${mentionsReviews && sponsoredUnknown > 0 ? ` (${sponsoredUnknown} unknown)` : ''}\n`;
-            responseText += `- Sum: ${rightValue.known_count}${rightValue.unknown_count > 0 ? ` (${rightValue.unknown_count} unknown)` : ''}\n\n`;
+            responseText += `- All: ${leftValue.known_count}${leftValue.unknown_count > 0 ? ` (${leftValue.unknown_count} listings with missing data)` : ''}\n`;
+            responseText += `- Organic: ${organicValue}${mentionsReviews && organicUnknown > 0 ? ` (${organicUnknown} listings with missing data)` : ''}\n`;
+            responseText += `- Sponsored: ${sponsoredValue}${mentionsReviews && sponsoredUnknown > 0 ? ` (${sponsoredUnknown} listings with missing data)` : ''}\n`;
+            responseText += `- Sum: ${rightValue.known_count}${rightValue.unknown_count > 0 ? ` (${rightValue.unknown_count} listings with missing data)` : ''}\n\n`;
             responseText += `${leftValue.known_count} ≠ ${rightValue.known_count}`;
             if (leftValue.unknown_count > 0 || rightValue.unknown_count > 0) {
-              responseText += `\n\nNote: Unknown counts: All=${leftValue.unknown_count}, Organic+Sponsored=${rightValue.unknown_count}`;
+              responseText += `\n\nNote: Some listings don't show this data on Page-1, so the true numbers could be slightly different.`;
             }
+            responseText += `\n\nWant me to break this down by organic vs sponsored, or by the top brands?`;
           }
           
           console.log("🔢 MATH_FAST_PATH_USED", {
@@ -3235,6 +3237,85 @@ CRITICAL RULES FOR ESCALATED DATA:
           let finalMessage = fullAssistantMessage.trim();
           let tripwireTriggered = false;
           let tripwireReason: string | undefined;
+          
+          // ═══════════════════════════════════════════════════════════════════════════
+          // POST-PROCESSOR: Strip dev jargon and ensure follow-up question
+          // ═══════════════════════════════════════════════════════════════════════════
+          if (finalMessage) {
+            let hadForbiddenTerms = false;
+            let appendedFollowup = false;
+            
+            // Strip/replace forbidden technical terms
+            const forbiddenTerms = [
+              { pattern: /\bunknown_count\b/gi, replacement: "listings with missing data" },
+              { pattern: /\bknown_count\b/gi, replacement: "listings" },
+              { pattern: /\bcomputed_metrics\b/gi, replacement: "data" },
+              { pattern: /\bai_context\b/gi, replacement: "data" },
+              { pattern: /\bauthoritative_facts\b/gi, replacement: "data" },
+              { pattern: /\bPage-1 array\b/gi, replacement: "Page-1 listings" },
+              { pattern: /\bschema\b/gi, replacement: "format" },
+              { pattern: /\bcontract\b/gi, replacement: "data" },
+              { pattern: /\bdata structure\b/gi, replacement: "data" },
+              { pattern: /\binternal\b/gi, replacement: "" },
+            ];
+            
+            for (const { pattern, replacement } of forbiddenTerms) {
+              if (pattern.test(finalMessage)) {
+                hadForbiddenTerms = true;
+                finalMessage = finalMessage.replace(pattern, replacement);
+              }
+            }
+            
+            // Clean up any double spaces or trailing punctuation issues
+            finalMessage = finalMessage.replace(/\s+/g, " ").trim();
+            
+            // Ensure ends with exactly ONE follow-up question
+            const questionMarkCount = (finalMessage.match(/\?/g) || []).length;
+            const lastChar = finalMessage[finalMessage.length - 1];
+            
+            if (lastChar !== "?") {
+              // Append a follow-up question if missing
+              const followUpQuestions = [
+                "Want me to break this down by organic vs sponsored, or by the top brands?",
+                "Should I analyze the price structure for these listings?",
+                "Would you like me to check the review distribution for the top products?",
+                "Want me to dive deeper into any specific aspect?",
+              ];
+              // Pick a relevant follow-up based on context
+              const hasReviewMention = /review/i.test(finalMessage);
+              const hasPriceMention = /price|cost|revenue/i.test(finalMessage);
+              const hasBrandMention = /brand/i.test(finalMessage);
+              
+              let followUp = followUpQuestions[0]; // Default
+              if (hasReviewMention) {
+                followUp = "Want me to break this down by organic vs sponsored, or by the top brands?";
+              } else if (hasPriceMention) {
+                followUp = "Should I analyze the price structure for these listings?";
+              } else if (hasBrandMention) {
+                followUp = "Want me to dive deeper into any specific aspect?";
+              }
+              
+              finalMessage = finalMessage + (lastChar.match(/[.!]$/) ? " " : ". ") + followUp;
+              appendedFollowup = true;
+            } else if (questionMarkCount > 1) {
+              // Multiple questions - keep only the last one
+              const sentences = finalMessage.split(/(?<=[.!?])\s+/);
+              const questions = sentences.filter(s => s.trim().endsWith("?"));
+              if (questions.length > 1) {
+                // Remove all but the last question
+                const lastQuestion = questions[questions.length - 1];
+                const lastQuestionIndex = finalMessage.lastIndexOf(lastQuestion);
+                finalMessage = finalMessage.substring(0, lastQuestionIndex) + lastQuestion;
+              }
+            }
+            
+            console.log("🔧 COPILOT_POSTPROCESS", {
+              analysisRunId: body.analysisRunId,
+              had_forbidden_terms: hadForbiddenTerms,
+              appended_followup: appendedFollowup,
+              question_count_after: (finalMessage.match(/\?/g) || []).length,
+            });
+          }
           
           if (finalMessage) {
             // Check for financial directive patterns first
