@@ -2797,30 +2797,43 @@ CRITICAL RULES FOR ESCALATED DATA:
       estimated_monthly_revenue: productsArray[0]?.estimated_monthly_revenue ?? null,
     } : null;
     
-    // Server-side scope verification counts
+    // Server-side scope verification counts (explicit boolean checks)
     const sponsoredCount = productsArray.filter((p: any) => p.is_sponsored === true).length;
     const organicCount = productsArray.filter((p: any) => p.is_sponsored === false).length;
     const unknownSponsoredCount = productsArray.filter((p: any) => p.is_sponsored === null).length;
     
-    // Scope-specific lt500 counts
+    // Unique ASINs vs Total Appearances
+    const uniqueAsins = new Set(productsArray.map((p: any) => p.asin));
+    const page1UniqueAsins = uniqueAsins.size;
+    const page1TotalAppearances = productsArray.length;
+    
+    // Scope-specific lt500 counts (explicit boolean checks)
+    const lt500All = productsArray.filter((p: any) => 
+      typeof p.review_count === 'number' && p.review_count < 500
+    ).length;
+    const lt500AllUnknown = productsArray.filter((p: any) => 
+      p.review_count === null
+    ).length;
+    
     const lt500Organic = productsArray.filter((p: any) => 
       p.is_sponsored === false && typeof p.review_count === 'number' && p.review_count < 500
     ).length;
-    const lt500Sponsored = productsArray.filter((p: any) => 
-      p.is_sponsored === true && typeof p.review_count === 'number' && p.review_count < 500
-    ).length;
-    const lt500AllPage1 = productsArray.filter((p: any) => 
-      (p.is_sponsored === true || p.is_sponsored === false) && typeof p.review_count === 'number' && p.review_count < 500
-    ).length;
-    
     const lt500OrganicUnknown = productsArray.filter((p: any) => 
       p.is_sponsored === false && p.review_count === null
+    ).length;
+    
+    const lt500Sponsored = productsArray.filter((p: any) => 
+      p.is_sponsored === true && typeof p.review_count === 'number' && p.review_count < 500
     ).length;
     const lt500SponsoredUnknown = productsArray.filter((p: any) => 
       p.is_sponsored === true && p.review_count === null
     ).length;
-    const lt500AllPage1Unknown = productsArray.filter((p: any) => 
-      (p.is_sponsored === true || p.is_sponsored === false) && p.review_count === null
+    
+    const lt500UnknownSponsored = productsArray.filter((p: any) => 
+      p.is_sponsored === null && typeof p.review_count === 'number' && p.review_count < 500
+    ).length;
+    const lt500UnknownSponsoredUnknown = productsArray.filter((p: any) => 
+      p.is_sponsored === null && p.review_count === null
     ).length;
     
     console.log("🔍 OPENAI_CONTEXT_SANITY_CHECK", {
@@ -2831,7 +2844,10 @@ CRITICAL RULES FOR ESCALATED DATA:
       has_ai_context_products,
       has_computed_metrics,
       computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
-      // Product counts
+      // Unique ASINs vs Total Appearances
+      page1_unique_asins: page1UniqueAsins,
+      page1_total_appearances: page1TotalAppearances,
+      // Product counts by sponsored status (appearances)
       total_products: productsArray.length,
       sponsored_count: sponsoredCount,
       organic_count: organicCount,
@@ -2839,11 +2855,12 @@ CRITICAL RULES FOR ESCALATED DATA:
       first_product_sample: firstProductSample,
       // Server-side verification counts (all scopes)
       lt500_all_scope: lt500,
-      // Scope-specific lt500 breakdown
+      // Scope-specific lt500 breakdown (with unknown_sponsored)
       lt500_breakdown: {
-        organic: { known: lt500Organic, unknown: lt500OrganicUnknown },
-        sponsored: { known: lt500Sponsored, unknown: lt500SponsoredUnknown },
-        all_page1: { known: lt500AllPage1, unknown: lt500AllPage1Unknown },
+        all: { known_count: lt500All, unknown_count: lt500AllUnknown },
+        organic: { known_count: lt500Organic, unknown_count: lt500OrganicUnknown },
+        sponsored: { known_count: lt500Sponsored, unknown_count: lt500SponsoredUnknown },
+        unknown_sponsored: { known_count: lt500UnknownSponsored, unknown_count: lt500UnknownSponsoredUnknown },
       },
       // Additional context for debugging
       ai_context_keys: ai ? Object.keys(ai) : [],
@@ -3462,3 +3479,4 @@ CRITICAL RULES FOR ESCALATED DATA:
     );
   }
 }
+

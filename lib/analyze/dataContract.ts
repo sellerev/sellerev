@@ -1441,27 +1441,38 @@ export async function buildKeywordAnalyzeResponse(
     return { count_known: countKnown, unknown };
   };
   
-  // Helper: Count products with review_count < threshold by scope
+  // Helper: Count products with review_count < threshold by scope (with unknown_sponsored segment)
   const countReviewsBelowByScope = (threshold: number): {
-    organic: { known: number; unknown: number };
-    sponsored: { known: number; unknown: number };
-    all_page1: { known: number; unknown: number };
+    all: { known_count: number; unknown_count: number };
+    organic: { known_count: number; unknown_count: number };
+    sponsored: { known_count: number; unknown_count: number };
+    unknown_sponsored: { known_count: number; unknown_count: number };
   } => {
+    let allKnown = 0;
+    let allUnknown = 0;
     let organicKnown = 0;
     let organicUnknown = 0;
     let sponsoredKnown = 0;
     let sponsoredUnknown = 0;
-    let allPage1Known = 0;
-    let allPage1Unknown = 0;
+    let unknownSponsoredKnown = 0;
+    let unknownSponsoredUnknown = 0;
     
     for (const p of products) {
+      // Explicit boolean checks (never truthy/falsy shortcuts)
       const isOrganic = p.is_sponsored === false;
       const isSponsored = p.is_sponsored === true;
-      const isAllPage1 = isOrganic || isSponsored; // Exclude null
+      const isUnknownSponsored = p.is_sponsored === null;
       
       const hasReviewCount = p.review_count !== null;
       const reviewCount = p.review_count ?? 0;
       const isBelowThreshold = hasReviewCount && reviewCount < threshold;
+      
+      // All scope (all listings regardless of sponsored status)
+      if (hasReviewCount && isBelowThreshold) {
+        allKnown++;
+      } else if (!hasReviewCount) {
+        allUnknown++;
+      }
       
       // Organic-only scope
       if (isOrganic) {
@@ -1481,20 +1492,21 @@ export async function buildKeywordAnalyzeResponse(
         }
       }
       
-      // All Page-1 scope (organic + sponsored, exclude null)
-      if (isAllPage1) {
+      // Unknown sponsored scope
+      if (isUnknownSponsored) {
         if (hasReviewCount && isBelowThreshold) {
-          allPage1Known++;
+          unknownSponsoredKnown++;
         } else if (!hasReviewCount) {
-          allPage1Unknown++;
+          unknownSponsoredUnknown++;
         }
       }
     }
     
     return {
-      organic: { known: organicKnown, unknown: organicUnknown },
-      sponsored: { known: sponsoredKnown, unknown: sponsoredUnknown },
-      all_page1: { known: allPage1Known, unknown: allPage1Unknown },
+      all: { known_count: allKnown, unknown_count: allUnknown },
+      organic: { known_count: organicKnown, unknown_count: organicUnknown },
+      sponsored: { known_count: sponsoredKnown, unknown_count: sponsoredUnknown },
+      unknown_sponsored: { known_count: unknownSponsoredKnown, unknown_count: unknownSponsoredUnknown },
     };
   };
   
@@ -1506,11 +1518,25 @@ export async function buildKeywordAnalyzeResponse(
     return sorted[Math.max(0, index)];
   };
   
-  // Unique ASINs count
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SEGMENTATION: Unique ASINs vs Total Appearances
+  // ═══════════════════════════════════════════════════════════════════════════
+  // page1_unique_asins = unique products (by ASIN)
+  // page1_total_appearances = raw listings length (includes duplicates if ASIN appears multiple times)
   const uniqueAsins = new Set(products.map(p => p.asin));
   const page1_unique_asins = uniqueAsins.size;
+  const page1_total_appearances = products.length;
   
-  // Sponsored counts
+  // Sponsored counts (by unique ASINs, not appearances)
+  const organicAsins = new Set(products.filter(p => p.is_sponsored === false).map(p => p.asin));
+  const sponsoredAsins = new Set(products.filter(p => p.is_sponsored === true).map(p => p.asin));
+  const unknownSponsoredAsins = new Set(products.filter(p => p.is_sponsored === null).map(p => p.asin));
+  
+  const organic_unique_asins = organicAsins.size;
+  const sponsored_unique_asins = sponsoredAsins.size;
+  const unknown_sponsored_unique_asins = unknownSponsoredAsins.size;
+  
+  // Sponsored counts (by appearances, for backward compatibility)
   const organic_count = products.filter(p => p.is_sponsored === false).length;
   const sponsored_count = products.filter(p => p.is_sponsored === true).length;
   const unknown_sponsored_count = products.filter(p => p.is_sponsored === null).length;
@@ -1636,19 +1662,41 @@ export async function buildKeywordAnalyzeResponse(
   // Build comprehensive computed_metrics
   const computedMetrics = {
     counts: {
-      page1_unique_asins: page1_unique_asins,
-      total_listings: products.length,
+      // Unique ASINs vs Total Appearances
+      page1_unique_asins: page1_unique_asins, // Unique products (by ASIN)
+      page1_total_appearances: page1_total_appearances, // Raw listings length (includes duplicates)
+      total_listings: products.length, // Alias for page1_total_appearances (backward compatibility)
+      
+      // By sponsored status (unique ASINs)
+      by_sponsored_status: {
+        organic_unique_asins: organic_unique_asins,
+        sponsored_unique_asins: sponsored_unique_asins,
+        unknown_sponsored_unique_asins: unknown_sponsored_unique_asins,
+      },
+      
+      // By sponsored status (appearances, backward compatibility)
       organic_count,
       sponsored_count,
       unknown_sponsored_count,
+      
+      // Review counts
       reviews_known_count,
       reviews_unknown_count,
+      
+      // Review thresholds (legacy, all scopes combined)
       products_lt_50_reviews: countReviewsBelow(50),
       products_lt_100_reviews: countReviewsBelow(100),
       products_lt_300_reviews: countReviewsBelow(300),
       products_lt_500_reviews: countReviewsBelow(500),
       products_lt_1000_reviews: countReviewsBelow(1000),
-      // Scope-specific lt500 counts (organic-only, sponsored-only, all_page1)
+      
+      // Review thresholds by segment (explicit segmentation)
+      review_thresholds: {
+        lt50: countReviewsBelowByScope(50),
+        lt500: countReviewsBelowByScope(500),
+      },
+      
+      // Legacy scope-specific lt500 (deprecated, use review_thresholds.lt500 instead)
       lt500: countReviewsBelowByScope(500),
     },
     rankings: {
@@ -1707,10 +1755,20 @@ export async function buildKeywordAnalyzeResponse(
   // Log computed_metrics for verification
   console.log("📊 COMPUTED_METRICS_BUILT", {
     keyword,
-    total_listings: computedMetrics.counts.total_listings,
+    // Unique ASINs vs Appearances
+    page1_unique_asins: computedMetrics.counts.page1_unique_asins,
+    page1_total_appearances: computedMetrics.counts.page1_total_appearances,
+    // By sponsored status (unique ASINs)
+    organic_unique_asins: computedMetrics.counts.by_sponsored_status.organic_unique_asins,
+    sponsored_unique_asins: computedMetrics.counts.by_sponsored_status.sponsored_unique_asins,
+    unknown_sponsored_unique_asins: computedMetrics.counts.by_sponsored_status.unknown_sponsored_unique_asins,
+    // Review thresholds
     reviews_known: computedMetrics.counts.reviews_known_count,
     reviews_unknown: computedMetrics.counts.reviews_unknown_count,
-    products_lt_500_reviews: computedMetrics.counts.products_lt_500_reviews.count_known,
+    lt500_all: computedMetrics.counts.review_thresholds.lt500.all,
+    lt500_organic: computedMetrics.counts.review_thresholds.lt500.organic,
+    lt500_sponsored: computedMetrics.counts.review_thresholds.lt500.sponsored,
+    lt500_unknown_sponsored: computedMetrics.counts.review_thresholds.lt500.unknown_sponsored,
     has_top_revenue: !!computedMetrics.rankings.top_revenue_product,
     has_top_reviews: !!computedMetrics.rankings.top_reviews_product,
     top1_revenue_share: computedMetrics.concentration.top1_revenue_share_pct,

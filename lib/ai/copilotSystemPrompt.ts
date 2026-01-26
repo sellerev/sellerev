@@ -232,8 +232,10 @@ No products are currently selected. Answer at Page-1 market level using aggregat
   // PHASE C: Updated to match comprehensive computed_metrics structure
   const computedMetrics = (ai_context.computed_metrics as {
     counts?: {
+      // Unique ASINs vs Total Appearances
       page1_unique_asins?: number;
-      total_listings?: number;
+      page1_total_appearances?: number;
+      total_listings?: number; // Alias for page1_total_appearances (backward compatibility)
       organic_count?: number;
       sponsored_count?: number;
       unknown_sponsored_count?: number;
@@ -244,7 +246,28 @@ No products are currently selected. Answer at Page-1 market level using aggregat
       products_lt_300_reviews?: { count_known: number; unknown: number };
       products_lt_500_reviews?: { count_known: number; unknown: number };
       products_lt_1000_reviews?: { count_known: number; unknown: number };
-      // Scope-specific lt500 counts (organic-only, sponsored-only, all_page1)
+      // By sponsored status (unique ASINs)
+      by_sponsored_status?: {
+        organic_unique_asins?: number;
+        sponsored_unique_asins?: number;
+        unknown_sponsored_unique_asins?: number;
+      };
+      // Review thresholds by segment (explicit segmentation)
+      review_thresholds?: {
+        lt50?: {
+          all: { known_count: number; unknown_count: number };
+          organic: { known_count: number; unknown_count: number };
+          sponsored: { known_count: number; unknown_count: number };
+          unknown_sponsored: { known_count: number; unknown_count: number };
+        };
+        lt500?: {
+          all: { known_count: number; unknown_count: number };
+          organic: { known_count: number; unknown_count: number };
+          sponsored: { known_count: number; unknown_count: number };
+          unknown_sponsored: { known_count: number; unknown_count: number };
+        };
+      };
+      // Legacy scope-specific lt500 (deprecated)
       lt500?: {
         organic: { known: number; unknown: number };
         sponsored: { known: number; unknown: number };
@@ -673,20 +696,21 @@ PATTERN 1: Rankings (argmax revenue, argmax reviews, argmin reviews, etc.)
 → Fallback: Compute from ai_context.products (argmax/argmin)
 
 PATTERN 2: Threshold counts (reviews < X, price > Y, revenue > Z)
-→ Use: computed_metrics.counts.* with unknown handling
+→ Use: computed_metrics.counts.review_thresholds.* with unknown handling
 → Examples:
-   - "How many products less than 500 reviews?" → Use computed_metrics.counts.lt500 for scope-specific counts
+   - "How many products less than 500 reviews?" → Use computed_metrics.counts.review_thresholds.lt500 for scope-specific counts
      Response format (MUST use scope-specific keys):
-     - If user asks "organic-only" or "organic": Use computed_metrics.counts.lt500.organic
-       "Organic-only: known X | unknown Y"
-     - If user asks "sponsored" or "ads": Use computed_metrics.counts.lt500.sponsored
-       "Sponsored-only: known X | unknown Y"
-     - If user asks "all" or "including sponsored" or doesn't specify: Use computed_metrics.counts.lt500.all_page1
-       "All Page-1 (organic+sponsored): known X | unknown Y"
-     - If unknown > 0, say: "Note: Y listings have unknown review counts, so this count may be incomplete."
+     - If user asks "organic-only" or "organic": Use computed_metrics.counts.review_thresholds.lt500.organic
+       "Organic-only: known_count X | unknown_count Y"
+     - If user asks "sponsored" or "ads" or "sponsored-only": Use computed_metrics.counts.review_thresholds.lt500.sponsored
+       "Sponsored-only: known_count X | unknown_count Y"
+     - If user asks "all" or "including sponsored" or doesn't specify: Use computed_metrics.counts.review_thresholds.lt500.all
+       "All Page-1: known_count X | unknown_count Y"
+     - If unknown_count > 0, say: "Note: Y listings have unknown review counts, so this count may be incomplete."
+   - "How many products less than 50 reviews?" → Use computed_metrics.counts.review_thresholds.lt50 (same scope rules)
    - "How many products less than 100 reviews?" → computed_metrics.counts.products_lt_100_reviews (legacy, all scopes)
-   - "How many products less than 50 reviews?" → computed_metrics.counts.products_lt_50_reviews (legacy, all scopes)
-→ Fallback: Filter ai_context.products by is_sponsored, count known values, report unknown_count separately
+→ Fallback: Filter ai_context.products by is_sponsored === true/false/null, count known values, report unknown_count separately
+→ CRITICAL: Use explicit boolean checks (is_sponsored === true/false/null), never truthy/falsy shortcuts
 
 PATTERN 3: Concentration / hero vs spread
 → Use: computed_metrics.concentration.top{1,3,5,10}_revenue_share_pct + revenue distribution
@@ -757,6 +781,42 @@ CRITICAL RULES FOR ALL PATTERNS:
 - Always answer the closest possible subquestion using available data
 - For count/filter queries, ALWAYS report: known_count and unknown_count
 - If unknown_count > 0, do NOT present the result as definitive
+- Use explicit boolean checks: is_sponsored === true/false/null (never truthy/falsy shortcuts like !!p.is_sponsored)
+
+═══════════════════════════════════════════════════════════════════════════
+VOCABULARY RULES (HARD - MUST FOLLOW)
+═══════════════════════════════════════════════════════════════════════════
+
+When user asks about counts, distinguish between:
+
+1. "unique ASINs" / "unique products" / "how many products"
+   → Use: computed_metrics.counts.page1_unique_asins
+   → This is the count of distinct ASINs on Page-1
+
+2. "total listings" / "total appearances" / "total placements" / "how many listings"
+   → Use: computed_metrics.counts.page1_total_appearances OR authoritative_facts.page1.total_listings
+   → This is the raw count of listings/appearances (may include duplicates if ASIN appears multiple times)
+
+3. If user is ambiguous (e.g., "how many total page-1 listings?"), return BOTH labeled values:
+   "Unique ASINs: X | Total appearances: Y"
+
+4. For sponsored status segmentation:
+   - "organic-only" / "organic" → Use computed_metrics.counts.by_sponsored_status.organic_unique_asins (for unique) or organic_count (for appearances)
+   - "sponsored-only" / "sponsored" / "ads" → Use computed_metrics.counts.by_sponsored_status.sponsored_unique_asins (for unique) or sponsored_count (for appearances)
+   - "all" / "including sponsored" → Use page1_unique_asins or page1_total_appearances
+
+═══════════════════════════════════════════════════════════════════════════
+CONSISTENCY CHECK RULE (HARD - MUST FOLLOW)
+═══════════════════════════════════════════════════════════════════════════
+
+When user asks whether A equals B+C (e.g., "Is total <500 equal to organic + sponsored?"):
+1. Compute the actual values from computed_metrics
+2. Compare: A === (B + C)
+3. Answer Yes/No correctly based on the math
+4. If Yes, say "Yes, [A] equals [B] + [C] = [sum]"
+5. If No, say "No, [A] does not equal [B] + [C]. [A] = [value], [B] + [C] = [sum]"
+6. DO NOT invent overlap explanations or other reasons - use the actual computed values
+7. If values are equal, answer Yes. If not equal, answer No and show the math.
 
 REVENUE & UNITS QUESTIONS (CRITICAL - NON-NEGOTIABLE):
 - Revenue and units questions MUST ALWAYS be answered using Page-1 snapshot estimates
