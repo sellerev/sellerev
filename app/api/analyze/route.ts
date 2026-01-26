@@ -3596,7 +3596,7 @@ export async function POST(req: NextRequest) {
           if (mergedListingsByAsin.size <= 3) {
             const fs = require('fs');
             const logPath = '/Users/Shane/Desktop/sellerev/.cursor/debug.log';
-            const logEntry = JSON.stringify({location:'route.ts:3594',message:'Building merge map from keywordMarketData',data:{asin:listing.asin,has_main_category_bsr:!!(listing as any).main_category_bsr,has_mainCategoryBsr:!!(listing as any).mainCategoryBsr,main_category_bsr:(listing as any).main_category_bsr,mainCategoryBsr:(listing as any).mainCategoryBsr,root_rank:(listing as any).root_rank},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'}) + '\n';
+            const logEntry = JSON.stringify({location:'route.ts:3594',message:'Building merge map from keywordMarketData',data:{asin:listing.asin,normalizedAsin:normalizeAsin(listing.asin),has_main_category_bsr:!!(listing as any).main_category_bsr,has_mainCategoryBsr:!!(listing as any).mainCategoryBsr,main_category_bsr:(listing as any).main_category_bsr,mainCategoryBsr:(listing as any).mainCategoryBsr,root_rank:(listing as any).root_rank},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'}) + '\n';
             try { fs.appendFileSync(logPath, logEntry); } catch(e) {}
           }
           // #endregion
@@ -3604,8 +3604,25 @@ export async function POST(req: NextRequest) {
       }
     }
     
+    // #region agent log
+    const fs = require('fs');
+    const logPath = '/Users/Shane/Desktop/sellerev/.cursor/debug.log';
+    const logEntry1 = JSON.stringify({location:'route.ts:3600',message:'Merge map and finalListings stats',data:{mergeMapSize:mergedListingsByAsin.size,finalListingsLength:finalListings.length,firstFinalListingAsin:finalListings[0]?.asin,firstFinalListingHasMainCategoryBsr:!!finalListings[0]?.main_category_bsr},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'}) + '\n';
+    try { fs.appendFileSync(logPath, logEntry1); } catch(e) {}
+    // #endregion
+    
     const listingsWithMergedFields = finalListings.map((listing: any) => {
       const asinKey = listing.asin ? normalizeAsin(listing.asin) : null;
+      
+      // #region agent log
+      if (listingsWithMergedFields.length < 5) {
+        const fs = require('fs');
+        const logPath = '/Users/Shane/Desktop/sellerev/.cursor/debug.log';
+        const logEntry = JSON.stringify({location:'route.ts:3602',message:'Processing listing in map',data:{asin:listing.asin,asinKey,listing_has_main_category_bsr:!!listing.main_category_bsr,listing_has_root_rank:!!listing.root_rank,listing_main_category_bsr:listing.main_category_bsr,listing_root_rank:listing.root_rank},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'}) + '\n';
+        try { fs.appendFileSync(logPath, logEntry); } catch(e) {}
+      }
+      // #endregion
+      
       if (!asinKey) {
         // Ensure fields are present even if no ASIN
         const mainCategoryBsrValue = listing.main_category_bsr ?? listing.root_rank ?? listing.bsr_root ?? null;
