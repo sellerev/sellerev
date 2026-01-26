@@ -2691,7 +2691,11 @@ CRITICAL RULES FOR ESCALATED DATA:
     const maxTokens = responseMode === "expanded" ? 700 : 300;
     
     // Sanity check: Log context before OpenAI call
-    const productsArray = (contextToUse.products as any[]) || (contextToUse.ai_context?.products as any[]) || (contextToUse.analyze_contract?.listings as any[]) || [];
+    // Products can be in analyze_contract.listings or legacy ai_context.products
+    const productsArray = (contextToUse.analyze_contract?.listings as any[]) || 
+                         ((contextToUse as any).ai_context?.products as any[]) || 
+                         ((contextToUse as any).products as any[]) || 
+                         [];
     const firstProductKeys = productsArray.length > 0 ? Object.keys(productsArray[0] || {}) : [];
     console.log("🔍 OPENAI_CONTEXT_SANITY_CHECK", {
       analysisRunId: body.analysisRunId,
@@ -2706,9 +2710,10 @@ CRITICAL RULES FOR ESCALATED DATA:
         estimated_monthly_revenue: productsArray[0]?.estimated_monthly_revenue,
       } : null,
       context_structure: {
-        has_products: !!contextToUse.products,
-        has_ai_context: !!contextToUse.ai_context,
         has_analyze_contract: !!contextToUse.analyze_contract,
+        has_analyze_contract_listings: !!(contextToUse.analyze_contract?.listings),
+        has_ai_context: !!(contextToUse as any).ai_context,
+        has_ai_context_products: !!((contextToUse as any).ai_context?.products),
         has_selected_asins: !!contextToUse.selected_asins,
       },
       timestamp: new Date().toISOString(),
