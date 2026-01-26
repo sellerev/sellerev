@@ -1476,34 +1476,34 @@ export async function buildKeywordAnalyzeResponse(
   } : null;
   
   // Concentration metrics
-  const revenue_total = products.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
-  const top1Revenue = rankedByRevenue.length > 0 ? rankedByRevenue[0].estimated_monthly_revenue : 0;
-  const top3Revenue = rankedByRevenue.slice(0, 3).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  const top5Revenue = rankedByRevenue.slice(0, 5).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
-  const top10Revenue = rankedByRevenue.slice(0, 10).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const computed_revenue_total = products.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
+  const computed_top1Revenue = rankedByRevenue.length > 0 ? rankedByRevenue[0].estimated_monthly_revenue : 0;
+  const computed_top3Revenue = rankedByRevenue.slice(0, 3).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const computed_top5Revenue = rankedByRevenue.slice(0, 5).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const computed_top10Revenue = rankedByRevenue.slice(0, 10).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
   
-  const top1_revenue_share_pct = revenue_total > 0 ? Number(((top1Revenue / revenue_total) * 100).toFixed(1)) : null;
-  const top3_revenue_share_pct = revenue_total > 0 ? Number(((top3Revenue / revenue_total) * 100).toFixed(1)) : null;
-  const top5_revenue_share_pct = revenue_total > 0 ? Number(((top5Revenue / revenue_total) * 100).toFixed(1)) : null;
-  const top10_revenue_share_pct = revenue_total > 0 ? Number(((top10Revenue / revenue_total) * 100).toFixed(1)) : null;
+  const top1_revenue_share_pct = computed_revenue_total > 0 ? Number(((computed_top1Revenue / computed_revenue_total) * 100).toFixed(1)) : null;
+  const top3_revenue_share_pct = computed_revenue_total > 0 ? Number(((computed_top3Revenue / computed_revenue_total) * 100).toFixed(1)) : null;
+  const top5_revenue_share_pct = computed_revenue_total > 0 ? Number(((computed_top5Revenue / computed_revenue_total) * 100).toFixed(1)) : null;
+  const top10_revenue_share_pct = computed_revenue_total > 0 ? Number(((computed_top10Revenue / computed_revenue_total) * 100).toFixed(1)) : null;
   
   // Price metrics
-  const prices = products.map(p => p.price).filter((p): p is number => p > 0);
-  const price_min = prices.length > 0 ? Math.min(...prices) : null;
-  const price_max = prices.length > 0 ? Math.max(...prices) : null;
-  const price_avg = prices.length > 0 ? prices.reduce((sum, p) => sum + p, 0) / prices.length : null;
-  const price_p25 = prices.length > 0 ? percentile(prices, 25) : null;
-  const price_p50 = prices.length > 0 ? percentile(prices, 50) : null;
-  const price_p75 = prices.length > 0 ? percentile(prices, 75) : null;
+  const computed_prices = products.map(p => p.price).filter((p): p is number => p > 0);
+  const price_min = computed_prices.length > 0 ? Math.min(...computed_prices) : null;
+  const price_max = computed_prices.length > 0 ? Math.max(...computed_prices) : null;
+  const price_avg = computed_prices.length > 0 ? computed_prices.reduce((sum, p) => sum + p, 0) / computed_prices.length : null;
+  const price_p25 = computed_prices.length > 0 ? percentile(computed_prices, 25) : null;
+  const price_p50 = computed_prices.length > 0 ? percentile(computed_prices, 50) : null;
+  const price_p75 = computed_prices.length > 0 ? percentile(computed_prices, 75) : null;
   
   // Revenue-weighted average price
-  const revenue_weighted_avg = revenue_total > 0
-    ? products.reduce((sum, p) => sum + (p.price * (p.estimated_monthly_revenue || 0)), 0) / revenue_total
+  const revenue_weighted_avg = computed_revenue_total > 0
+    ? products.reduce((sum, p) => sum + (p.price * (p.estimated_monthly_revenue || 0)), 0) / computed_revenue_total
     : null;
   
   // Dominant revenue price band (find price range that captures most revenue)
   let dominant_revenue_price_band: { min: number; max: number; revenue_share_pct: number } | null = null;
-  if (prices.length > 0 && revenue_total > 0) {
+  if (computed_prices.length > 0 && computed_revenue_total > 0) {
     // Group products into price bands and find the band with highest revenue
     const priceBands: Array<{ min: number; max: number; revenue: number }> = [];
     const bandSize = (price_max! - price_min!) / 5; // 5 bands
@@ -1516,7 +1516,7 @@ export async function buildKeywordAnalyzeResponse(
       priceBands.push({ min, max, revenue });
     }
     const dominantBand = priceBands.reduce((max, band) => band.revenue > max.revenue ? band : max, priceBands[0]);
-    const revenueSharePct = Number(((dominantBand.revenue / revenue_total) * 100).toFixed(1));
+    const revenueSharePct = Number(((dominantBand.revenue / computed_revenue_total) * 100).toFixed(1));
     if (revenueSharePct > 0) {
       dominant_revenue_price_band = {
         min: Number(dominantBand.min.toFixed(2)),
@@ -1593,13 +1593,13 @@ export async function buildKeywordAnalyzeResponse(
       products_lt_1000_reviews: countReviewsBelow(1000),
     },
     rankings: {
-      top_revenue_product: topRevenueProduct,
+    top_revenue_product: topRevenueProduct,
       top_units_product: topUnitsProduct,
-      top_reviews_product: topReviewsProduct,
+    top_reviews_product: topReviewsProduct,
       lowest_reviews_product: lowestReviewsProduct,
     },
     concentration: {
-      revenue_total,
+      revenue_total: computed_revenue_total,
       top1_revenue_share_pct,
       top3_revenue_share_pct,
       top5_revenue_share_pct,
@@ -1630,7 +1630,7 @@ export async function buildKeywordAnalyzeResponse(
       dispersion: ratings_dispersion,
     },
     categories: {
-      dominant_subcategory: subcategoryDominance.length > 0 ? subcategoryDominance[0] : null,
+    dominant_subcategory: subcategoryDominance.length > 0 ? subcategoryDominance[0] : null,
       subcategory_top3: subcategoryDominance,
     },
     fulfillment: {
