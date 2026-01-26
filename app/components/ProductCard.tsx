@@ -3,6 +3,35 @@
 import { useState, useEffect, useRef } from "react";
 import { Star, Image as ImageIcon, Check, Copy, ExternalLink } from "lucide-react";
 
+// #region agent log - Ingest URL helper
+const getIngestUrl = () => {
+  const runId = 'b2409008-55ce-444e-a877-70d07cb89a85';
+  const envUrl = process.env.NEXT_PUBLIC_INGEST_BASE_URL;
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  let baseUrl: string;
+  if (envUrl) {
+    baseUrl = envUrl;
+  } else if (isProduction) {
+    // Production must use relative path or env var - never localhost
+    baseUrl = '/api/ingest';
+  } else {
+    // Development: use relative path
+    baseUrl = '/api/ingest';
+  }
+  
+  const fullUrl = `${baseUrl}/${runId}`;
+  
+  // Log once on first call
+  if (!(window as any).__ingestUrlLogged) {
+    console.log('🔍 Ingest URL resolved:', { baseUrl, fullUrl, isProduction, hasEnvVar: !!envUrl });
+    (window as any).__ingestUrlLogged = true;
+  }
+  
+  return fullUrl;
+};
+// #endregion
+
 interface ProductCardProps {
   rank: number;
   title: string | null;
@@ -90,7 +119,7 @@ export function ProductCard({
       });
       
       // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProductCard.tsx:84',message:'ProductCard props received',data:{asin,bsr,mainCategoryBsr,rootRank,bsrRoot,computed_mainBsr:mainCategoryBsr ?? rootRank ?? bsrRoot ?? null,has_mainCategoryBsr:!!mainCategoryBsr,has_rootRank:!!rootRank,has_bsrRoot:!!bsrRoot},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'})}).catch(()=>{});
+      fetch(getIngestUrl(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProductCard.tsx:84',message:'ProductCard props received',data:{asin,bsr,mainCategoryBsr,rootRank,bsrRoot,computed_mainBsr:mainCategoryBsr ?? rootRank ?? bsrRoot ?? null,has_mainCategoryBsr:!!mainCategoryBsr,has_rootRank:!!rootRank,has_bsrRoot:!!bsrRoot},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'})}).catch(()=>{});
       // #endregion
     }
   }, [asin, bsr, mainCategoryBsr, rootRank, bsrRoot]);
