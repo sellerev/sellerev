@@ -2523,8 +2523,53 @@ export async function POST(req: NextRequest) {
       executive_summary: analysisResponse.executive_summary as string | undefined,
     } : undefined;
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PHASE B FIX: Normalize ai_context to ensure it's the actual ai_context object
+    // ═══════════════════════════════════════════════════════════════════════════
+    // The copilot expects copilotContext.ai_context to be the actual ai_context object
+    // with keys: mode, keyword, products, computed_metrics, authoritative_facts, etc.
+    // NOT the wrapper object (contextToUse) which contains analyze_contract, selected_asins, etc.
+    let aiContextToUse: Record<string, unknown> | null = null;
+    
+    // Safe "mode exists" check to find the actual ai_context object
+    if ((contextToUse as any).ai_context?.mode) {
+      // ai_context is nested inside contextToUse
+      aiContextToUse = (contextToUse as any).ai_context as Record<string, unknown>;
+    } else if ((contextToUse as any).mode) {
+      // contextToUse IS the ai_context object (legacy path)
+      aiContextToUse = contextToUse as Record<string, unknown>;
+    } else {
+      // Try to extract from aiContext variable (from analysisResponse)
+      if (aiContext && typeof aiContext === 'object' && (aiContext as any).mode) {
+        aiContextToUse = aiContext as Record<string, unknown>;
+      } else {
+        // Hard error - log and throw
+        console.error("❌ AI_CONTEXT_NORMALIZATION_FAILED", {
+          analysisRunId: body.analysisRunId,
+          contextToUse_keys: Object.keys(contextToUse),
+          has_ai_context_nested: !!(contextToUse as any).ai_context,
+          has_mode_in_contextToUse: !!(contextToUse as any).mode,
+          has_aiContext: !!aiContext,
+          aiContext_keys: aiContext ? Object.keys(aiContext) : [],
+        });
+        // Don't throw - allow it to continue but log the error
+        // The copilot will work with whatever data is available
+        aiContextToUse = (contextToUse as any).ai_context || contextToUse || {};
+      }
+    }
+    
+    console.log("🔍 AI_CONTEXT_NORMALIZED", {
+      analysisRunId: body.analysisRunId,
+      has_aiContextToUse: !!aiContextToUse,
+      aiContextToUse_keys: aiContextToUse ? Object.keys(aiContextToUse) : [],
+      has_mode: !!(aiContextToUse as any)?.mode,
+      has_products: Array.isArray((aiContextToUse as any)?.products),
+      products_count: Array.isArray((aiContextToUse as any)?.products) ? (aiContextToUse as any).products.length : 0,
+      has_computed_metrics: !!(aiContextToUse as any)?.computed_metrics,
+    });
+    
     const copilotContext = {
-      ai_context: contextToUse,
+      ai_context: aiContextToUse || {}, // Use normalized ai_context, not the wrapper
       seller_memory: sellerMemory,
       structured_memories: structuredMemories, // New structured memory system
       seller_profile_version: sellerProfile.updated_at || null, // Include profile version for context
@@ -2590,6 +2635,12 @@ CRITICAL RULES:
       }
     }
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PHASE B FIX: Ensure messages[0].content is updated if systemPrompt was mutated
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Note: messages array is created later, but we need to ensure systemPrompt
+    // is the final version when messages[0] is created
+    
     // Log AI reasoning inputs for audit/debugging
     // FIX (History context): ai_context may be missing on older analysis runs, but the analysis_run_id
     // still represents valid grounded context (Page-1 snapshot + response JSON).
@@ -2621,8 +2672,12 @@ CRITICAL RULES:
     // AI Copilot prompt is self-contained with ai_context + seller_memory
     // No need for separate context injection - everything is in the system prompt
     // Chat stays quiet by default - no initial greeting, only respond when user asks
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PHASE B FIX: Ensure systemPrompt is the final version (after escalation mutations)
+    // ═══════════════════════════════════════════════════════════════════════════
     const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       // System prompt: Contains locked behavior contract + ai_context + seller_memory
+      // CRITICAL: Use final systemPrompt (after escalation mutations if any)
       { role: "system", content: systemPrompt },
     ];
     
@@ -2717,56 +2772,50 @@ CRITICAL RULES FOR ESCALATED DATA:
     // Determine max_tokens based on response mode
     const maxTokens = responseMode === "expanded" ? 700 : 300;
     
-    // Sanity check: Log context before OpenAI call
-    // Products can be in analyze_contract.listings or legacy ai_context.products
-    const productsArray = (contextToUse.analyze_contract?.listings as any[]) || 
-                         ((contextToUse as any).ai_context?.products as any[]) || 
-                         ((contextToUse as any).products as any[]) || 
-                         [];
-    const firstProductKeys = productsArray.length > 0 ? Object.keys(productsArray[0] || {}) : [];
     // ═══════════════════════════════════════════════════════════════════════════
-    // PHASE B FIX: Updated sanity check to validate exact booleans
+    // PHASE B FIX: Updated sanity check to inspect ONLY copilotContext.ai_context
     // ═══════════════════════════════════════════════════════════════════════════
-    const aiContextForCheck = (contextToUse as any).ai_context;
-    const computedMetrics = aiContextForCheck?.computed_metrics;
+    // Inspect ONLY copilotContext.ai_context (not any wrapper)
+    const ai = copilotContext.ai_context as Record<string, unknown> | null;
+    const productsArray = Array.isArray(ai?.products) ? (ai.products as any[]) : [];
+    const computedMetrics = ai?.computed_metrics as Record<string, unknown> | undefined;
     
     // Validate exact booleans as required
-    const has_ai_context = !!aiContextForCheck;
-    const has_ai_context_products = Array.isArray(aiContextForCheck?.products) && aiContextForCheck.products.length > 0;
+    const has_ai_context = !!ai;
+    const has_ai_context_products = Array.isArray(ai?.products) && productsArray.length > 0;
     const has_computed_metrics = !!computedMetrics;
+    
+    // Server-side count verification: count products with review_count < 500
+    const lt500 = productsArray.filter((p: any) => 
+      typeof p.review_count === 'number' && p.review_count < 500
+    ).length;
+    
+    const firstProductSample = productsArray.length > 0 ? {
+      asin: productsArray[0]?.asin,
+      title: productsArray[0]?.title?.substring(0, 50) || null,
+      review_count: productsArray[0]?.review_count ?? null,
+      estimated_monthly_revenue: productsArray[0]?.estimated_monthly_revenue ?? null,
+    } : null;
     
     console.log("🔍 OPENAI_CONTEXT_SANITY_CHECK", {
       analysisRunId: body.analysisRunId,
       userId: user.id,
+      // Inspect ONLY copilotContext.ai_context
+      has_ai_context,
+      has_ai_context_products,
+      has_computed_metrics,
+      computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
+      // Product counts
       products_count: productsArray.length,
-      first_product_keys: firstProductKeys,
-      first_product_sample: productsArray.length > 0 ? {
-        asin: productsArray[0]?.asin,
-        title: productsArray[0]?.title?.substring(0, 50),
-        price: productsArray[0]?.price,
-        review_count: productsArray[0]?.review_count,
-        estimated_monthly_revenue: productsArray[0]?.estimated_monthly_revenue,
-      } : null,
-      context_structure: {
-        has_analyze_contract: !!contextToUse.analyze_contract,
-        has_analyze_contract_listings: !!(contextToUse.analyze_contract?.listings),
-        // PHASE B: Exact boolean validation
-        has_ai_context,
-        has_ai_context_products,
-        has_computed_metrics,
-        computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
-        has_selected_asins: !!contextToUse.selected_asins,
-      },
-      computed_metrics: computedMetrics ? {
-        has_top_revenue: !!computedMetrics.top_revenue_product,
-        has_top_reviews: !!computedMetrics.top_reviews_product,
-        has_dominant_subcategory: !!computedMetrics.dominant_subcategory,
-      } : null,
-      system_prompt_checks: {
-        includes_computed_metrics_priority: systemPrompt.includes("COMPUTED METRICS PRIORITY"),
-        includes_derived_metrics_allowed: systemPrompt.includes("DERIVED METRICS ALLOWED"),
-      },
-      timestamp: new Date().toISOString(),
+      first_product_sample: firstProductSample,
+      // Server-side verification count
+      lt500_count: lt500,
+      // Additional context for debugging
+      ai_context_keys: ai ? Object.keys(ai) : [],
+      has_mode: !!(ai as any)?.mode,
+      has_keyword: !!(ai as any)?.keyword,
+      has_authoritative_facts: !!(ai as any)?.authoritative_facts,
+      has_page1_market_summary: !!(ai as any)?.page1_market_summary,
     });
     
     const openaiResponse = await fetch(
