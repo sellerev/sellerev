@@ -2651,6 +2651,12 @@ CRITICAL RULES FOR ESCALATED DATA:
 6. Use only the data present in the single response object
 7. ALWAYS answer the user's question using the escalated product data provided above - never refuse even if specific field is missing
 8. You MUST explicitly reference at least 2 concrete fields from the escalated product payload(s) (e.g., price, rating, reviews_total, bsr, bought_last_month) when answering. If the payload lacks usable fields, say so explicitly and state what was missing.`;
+      
+      // CRITICAL: Update the system message in messages array after modifying systemPrompt
+      // The messages array was already built, so we need to update it
+      if (messages.length > 0 && messages[0].role === "system") {
+        messages[0].content = systemPrompt;
+      }
     }
     
     // 12. Append the new user message
@@ -2683,6 +2689,30 @@ CRITICAL RULES FOR ESCALATED DATA:
 
     // Determine max_tokens based on response mode
     const maxTokens = responseMode === "expanded" ? 700 : 300;
+    
+    // Sanity check: Log context before OpenAI call
+    const productsArray = (contextToUse.products as any[]) || (contextToUse.ai_context?.products as any[]) || (contextToUse.analyze_contract?.listings as any[]) || [];
+    const firstProductKeys = productsArray.length > 0 ? Object.keys(productsArray[0] || {}) : [];
+    console.log("🔍 OPENAI_CONTEXT_SANITY_CHECK", {
+      analysisRunId: body.analysisRunId,
+      userId: user.id,
+      products_count: productsArray.length,
+      first_product_keys: firstProductKeys,
+      first_product_sample: productsArray.length > 0 ? {
+        asin: productsArray[0]?.asin,
+        title: productsArray[0]?.title?.substring(0, 50),
+        price: productsArray[0]?.price,
+        review_count: productsArray[0]?.review_count,
+        estimated_monthly_revenue: productsArray[0]?.estimated_monthly_revenue,
+      } : null,
+      context_structure: {
+        has_products: !!contextToUse.products,
+        has_ai_context: !!contextToUse.ai_context,
+        has_analyze_contract: !!contextToUse.analyze_contract,
+        has_selected_asins: !!contextToUse.selected_asins,
+      },
+      timestamp: new Date().toISOString(),
+    });
     
     const openaiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",

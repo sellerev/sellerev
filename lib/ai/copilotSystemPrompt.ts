@@ -246,6 +246,23 @@ No products are currently selected. Answer at Page-1 market level using aggregat
       highest_units_asin?: string | null;
       lowest_review_asin?: string | null;
       highest_review_asin?: string | null;
+      // Precomputed product details (for direct AI consumption)
+      top_revenue_product?: {
+        asin: string;
+        title: string | null;
+        estimated_monthly_revenue: number;
+      } | null;
+      top_reviews_product?: {
+        asin: string;
+        title: string | null;
+        review_count: number;
+      } | null;
+      subcategory_dominance_top3?: Array<{
+        subcategory_name: string;
+        asin_count: number;
+        revenue_sum: number;
+        revenue_share_pct: number;
+      }>;
     };
     confidence?: {
       data_completeness_score?: number;
@@ -323,7 +340,14 @@ Rankings:
 ${authoritativeFacts.rankings.highest_revenue_asin ? `- Highest revenue ASIN: ${authoritativeFacts.rankings.highest_revenue_asin}` : ''}
 ${authoritativeFacts.rankings.highest_units_asin ? `- Highest units ASIN: ${authoritativeFacts.rankings.highest_units_asin}` : ''}
 ${authoritativeFacts.rankings.lowest_review_asin ? `- Lowest review ASIN: ${authoritativeFacts.rankings.lowest_review_asin}` : ''}
-${authoritativeFacts.rankings.highest_review_asin ? `- Highest review ASIN: ${authoritativeFacts.rankings.highest_review_asin}` : ''}` : ''}
+${authoritativeFacts.rankings.highest_review_asin ? `- Highest review ASIN: ${authoritativeFacts.rankings.highest_review_asin}` : ''}
+${authoritativeFacts.rankings.top_revenue_product ? `- Top Revenue Product: ASIN ${authoritativeFacts.rankings.top_revenue_product.asin} | Title: ${authoritativeFacts.rankings.top_revenue_product.title || 'N/A'} | Estimated Monthly Revenue: $${authoritativeFacts.rankings.top_revenue_product.estimated_monthly_revenue.toLocaleString()} (estimated)` : ''}
+${authoritativeFacts.rankings.top_reviews_product ? `- Top Reviews Product: ASIN ${authoritativeFacts.rankings.top_reviews_product.asin} | Title: ${authoritativeFacts.rankings.top_reviews_product.title || 'N/A'} | Review Count: ${authoritativeFacts.rankings.top_reviews_product.review_count.toLocaleString()}` : ''}
+${authoritativeFacts.rankings.subcategory_dominance_top3 && authoritativeFacts.rankings.subcategory_dominance_top3.length > 0 ? `
+Subcategory Dominance (Top 3):
+${authoritativeFacts.rankings.subcategory_dominance_top3.map((sub, idx) => 
+  `${idx + 1}. ${sub.subcategory_name}: ${sub.asin_count} listings, $${sub.revenue_sum.toLocaleString()} estimated monthly revenue (${sub.revenue_share_pct}% of total)`
+).join('\n')}` : ''}` : ''}
 ${authoritativeFacts.confidence ? `
 Data Confidence:
 - Data completeness score: ${authoritativeFacts.confidence.data_completeness_score ?? 'N/A'}/100
@@ -462,6 +486,52 @@ No data → no differentiation advice.
 ---
 
 You MUST NEVER refuse to answer due to missing metrics (unless the metric is a factual value that must come from authoritative_facts).
+
+═══════════════════════════════════════════════════════════════════════════
+DERIVED METRICS ALLOWED (CRITICAL - NEVER SAY "NOT IN SCOPE")
+═══════════════════════════════════════════════════════════════════════════
+
+The assistant may compute derived metrics from ai_context.products or ai_context.page_one_listings:
+- max/min values (e.g., highest revenue, lowest price)
+- counts (e.g., how many products have > 1000 reviews)
+- sorting (e.g., products sorted by revenue descending)
+- filtering (e.g., products with price < $20)
+- group-by counts (e.g., count products by subcategory)
+- group-by revenue sum/share (e.g., total revenue per subcategory)
+
+CRITICAL RULES:
+1. The assistant MUST use only the listings the seller sees (the arrays in ai_context.products or ai_context.page_one_listings)
+2. Only refuse if required fields are missing/null for ALL items in the array
+3. If some items have the field and others don't, compute using available data
+4. NEVER say "not in scope" if the answer is computable from the listings array
+
+EXPLICIT RECIPES FOR COMMON QUESTIONS:
+
+1. "Which product is pulling in the most revenue?" → argmax revenue
+   - Find product with highest estimated_monthly_revenue in ai_context.products
+   - Response format: "ASIN: [asin] | Title: [title] | Estimated Monthly Revenue: $[value] (estimated)"
+   - If multiple products tied, list all tied products
+
+2. "Which product has the highest review count?" → argmax review_count
+   - Find product with highest review_count in ai_context.products
+   - Response format: "ASIN: [asin] | Title: [title] | Review Count: [value]"
+   - If multiple products tied, list all tied products
+
+3. "Which subcategory is most dominant?" → group by subcategory_name, rank by listing count; break ties by revenue sum
+   - Group products by subcategory_name (or category field if subcategory_name missing)
+   - Count listings per subcategory
+   - Calculate revenue sum per subcategory
+   - Rank by listing count (descending), break ties by revenue sum (descending)
+   - Response format: "Top subcategory: [name] with [count] listings and $[revenue_sum] estimated monthly revenue ([revenue_share_pct]% of total)"
+   - If subcategory_name is missing for all products, say "Subcategory data is not available for these listings"
+
+CITATION STYLE (MANDATORY):
+- Always cite: ASIN + title + the numeric value
+- Label estimates as "estimated" (e.g., "estimated monthly revenue", "estimated monthly units")
+- Example: "ASIN: B0XXX | Title: Product Name | Estimated Monthly Revenue: $12,500 (estimated)"
+- Example: "ASIN: B0YYY | Title: Another Product | Review Count: 3,478"
+
+If authoritative_facts.rankings contains precomputed values (top_revenue_product, top_reviews_product, subcategory_dominance_top3), use those directly instead of computing.
 
 REVENUE & UNITS QUESTIONS (CRITICAL - NON-NEGOTIABLE):
 - Revenue and units questions MUST ALWAYS be answered using Page-1 snapshot estimates

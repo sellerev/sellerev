@@ -61,6 +61,23 @@ export interface AuthoritativeFacts {
     highest_units_asin?: string | null;
     lowest_review_asin?: string | null;
     highest_review_asin?: string | null;
+    // Precomputed product details (for direct AI consumption)
+    top_revenue_product?: {
+      asin: string;
+      title: string | null;
+      estimated_monthly_revenue: number;
+    } | null;
+    top_reviews_product?: {
+      asin: string;
+      title: string | null;
+      review_count: number;
+    } | null;
+    subcategory_dominance_top3?: Array<{
+      subcategory_name: string;
+      asin_count: number;
+      revenue_sum: number;
+      revenue_share_pct: number;
+    }>;
   };
   confidence: {
     data_completeness_score: number;        // 0–100
@@ -1289,6 +1306,67 @@ export async function buildKeywordAnalyzeResponse(
     ? Number((((page1MarketSummary.price_max - page1MarketSummary.price_min) / summary.avg_price) * 100).toFixed(1))
     : null;
   
+  // Precompute top revenue product (for direct AI consumption)
+  const topRevenueProduct = rankedByRevenue.length > 0 ? {
+    asin: rankedByRevenue[0].asin,
+    title: rankedByRevenue[0].title,
+    estimated_monthly_revenue: rankedByRevenue[0].estimated_monthly_revenue,
+  } : null;
+  
+  // Precompute top reviews product (for direct AI consumption)
+  const topReviewsProduct = rankedByReviewsDesc.length > 0 ? {
+    asin: rankedByReviewsDesc[0].asin,
+    title: rankedByReviewsDesc[0].title,
+    review_count: rankedByReviewsDesc[0].review_count,
+  } : null;
+  
+  // Precompute subcategory dominance (group by subcategory_name, rank by listing count, break ties by revenue sum)
+  const subcategoryGroups = new Map<string, {
+    subcategory_name: string;
+    asins: Array<{ asin: string; revenue: number }>;
+  }>();
+  
+  for (const product of products) {
+    const subcategory = (product as any).subcategory_name || (product as any).subcategoryName || (product as any).category || null;
+    if (subcategory && typeof subcategory === 'string') {
+      if (!subcategoryGroups.has(subcategory)) {
+        subcategoryGroups.set(subcategory, {
+          subcategory_name: subcategory,
+          asins: [],
+        });
+      }
+      subcategoryGroups.get(subcategory)!.asins.push({
+        asin: product.asin,
+        revenue: product.estimated_monthly_revenue || 0,
+      });
+    }
+  }
+  
+  // Calculate subcategory dominance metrics
+  const subcategoryDominance = Array.from(subcategoryGroups.values())
+    .map(group => {
+      const asinCount = group.asins.length;
+      const revenueSum = group.asins.reduce((sum, item) => sum + item.revenue, 0);
+      const totalRevenue = products.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
+      const revenueSharePct = totalRevenue > 0 ? Number(((revenueSum / totalRevenue) * 100).toFixed(1)) : 0;
+      
+      return {
+        subcategory_name: group.subcategory_name,
+        asin_count: asinCount,
+        revenue_sum: revenueSum,
+        revenue_share_pct: revenueSharePct,
+      };
+    })
+    .sort((a, b) => {
+      // Primary sort: listing count (descending)
+      if (b.asin_count !== a.asin_count) {
+        return b.asin_count - a.asin_count;
+      }
+      // Tie-breaker: revenue sum (descending)
+      return b.revenue_sum - a.revenue_sum;
+    })
+    .slice(0, 3); // Top 3
+  
   // Calculate confidence scores (simplified - can be enhanced with actual data quality metrics)
   const totalListings = products.length;
   const listingsWithRainforestData = products.filter(p => p.title !== null).length;
@@ -1316,6 +1394,10 @@ export async function buildKeywordAnalyzeResponse(
       highest_units_asin: rankedByUnits.length > 0 ? rankedByUnits[0].asin : null,
       lowest_review_asin: rankedByReviewsAsc.length > 0 ? rankedByReviewsAsc[0].asin : null,
       highest_review_asin: rankedByReviewsDesc.length > 0 ? rankedByReviewsDesc[0].asin : null,
+      // Precomputed product details (for direct AI consumption)
+      top_revenue_product: topRevenueProduct,
+      top_reviews_product: topReviewsProduct,
+      subcategory_dominance_top3: subcategoryDominance.length > 0 ? subcategoryDominance : undefined,
     },
     confidence: {
       data_completeness_score: dataCompletenessScore,
