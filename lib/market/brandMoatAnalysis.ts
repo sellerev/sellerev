@@ -30,7 +30,7 @@ export interface BrandMoatResult {
 export interface PageOneListing {
   brand: string | null;
   estimated_monthly_revenue: number;
-  review_count: number;
+  review_count: number | null; // Null if missing from Rainforest, never invented
   rank: number | null; // Page-1 position (lower is better)
   page_position?: number | null; // Alternative to rank
 }
