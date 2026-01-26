@@ -1427,6 +1427,20 @@ export async function buildKeywordAnalyzeResponse(
   // All metrics derived from canonical Page-1 array (products)
   // Missing values are null, never invented
   
+  // Helper: Count products with review_count < threshold (known only, all scopes)
+  const countReviewsBelow = (threshold: number): { count_known: number; unknown: number } => {
+    let countKnown = 0;
+    let unknown = 0;
+    for (const p of products) {
+      if (p.review_count === null) {
+        unknown++;
+      } else if (p.review_count < threshold) {
+        countKnown++;
+      }
+    }
+    return { count_known: countKnown, unknown };
+  };
+  
   // Helper: Count products with review_count < threshold by scope
   const countReviewsBelowByScope = (threshold: number): {
     organic: { known: number; unknown: number };
