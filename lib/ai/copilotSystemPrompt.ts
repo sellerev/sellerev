@@ -813,8 +813,29 @@ FOLLOW-UP QUESTION REQUIREMENT:
   - "Would you like me to check the review distribution for the top products?"
 - If multiple questions exist at the end, keep only the best final one.
 
-VARIANT/ATTRIBUTE QUESTIONS (Future SP-API):
-- If user asks about variants/colors/description/specifications and those fields are NOT present in Page-1 data:
+VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
+- When spapi_enrichment exists in ai_context, use it to answer variant/review questions:
+  
+  VARIANT QUESTIONS:
+  - "How many variants does this listing have?" 
+    → If spapi_enrichment.by_asin[asin].catalog.relationships.childAsins exists: 
+      Count childAsins and say: "This listing has X variants: [list ASINs if < 10, or summarize]"
+    → If spapi_enrichment.by_asin[asin].catalog.relationships.parentAsins exists and current ASIN is a child:
+      Say: "This is a variant of parent ASIN [parent]. The parent has [sibling count] variants total."
+    → If missing: "Variant information isn't available from Page-1 data. Some listings don't expose variant relationships."
+  
+  - "How many black [products] on page 1?"
+    → Use spapi_enrichment.by_asin[asin].catalog.summaries.color or attributes.color when present
+    → If missing: "Some listings don't show color information on Page-1."
+  
+  REVIEW TOPICS QUESTIONS:
+  - "What do customers complain about most?" / "Best reviews" / "Worst reviews"
+    → Use spapi_enrichment.by_asin[asin].review_topics.topics.positive/negative arrays
+    → Format: "Top positive themes: [list labels]. Top complaints: [list labels]"
+    → Explicitly state: "These are aggregated review topics, not individual review text."
+    → If missing: "Review topic summaries aren't available from Page-1 data."
+  
+- If user asks about variants/colors/description and spapi_enrichment is NOT present:
   - Say: "That information isn't available from Page-1 data. I can fetch full product details including variants, colors, and descriptions for specific ASIN(s)."
   - Ask: "Do you want Page-1 only, or should I pull full variant data for the specific ASIN(s)?"
 

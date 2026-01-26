@@ -2132,6 +2132,32 @@ export async function POST(req: NextRequest) {
       max_daily_credits: 50,
     };
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ENRICHMENT DECISION (SP-API enrichment for variants/review topics)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Separate from Rainforest escalation - doesn't use credits
+    const normalizedQuestion = body.message.toLowerCase();
+    const variantsIntent = /variants?|variations?|sizes?|colors?|which variant|how many variants/i.test(body.message);
+    const reviewInsightsIntent = /best reviews|worst reviews|what do customers like|complaints|pros and cons|review topics|what customers complain/i.test(body.message);
+    
+    const requiresEnrichment = (variantsIntent || reviewInsightsIntent) && selectedAsins.length > 0;
+    const enrichmentAsins = requiresEnrichment ? selectedAsins.slice(0, 5) : []; // Cap at 5 ASINs
+    const enrichmentTypes: Array<'catalog' | 'reviewTopics'> = [];
+    if (requiresEnrichment) {
+      if (variantsIntent) enrichmentTypes.push('catalog');
+      if (reviewInsightsIntent) enrichmentTypes.push('reviewTopics');
+    }
+    
+    console.log("ENRICHMENT_DECISION", {
+      analysisRunId: body.analysisRunId,
+      requires_enrichment: requiresEnrichment,
+      variants_intent: variantsIntent,
+      review_insights_intent: reviewInsightsIntent,
+      selected_asins: selectedAsins,
+      enrichment_asins: enrichmentAsins,
+      enrichment_types: enrichmentTypes,
+    });
+
     // Pass 1: decide escalation WITHOUT hitting credits DB (fast, and does not block history chat).
     let escalationDecision = decideEscalation(
       body.message,
@@ -2458,16 +2484,85 @@ export async function POST(req: NextRequest) {
       matched_asins: selectedAsinsArray.map(p => p.asin),
     });
     
-    // 8c. Inject selected_asins into ai_context
     // ═══════════════════════════════════════════════════════════════════════════
-    // Add selected_asins to ai_context so the AI can reference them in answers
+    // SP-API ENRICHMENT EXECUTION (for variants/review topics)
+    // ═══════════════════════════════════════════════════════════════════════════
+    let spapiEnrichment: {
+      executed: boolean;
+      asins: string[];
+      by_asin: Record<string, {
+        catalog: any | null;
+        review_topics: any | null;
+        errors: string[];
+      }>;
+    } | null = null;
+    
+    if (requiresEnrichment && enrichmentAsins.length > 0) {
+      const { getCatalogItemEnrichment, getReviewTopics } = await import("@/lib/spapi/enrichment");
+      const marketplaceId = "ATVPDKIKX0DER"; // US marketplace
+      
+      spapiEnrichment = {
+        executed: true,
+        asins: enrichmentAsins,
+        by_asin: {},
+      };
+      
+      // Fetch enrichment for each ASIN
+      for (const asin of enrichmentAsins) {
+        const errors: string[] = [];
+        let catalog: any | null = null;
+        let reviewTopics: any | null = null;
+        
+        try {
+          if (enrichmentTypes.includes('catalog')) {
+            catalog = await getCatalogItemEnrichment(asin, marketplaceId, user.id);
+            if (!catalog) {
+              errors.push("Catalog enrichment failed");
+            }
+          }
+        } catch (error) {
+          errors.push(`Catalog enrichment error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        
+        try {
+          if (enrichmentTypes.includes('reviewTopics')) {
+            reviewTopics = await getReviewTopics(asin, marketplaceId, user.id);
+            if (!reviewTopics) {
+              errors.push("Review topics enrichment failed");
+            }
+          }
+        } catch (error) {
+          errors.push(`Review topics enrichment error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        
+        spapiEnrichment.by_asin[asin] = {
+          catalog,
+          review_topics: reviewTopics,
+          errors,
+        };
+      }
+      
+      console.log("SP_API_ENRICHMENT_COMPLETE", {
+        analysisRunId: body.analysisRunId,
+        asins: enrichmentAsins,
+        enrichment_types: enrichmentTypes,
+        success_count: Object.values(spapiEnrichment.by_asin).filter(v => v.catalog || v.review_topics).length,
+        error_count: Object.values(spapiEnrichment.by_asin).reduce((sum, v) => sum + v.errors.length, 0),
+      });
+    }
+    
+    // 8c. Inject selected_asins and enrichment into ai_context
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Add selected_asins and spapi_enrichment to ai_context so the AI can reference them in answers
     const aiContextWithSelectedAsins = aiContext 
       ? {
           ...aiContext,
           selected_asins: selectedAsinsArray,
+          ...(spapiEnrichment ? { spapi_enrichment: spapiEnrichment } : {}),
         }
       : {
           selected_asins: selectedAsinsArray,
+          ...(spapiEnrichment ? { spapi_enrichment: spapiEnrichment } : {}),
         };
     
     // 8d. Determine response mode (concise by default, expanded if user requests)
@@ -2558,6 +2653,13 @@ export async function POST(req: NextRequest) {
       }
     }
     
+    // Ensure spapi_enrichment is included in ai_context if it exists
+    if (spapiEnrichment && aiContextToUse) {
+      aiContextToUse.spapi_enrichment = spapiEnrichment;
+    } else if (spapiEnrichment && !aiContextToUse) {
+      aiContextToUse = { spapi_enrichment: spapiEnrichment };
+    }
+    
     console.log("🔍 AI_CONTEXT_NORMALIZED", {
       analysisRunId: body.analysisRunId,
       has_aiContextToUse: !!aiContextToUse,
@@ -2566,6 +2668,7 @@ export async function POST(req: NextRequest) {
       has_products: Array.isArray((aiContextToUse as any)?.products),
       products_count: Array.isArray((aiContextToUse as any)?.products) ? (aiContextToUse as any).products.length : 0,
       has_computed_metrics: !!(aiContextToUse as any)?.computed_metrics,
+      has_spapi_enrichment: !!(aiContextToUse as any)?.spapi_enrichment,
     });
     
     const copilotContext = {
