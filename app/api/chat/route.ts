@@ -2697,6 +2697,8 @@ CRITICAL RULES FOR ESCALATED DATA:
                          ((contextToUse as any).products as any[]) || 
                          [];
     const firstProductKeys = productsArray.length > 0 ? Object.keys(productsArray[0] || {}) : [];
+    const aiContextForCheck = (contextToUse as any).ai_context || contextToUse.analyze_contract;
+    const computedMetrics = aiContextForCheck?.computed_metrics;
     console.log("🔍 OPENAI_CONTEXT_SANITY_CHECK", {
       analysisRunId: body.analysisRunId,
       userId: user.id,
@@ -2714,7 +2716,18 @@ CRITICAL RULES FOR ESCALATED DATA:
         has_analyze_contract_listings: !!(contextToUse.analyze_contract?.listings),
         has_ai_context: !!(contextToUse as any).ai_context,
         has_ai_context_products: !!((contextToUse as any).ai_context?.products),
+        has_computed_metrics: !!computedMetrics,
+        computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
         has_selected_asins: !!contextToUse.selected_asins,
+      },
+      computed_metrics: computedMetrics ? {
+        has_top_revenue: !!computedMetrics.top_revenue_product,
+        has_top_reviews: !!computedMetrics.top_reviews_product,
+        has_dominant_subcategory: !!computedMetrics.dominant_subcategory,
+      } : null,
+      system_prompt_checks: {
+        includes_computed_metrics_priority: systemPrompt.includes("COMPUTED METRICS PRIORITY"),
+        includes_derived_metrics_allowed: systemPrompt.includes("DERIVED METRICS ALLOWED"),
       },
       timestamp: new Date().toISOString(),
     });

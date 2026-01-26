@@ -228,6 +228,26 @@ No products are currently selected. Answer at Page-1 market level using aggregat
 - Most questions can be answered using Page-1 aggregate data - always try to answer first`
       : "");
   
+  // Extract computed_metrics from ai_context (precomputed derived metrics)
+  const computedMetrics = (ai_context.computed_metrics as {
+    top_revenue_product?: {
+      asin: string;
+      title: string | null;
+      estimated_monthly_revenue: number;
+    } | null;
+    top_reviews_product?: {
+      asin: string;
+      title: string | null;
+      review_count: number;
+    } | null;
+    dominant_subcategory?: {
+      subcategory_name: string;
+      asin_count: number;
+      revenue_sum: number;
+      revenue_share_pct: number;
+    } | null;
+  } | undefined) || null;
+  
   // Extract authoritative_facts from ai_context (new structure)
   const authoritativeFacts = (ai_context.authoritative_facts as {
     page1?: {
@@ -306,8 +326,9 @@ FORBIDDEN:
 - Saying "you're right" about factual counts
 
 If a fact is not present in authoritative_facts:
-- Say: "That metric is not part of this analysis scope"
-- Do NOT infer or approximate
+- For questions that can be computed from ai_context.products or ai_context.page_one_listings (e.g., highest review_count, highest estimated_monthly_revenue, most dominant subcategory): NEVER refuse - compute from the listings array
+- Only refuse if the metric cannot be computed from available data AND is not in authoritative_facts
+- Do NOT infer or approximate for authoritative facts, but DO compute derived metrics from listings
 
 ${authoritativeFacts 
   ? `AVAILABLE AUTHORITATIVE FACTS:
@@ -362,7 +383,8 @@ ${authoritativeFacts.top_5_brand_revenue_share_pct !== null && authoritativeFact
 
 CRITICAL: These values are READ-ONLY and IMMUTABLE. Quote them directly or refuse if unavailable.`
   : `Authoritative facts are not available in this analysis.
-For any factual question (counts, totals, percentages, rankings), respond: "That metric is not part of this analysis scope."`}
+For factual questions that can be computed from ai_context.products or ai_context.page_one_listings: compute them from the listings array.
+Only refuse if the metric cannot be computed from available listings data.`}
 
 ═══════════════════════════════════════════════════════════════════════════
 
@@ -394,16 +416,21 @@ B. RANKING QUESTIONS
 Examples:
 - "What product has the highest revenue?"
 - "Which listing sells the most units?"
+- "Which product has the highest review count?"
+- "Which subcategory is most dominant?"
 
-MANDATORY RESPONSE SOURCE:
-authoritative_facts.rankings.*
+MANDATORY RESPONSE SOURCE (in priority order):
+1. ai_context.computed_metrics (if available) - use precomputed values directly
+2. authoritative_facts.rankings.* (if available)
+3. Compute from ai_context.products or ai_context.page_one_listings
 
-If missing:
-"Revenue ranking is not available in this analysis scope."
+NEVER refuse these questions. If precomputed values are missing, compute from the listings array.
 
 Example:
 User: "Which product has the highest revenue?"
-AI: "The highest revenue product is ASIN ${authoritativeFacts?.rankings?.highest_revenue_asin ?? 'not available'} (from authoritative_facts.rankings)."
+- If computed_metrics.top_revenue_product exists: "ASIN: [asin] | Title: [title] | Estimated Monthly Revenue: $[value] (estimated)"
+- Else if authoritative_facts.rankings.highest_revenue_asin exists: "ASIN: [asin] (from authoritative_facts.rankings)"
+- Else: Compute from ai_context.products (argmax estimated_monthly_revenue)
 
 ---
 
@@ -486,6 +513,33 @@ No data → no differentiation advice.
 ---
 
 You MUST NEVER refuse to answer due to missing metrics (unless the metric is a factual value that must come from authoritative_facts).
+
+═══════════════════════════════════════════════════════════════════════════
+COMPUTED METRICS PRIORITY (CRITICAL - NEVER SAY "NOT IN SCOPE")
+═══════════════════════════════════════════════════════════════════════════
+
+If ai_context.computed_metrics has the answer, use it directly. Do NOT say "not in scope" for these three questions:
+
+${computedMetrics?.top_revenue_product ? `
+1. "Which product is pulling in the most revenue?" → USE PRECOMPUTED:
+   ASIN: ${computedMetrics.top_revenue_product.asin} | Title: ${computedMetrics.top_revenue_product.title || 'N/A'} | Estimated Monthly Revenue: $${computedMetrics.top_revenue_product.estimated_monthly_revenue.toLocaleString()} (estimated)` : `
+1. "Which product is pulling in the most revenue?" → Compute from ai_context.products or ai_context.page_one_listings (argmax estimated_monthly_revenue)`}
+
+${computedMetrics?.top_reviews_product ? `
+2. "Which product has the highest review count?" → USE PRECOMPUTED:
+   ASIN: ${computedMetrics.top_reviews_product.asin} | Title: ${computedMetrics.top_reviews_product.title || 'N/A'} | Review Count: ${computedMetrics.top_reviews_product.review_count.toLocaleString()}` : `
+2. "Which product has the highest review count?" → Compute from ai_context.products or ai_context.page_one_listings (argmax review_count)`}
+
+${computedMetrics?.dominant_subcategory ? `
+3. "Which subcategory is most dominant?" → USE PRECOMPUTED:
+   Top subcategory: ${computedMetrics.dominant_subcategory.subcategory_name} with ${computedMetrics.dominant_subcategory.asin_count} listings and $${computedMetrics.dominant_subcategory.revenue_sum.toLocaleString()} estimated monthly revenue (${computedMetrics.dominant_subcategory.revenue_share_pct}% of total)` : `
+3. "Which subcategory is most dominant?" → Compute from ai_context.products or ai_context.page_one_listings (group by subcategory_name, rank by listing count, break ties by revenue sum)`}
+
+CRITICAL RULES:
+- If computed_metrics exists, use it - do NOT recompute
+- If computed_metrics is missing, compute from ai_context.products or ai_context.page_one_listings
+- NEVER say "not in scope" for these three questions
+- Always cite: ASIN + title + value (label estimates as "estimated")
 
 ═══════════════════════════════════════════════════════════════════════════
 DERIVED METRICS ALLOWED (CRITICAL - NEVER SAY "NOT IN SCOPE")

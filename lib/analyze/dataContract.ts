@@ -1421,6 +1421,13 @@ export async function buildKeywordAnalyzeResponse(
     note: "These values are READ-ONLY and IMMUTABLE - AI must quote directly or refuse",
   });
   
+  // Build computed_metrics (precomputed derived metrics for AI consumption)
+  const computedMetrics = {
+    top_revenue_product: topRevenueProduct,
+    top_reviews_product: topReviewsProduct,
+    dominant_subcategory: subcategoryDominance.length > 0 ? subcategoryDominance[0] : null,
+  };
+  
   // Build AI context (read-only copy)
   const aiContext = {
     mode: "keyword" as const,
@@ -1429,6 +1436,7 @@ export async function buildKeywordAnalyzeResponse(
     products,
     market_structure: marketStructure,
     margin_snapshot: marginSnapshotContract,
+    computed_metrics: computedMetrics,
     signals,
     brand_moat: brandMoat, // Add brand moat to AI context
     // Authoritative facts (READ-ONLY, IMMUTABLE)
