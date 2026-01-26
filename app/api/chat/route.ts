@@ -2797,6 +2797,32 @@ CRITICAL RULES FOR ESCALATED DATA:
       estimated_monthly_revenue: productsArray[0]?.estimated_monthly_revenue ?? null,
     } : null;
     
+    // Server-side scope verification counts
+    const sponsoredCount = productsArray.filter((p: any) => p.is_sponsored === true).length;
+    const organicCount = productsArray.filter((p: any) => p.is_sponsored === false).length;
+    const unknownSponsoredCount = productsArray.filter((p: any) => p.is_sponsored === null).length;
+    
+    // Scope-specific lt500 counts
+    const lt500Organic = productsArray.filter((p: any) => 
+      p.is_sponsored === false && typeof p.review_count === 'number' && p.review_count < 500
+    ).length;
+    const lt500Sponsored = productsArray.filter((p: any) => 
+      p.is_sponsored === true && typeof p.review_count === 'number' && p.review_count < 500
+    ).length;
+    const lt500AllPage1 = productsArray.filter((p: any) => 
+      (p.is_sponsored === true || p.is_sponsored === false) && typeof p.review_count === 'number' && p.review_count < 500
+    ).length;
+    
+    const lt500OrganicUnknown = productsArray.filter((p: any) => 
+      p.is_sponsored === false && p.review_count === null
+    ).length;
+    const lt500SponsoredUnknown = productsArray.filter((p: any) => 
+      p.is_sponsored === true && p.review_count === null
+    ).length;
+    const lt500AllPage1Unknown = productsArray.filter((p: any) => 
+      (p.is_sponsored === true || p.is_sponsored === false) && p.review_count === null
+    ).length;
+    
     console.log("🔍 OPENAI_CONTEXT_SANITY_CHECK", {
       analysisRunId: body.analysisRunId,
       userId: user.id,
@@ -2806,10 +2832,19 @@ CRITICAL RULES FOR ESCALATED DATA:
       has_computed_metrics,
       computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
       // Product counts
-      products_count: productsArray.length,
+      total_products: productsArray.length,
+      sponsored_count: sponsoredCount,
+      organic_count: organicCount,
+      unknown_sponsored_count: unknownSponsoredCount,
       first_product_sample: firstProductSample,
-      // Server-side verification count
-      lt500_count: lt500,
+      // Server-side verification counts (all scopes)
+      lt500_all_scope: lt500,
+      // Scope-specific lt500 breakdown
+      lt500_breakdown: {
+        organic: { known: lt500Organic, unknown: lt500OrganicUnknown },
+        sponsored: { known: lt500Sponsored, unknown: lt500SponsoredUnknown },
+        all_page1: { known: lt500AllPage1, unknown: lt500AllPage1Unknown },
+      },
       // Additional context for debugging
       ai_context_keys: ai ? Object.keys(ai) : [],
       has_mode: !!(ai as any)?.mode,

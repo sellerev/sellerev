@@ -1427,18 +1427,61 @@ export async function buildKeywordAnalyzeResponse(
   // All metrics derived from canonical Page-1 array (products)
   // Missing values are null, never invented
   
-  // Helper: Count products with review_count < threshold (known only)
-  const countReviewsBelow = (threshold: number): { count_known: number; unknown: number } => {
-    let countKnown = 0;
-    let unknown = 0;
+  // Helper: Count products with review_count < threshold by scope
+  const countReviewsBelowByScope = (threshold: number): {
+    organic: { known: number; unknown: number };
+    sponsored: { known: number; unknown: number };
+    all_page1: { known: number; unknown: number };
+  } => {
+    let organicKnown = 0;
+    let organicUnknown = 0;
+    let sponsoredKnown = 0;
+    let sponsoredUnknown = 0;
+    let allPage1Known = 0;
+    let allPage1Unknown = 0;
+    
     for (const p of products) {
-      if (p.review_count === null) {
-        unknown++;
-      } else if (p.review_count < threshold) {
-        countKnown++;
+      const isOrganic = p.is_sponsored === false;
+      const isSponsored = p.is_sponsored === true;
+      const isAllPage1 = isOrganic || isSponsored; // Exclude null
+      
+      const hasReviewCount = p.review_count !== null;
+      const reviewCount = p.review_count ?? 0;
+      const isBelowThreshold = hasReviewCount && reviewCount < threshold;
+      
+      // Organic-only scope
+      if (isOrganic) {
+        if (hasReviewCount && isBelowThreshold) {
+          organicKnown++;
+        } else if (!hasReviewCount) {
+          organicUnknown++;
+        }
+      }
+      
+      // Sponsored-only scope
+      if (isSponsored) {
+        if (hasReviewCount && isBelowThreshold) {
+          sponsoredKnown++;
+        } else if (!hasReviewCount) {
+          sponsoredUnknown++;
+        }
+      }
+      
+      // All Page-1 scope (organic + sponsored, exclude null)
+      if (isAllPage1) {
+        if (hasReviewCount && isBelowThreshold) {
+          allPage1Known++;
+        } else if (!hasReviewCount) {
+          allPage1Unknown++;
+        }
       }
     }
-    return { count_known: countKnown, unknown };
+    
+    return {
+      organic: { known: organicKnown, unknown: organicUnknown },
+      sponsored: { known: sponsoredKnown, unknown: sponsoredUnknown },
+      all_page1: { known: allPage1Known, unknown: allPage1Unknown },
+    };
   };
   
   // Helper: Calculate percentile
@@ -1591,6 +1634,8 @@ export async function buildKeywordAnalyzeResponse(
       products_lt_300_reviews: countReviewsBelow(300),
       products_lt_500_reviews: countReviewsBelow(500),
       products_lt_1000_reviews: countReviewsBelow(1000),
+      // Scope-specific lt500 counts (organic-only, sponsored-only, all_page1)
+      lt500: countReviewsBelowByScope(500),
     },
     rankings: {
     top_revenue_product: topRevenueProduct,

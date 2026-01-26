@@ -244,6 +244,12 @@ No products are currently selected. Answer at Page-1 market level using aggregat
       products_lt_300_reviews?: { count_known: number; unknown: number };
       products_lt_500_reviews?: { count_known: number; unknown: number };
       products_lt_1000_reviews?: { count_known: number; unknown: number };
+      // Scope-specific lt500 counts (organic-only, sponsored-only, all_page1)
+      lt500?: {
+        organic: { known: number; unknown: number };
+        sponsored: { known: number; unknown: number };
+        all_page1: { known: number; unknown: number };
+      };
     };
     rankings?: {
       top_revenue_product?: { asin: string; title: string | null; estimated_monthly_revenue: number } | null;
@@ -669,12 +675,18 @@ PATTERN 1: Rankings (argmax revenue, argmax reviews, argmin reviews, etc.)
 PATTERN 2: Threshold counts (reviews < X, price > Y, revenue > Z)
 → Use: computed_metrics.counts.* with unknown handling
 → Examples:
-   - "How many products less than 500 reviews?" → computed_metrics.counts.products_lt_500_reviews
-     Response format: "Count (known): N | Missing review_count on: M listings"
-     If unknown_count > 0, say: "Note: M listings have unknown review counts, so this count may be incomplete."
-   - "How many products less than 100 reviews?" → computed_metrics.counts.products_lt_100_reviews
-   - "How many products less than 50 reviews?" → computed_metrics.counts.products_lt_50_reviews
-→ Fallback: Filter ai_context.products, count known values, report unknown_count separately
+   - "How many products less than 500 reviews?" → Use computed_metrics.counts.lt500 for scope-specific counts
+     Response format (MUST use scope-specific keys):
+     - If user asks "organic-only" or "organic": Use computed_metrics.counts.lt500.organic
+       "Organic-only: known X | unknown Y"
+     - If user asks "sponsored" or "ads": Use computed_metrics.counts.lt500.sponsored
+       "Sponsored-only: known X | unknown Y"
+     - If user asks "all" or "including sponsored" or doesn't specify: Use computed_metrics.counts.lt500.all_page1
+       "All Page-1 (organic+sponsored): known X | unknown Y"
+     - If unknown > 0, say: "Note: Y listings have unknown review counts, so this count may be incomplete."
+   - "How many products less than 100 reviews?" → computed_metrics.counts.products_lt_100_reviews (legacy, all scopes)
+   - "How many products less than 50 reviews?" → computed_metrics.counts.products_lt_50_reviews (legacy, all scopes)
+→ Fallback: Filter ai_context.products by is_sponsored, count known values, report unknown_count separately
 
 PATTERN 3: Concentration / hero vs spread
 → Use: computed_metrics.concentration.top{1,3,5,10}_revenue_share_pct + revenue distribution
