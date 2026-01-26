@@ -3467,8 +3467,13 @@ export async function fetchKeywordMarketSnapshot(
           (listing as any).bsr_root = catalog.bsr_root ?? null;
           (listing as any).bsr_root_category = catalog.bsr_root_category ?? null;
           // Backwards-compatible aliases (always set, even if null)
-          (listing as any).main_category_bsr = catalog.main_category_bsr ?? catalog.root_rank ?? catalog.bsr_root ?? null;
-          (listing as any).main_category_name = catalog.main_category_name ?? catalog.root_display_group ?? catalog.bsr_root_category ?? null;
+          const mainCategoryBsrValue = catalog.main_category_bsr ?? catalog.root_rank ?? catalog.bsr_root ?? null;
+          const mainCategoryNameValue = catalog.main_category_name ?? catalog.root_display_group ?? catalog.bsr_root_category ?? null;
+          (listing as any).main_category_bsr = mainCategoryBsrValue;
+          (listing as any).main_category_name = mainCategoryNameValue;
+          // CamelCase versions for UI compatibility
+          (listing as any).mainCategoryBsr = mainCategoryBsrValue;
+          (listing as any).mainCategoryName = mainCategoryNameValue;
           
           // Persist structured BSR context to listing
           if (catalog.bsr_context) {

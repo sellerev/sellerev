@@ -2129,6 +2129,19 @@ export default function AnalyzeForm({
                             // Try mainCategoryBsr (camelCase) first, then main_category_bsr (snake_case), then fallbacks
                             const mainCategoryBsr = (listing as any).mainCategoryBsr ?? (listing as any).main_category_bsr ?? (listing as any).bsr_root ?? (listing as any).root_rank ?? null;
                             const mainCategoryName = (listing as any).mainCategoryName ?? (listing as any).main_category_name ?? (listing as any).bsr_root_category ?? (listing as any).root_display_group ?? null;
+                            
+                            // 🧪 TEMP DEBUG: Log first listing to verify main category BSR
+                            if (idx === 0 && asin) {
+                              console.log("🧪 CARD_LISTING_SAMPLE", asin, {
+                                bsr: bsr,
+                                main_category_bsr: (listing as any).main_category_bsr,
+                                mainCategoryBsr: (listing as any).mainCategoryBsr,
+                                root_rank: (listing as any).root_rank,
+                                bsr_root: (listing as any).bsr_root,
+                                extracted_mainCategoryBsr: mainCategoryBsr,
+                                keys: listing ? Object.keys(listing) : null,
+                              });
+                            }
                             const rootRank = (listing as any).root_rank ?? null;
                             const rootDisplayGroup = (listing as any).root_display_group ?? null;
                             const bsrRoot = (listing as any).bsr_root ?? null;

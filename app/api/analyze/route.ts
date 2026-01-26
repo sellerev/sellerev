@@ -3836,19 +3836,16 @@ export async function POST(req: NextRequest) {
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // DEBUG LOG: Confirm first listing includes main_category_bsr before returning
+    // 🧪 TEMP DEBUG: Confirm first listing includes main_category_bsr before returning
     // ═══════════════════════════════════════════════════════════════════════════
-    const firstListingForDebug = listingsWithMergedFields[0];
-    if (firstListingForDebug) {
-      console.log("PRE_RETURN_LISTING_BSR_DEBUG", {
-        asin: firstListingForDebug.asin,
-        bsr: firstListingForDebug.bsr,
-        main_category_bsr: firstListingForDebug.main_category_bsr,
-        mainCategoryBsr: firstListingForDebug.mainCategoryBsr,
-        keys: Object.keys(firstListingForDebug).sort(),
-        keyword: normalizedKeyword,
-      });
-    }
+    const first = listingsWithMergedFields?.[0];
+    console.log("🧪 RESPONSE_LISTING_SAMPLE", {
+      asin: first?.asin,
+      bsr: first?.bsr,
+      main_category_bsr: first?.main_category_bsr,
+      mainCategoryBsr: first?.mainCategoryBsr,
+      keys: first ? Object.keys(first) : null,
+    });
     
     return NextResponse.json(
       finalResponse,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Star, Image as ImageIcon, Check, Copy, ExternalLink } from "lucide-react";
 
 interface ProductCardProps {
@@ -75,6 +75,21 @@ export function ProductCard({
   fulfillment_status,
 }: ProductCardProps) {
   const [copied, setCopied] = useState(false);
+  const hasLoggedRef = useRef(false);
+
+  // 🧪 TEMP DEBUG: Log first card listing to verify main category BSR (only log once)
+  useEffect(() => {
+    if (asin && !hasLoggedRef.current && typeof window !== 'undefined') {
+      hasLoggedRef.current = true;
+      console.log("🧪 CARD_LISTING_SAMPLE", asin, {
+        bsr: bsr,
+        main_category_bsr: (mainCategoryBsr ?? rootRank ?? bsrRoot) ?? null,
+        mainCategoryBsr: mainCategoryBsr ?? null,
+        rootRank: rootRank ?? null,
+        bsrRoot: bsrRoot ?? null,
+      });
+    }
+  }, [asin, bsr, mainCategoryBsr, rootRank, bsrRoot]);
 
   const getFulfillmentBadgeStyle = () => {
     switch (fulfillment) {
@@ -111,9 +126,10 @@ export function ProductCard({
   const displaySubcategoryBsr = subcategoryBsr ?? subcategoryRank ?? bsr ?? null;
   const displaySubcategoryName = subcategoryName ?? bsrContext?.chosen_category_name ?? null;
   
-  // Main Category BSR: use props (already extracted from listing with both snake_case and camelCase support)
-  // Fallback to rootRank/rootDisplayGroup, then bsrRoot/bsrRootCategory for backwards compatibility
-  const displayMainCategoryBsr = mainCategoryBsr ?? rootRank ?? bsrRoot ?? null;
+  // Main Category BSR: use tolerant accessor (snake_case first, then camelCase, then fallbacks)
+  // CRITICAL: Do NOT use listing.bsr here - that's the subcategory rank
+  const mainBsr = mainCategoryBsr ?? rootRank ?? bsrRoot ?? null;
+  const displayMainCategoryBsr = mainBsr;
   const displayMainCategoryName = mainCategoryName ?? rootDisplayGroup ?? bsrRootCategory ?? null;
 
   return (
@@ -256,15 +272,13 @@ export function ProductCard({
         ) : (
           <div>Subcategory Rank: —</div>
         )}
-        {/* Main Category BSR */}
-        {displayMainCategoryBsr !== null && displayMainCategoryBsr !== undefined && displayMainCategoryBsr > 0 ? (
+        {/* Main Category BSR - Only render if mainBsr is not null */}
+        {mainBsr !== null && mainBsr !== undefined && mainBsr > 0 ? (
           <div>
-            Main Category BSR: #{displayMainCategoryBsr.toLocaleString()}
+            Main Category BSR: #{mainBsr.toLocaleString()}
             {displayMainCategoryName ? ` in ${displayMainCategoryName}` : ''}
           </div>
-        ) : (
-          <div>Main Category BSR: —</div>
-        )}
+        ) : null}
       </div>
 
       {/* Spacer to push revenue section to bottom */}
