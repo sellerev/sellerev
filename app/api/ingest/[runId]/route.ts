@@ -6,11 +6,11 @@ import { NextRequest, NextResponse } from "next/server";
  */
 export async function POST(
   req: NextRequest,
-  { params }: { params: { runId: string } }
+  { params }: { params: Promise<{ runId: string }> }
 ) {
   try {
     const body = await req.json();
-    const { runId } = params;
+    const { runId } = await params;
     
     // In production, you might want to write to a logging service
     // For now, we just accept the request silently
