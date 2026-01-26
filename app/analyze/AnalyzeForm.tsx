@@ -2227,6 +2227,7 @@ export default function AnalyzeForm({
                                   isSelected={isSelected}
                                   primeEligible={primeEligible}
                                   fulfillment_status={fulfillmentStatus}
+                                  listing={listing}
                                   onSelect={(e) => {
                                   // CRITICAL: Use the extracted asin (not listing.asin) for consistency
                                   if (!asin) return;

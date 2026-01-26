@@ -69,6 +69,8 @@ interface ProductCardProps {
   onSelect?: (e: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement>) => void;
   primeEligible?: boolean; // Prime eligibility (from is_prime heuristic)
   fulfillment_status?: 'PRIME' | 'NON_PRIME'; // Prime/Non-Prime status (heuristic from is_prime)
+  // Optional: raw listing object for direct field access (more reliable than extracted props)
+  listing?: any; // Raw listing object from API response
 }
 
 export function ProductCard({
@@ -102,6 +104,7 @@ export function ProductCard({
   onSelect,
   primeEligible,
   fulfillment_status,
+  listing: rawListing,
 }: ProductCardProps) {
   const [copied, setCopied] = useState(false);
   const hasLoggedRef = useRef(false);
@@ -156,15 +159,52 @@ export function ProductCard({
   // Determine if we should show ~ prefix (for estimated, not for sp_api)
   const showEstimatePrefix = bsrSource !== 'sp_api' || bsrContext === null || bsrContext === undefined;
   
-  // Subcategory Rank: prefer subcategoryBsr (from subcategory_bsr field), fallback to subcategoryRank, then bsr
-  const displaySubcategoryBsr = subcategoryBsr ?? subcategoryRank ?? bsr ?? null;
-  const displaySubcategoryName = subcategoryName ?? bsrContext?.chosen_category_name ?? null;
-  
-  // Main Category BSR: use tolerant accessor (snake_case first, then camelCase, then fallbacks)
-  // CRITICAL: Do NOT use listing.bsr here - that's the subcategory rank
-  const mainBsr = mainCategoryBsr ?? rootRank ?? bsrRoot ?? null;
-  const displayMainCategoryBsr = mainBsr;
-  const displayMainCategoryName = mainCategoryName ?? rootDisplayGroup ?? bsrRootCategory ?? null;
+  // ---- Robust accessors (snake_case + camelCase) ----
+  // Read from raw listing object first (most reliable), then fall back to props
+  const mainBsr =
+    rawListing?.mainCategoryBsr ??
+    rawListing?.main_category_bsr ??
+    rawListing?.rootRank ??
+    rawListing?.root_rank ??
+    rawListing?.bsrRoot ??
+    rawListing?.bsr_root ??
+    mainCategoryBsr ??
+    rootRank ??
+    bsrRoot ??
+    null;
+
+  const displayMainCategoryName =
+    rawListing?.rootDisplayGroup ??
+    rawListing?.root_display_group ??
+    rawListing?.mainCategoryName ??
+    rawListing?.main_category_name ??
+    rawListing?.bsrRootCategory ??
+    rawListing?.bsr_root_category ??
+    rootDisplayGroup ??
+    mainCategoryName ??
+    bsrRootCategory ??
+    null;
+
+  // Subcategory rank: bsr is subcategory rank by design (backwards compatibility)
+  const displaySubcategoryBsr =
+    rawListing?.subcategoryBsr ??
+    rawListing?.subcategory_bsr ??
+    rawListing?.subcategoryRank ??
+    rawListing?.subcategory_rank ??
+    rawListing?.bsr ??
+    subcategoryBsr ??
+    subcategoryRank ??
+    bsr ??
+    null;
+
+  const displaySubcategoryName =
+    rawListing?.subcategoryName ??
+    rawListing?.subcategory_name ??
+    rawListing?.category ??
+    rawListing?.primary_category ??
+    subcategoryName ??
+    bsrContext?.chosen_category_name ??
+    null;
 
   return (
     <div
@@ -297,7 +337,18 @@ export function ProductCard({
 
       {/* BSR Display */}
       <div className="text-sm text-[#6B7280] mb-3 space-y-1">
-        {/* Subcategory Rank */}
+        {/* MAIN (Root) BSR - render first */}
+        {mainBsr !== null && mainBsr !== undefined && mainBsr > 0 ? (
+          <div>
+            Main Category BSR: #{mainBsr.toLocaleString()}
+            {displayMainCategoryName ? ` in ${displayMainCategoryName}` : ''}
+            {displaySubcategoryName ? ` • ${displaySubcategoryName}` : ''}
+          </div>
+        ) : (
+          <div>Main Category BSR: —</div>
+        )}
+
+        {/* SUBCATEGORY Rank - render second */}
         {displaySubcategoryBsr !== null && displaySubcategoryBsr !== undefined && displaySubcategoryBsr > 0 ? (
           <div>
             Subcategory Rank: #{displaySubcategoryBsr.toLocaleString()}
@@ -306,13 +357,6 @@ export function ProductCard({
         ) : (
           <div>Subcategory Rank: —</div>
         )}
-        {/* Main Category BSR - Only render if mainBsr is not null */}
-        {mainBsr !== null && mainBsr !== undefined && mainBsr > 0 ? (
-          <div>
-            Main Category BSR: #{mainBsr.toLocaleString()}
-            {displayMainCategoryName ? ` in ${displayMainCategoryName}` : ''}
-          </div>
-        ) : null}
       </div>
 
       {/* Spacer to push revenue section to bottom */}
