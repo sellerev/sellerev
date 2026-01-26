@@ -2141,6 +2141,12 @@ export default function AnalyzeForm({
                                 extracted_mainCategoryBsr: mainCategoryBsr,
                                 keys: listing ? Object.keys(listing) : null,
                               });
+                              
+                              // #region agent log
+                              if (typeof window !== 'undefined') {
+                                fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AnalyzeForm.tsx:2135',message:'Frontend listing before prop extraction',data:{asin,bsr,listing_main_category_bsr:(listing as any).main_category_bsr,listing_mainCategoryBsr:(listing as any).mainCategoryBsr,listing_root_rank:(listing as any).root_rank,extracted_mainCategoryBsr:mainCategoryBsr,has_main_category_bsr:!!(listing as any).main_category_bsr,has_mainCategoryBsr:!!(listing as any).mainCategoryBsr},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
+                              }
+                              // #endregion
                             }
                             const rootRank = (listing as any).root_rank ?? null;
                             const rootDisplayGroup = (listing as any).root_display_group ?? null;

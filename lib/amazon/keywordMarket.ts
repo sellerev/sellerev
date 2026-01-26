@@ -3475,6 +3475,12 @@ export async function fetchKeywordMarketSnapshot(
           (listing as any).mainCategoryBsr = mainCategoryBsrValue;
           (listing as any).mainCategoryName = mainCategoryNameValue;
           
+          // #region agent log
+          if (bsrMergeCount <= 3) {
+            fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'keywordMarket.ts:3475',message:'SP-API merge sets main_category_bsr',data:{asin:listing.asin,main_category_bsr:mainCategoryBsrValue,mainCategoryBsr:mainCategoryBsrValue,root_rank:catalog.root_rank,bsr_root:catalog.bsr_root},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+          }
+          // #endregion
+          
           // Persist structured BSR context to listing
           if (catalog.bsr_context) {
             (listing as any).bsr_context = catalog.bsr_context;

@@ -88,6 +88,10 @@ export function ProductCard({
         rootRank: rootRank ?? null,
         bsrRoot: bsrRoot ?? null,
       });
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProductCard.tsx:84',message:'ProductCard props received',data:{asin,bsr,mainCategoryBsr,rootRank,bsrRoot,computed_mainBsr:mainCategoryBsr ?? rootRank ?? bsrRoot ?? null,has_mainCategoryBsr:!!mainCategoryBsr,has_rootRank:!!rootRank,has_bsrRoot:!!bsrRoot},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'})}).catch(()=>{});
+      // #endregion
     }
   }, [asin, bsr, mainCategoryBsr, rootRank, bsrRoot]);
 
