@@ -100,14 +100,18 @@ function computeMarketSummary(listings: ListingCard[]): MarketSummary {
   const ratings = listings.map(l => l.rating).filter(r => r > 0);
   const avgRating = ratings.length > 0 ? ratings.reduce((a, b) => a + b, 0) / ratings.length : null;
   
-  const reviews = listings.map(l => l.review_count);
+  const reviews = listings
+    .map(l => l.review_count)
+    .filter((r): r is number => r !== null && r !== undefined);
   const avgReviews = reviews.length > 0 ? reviews.reduce((a, b) => a + b, 0) / reviews.length : 0;
   const medianReviews = reviews.length > 0 
     ? [...reviews].sort((a, b) => a - b)[Math.floor(reviews.length / 2)]
     : null;
   
   const top5Listings = listings.slice(0, 5);
-  const top5Reviews = top5Listings.map(l => l.review_count).filter(r => r > 0);
+  const top5Reviews = top5Listings
+    .map(l => l.review_count)
+    .filter((r): r is number => r !== null && r !== undefined && r > 0);
   const top5MedianReviews = top5Reviews.length > 0
     ? [...top5Reviews].sort((a, b) => a - b)[Math.floor(top5Reviews.length / 2)]
     : null;
