@@ -581,7 +581,7 @@ ${computedMetrics?.top_revenue_product ? `
 
 ${computedMetrics?.top_reviews_product ? `
 2. "Which product has the highest review count?" → USE PRECOMPUTED:
-   ASIN: ${computedMetrics.top_reviews_product.asin} | Title: ${computedMetrics.top_reviews_product.title || 'N/A'} | Review Count: ${computedMetrics.top_reviews_product.review_count.toLocaleString()}` : `
+   ASIN: ${computedMetrics.top_reviews_product.asin} | Title: ${computedMetrics.top_reviews_product.title || 'N/A'} | Review Count: ${computedMetrics.top_reviews_product.review_count !== null ? computedMetrics.top_reviews_product.review_count.toLocaleString() : 'N/A'}` : `
 2. "Which product has the highest review count?" → Compute from ai_context.products or ai_context.page_one_listings (argmax review_count)`}
 
 ${computedMetrics?.dominant_subcategory ? `
