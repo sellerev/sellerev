@@ -178,13 +178,21 @@ export async function getCatalogItemEnrichment(
     
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
+      // PRIORITY D.10: Explicitly handle 403 Unauthorized
+      const is403 = httpStatus === 403;
       console.error("SP_API_ENRICHMENT_ERROR", {
         endpoint: "catalogItems",
         asin,
         http_status: httpStatus,
+        is_403_unauthorized: is403,
         error: errorText.substring(0, 200),
         duration_ms: duration,
       });
+      
+      // Throw error with 403 flag so caller can handle it
+      if (is403) {
+        throw new Error("403 Unauthorized: Catalog Items API access not authorized");
+      }
       return null;
     }
     
@@ -299,13 +307,21 @@ export async function getReviewTopics(
     
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
+      // PRIORITY D.10: Explicitly handle 403 Unauthorized
+      const is403 = httpStatus === 403;
       console.error("SP_API_ENRICHMENT_ERROR", {
         endpoint: "reviewTopics",
         asin,
         http_status: httpStatus,
+        is_403_unauthorized: is403,
         error: errorText.substring(0, 200),
         duration_ms: duration,
       });
+      
+      // Throw error with 403 flag so caller can handle it
+      if (is403) {
+        throw new Error("403 Unauthorized: Review Topics API access not authorized");
+      }
       return null;
     }
     

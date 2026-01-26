@@ -1908,11 +1908,54 @@ export async function POST(req: NextRequest) {
     // CRITICAL: selectedAsins is the single source of truth
     // Only use selectedListing as fallback if selectedAsins is empty/undefined
     // If selectedAsins.length === 0, NO ASIN is selected (Copilot must not reference any ASIN)
-    const selectedAsins: string[] = Array.isArray(body.selectedAsins) && body.selectedAsins.length > 0
+    let selectedAsins: string[] = Array.isArray(body.selectedAsins) && body.selectedAsins.length > 0
       ? body.selectedAsins.filter(asin => asin && typeof asin === 'string') // Filter out invalid ASINs
       : (body.selectedListing?.asin && typeof body.selectedListing.asin === 'string'
         ? [body.selectedListing.asin] // Backward compatibility fallback
         : []); // Empty array = no selection
+    
+    // PRIORITY A.3: Extract ASINs from message text and merge with selectedAsins
+    const extractedAsinsFromMessage = extractAsinsFromText(body.message);
+    if (extractedAsinsFromMessage.length > 0) {
+      // Merge extracted ASINs with selected ASINs (deduplicate)
+      const mergedAsins = Array.from(new Set([...selectedAsins, ...extractedAsinsFromMessage]));
+      selectedAsins = mergedAsins;
+      console.log("ASIN_EXTRACTION_FROM_MESSAGE", {
+        analysisRunId: body.analysisRunId,
+        extracted_asins: extractedAsinsFromMessage,
+        original_selected: body.selectedAsins || [],
+        merged_selected: selectedAsins,
+      });
+    }
+    
+    // PRIORITY A.4: Handle "this one/selected/that listing" when selectedAsins is empty
+    const normalizedMessage = body.message.toLowerCase();
+    const referencesSelection = /this (one|listing|product)|selected|that listing|that product|the selected/i.test(normalizedMessage);
+    if (referencesSelection && selectedAsins.length === 0) {
+      // Return early with a follow-up question
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: "Which ASIN should I use?" })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new NextResponse(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
+    }
+    
+    console.log("SELECTED_ASINS_RECEIVED", {
+      analysisRunId: body.analysisRunId,
+      selected_asins: selectedAsins,
+      selected_count: selectedAsins.length,
+      extracted_from_message: extractedAsinsFromMessage,
+    });
 
     // Encoder for lightweight SSE responses (intents / guardrails) before OpenAI streaming
     const encoder = new TextEncoder();
@@ -2135,20 +2178,22 @@ export async function POST(req: NextRequest) {
     // ═══════════════════════════════════════════════════════════════════════════
     // ENRICHMENT DECISION (SP-API enrichment for variants/review topics)
     // ═══════════════════════════════════════════════════════════════════════════
-    // Separate from Rainforest escalation - doesn't use credits
-    // Hard cap: MAX_ENRICHMENT_ASINS_PER_QUESTION = 1 (start)
-    const MAX_ENRICHMENT_ASINS_PER_QUESTION = 1;
+    // PRIORITY B: No credits gating - use hard limits instead
+    // PRIORITY C: Enhanced intent detection
+    const MAX_ENRICHMENT_ASINS_PER_MESSAGE = 2; // Per user message
+    const MAX_ENRICHMENT_CALLS_PER_ANALYSIS = 10; // Total across chat for this analysis_run_id
     
     const normalizedQuestion = body.message.toLowerCase();
     
-    // Robust variants intent detection
+    // PRIORITY C.7: Enhanced variants intent detection
     const variantsIntent = /variant|variants|variation|variations|size|sizes|color|colors|colour|colours|version|versions|how many variants|which variant/i.test(body.message);
     
-    // Robust review topics intent detection
-    const reviewInsightsIntent = /complain|complaints|worst|best|pros|cons|common issues|review topics|negative reviews|positive reviews|what do customers say|what do customers complain|what customers complain|customer complaints|most common complaints/i.test(body.message);
+    // PRIORITY C.7: Enhanced review topics intent detection
+    const reviewInsightsIntent = /bad reviews|complaints|what do customers complain about|negative reviews|review topics|worst reviews|most common complaints|customer complaints/i.test(body.message);
     
+    // PRIORITY C.8: If selectedAsins exists AND any intent is true, enrichment MUST execute
     const requiresEnrichment = (variantsIntent || reviewInsightsIntent) && selectedAsins.length > 0;
-    const enrichmentAsins = requiresEnrichment ? selectedAsins.slice(0, MAX_ENRICHMENT_ASINS_PER_QUESTION) : [];
+    const enrichmentAsins = requiresEnrichment ? selectedAsins.slice(0, MAX_ENRICHMENT_ASINS_PER_MESSAGE) : [];
     const enrichmentTypes: Array<'catalog' | 'reviewTopics'> = [];
     if (requiresEnrichment) {
       if (variantsIntent) enrichmentTypes.push('catalog');
@@ -2168,7 +2213,7 @@ export async function POST(req: NextRequest) {
       selected_asins_count: selectedAsins.length,
       enrichment_asins: enrichmentAsins,
       enrichment_types: enrichmentTypes,
-      capped_to: MAX_ENRICHMENT_ASINS_PER_QUESTION,
+      capped_to: MAX_ENRICHMENT_ASINS_PER_MESSAGE,
     });
 
     // Pass 1: decide escalation WITHOUT hitting credits DB (fast, and does not block history chat).
@@ -2526,6 +2571,71 @@ export async function POST(req: NextRequest) {
       total_selected?: number; // Total selected count
     } | null = null;
     
+    // PRIORITY B.6: Check enrichment limits (per analysis_run_id)
+    let enrichmentCallsUsed = 0;
+    if (requiresEnrichment && enrichmentAsins.length > 0) {
+      // Count existing enrichment calls for this analysis_run_id
+      try {
+        const { data: existingCalls } = await supabase
+          .from('chat_messages')
+          .select('id')
+          .eq('analysis_run_id', body.analysisRunId)
+          .not('metadata->spapi_enrichment', 'is', null)
+          .limit(MAX_ENRICHMENT_CALLS_PER_ANALYSIS);
+        
+        enrichmentCallsUsed = existingCalls?.length || 0;
+      } catch (error) {
+        console.warn("ENRICHMENT_LIMIT_CHECK_ERROR", {
+          analysisRunId: body.analysisRunId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      
+      if (enrichmentCallsUsed >= MAX_ENRICHMENT_CALLS_PER_ANALYSIS) {
+        // Limit reached - return early with explanation
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: `I've reached the limit for enrichment calls in this analysis (${MAX_ENRICHMENT_CALLS_PER_ANALYSIS} total). Please pick 1-2 ASINs to analyze.` })}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        return new NextResponse(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            ...Object.fromEntries(res.headers.entries()),
+          },
+        });
+      }
+    }
+    
+    // In-memory cache for enrichment (24h TTL)
+    const ENRICHMENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+    const enrichmentCache = new Map<string, { expiresAt: number; catalog: any | null; review_topics: any | null }>();
+    
+    function getCachedEnrichment(asin: string, endpoint: 'catalog' | 'reviewTopics'): any | null {
+      const cacheKey = `${asin}:${endpoint}`;
+      const entry = enrichmentCache.get(cacheKey);
+      if (!entry || Date.now() > entry.expiresAt) {
+        return null;
+      }
+      return endpoint === 'catalog' ? entry.catalog : entry.review_topics;
+    }
+    
+    function setCachedEnrichment(asin: string, catalog: any | null, review_topics: any | null) {
+      const catalogKey = `${asin}:catalog`;
+      const reviewTopicsKey = `${asin}:reviewTopics`;
+      const expiresAt = Date.now() + ENRICHMENT_CACHE_TTL_MS;
+      if (catalog !== null) {
+        enrichmentCache.set(catalogKey, { expiresAt, catalog, review_topics: null });
+      }
+      if (review_topics !== null) {
+        enrichmentCache.set(reviewTopicsKey, { expiresAt, catalog: null, review_topics });
+      }
+    }
+    
     if (requiresEnrichment && enrichmentAsins.length > 0) {
       const { getCatalogItemEnrichment, getReviewTopics } = await import("@/lib/spapi/enrichment");
       const marketplaceId = "ATVPDKIKX0DER"; // US marketplace
@@ -2536,30 +2646,86 @@ export async function POST(req: NextRequest) {
         by_asin: {},
       };
       
-      // Fetch enrichment for each ASIN (capped at MAX_ENRICHMENT_ASINS_PER_QUESTION)
+      // PRIORITY D.9-10: Fetch enrichment for each ASIN with caching and 403 handling
       for (const asin of enrichmentAsins) {
         const errors: string[] = [];
         let catalog: any | null = null;
         let reviewTopics: any | null = null;
         
-        // Always fetch both endpoints if enrichment is required
-        // (enrichmentTypes may indicate which one is needed, but we fetch both for completeness)
-        try {
-          catalog = await getCatalogItemEnrichment(asin, marketplaceId, user.id);
-          if (!catalog) {
-            errors.push("Catalog enrichment failed");
+        // Check cache first
+        const cachedCatalog = getCachedEnrichment(asin, 'catalog');
+        const cachedReviewTopics = getCachedEnrichment(asin, 'reviewTopics');
+        
+        if (cachedCatalog) {
+          catalog = cachedCatalog;
+          console.log("SP_API_ENRICHMENT_CACHE_HIT", { asin, endpoint: "catalog" });
+        } else {
+          // Fetch catalog enrichment
+          try {
+            catalog = await getCatalogItemEnrichment(asin, marketplaceId, user.id);
+            if (!catalog) {
+              errors.push("Catalog enrichment failed");
+            } else {
+              setCachedEnrichment(asin, catalog, null);
+            }
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            // PRIORITY D.10: Handle 403 Unauthorized explicitly
+            if (errorMessage.includes('403') || errorMessage.includes('Unauthorized') || errorMessage.includes('Forbidden')) {
+              errors.push("Permission denied: Catalog API access not authorized");
+            } else {
+              errors.push(`Catalog enrichment error: ${errorMessage}`);
+            }
           }
-        } catch (error) {
-          errors.push(`Catalog enrichment error: ${error instanceof Error ? error.message : String(error)}`);
         }
         
-        try {
-          reviewTopics = await getReviewTopics(asin, marketplaceId, user.id);
-          if (!reviewTopics) {
-            errors.push("Review topics enrichment failed");
+        if (cachedReviewTopics) {
+          reviewTopics = cachedReviewTopics;
+          console.log("SP_API_ENRICHMENT_CACHE_HIT", { asin, endpoint: "reviewTopics" });
+        } else {
+          // Fetch review topics enrichment
+          try {
+            reviewTopics = await getReviewTopics(asin, marketplaceId, user.id);
+            if (!reviewTopics) {
+              errors.push("Review topics enrichment failed");
+            } else {
+              setCachedEnrichment(asin, null, reviewTopics);
+            }
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            // PRIORITY D.10: Handle 403 Unauthorized explicitly
+            if (errorMessage.includes('403') || errorMessage.includes('Unauthorized') || errorMessage.includes('Forbidden')) {
+              errors.push("Permission denied: Review Topics API access not authorized");
+            } else {
+              errors.push(`Review topics enrichment error: ${errorMessage}`);
+            }
           }
-        } catch (error) {
-          errors.push(`Review topics enrichment error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        
+        // PRIORITY D.9: If relationships are empty on a child, detect parent ASIN and fetch parent
+        if (catalog && !catalog.child_asins && catalog.parent_asins && catalog.parent_asins.length > 0) {
+          const parentAsin = catalog.parent_asins[0];
+          console.log("SP_API_ENRICHMENT_FETCHING_PARENT", { child_asin: asin, parent_asin: parentAsin });
+          
+          try {
+            const parentCatalog = await getCatalogItemEnrichment(parentAsin, marketplaceId, user.id);
+            if (parentCatalog && parentCatalog.child_asins) {
+              // Update catalog with parent's child count
+              catalog.child_asins = parentCatalog.child_asins;
+              catalog.variation_theme = parentCatalog.variation_theme || catalog.variation_theme;
+              console.log("SP_API_ENRICHMENT_PARENT_FETCHED", { 
+                child_asin: asin, 
+                parent_asin: parentAsin,
+                child_count: parentCatalog.child_asins?.length || 0,
+              });
+            }
+          } catch (error) {
+            console.warn("SP_API_ENRICHMENT_PARENT_FETCH_FAILED", {
+              child_asin: asin,
+              parent_asin: parentAsin,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
         
         spapiEnrichment.by_asin[asin] = {
@@ -2570,7 +2736,7 @@ export async function POST(req: NextRequest) {
       }
       
       // If user selected more than cap, note it in the enrichment data
-      if (selectedAsins.length > MAX_ENRICHMENT_ASINS_PER_QUESTION) {
+      if (selectedAsins.length > MAX_ENRICHMENT_ASINS_PER_MESSAGE) {
         spapiEnrichment.only_fetched_for = enrichmentAsins[0];
         spapiEnrichment.total_selected = selectedAsins.length;
       }
@@ -2584,6 +2750,23 @@ export async function POST(req: NextRequest) {
         error_count: Object.values(spapiEnrichment.by_asin).reduce((sum, v) => sum + v.errors.length, 0),
         catalog_success: Object.values(spapiEnrichment.by_asin).filter(v => v.catalog).length,
         review_topics_success: Object.values(spapiEnrichment.by_asin).filter(v => v.review_topics).length,
+        calls_used: enrichmentCallsUsed + 1,
+        calls_remaining: MAX_ENRICHMENT_CALLS_PER_ANALYSIS - (enrichmentCallsUsed + 1),
+        has_403_errors: Object.values(spapiEnrichment.by_asin).some(v => v.errors.some(e => e.includes('Permission denied'))),
+      });
+    }
+    
+    // PRIORITY D.11: Log what ai_context.spapi_enrichment contains before OpenAI call
+    if (spapiEnrichment) {
+      console.log("SPAPI_ENRICHMENT_INJECTED", {
+        analysisRunId: body.analysisRunId,
+        executed: spapiEnrichment.executed,
+        asins: spapiEnrichment.asins,
+        by_asin_keys: Object.keys(spapiEnrichment.by_asin),
+        catalog_success_count: Object.values(spapiEnrichment.by_asin).filter(v => v.catalog).length,
+        review_topics_success_count: Object.values(spapiEnrichment.by_asin).filter(v => v.review_topics).length,
+        error_count: Object.values(spapiEnrichment.by_asin).reduce((sum, v) => sum + v.errors.length, 0),
+        has_403_errors: Object.values(spapiEnrichment.by_asin).some(v => v.errors.some(e => e.includes('Permission denied'))),
       });
     }
     
@@ -2696,6 +2879,21 @@ export async function POST(req: NextRequest) {
       aiContextToUse = { spapi_enrichment: spapiEnrichment };
     }
     
+    // PRIORITY D.11: Log what ai_context.spapi_enrichment contains before OpenAI call
+    const spapiEnrichmentInContext = (aiContextToUse as any)?.spapi_enrichment;
+    if (spapiEnrichmentInContext) {
+      console.log("SPAPI_ENRICHMENT_IN_CONTEXT", {
+        analysisRunId: body.analysisRunId,
+        executed: spapiEnrichmentInContext.executed,
+        asins: spapiEnrichmentInContext.asins || [],
+        by_asin_keys: Object.keys(spapiEnrichmentInContext.by_asin || {}),
+        catalog_success_count: Object.values(spapiEnrichmentInContext.by_asin || {}).filter((v: any) => v.catalog).length,
+        review_topics_success_count: Object.values(spapiEnrichmentInContext.by_asin || {}).filter((v: any) => v.review_topics).length,
+        error_count: Object.values(spapiEnrichmentInContext.by_asin || {}).reduce((sum: number, v: any) => sum + (v.errors?.length || 0), 0),
+        has_403_errors: Object.values(spapiEnrichmentInContext.by_asin || {}).some((v: any) => v.errors?.some((e: string) => e.includes('Permission denied'))),
+      });
+    }
+    
     console.log("🔍 AI_CONTEXT_NORMALIZED", {
       analysisRunId: body.analysisRunId,
       has_aiContextToUse: !!aiContextToUse,
@@ -2704,7 +2902,9 @@ export async function POST(req: NextRequest) {
       has_products: Array.isArray((aiContextToUse as any)?.products),
       products_count: Array.isArray((aiContextToUse as any)?.products) ? (aiContextToUse as any).products.length : 0,
       has_computed_metrics: !!(aiContextToUse as any)?.computed_metrics,
-      has_spapi_enrichment: !!(aiContextToUse as any)?.spapi_enrichment,
+      has_spapi_enrichment: !!spapiEnrichmentInContext,
+      spapi_enrichment_asins: spapiEnrichmentInContext?.asins || [],
+      spapi_enrichment_executed: spapiEnrichmentInContext?.executed || false,
     });
     
     const copilotContext = {
@@ -2982,7 +3182,7 @@ CRITICAL RULES FOR ESCALATED DATA:
       has_ai_context,
       has_ai_context_products,
       has_computed_metrics,
-      computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
+        computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
       has_spapi_enrichment: !!(ai as any)?.spapi_enrichment,
       spapi_enrichment_asins: (ai as any)?.spapi_enrichment?.asins || [],
       // Unique ASINs vs Total Appearances
