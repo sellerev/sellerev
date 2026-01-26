@@ -31,7 +31,7 @@ function convertListingToCard(listing: any): ListingCard {
     
     // Review & rating data
     rating: listing.rating ?? 0,
-    review_count: listing.review_count ?? listing.reviews ?? 0,
+    review_count: listing.review_count ?? listing.reviews ?? null, // Preserve null, never invent
     
     // Sponsored status (ASIN-level aggregation)
     // CRITICAL: Use appearsSponsored (ASIN-level), NOT isSponsored (instance-level)

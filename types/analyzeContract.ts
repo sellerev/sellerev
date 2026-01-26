@@ -75,7 +75,7 @@ export interface ListingCard {
   // REVIEW & RATING DATA (REQUIRED)
   // ═══════════════════════════════════════════════════════════════════════
   rating: number; // Average rating (0-5 scale, always present)
-  review_count: number; // Total review count (always present, may be 0)
+  review_count: number | null; // Total review count (null if missing from Rainforest, never invented)
   
   // ═══════════════════════════════════════════════════════════════════════
   // SPONSORED STATUS (REQUIRED - ASIN-LEVEL)

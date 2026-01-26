@@ -34,7 +34,7 @@ export interface CanonicalProduct {
   image_url: string | null;
   price: number;
   rating: number;
-  review_count: number;
+  review_count: number | null; // Null if missing from Rainforest, never invented
   bsr: number | null;
   estimated_monthly_units: number;
   estimated_monthly_revenue: number;
@@ -1033,12 +1033,12 @@ export function buildKeywordPageOne(
       : (ratingForProduct ?? 0);
     
     // Review count: map directly from listing.reviews (ratings_total equivalent)
-    // Real listings: preserve actual review count (even if null - interface requires number, so use 0)
-    // ESTIMATED: use 0
+    // Real listings: preserve actual review count (null if missing - never invent)
+    // ESTIMATED: use null (not 0, to distinguish from actual 0)
     const reviewCountForProduct = l.reviews ?? null;
     const review_count = isEstimatedProduct
-      ? 0
-      : (reviewCountForProduct ?? 0);
+      ? null
+      : reviewCountForProduct; // Preserve null, don't convert to 0
     
     // Image: check multiple sources (listing.image_url OR listing.image OR listing.main_image OR listing.images[0])
     // Real listings: preserve actual image, fallback to raw listing fields if missing/empty

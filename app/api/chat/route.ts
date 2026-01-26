@@ -2087,7 +2087,7 @@ export async function POST(req: NextRequest) {
         title: p.title || null,
         price: p.price || 0,
         rating: p.rating || 0,
-        review_count: p.review_count || 0,
+        review_count: p.review_count ?? null, // Preserve null, never invent
         bsr: p.bsr || null,
         estimated_monthly_units: p.estimated_monthly_units || 0,
         estimated_monthly_revenue: p.estimated_monthly_revenue || 0,
@@ -2422,9 +2422,27 @@ export async function POST(req: NextRequest) {
       analysisResponse.enrichment_status as any
     );
     
-    // 8b. Extract ai_context from analyze contract (if available)
-    // The analyze contract stores ai_context in the response (legacy support)
+    // 8b. Extract ai_context from analyze response (CRITICAL: Must include products, computed_metrics, etc.)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PHASE B FIX: Ensure ai_context is properly extracted and passed to copilot
     const aiContext = (analysisResponse.ai_context as Record<string, unknown>) || null;
+    
+    // Validate ai_context structure
+    if (aiContext) {
+      console.log("🔍 AI_CONTEXT_EXTRACTED", {
+        has_products: Array.isArray(aiContext.products),
+        products_count: Array.isArray(aiContext.products) ? aiContext.products.length : 0,
+        has_computed_metrics: !!aiContext.computed_metrics,
+        computed_metrics_keys: aiContext.computed_metrics ? Object.keys(aiContext.computed_metrics) : [],
+        has_page_one_listings: Array.isArray(aiContext.page_one_listings),
+      });
+    } else {
+      console.warn("⚠️ AI_CONTEXT_MISSING", {
+        analysisRunId: body.analysisRunId,
+        has_analysisResponse: !!analysisResponse,
+        analysisResponse_keys: analysisResponse ? Object.keys(analysisResponse) : [],
+      });
+    }
     
     // 8c. Build structured selected_asins array from contract listings
     // ═══════════════════════════════════════════════════════════════════════════
@@ -2466,11 +2484,17 @@ export async function POST(req: NextRequest) {
     // Remove selected_asins from aiContextWithSelectedAsins to avoid duplicate
     const { selected_asins: _, ...aiContextWithoutSelectedAsins } = aiContextWithSelectedAsins || {};
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PHASE B FIX: Ensure ai_context is ALWAYS included with products and computed_metrics
+    // ═══════════════════════════════════════════════════════════════════════════
     const contextToUse = useCompactContext
       ? {
           // Compact mode: Use contract format with essential fields only
           analyze_contract: analyzeContract, // Stable contract format
           selected_asins: selectedAsinsArray, // Always include selected_asins even in compact mode
+          // CRITICAL: Include ai_context even in compact mode (required for copilot)
+          // This ensures has_ai_context=true, has_ai_context_products=true, has_computed_metrics=true
+          ...(aiContext ? { ai_context: aiContext } : {}),
           // Legacy fields for backward compatibility (deprecated)
           ...buildCompactContext(
             analysisResponse, 
@@ -2483,7 +2507,10 @@ export async function POST(req: NextRequest) {
           // Expanded mode: Use full contract format
           analyze_contract: analyzeContract, // Stable contract format (primary)
           selected_asins: selectedAsinsArray,
-          // Legacy ai_context for backward compatibility (deprecated, without selected_asins to avoid duplicate)
+          // CRITICAL: Include full ai_context in expanded mode
+          // This ensures has_ai_context=true, has_ai_context_products=true, has_computed_metrics=true
+          ...(aiContext ? { ai_context: aiContext } : {}),
+          // Legacy ai_context fields for backward compatibility (deprecated, without selected_asins to avoid duplicate)
           ...aiContextWithoutSelectedAsins,
         };
     
@@ -2697,8 +2724,17 @@ CRITICAL RULES FOR ESCALATED DATA:
                          ((contextToUse as any).products as any[]) || 
                          [];
     const firstProductKeys = productsArray.length > 0 ? Object.keys(productsArray[0] || {}) : [];
-    const aiContextForCheck = (contextToUse as any).ai_context || contextToUse.analyze_contract;
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PHASE B FIX: Updated sanity check to validate exact booleans
+    // ═══════════════════════════════════════════════════════════════════════════
+    const aiContextForCheck = (contextToUse as any).ai_context;
     const computedMetrics = aiContextForCheck?.computed_metrics;
+    
+    // Validate exact booleans as required
+    const has_ai_context = !!aiContextForCheck;
+    const has_ai_context_products = Array.isArray(aiContextForCheck?.products) && aiContextForCheck.products.length > 0;
+    const has_computed_metrics = !!computedMetrics;
+    
     console.log("🔍 OPENAI_CONTEXT_SANITY_CHECK", {
       analysisRunId: body.analysisRunId,
       userId: user.id,
@@ -2714,9 +2750,10 @@ CRITICAL RULES FOR ESCALATED DATA:
       context_structure: {
         has_analyze_contract: !!contextToUse.analyze_contract,
         has_analyze_contract_listings: !!(contextToUse.analyze_contract?.listings),
-        has_ai_context: !!(contextToUse as any).ai_context,
-        has_ai_context_products: !!((contextToUse as any).ai_context?.products),
-        has_computed_metrics: !!computedMetrics,
+        // PHASE B: Exact boolean validation
+        has_ai_context,
+        has_ai_context_products,
+        has_computed_metrics,
         computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
         has_selected_asins: !!contextToUse.selected_asins,
       },

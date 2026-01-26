@@ -228,24 +228,78 @@ No products are currently selected. Answer at Page-1 market level using aggregat
 - Most questions can be answered using Page-1 aggregate data - always try to answer first`
       : "");
   
-  // Extract computed_metrics from ai_context (precomputed derived metrics)
+  // Extract computed_metrics from ai_context (comprehensive precomputed derived metrics)
+  // PHASE C: Updated to match comprehensive computed_metrics structure
   const computedMetrics = (ai_context.computed_metrics as {
-    top_revenue_product?: {
-      asin: string;
-      title: string | null;
-      estimated_monthly_revenue: number;
-    } | null;
-    top_reviews_product?: {
-      asin: string;
-      title: string | null;
-      review_count: number;
-    } | null;
-    dominant_subcategory?: {
-      subcategory_name: string;
-      asin_count: number;
-      revenue_sum: number;
-      revenue_share_pct: number;
-    } | null;
+    counts?: {
+      page1_unique_asins?: number;
+      total_listings?: number;
+      organic_count?: number;
+      sponsored_count?: number;
+      unknown_sponsored_count?: number;
+      reviews_known_count?: number;
+      reviews_unknown_count?: number;
+      products_lt_50_reviews?: { count_known: number; unknown: number };
+      products_lt_100_reviews?: { count_known: number; unknown: number };
+      products_lt_300_reviews?: { count_known: number; unknown: number };
+      products_lt_500_reviews?: { count_known: number; unknown: number };
+      products_lt_1000_reviews?: { count_known: number; unknown: number };
+    };
+    rankings?: {
+      top_revenue_product?: { asin: string; title: string | null; estimated_monthly_revenue: number } | null;
+      top_units_product?: { asin: string; title: string | null; estimated_monthly_units: number } | null;
+      top_reviews_product?: { asin: string; title: string | null; review_count: number | null } | null;
+      lowest_reviews_product?: { asin: string; title: string | null; review_count: number | null } | null;
+    };
+    concentration?: {
+      revenue_total?: number;
+      top1_revenue_share_pct?: number | null;
+      top3_revenue_share_pct?: number | null;
+      top5_revenue_share_pct?: number | null;
+      top10_revenue_share_pct?: number | null;
+    };
+    price?: {
+      min?: number | null;
+      max?: number | null;
+      avg?: number | null;
+      p25?: number | null;
+      p50?: number | null;
+      p75?: number | null;
+      revenue_weighted_avg?: number | null;
+      dominant_revenue_price_band?: { min: number; max: number; revenue_share_pct: number } | null;
+    };
+    reviews?: {
+      median?: number | null;
+      p25?: number | null;
+      p50?: number | null;
+      p75?: number | null;
+      top10_median?: number | null;
+    };
+    ratings?: {
+      avg?: number | null;
+      p25?: number | null;
+      p50?: number | null;
+      p75?: number | null;
+      dispersion?: number | null;
+    };
+    categories?: {
+      dominant_subcategory?: { subcategory_name: string; asin_count: number; revenue_sum: number; revenue_share_pct: number } | null;
+      subcategory_top3?: Array<{ subcategory_name: string; asin_count: number; revenue_sum: number; revenue_share_pct: number }>;
+    };
+    fulfillment?: {
+      fba_pct?: number | null;
+      fbm_pct?: number | null;
+      amazon_pct?: number | null;
+    };
+    data_quality?: {
+      review_count_coverage_pct?: number;
+      revenue_coverage_pct?: number;
+      subcategory_coverage_pct?: number;
+    };
+    // Legacy fields for backward compatibility
+    top_revenue_product?: { asin: string; title: string | null; estimated_monthly_revenue: number } | null;
+    top_reviews_product?: { asin: string; title: string | null; review_count: number | null } | null;
+    dominant_subcategory?: { subcategory_name: string; asin_count: number; revenue_sum: number; revenue_share_pct: number } | null;
   } | undefined) || null;
   
   // Extract authoritative_facts from ai_context (new structure)
@@ -586,6 +640,111 @@ CITATION STYLE (MANDATORY):
 - Example: "ASIN: B0YYY | Title: Another Product | Review Count: 3,478"
 
 If authoritative_facts.rankings contains precomputed values (top_revenue_product, top_reviews_product, subcategory_dominance_top3), use those directly instead of computing.
+
+═══════════════════════════════════════════════════════════════════════════
+ANSWERING SELLER QUESTIONS (Page-1 only) - PLAYBOOK
+═══════════════════════════════════════════════════════════════════════════
+
+PHASE D: This playbook maps common seller questions to computation patterns.
+Use this to answer ALL questions computable from Page-1 data.
+
+REQUIREMENTS:
+1) Always prefer ai_context.computed_metrics when present
+2) If computed_metrics is missing, derive from ai_context.products/page_one_listings using allowed ops:
+   - filter, count, sort, min/max, percentiles, group-by (subcategory_name, brand if present)
+3) For any numeric answer, cite: ASIN + truncated title + the number + label "estimated" where applicable
+4) For any count/filter query, ALWAYS include known_count and unknown_count
+
+QUESTION ROUTING / PLAYBOOK:
+
+PATTERN 1: Rankings (argmax revenue, argmax reviews, argmin reviews, etc.)
+→ Use: computed_metrics.rankings.*
+→ Examples:
+   - "Which product is pulling in the most revenue?" → computed_metrics.rankings.top_revenue_product
+   - "Which product has the highest review count?" → computed_metrics.rankings.top_reviews_product
+   - "Which product has the lowest review count?" → computed_metrics.rankings.lowest_reviews_product
+   - "Which product sells the most units?" → computed_metrics.rankings.top_units_product
+→ Fallback: Compute from ai_context.products (argmax/argmin)
+
+PATTERN 2: Threshold counts (reviews < X, price > Y, revenue > Z)
+→ Use: computed_metrics.counts.* with unknown handling
+→ Examples:
+   - "How many products less than 500 reviews?" → computed_metrics.counts.products_lt_500_reviews
+     Response format: "Count (known): N | Missing review_count on: M listings"
+     If unknown_count > 0, say: "Note: M listings have unknown review counts, so this count may be incomplete."
+   - "How many products less than 100 reviews?" → computed_metrics.counts.products_lt_100_reviews
+   - "How many products less than 50 reviews?" → computed_metrics.counts.products_lt_50_reviews
+→ Fallback: Filter ai_context.products, count known values, report unknown_count separately
+
+PATTERN 3: Concentration / hero vs spread
+→ Use: computed_metrics.concentration.top{1,3,5,10}_revenue_share_pct + revenue distribution
+→ Examples:
+   - "How concentrated is the market?" → Use top1_revenue_share_pct, top3_revenue_share_pct
+   - "What percentage of revenue do the top 3 products control?" → computed_metrics.concentration.top3_revenue_share_pct
+   - "Is this a hero product market?" → Compare top1_revenue_share_pct to thresholds (e.g., >30% = hero market)
+→ Fallback: Compute from ai_context.products (sort by revenue, calculate share)
+
+PATTERN 4: Price structure / premium gap
+→ Use: computed_metrics.price percentiles + dominant_revenue_price_band
+→ Examples:
+   - "What's the price range?" → computed_metrics.price.min to computed_metrics.price.max
+   - "What's the median price?" → computed_metrics.price.p50
+   - "What price band captures most revenue?" → computed_metrics.price.dominant_revenue_price_band
+   - "Is there a premium gap?" → Compare price.p75 to price.p25, look for gaps
+→ Fallback: Compute percentiles from ai_context.products (sort prices, calculate percentiles)
+
+PATTERN 5: Brand / moat (page-1 only)
+→ Use: ai_context.brand_moat + computed_metrics.concentration + brand_stats if present
+→ Examples:
+   - "Is this market brand-locked?" → Use brand_moat.moat_strength
+   - "How many brands are on Page 1?" → Use authoritative_facts.page1.distinct_brand_count
+   - "What percentage do the top brands control?" → Use brand_moat.top_3_brands_revenue_share_pct
+→ Fallback: Group by brand from ai_context.products, calculate revenue share
+
+PATTERN 6: Subcategory dominance
+→ Use: computed_metrics.categories.dominant_subcategory / top3
+→ Examples:
+   - "Which subcategory is most dominant?" → computed_metrics.categories.dominant_subcategory
+   - "What are the top 3 subcategories?" → computed_metrics.categories.subcategory_top3
+→ Fallback: Group by subcategory_name from ai_context.products, rank by listing count, break ties by revenue
+
+PATTERN 7: Review barrier / incumbency
+→ Use: computed_metrics.reviews percentiles + top10 median + compare top revenue listings' reviews
+→ Examples:
+   - "What's the review barrier?" → Use reviews.median, reviews.p75
+   - "How many reviews do top products have?" → Use reviews.top10_median
+   - "Can I compete with low reviews?" → Compare top revenue products' review_count to thresholds
+→ Fallback: Compute percentiles from ai_context.products (filter null review_count, sort, calculate percentiles)
+
+PATTERN 8: Sponsored pressure
+→ Use: authoritative_facts.page1.sponsored_pct + computed_metrics.counts.sponsored_count + sponsored_in_top10 if available
+→ Examples:
+   - "How many sponsored ads are on Page 1?" → computed_metrics.counts.sponsored_count
+   - "What percentage of Page 1 is sponsored?" → authoritative_facts.page1.sponsored_pct
+   - "Are there sponsored ads in the top 10?" → Check top 10 products' is_sponsored flags
+→ Fallback: Count is_sponsored === true from ai_context.products
+
+PATTERN 9: Fulfillment complexity
+→ Use: computed_metrics.fulfillment mix
+→ Examples:
+   - "What percentage is FBA?" → computed_metrics.fulfillment.fba_pct
+   - "What percentage is FBM?" → computed_metrics.fulfillment.fbm_pct
+   - "Is this mostly FBA or FBM?" → Compare fba_pct to fbm_pct
+→ Fallback: Group by fulfillment from ai_context.products, calculate percentages
+
+PATTERN 10: Data limitations messaging
+→ If a question asks for trends/velocity/PPC spend/seasonality:
+   - Say: "Not observable from Page-1 data"
+   - Explicitly list what is missing (e.g., PPC spend, historical trends, review velocity)
+   - Answer the closest possible subquestion using available data
+   - Example: "PPC spend is not observable from Page-1 data. However, I can see that X% of listings are sponsored, which suggests paid competition is present."
+
+CRITICAL RULES FOR ALL PATTERNS:
+- NEVER say "That metric is not part of this analysis scope"
+- If truly cannot be answered from page1 data, say "Not observable from Page-1 data" and list what is missing
+- Always answer the closest possible subquestion using available data
+- For count/filter queries, ALWAYS report: known_count and unknown_count
+- If unknown_count > 0, do NOT present the result as definitive
 
 REVENUE & UNITS QUESTIONS (CRITICAL - NON-NEGOTIABLE):
 - Revenue and units questions MUST ALWAYS be answered using Page-1 snapshot estimates

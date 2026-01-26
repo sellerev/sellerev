@@ -156,7 +156,7 @@ export interface KeywordAnalyzeResponse {
     image_url: string | null;
     price: number;
     rating: number;
-    review_count: number;
+    review_count: number | null; // Null if missing from Rainforest, never invented
     bsr: number | null;
     estimated_monthly_units: number;
     estimated_monthly_revenue: number;
@@ -186,7 +186,7 @@ export interface KeywordAnalyzeResponse {
     image_url: string | null;
     price: number;
     rating: number;
-    review_count: number;
+    review_count: number | null; // Null if missing from Rainforest, never invented
     bsr: number | null;
     estimated_monthly_units: number;
     estimated_monthly_revenue: number;
@@ -385,13 +385,13 @@ function calculateTop3BrandShare(canonicalProducts: CanonicalProduct[] | undefin
 /**
  * Calculates median reviews
  */
-function calculateMedianReviews(products: Array<{ review_count: number }>): number {
+function calculateMedianReviews(products: Array<{ review_count: number | null }>): number | null {
   const reviews = products
     .map(p => p.review_count)
-    .filter(r => r > 0)
+    .filter((r): r is number => r !== null && r > 0)
     .sort((a, b) => a - b);
   
-  if (reviews.length === 0) return 0;
+  if (reviews.length === 0) return null;
   
   const mid = Math.floor(reviews.length / 2);
   return reviews.length % 2 === 0
@@ -402,14 +402,14 @@ function calculateMedianReviews(products: Array<{ review_count: number }>): numb
 /**
  * Calculates top 5 average reviews
  */
-function calculateTop5AvgReviews(products: Array<{ review_count: number }>): number {
+function calculateTop5AvgReviews(products: Array<{ review_count: number | null }>): number | null {
   const reviews = products
     .map(p => p.review_count)
-    .filter(r => r > 0)
+    .filter((r): r is number => r !== null && r > 0)
     .sort((a, b) => b - a)
     .slice(0, 5);
   
-  if (reviews.length === 0) return 0;
+  if (reviews.length === 0) return null;
   
   const sum = reviews.reduce((a, b) => a + b, 0);
   return Math.round(sum / reviews.length);
@@ -695,7 +695,7 @@ export async function buildKeywordAnalyzeResponse(
         image_url: listing.image_url || null,
         price: listing.price || 0,
         rating: listing.rating || 0,
-        review_count: listing.reviews || 0,
+        review_count: listing.reviews ?? null, // Preserve null, don't convert to 0
         bsr: listing.bsr || null,
         estimated_monthly_units: listing.est_monthly_units || 0,
         estimated_monthly_revenue: revenue,
@@ -766,8 +766,8 @@ export async function buildKeywordAnalyzeResponse(
     },
     fulfillment_mix: fulfillmentMix,
     review_barrier: {
-      median_reviews: calculateMedianReviews(products),
-      top_5_avg_reviews: calculateTop5AvgReviews(products),
+      median_reviews: calculateMedianReviews(products) ?? 0, // Fallback to 0 for UI compatibility
+      top_5_avg_reviews: calculateTop5AvgReviews(products) ?? 0, // Fallback to 0 for UI compatibility
     },
     page1_density: snapshot.total_page1_listings,
   };
@@ -1180,7 +1180,7 @@ export async function buildKeywordAnalyzeResponse(
       const pageOneListings = canonicalProducts.map((p) => ({
         brand: p.brand || null,
         estimated_monthly_revenue: p.estimated_monthly_revenue || 0,
-        review_count: p.review_count || 0,
+        review_count: p.review_count ?? null, // Preserve null
         rank: p.rank || p.page_position || null,
         page_position: p.page_position || p.rank || null,
       }));
@@ -1291,11 +1291,11 @@ export async function buildKeywordAnalyzeResponse(
     .filter(p => p.estimated_monthly_units > 0)
     .sort((a, b) => b.estimated_monthly_units - a.estimated_monthly_units);
   const rankedByReviewsAsc = [...products]
-    .filter(p => p.review_count > 0)
-    .sort((a, b) => a.review_count - b.review_count); // Lowest first
+    .filter(p => p.review_count !== null && p.review_count > 0)
+    .sort((a, b) => (a.review_count ?? 0) - (b.review_count ?? 0)); // Lowest first
   const rankedByReviewsDesc = [...products]
-    .filter(p => p.review_count > 0)
-    .sort((a, b) => b.review_count - a.review_count); // Highest first
+    .filter(p => p.review_count !== null && p.review_count > 0)
+    .sort((a, b) => (b.review_count ?? 0) - (a.review_count ?? 0)); // Highest first
   
   // Calculate organic vs sponsored counts
   const organicListings = products.filter(p => p.is_sponsored === false).length;
@@ -1421,12 +1421,264 @@ export async function buildKeywordAnalyzeResponse(
     note: "These values are READ-ONLY and IMMUTABLE - AI must quote directly or refuse",
   });
   
-  // Build computed_metrics (precomputed derived metrics for AI consumption)
-  const computedMetrics = {
-    top_revenue_product: topRevenueProduct,
-    top_reviews_product: topReviewsProduct,
-    dominant_subcategory: subcategoryDominance.length > 0 ? subcategoryDominance[0] : null,
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUILD COMPREHENSIVE computed_metrics (deterministic, numeric only)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // All metrics derived from canonical Page-1 array (products)
+  // Missing values are null, never invented
+  
+  // Helper: Count products with review_count < threshold (known only)
+  const countReviewsBelow = (threshold: number): { count_known: number; unknown: number } => {
+    let countKnown = 0;
+    let unknown = 0;
+    for (const p of products) {
+      if (p.review_count === null) {
+        unknown++;
+      } else if (p.review_count < threshold) {
+        countKnown++;
+      }
+    }
+    return { count_known: countKnown, unknown };
   };
+  
+  // Helper: Calculate percentile
+  const percentile = (arr: number[], p: number): number | null => {
+    if (arr.length === 0) return null;
+    const sorted = [...arr].sort((a, b) => a - b);
+    const index = Math.ceil((p / 100) * sorted.length) - 1;
+    return sorted[Math.max(0, index)];
+  };
+  
+  // Unique ASINs count
+  const uniqueAsins = new Set(products.map(p => p.asin));
+  const page1_unique_asins = uniqueAsins.size;
+  
+  // Sponsored counts
+  const organic_count = products.filter(p => p.is_sponsored === false).length;
+  const sponsored_count = products.filter(p => p.is_sponsored === true).length;
+  const unknown_sponsored_count = products.filter(p => p.is_sponsored === null).length;
+  
+  // Review counts
+  const reviews_known_count = products.filter(p => p.review_count !== null).length;
+  const reviews_unknown_count = products.filter(p => p.review_count === null).length;
+  
+  // Rankings
+  const topUnitsProduct = rankedByUnits.length > 0 ? {
+    asin: rankedByUnits[0].asin,
+    title: rankedByUnits[0].title,
+    estimated_monthly_units: rankedByUnits[0].estimated_monthly_units,
+  } : null;
+  
+  const lowestReviewsProduct = rankedByReviewsAsc.length > 0 ? {
+    asin: rankedByReviewsAsc[0].asin,
+    title: rankedByReviewsAsc[0].title,
+    review_count: rankedByReviewsAsc[0].review_count ?? null,
+  } : null;
+  
+  // Concentration metrics
+  const revenue_total = products.reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
+  const top1Revenue = rankedByRevenue.length > 0 ? rankedByRevenue[0].estimated_monthly_revenue : 0;
+  const top3Revenue = rankedByRevenue.slice(0, 3).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const top5Revenue = rankedByRevenue.slice(0, 5).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  const top10Revenue = rankedByRevenue.slice(0, 10).reduce((sum, p) => sum + p.estimated_monthly_revenue, 0);
+  
+  const top1_revenue_share_pct = revenue_total > 0 ? Number(((top1Revenue / revenue_total) * 100).toFixed(1)) : null;
+  const top3_revenue_share_pct = revenue_total > 0 ? Number(((top3Revenue / revenue_total) * 100).toFixed(1)) : null;
+  const top5_revenue_share_pct = revenue_total > 0 ? Number(((top5Revenue / revenue_total) * 100).toFixed(1)) : null;
+  const top10_revenue_share_pct = revenue_total > 0 ? Number(((top10Revenue / revenue_total) * 100).toFixed(1)) : null;
+  
+  // Price metrics
+  const prices = products.map(p => p.price).filter((p): p is number => p > 0);
+  const price_min = prices.length > 0 ? Math.min(...prices) : null;
+  const price_max = prices.length > 0 ? Math.max(...prices) : null;
+  const price_avg = prices.length > 0 ? prices.reduce((sum, p) => sum + p, 0) / prices.length : null;
+  const price_p25 = prices.length > 0 ? percentile(prices, 25) : null;
+  const price_p50 = prices.length > 0 ? percentile(prices, 50) : null;
+  const price_p75 = prices.length > 0 ? percentile(prices, 75) : null;
+  
+  // Revenue-weighted average price
+  const revenue_weighted_avg = revenue_total > 0
+    ? products.reduce((sum, p) => sum + (p.price * (p.estimated_monthly_revenue || 0)), 0) / revenue_total
+    : null;
+  
+  // Dominant revenue price band (find price range that captures most revenue)
+  let dominant_revenue_price_band: { min: number; max: number; revenue_share_pct: number } | null = null;
+  if (prices.length > 0 && revenue_total > 0) {
+    // Group products into price bands and find the band with highest revenue
+    const priceBands: Array<{ min: number; max: number; revenue: number }> = [];
+    const bandSize = (price_max! - price_min!) / 5; // 5 bands
+    for (let i = 0; i < 5; i++) {
+      const min = price_min! + (i * bandSize);
+      const max = i === 4 ? price_max! : min + bandSize;
+      const revenue = products
+        .filter(p => p.price >= min && p.price <= max)
+        .reduce((sum, p) => sum + (p.estimated_monthly_revenue || 0), 0);
+      priceBands.push({ min, max, revenue });
+    }
+    const dominantBand = priceBands.reduce((max, band) => band.revenue > max.revenue ? band : max, priceBands[0]);
+    const revenueSharePct = Number(((dominantBand.revenue / revenue_total) * 100).toFixed(1));
+    if (revenueSharePct > 0) {
+      dominant_revenue_price_band = {
+        min: Number(dominantBand.min.toFixed(2)),
+        max: Number(dominantBand.max.toFixed(2)),
+        revenue_share_pct: revenueSharePct,
+      };
+    }
+  }
+  
+  // Review metrics
+  const reviewCounts = products
+    .map(p => p.review_count)
+    .filter((r): r is number => r !== null && r > 0);
+  const reviews_median = reviewCounts.length > 0 ? percentile(reviewCounts, 50) : null;
+  const reviews_p25 = reviewCounts.length > 0 ? percentile(reviewCounts, 25) : null;
+  const reviews_p50 = reviews_median;
+  const reviews_p75 = reviewCounts.length > 0 ? percentile(reviewCounts, 75) : null;
+  
+  // Top 10 median reviews
+  const top10ByRevenue = rankedByRevenue.slice(0, 10);
+  const top10ReviewCounts = top10ByRevenue
+    .map(p => p.review_count)
+    .filter((r): r is number => r !== null && r > 0);
+  const top10_median = top10ReviewCounts.length > 0 ? percentile(top10ReviewCounts, 50) : null;
+  
+  // Rating metrics
+  const ratings = products
+    .map(p => p.rating)
+    .filter((r): r is number => r > 0);
+  const ratings_avg = ratings.length > 0 ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length : null;
+  const ratings_p25 = ratings.length > 0 ? percentile(ratings, 25) : null;
+  const ratings_p50 = ratings.length > 0 ? percentile(ratings, 50) : null;
+  const ratings_p75 = ratings.length > 0 ? percentile(ratings, 75) : null;
+  
+  // Rating dispersion (std dev)
+  let ratings_dispersion: number | null = null;
+  if (ratings.length > 1 && ratings_avg !== null) {
+    const variance = ratings.reduce((sum, r) => sum + Math.pow(r - ratings_avg, 2), 0) / ratings.length;
+    ratings_dispersion = Number(Math.sqrt(variance).toFixed(2));
+  }
+  
+  // Fulfillment metrics
+  const fba_count = products.filter(p => p.fulfillment === "FBA").length;
+  const fbm_count = products.filter(p => p.fulfillment === "FBM").length;
+  const amazon_count = products.filter(p => p.fulfillment === "AMZ").length;
+  const total_fulfillment = fba_count + fbm_count + amazon_count;
+  const fba_pct = total_fulfillment > 0 ? Number(((fba_count / total_fulfillment) * 100).toFixed(1)) : null;
+  const fbm_pct = total_fulfillment > 0 ? Number(((fbm_count / total_fulfillment) * 100).toFixed(1)) : null;
+  const amazon_pct = total_fulfillment > 0 ? Number(((amazon_count / total_fulfillment) * 100).toFixed(1)) : null;
+  
+  // Data quality metrics
+  const review_count_coverage_pct = products.length > 0
+    ? Number(((reviews_known_count / products.length) * 100).toFixed(1))
+    : 0;
+  const revenue_coverage_pct = 100; // Revenue is always allocated (should be 100)
+  const subcategory_coverage_pct = products.length > 0
+    ? Number(((products.filter(p => (p as any).subcategory_name || (p as any).subcategoryName).length / products.length) * 100).toFixed(1))
+    : 0;
+  
+  // Build comprehensive computed_metrics
+  const computedMetrics = {
+    counts: {
+      page1_unique_asins: page1_unique_asins,
+      total_listings: products.length,
+      organic_count,
+      sponsored_count,
+      unknown_sponsored_count,
+      reviews_known_count,
+      reviews_unknown_count,
+      products_lt_50_reviews: countReviewsBelow(50),
+      products_lt_100_reviews: countReviewsBelow(100),
+      products_lt_300_reviews: countReviewsBelow(300),
+      products_lt_500_reviews: countReviewsBelow(500),
+      products_lt_1000_reviews: countReviewsBelow(1000),
+    },
+    rankings: {
+      top_revenue_product: topRevenueProduct,
+      top_units_product: topUnitsProduct,
+      top_reviews_product: topReviewsProduct,
+      lowest_reviews_product: lowestReviewsProduct,
+    },
+    concentration: {
+      revenue_total,
+      top1_revenue_share_pct,
+      top3_revenue_share_pct,
+      top5_revenue_share_pct,
+      top10_revenue_share_pct,
+    },
+    price: {
+      min: price_min,
+      max: price_max,
+      avg: price_avg,
+      p25: price_p25,
+      p50: price_p50,
+      p75: price_p75,
+      revenue_weighted_avg,
+      dominant_revenue_price_band,
+    },
+    reviews: {
+      median: reviews_median,
+      p25: reviews_p25,
+      p50: reviews_p50,
+      p75: reviews_p75,
+      top10_median: top10_median,
+    },
+    ratings: {
+      avg: ratings_avg,
+      p25: ratings_p25,
+      p50: ratings_p50,
+      p75: ratings_p75,
+      dispersion: ratings_dispersion,
+    },
+    categories: {
+      dominant_subcategory: subcategoryDominance.length > 0 ? subcategoryDominance[0] : null,
+      subcategory_top3: subcategoryDominance,
+    },
+    fulfillment: {
+      fba_pct,
+      fbm_pct,
+      amazon_pct,
+    },
+    data_quality: {
+      review_count_coverage_pct,
+      revenue_coverage_pct,
+      subcategory_coverage_pct,
+    },
+  };
+  
+  // Log computed_metrics for verification
+  console.log("📊 COMPUTED_METRICS_BUILT", {
+    keyword,
+    total_listings: computedMetrics.counts.total_listings,
+    reviews_known: computedMetrics.counts.reviews_known_count,
+    reviews_unknown: computedMetrics.counts.reviews_unknown_count,
+    products_lt_500_reviews: computedMetrics.counts.products_lt_500_reviews.count_known,
+    has_top_revenue: !!computedMetrics.rankings.top_revenue_product,
+    has_top_reviews: !!computedMetrics.rankings.top_reviews_product,
+    top1_revenue_share: computedMetrics.concentration.top1_revenue_share_pct,
+  });
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PHASE A: Review Count Verification Logging
+  // ═══════════════════════════════════════════════════════════════════════════
+  const reviewCountStats = {
+    total_products: products.length,
+    count_review_null: products.filter(p => p.review_count === null).length,
+    count_review_lt_500: products.filter(p => p.review_count !== null && p.review_count < 500).length,
+    sample_lowest_reviews: products
+      .filter(p => p.review_count !== null)
+      .sort((a, b) => (a.review_count ?? 0) - (b.review_count ?? 0))
+      .slice(0, 5)
+      .map(p => ({
+        asin: p.asin,
+        title: p.title?.substring(0, 50) || null,
+        review_count: p.review_count,
+      })),
+  };
+  console.log("🔍 REVIEW_COUNT_VERIFICATION", {
+    keyword,
+    ...reviewCountStats,
+    note: "Review counts must be preserved from Rainforest (null if missing, never invented)",
+  });
   
   // Build AI context (read-only copy)
   const aiContext = {
