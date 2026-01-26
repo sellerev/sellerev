@@ -624,6 +624,18 @@ export async function buildKeywordAnalyzeResponse(
         // Prime eligibility and fulfillment status (from is_prime heuristic)
         primeEligible: p.primeEligible ?? false, // Prime eligibility (from is_prime, for UI display and AI reasoning)
         fulfillment_status: p.fulfillment_status ?? 'NON_PRIME', // Prime/Non-Prime status (heuristic from is_prime, NOT FBA guarantee)
+        // BSR enrichment fields (from SP-API Catalog)
+        main_category_bsr: (p as any).main_category_bsr ?? (p as any).mainCategoryBsr ?? (p as any).root_rank ?? (p as any).bsr_root ?? null,
+        mainCategoryBsr: (p as any).mainCategoryBsr ?? (p as any).main_category_bsr ?? (p as any).root_rank ?? (p as any).bsr_root ?? null,
+        root_rank: (p as any).root_rank ?? (p as any).bsr_root ?? null,
+        root_display_group: (p as any).root_display_group ?? (p as any).bsr_root_category ?? (p as any).main_category_name ?? (p as any).mainCategoryName ?? null,
+        bsr_root: (p as any).bsr_root ?? (p as any).root_rank ?? null,
+        bsr_root_category: (p as any).bsr_root_category ?? (p as any).root_display_group ?? (p as any).main_category_name ?? (p as any).mainCategoryName ?? null,
+        subcategory_rank: (p as any).subcategory_rank ?? (p as any).subcategory_bsr ?? null,
+        subcategory_bsr: (p as any).subcategory_bsr ?? (p as any).subcategory_rank ?? null,
+        subcategory_name: (p as any).subcategory_name ?? null,
+        main_category_name: (p as any).main_category_name ?? (p as any).mainCategoryName ?? (p as any).root_display_group ?? (p as any).bsr_root_category ?? null,
+        mainCategoryName: (p as any).mainCategoryName ?? (p as any).main_category_name ?? (p as any).root_display_group ?? (p as any).bsr_root_category ?? null,
       };
     }) as any; // Type assertion to bypass interface requirement (Phase 2: brand removed at API boundary)
   } else if (canonicalProducts && canonicalProducts.length === 0) {
