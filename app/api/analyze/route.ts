@@ -3594,7 +3594,10 @@ export async function POST(req: NextRequest) {
           mergedListingsByAsin.set(normalizeAsin(listing.asin), listing);
           // #region agent log
           if (mergedListingsByAsin.size <= 3) {
-            fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:3594',message:'Building merge map from keywordMarketData',data:{asin:listing.asin,has_main_category_bsr:!!(listing as any).main_category_bsr,has_mainCategoryBsr:!!(listing as any).mainCategoryBsr,main_category_bsr:(listing as any).main_category_bsr,mainCategoryBsr:(listing as any).mainCategoryBsr,root_rank:(listing as any).root_rank},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+            const fs = require('fs');
+            const logPath = '/Users/Shane/Desktop/sellerev/.cursor/debug.log';
+            const logEntry = JSON.stringify({location:'route.ts:3594',message:'Building merge map from keywordMarketData',data:{asin:listing.asin,has_main_category_bsr:!!(listing as any).main_category_bsr,has_mainCategoryBsr:!!(listing as any).mainCategoryBsr,main_category_bsr:(listing as any).main_category_bsr,mainCategoryBsr:(listing as any).mainCategoryBsr,root_rank:(listing as any).root_rank},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'}) + '\n';
+            try { fs.appendFileSync(logPath, logEntry); } catch(e) {}
           }
           // #endregion
         }
@@ -3631,7 +3634,10 @@ export async function POST(req: NextRequest) {
       
       // #region agent log
       if (listingsWithMergedFields.length < 3) {
-        fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:3625',message:'Merge lookup for listing',data:{asin:listing.asin,asinKey,found:!!mergedListing,listing_has_main_category_bsr:!!listing.main_category_bsr,listing_has_root_rank:!!listing.root_rank,merged_has_main_category_bsr:!!(mergedListing as any)?.main_category_bsr,merged_has_root_rank:!!(mergedListing as any)?.root_rank},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+        const fs = require('fs');
+        const logPath = '/Users/Shane/Desktop/sellerev/.cursor/debug.log';
+        const logEntry = JSON.stringify({location:'route.ts:3625',message:'Merge lookup for listing',data:{asin:listing.asin,asinKey,found:!!mergedListing,listing_has_main_category_bsr:!!listing.main_category_bsr,listing_has_root_rank:!!listing.root_rank,merged_has_main_category_bsr:!!(mergedListing as any)?.main_category_bsr,merged_has_root_rank:!!(mergedListing as any)?.root_rank},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'}) + '\n';
+        try { fs.appendFileSync(logPath, logEntry); } catch(e) {}
       }
       // #endregion
       
@@ -3642,7 +3648,10 @@ export async function POST(req: NextRequest) {
         
         // #region agent log
         if (listingsWithMergedFields.length < 3) {
-          fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:3630',message:'Computed mainCategoryBsrValue from merged listing',data:{asin:listing.asin,mainCategoryBsrValue,from_merged_main_category_bsr:(mergedListing as any).main_category_bsr,from_merged_root_rank:(mergedListing as any).root_rank,from_listing_main_category_bsr:listing.main_category_bsr,from_listing_root_rank:listing.root_rank},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+          const fs = require('fs');
+          const logPath = '/Users/Shane/Desktop/sellerev/.cursor/debug.log';
+          const logEntry = JSON.stringify({location:'route.ts:3630',message:'Computed mainCategoryBsrValue from merged listing',data:{asin:listing.asin,mainCategoryBsrValue,from_merged_main_category_bsr:(mergedListing as any).main_category_bsr,from_merged_root_rank:(mergedListing as any).root_rank,from_listing_main_category_bsr:listing.main_category_bsr,from_listing_root_rank:listing.root_rank},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'}) + '\n';
+          try { fs.appendFileSync(logPath, logEntry); } catch(e) {}
         }
         // #endregion
         const mainCategoryNameValue = (mergedListing as any).main_category_name ?? (mergedListing as any).root_display_group ?? (mergedListing as any).bsr_root_category ?? listing.main_category_name ?? listing.root_display_group ?? listing.bsr_root_category ?? null;
@@ -3866,7 +3875,10 @@ export async function POST(req: NextRequest) {
     
     // #region agent log
     if (first) {
-      fetch('http://127.0.0.1:7242/ingest/b2409008-55ce-444e-a877-70d07cb89a85',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'route.ts:3842',message:'Final response listing sample',data:{asin:first.asin,bsr:first.bsr,main_category_bsr:first.main_category_bsr,mainCategoryBsr:first.mainCategoryBsr,root_rank:first.root_rank,has_main_category_bsr:!!first.main_category_bsr,has_mainCategoryBsr:!!first.mainCategoryBsr,keys:Object.keys(first).slice(0,20)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
+      const fs = require('fs');
+      const logPath = '/Users/Shane/Desktop/sellerev/.cursor/debug.log';
+      const logEntry = JSON.stringify({location:'route.ts:3842',message:'Final response listing sample',data:{asin:first.asin,bsr:first.bsr,main_category_bsr:first.main_category_bsr,mainCategoryBsr:first.mainCategoryBsr,root_rank:first.root_rank,has_main_category_bsr:!!first.main_category_bsr,has_mainCategoryBsr:!!first.mainCategoryBsr,keys:Object.keys(first).slice(0,20)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'}) + '\n';
+      try { fs.appendFileSync(logPath, logEntry); } catch(e) {}
     }
     // #endregion
     
