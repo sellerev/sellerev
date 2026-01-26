@@ -247,8 +247,16 @@ export function convertToAnalyzeContract(
   if (listings.length > 0) {
     const sortedByRevenue = [...listings].sort((a, b) => b.estimated_monthly_revenue - a.estimated_monthly_revenue);
     const sortedByUnits = [...listings].sort((a, b) => b.estimated_monthly_units - a.estimated_monthly_units);
-    const sortedByReviews = [...listings].sort((a, b) => a.review_count - b.review_count);
-    const sortedByReviewsDesc = [...listings].sort((a, b) => b.review_count - a.review_count);
+    const sortedByReviews = [...listings].sort((a, b) => {
+      const aCount = a.review_count ?? 0;
+      const bCount = b.review_count ?? 0;
+      return aCount - bCount;
+    });
+    const sortedByReviewsDesc = [...listings].sort((a, b) => {
+      const aCount = a.review_count ?? 0;
+      const bCount = b.review_count ?? 0;
+      return bCount - aCount;
+    });
     
     rankings.highest_revenue_asin = sortedByRevenue[0]?.asin ?? null;
     rankings.highest_units_asin = sortedByUnits[0]?.asin ?? null;
