@@ -3835,6 +3835,21 @@ export async function POST(req: NextRequest) {
       });
     }
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DEBUG LOG: Confirm first listing includes main_category_bsr before returning
+    // ═══════════════════════════════════════════════════════════════════════════
+    const firstListingForDebug = listingsWithMergedFields[0];
+    if (firstListingForDebug) {
+      console.log("PRE_RETURN_LISTING_BSR_DEBUG", {
+        asin: firstListingForDebug.asin,
+        bsr: firstListingForDebug.bsr,
+        main_category_bsr: firstListingForDebug.main_category_bsr,
+        mainCategoryBsr: firstListingForDebug.mainCategoryBsr,
+        keys: Object.keys(firstListingForDebug).sort(),
+        keyword: normalizedKeyword,
+      });
+    }
+    
     return NextResponse.json(
       finalResponse,
       { 

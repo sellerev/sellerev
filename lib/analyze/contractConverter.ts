@@ -66,8 +66,9 @@ function convertListingToCard(listing: any): ListingCard {
     brand_source: listing.brand_source,
     main_category: listing.main_category ?? null,
     category_source: listing.category_source,
-    bsr: listing.main_category_bsr ?? listing.bsr ?? null, // Prefer main_category_bsr
-    main_category_bsr: listing.main_category_bsr ?? listing.bsr ?? null,
+    bsr: listing.main_category_bsr ?? listing.mainCategoryBsr ?? listing.bsr ?? null, // Prefer main_category_bsr
+    main_category_bsr: listing.main_category_bsr ?? listing.mainCategoryBsr ?? listing.bsr ?? null,
+    mainCategoryBsr: listing.mainCategoryBsr ?? listing.main_category_bsr ?? listing.bsr ?? null, // CamelCase for UI compatibility
     bsr_source: listing.bsr_source,
     bsr_confidence: listing.bsr_confidence,
     dimensions: listing.dimensions ?? null,

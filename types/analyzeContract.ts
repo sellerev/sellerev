@@ -119,7 +119,8 @@ export interface ListingCard {
   
   // BSR enrichment (from SP-API Catalog or Rainforest)
   bsr?: number | null; // Best Seller Rank (main category)
-  main_category_bsr?: number | null; // Main category BSR (preferred)
+  main_category_bsr?: number | null; // Main category BSR (preferred, snake_case)
+  mainCategoryBsr?: number | null; // Main category BSR (camelCase, for UI compatibility)
   bsr_source?: "sp_api" | "rainforest" | "estimated" | "unavailable";
   bsr_confidence?: "high" | "medium" | "low" | "unknown";
   
