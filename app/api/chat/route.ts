@@ -2136,16 +2136,27 @@ export async function POST(req: NextRequest) {
     // ENRICHMENT DECISION (SP-API enrichment for variants/review topics)
     // ═══════════════════════════════════════════════════════════════════════════
     // Separate from Rainforest escalation - doesn't use credits
+    // Hard cap: MAX_ENRICHMENT_ASINS_PER_QUESTION = 1 (start)
+    const MAX_ENRICHMENT_ASINS_PER_QUESTION = 1;
+    
     const normalizedQuestion = body.message.toLowerCase();
-    const variantsIntent = /variants?|variations?|sizes?|colors?|which variant|how many variants/i.test(body.message);
-    const reviewInsightsIntent = /best reviews|worst reviews|what do customers like|complaints|pros and cons|review topics|what customers complain/i.test(body.message);
+    
+    // Robust variants intent detection
+    const variantsIntent = /variant|variants|variation|variations|size|sizes|color|colors|colour|colours|version|versions|how many variants|which variant/i.test(body.message);
+    
+    // Robust review topics intent detection
+    const reviewInsightsIntent = /complain|complaints|worst|best|pros|cons|common issues|review topics|negative reviews|positive reviews|what do customers say|what do customers complain|what customers complain|customer complaints|most common complaints/i.test(body.message);
     
     const requiresEnrichment = (variantsIntent || reviewInsightsIntent) && selectedAsins.length > 0;
-    const enrichmentAsins = requiresEnrichment ? selectedAsins.slice(0, 5) : []; // Cap at 5 ASINs
+    const enrichmentAsins = requiresEnrichment ? selectedAsins.slice(0, MAX_ENRICHMENT_ASINS_PER_QUESTION) : [];
     const enrichmentTypes: Array<'catalog' | 'reviewTopics'> = [];
     if (requiresEnrichment) {
       if (variantsIntent) enrichmentTypes.push('catalog');
       if (reviewInsightsIntent) enrichmentTypes.push('reviewTopics');
+      // If both intents detected, fetch both types
+      if (variantsIntent && reviewInsightsIntent) {
+        enrichmentTypes.push('catalog', 'reviewTopics');
+      }
     }
     
     console.log("ENRICHMENT_DECISION", {
@@ -2154,8 +2165,10 @@ export async function POST(req: NextRequest) {
       variants_intent: variantsIntent,
       review_insights_intent: reviewInsightsIntent,
       selected_asins: selectedAsins,
+      selected_asins_count: selectedAsins.length,
       enrichment_asins: enrichmentAsins,
       enrichment_types: enrichmentTypes,
+      capped_to: MAX_ENRICHMENT_ASINS_PER_QUESTION,
     });
 
     // Pass 1: decide escalation WITHOUT hitting credits DB (fast, and does not block history chat).
@@ -2166,6 +2179,20 @@ export async function POST(req: NextRequest) {
       effectiveSelectedAsinForEscalation, // Backward compatibility (single ASIN)
       eligibleAsinsForEscalation // Multi-ASIN support (selected OR explicit)
     );
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ENRICHMENT OVERRIDES PAGE-1 ANSWERABLE
+    // ═══════════════════════════════════════════════════════════════════════════
+    // If enrichment is required, this question cannot be answered from Page-1 alone
+    // because Page-1 doesn't contain variants or review topic summaries
+    if (requiresEnrichment) {
+      escalationDecision.can_answer_from_page1 = false;
+      console.log("ENRICHMENT_OVERRIDE_PAGE1", {
+        analysisRunId: body.analysisRunId,
+        original_can_answer_from_page1: escalationDecision.can_answer_from_page1,
+        override_reason: "Enrichment required for variants/review topics (not available in Page-1 data)",
+      });
+    }
 
     // Server-side guardrails (single source of truth for creditless analysis-only chat).
     // NOTE: this does NOT change pricing/credit logic; it only clarifies intent classification.
@@ -2495,6 +2522,8 @@ export async function POST(req: NextRequest) {
         review_topics: any | null;
         errors: string[];
       }>;
+      only_fetched_for?: string; // If user selected more than cap
+      total_selected?: number; // Total selected count
     } | null = null;
     
     if (requiresEnrichment && enrichmentAsins.length > 0) {
@@ -2507,29 +2536,27 @@ export async function POST(req: NextRequest) {
         by_asin: {},
       };
       
-      // Fetch enrichment for each ASIN
+      // Fetch enrichment for each ASIN (capped at MAX_ENRICHMENT_ASINS_PER_QUESTION)
       for (const asin of enrichmentAsins) {
         const errors: string[] = [];
         let catalog: any | null = null;
         let reviewTopics: any | null = null;
         
+        // Always fetch both endpoints if enrichment is required
+        // (enrichmentTypes may indicate which one is needed, but we fetch both for completeness)
         try {
-          if (enrichmentTypes.includes('catalog')) {
-            catalog = await getCatalogItemEnrichment(asin, marketplaceId, user.id);
-            if (!catalog) {
-              errors.push("Catalog enrichment failed");
-            }
+          catalog = await getCatalogItemEnrichment(asin, marketplaceId, user.id);
+          if (!catalog) {
+            errors.push("Catalog enrichment failed");
           }
         } catch (error) {
           errors.push(`Catalog enrichment error: ${error instanceof Error ? error.message : String(error)}`);
         }
         
         try {
-          if (enrichmentTypes.includes('reviewTopics')) {
-            reviewTopics = await getReviewTopics(asin, marketplaceId, user.id);
-            if (!reviewTopics) {
-              errors.push("Review topics enrichment failed");
-            }
+          reviewTopics = await getReviewTopics(asin, marketplaceId, user.id);
+          if (!reviewTopics) {
+            errors.push("Review topics enrichment failed");
           }
         } catch (error) {
           errors.push(`Review topics enrichment error: ${error instanceof Error ? error.message : String(error)}`);
@@ -2542,12 +2569,21 @@ export async function POST(req: NextRequest) {
         };
       }
       
+      // If user selected more than cap, note it in the enrichment data
+      if (selectedAsins.length > MAX_ENRICHMENT_ASINS_PER_QUESTION) {
+        spapiEnrichment.only_fetched_for = enrichmentAsins[0];
+        spapiEnrichment.total_selected = selectedAsins.length;
+      }
+      
       console.log("SP_API_ENRICHMENT_COMPLETE", {
         analysisRunId: body.analysisRunId,
         asins: enrichmentAsins,
+        total_selected: selectedAsins.length,
         enrichment_types: enrichmentTypes,
         success_count: Object.values(spapiEnrichment.by_asin).filter(v => v.catalog || v.review_topics).length,
         error_count: Object.values(spapiEnrichment.by_asin).reduce((sum, v) => sum + v.errors.length, 0),
+        catalog_success: Object.values(spapiEnrichment.by_asin).filter(v => v.catalog).length,
+        review_topics_success: Object.values(spapiEnrichment.by_asin).filter(v => v.review_topics).length,
       });
     }
     
@@ -2946,7 +2982,9 @@ CRITICAL RULES FOR ESCALATED DATA:
       has_ai_context,
       has_ai_context_products,
       has_computed_metrics,
-        computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
+      computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
+      has_spapi_enrichment: !!(ai as any)?.spapi_enrichment,
+      spapi_enrichment_asins: (ai as any)?.spapi_enrichment?.asins || [],
       // Unique ASINs vs Total Appearances
       page1_unique_asins: page1UniqueAsins,
       page1_total_appearances: page1TotalAppearances,

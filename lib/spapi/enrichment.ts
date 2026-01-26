@@ -108,28 +108,17 @@ function getEndpointForMarketplace(marketplaceId: string = "ATVPDKIKX0DER"): { e
 
 export interface CatalogEnrichment {
   asin: string;
-  relationships: {
-    parentAsins: string[] | null;
-    childAsins: string[] | null;
-    variationTheme: string | null;
-  };
-  summaries: {
-    itemName: string | null;
-    brand: string | null;
-    color: string | null;
-  };
-  attributes: {
-    color: string | null;
-    [key: string]: any;
-  };
+  parent_asins: string[] | null;
+  child_asins: string[] | null;
+  variation_theme: string | null;
+  color: string | null;
+  item_name: string | null;
 }
 
 export interface ReviewTopicsEnrichment {
   asin: string;
-  topics: {
-    positive: Array<{ label: string; mentions?: number | null }>;
-    negative: Array<{ label: string; mentions?: number | null }>;
-  };
+  positive_topics: Array<{ label: string; mentions?: number | null }>;
+  negative_topics: Array<{ label: string; mentions?: number | null }>;
   updated_at: string;
 }
 
@@ -234,21 +223,14 @@ export async function getCatalogItemEnrichment(
       has_variation_theme: !!variationTheme,
     });
     
+    // Normalize to flat structure
     return {
       asin,
-      relationships: {
-        parentAsins: parentAsins && parentAsins.length > 0 ? parentAsins : null,
-        childAsins: childAsins && childAsins.length > 0 ? childAsins : null,
-        variationTheme: variationTheme || null,
-      },
-      summaries: {
-        itemName: itemName || null,
-        brand: brand || null,
-        color: color || colorAttr || null,
-      },
-      attributes: {
-        color: colorAttr || null,
-      },
+      parent_asins: parentAsins && parentAsins.length > 0 ? parentAsins : null,
+      child_asins: childAsins && childAsins.length > 0 ? childAsins : null,
+      variation_theme: variationTheme || null,
+      color: color || colorAttr || null,
+      item_name: itemName || null,
     };
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -331,8 +313,8 @@ export async function getReviewTopics(
     
     // Normalize response
     const topics = data.topics || [];
-    const positive: Array<{ label: string; mentions?: number | null }> = [];
-    const negative: Array<{ label: string; mentions?: number | null }> = [];
+    const positive_topics: Array<{ label: string; mentions?: number | null }> = [];
+    const negative_topics: Array<{ label: string; mentions?: number | null }> = [];
     
     for (const topic of topics) {
       const label = topic.label || topic.topic || null;
@@ -342,9 +324,9 @@ export async function getReviewTopics(
       if (!label) continue;
       
       if (sentiment === 'positive' || sentiment === 'POSITIVE') {
-        positive.push({ label, mentions });
+        positive_topics.push({ label, mentions });
       } else if (sentiment === 'negative' || sentiment === 'NEGATIVE') {
-        negative.push({ label, mentions });
+        negative_topics.push({ label, mentions });
       }
     }
     
@@ -353,16 +335,14 @@ export async function getReviewTopics(
       asin,
       http_status: httpStatus,
       duration_ms: duration,
-      positive_count: positive.length,
-      negative_count: negative.length,
+      positive_count: positive_topics.length,
+      negative_count: negative_topics.length,
     });
     
     return {
       asin,
-      topics: {
-        positive,
-        negative,
-      },
+      positive_topics,
+      negative_topics,
       updated_at: new Date().toISOString(),
     };
   } catch (error) {
