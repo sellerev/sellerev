@@ -115,12 +115,24 @@ export interface ListingCard {
   
   // Category enrichment (from SP-API Catalog)
   main_category?: string | null; // Main category name (e.g., "Home & Kitchen")
+  category?: string | null; // Category name (alias for main_category)
+  primary_category?: string | null; // Primary category name (alias for main_category)
   category_source?: "sp_api" | "rainforest" | "unknown";
   
   // BSR enrichment (from SP-API Catalog or Rainforest)
-  bsr?: number | null; // Best Seller Rank (main category)
-  main_category_bsr?: number | null; // Main category BSR (preferred, snake_case)
-  mainCategoryBsr?: number | null; // Main category BSR (camelCase, for UI compatibility)
+  // CRITICAL: bsr is subcategory rank, main_category_bsr is root rank
+  bsr?: number | null; // Subcategory Best Seller Rank (for backwards compatibility)
+  subcategory_bsr?: number | null; // Subcategory BSR (explicit field)
+  subcategory_rank?: number | null; // Subcategory rank (alias for subcategory_bsr)
+  subcategory_name?: string | null; // Subcategory name
+  main_category_bsr?: number | null; // Main category BSR (root rank, preferred, snake_case)
+  mainCategoryBsr?: number | null; // Main category BSR (root rank, camelCase, for UI compatibility)
+  root_rank?: number | null; // Root/main category rank (explicit field)
+  root_display_group?: string | null; // Root/main category display group name
+  bsr_root?: number | null; // Root BSR (legacy alias)
+  bsr_root_category?: string | null; // Root category name (legacy alias)
+  main_category_name?: string | null; // Main category name (alias for root_display_group)
+  mainCategoryName?: string | null; // Main category name (camelCase alias)
   bsr_source?: "sp_api" | "rainforest" | "estimated" | "unavailable";
   bsr_confidence?: "high" | "medium" | "low" | "unknown";
   

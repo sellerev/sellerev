@@ -119,6 +119,7 @@ export function ProductCard({
       });
       
       // #region agent log
+      // Note: Ingest endpoint may not exist - this is debug only, failures are silent
       fetch(getIngestUrl(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ProductCard.tsx:84',message:'ProductCard props received',data:{asin,bsr,mainCategoryBsr,rootRank,bsrRoot,computed_mainBsr:mainCategoryBsr ?? rootRank ?? bsrRoot ?? null,has_mainCategoryBsr:!!mainCategoryBsr,has_rootRank:!!rootRank,has_bsrRoot:!!bsrRoot},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H4'})}).catch(()=>{});
       // #endregion
     }

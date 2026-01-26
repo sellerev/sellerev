@@ -3672,23 +3672,36 @@ export async function POST(req: NextRequest) {
         // #endregion
         const mainCategoryNameValue = (mergedListing as any).main_category_name ?? (mergedListing as any).root_display_group ?? (mergedListing as any).bsr_root_category ?? listing.main_category_name ?? listing.root_display_group ?? listing.bsr_root_category ?? null;
         
+        // CRITICAL: bsr should be subcategory rank, NOT root rank
+        const subcategoryBsrValue = (mergedListing as any).subcategory_bsr ?? (mergedListing as any).subcategory_rank ?? listing.subcategory_bsr ?? listing.subcategory_rank ?? null;
+        const subcategoryNameValue = (mergedListing as any).subcategory_name ?? listing.subcategory_name ?? null;
+        const bsrSourceValue = (mergedListing as any).bsr_source ?? listing.bsr_source ?? null;
+        const categoryValue = (mergedListing as any).category ?? (mergedListing as any).primary_category ?? (mergedListing as any).main_category ?? listing.category ?? listing.primary_category ?? listing.main_category ?? null;
+        
         return {
           ...listing,
+          // CRITICAL: bsr is subcategory rank (for backwards compatibility)
+          bsr: subcategoryBsrValue,
           // Subcategory fields (prefer merged, fallback to existing)
           subcategory_rank: (mergedListing as any).subcategory_rank ?? (mergedListing as any).subcategory_bsr ?? listing.subcategory_rank ?? listing.subcategory_bsr ?? null,
-          subcategory_name: (mergedListing as any).subcategory_name ?? listing.subcategory_name ?? null,
-          subcategory_bsr: (mergedListing as any).subcategory_bsr ?? listing.subcategory_bsr ?? null,
+          subcategory_name: subcategoryNameValue,
+          subcategory_bsr: subcategoryBsrValue,
           // Root/main category fields (prefer merged, fallback to existing)
           root_rank: (mergedListing as any).root_rank ?? (mergedListing as any).bsr_root ?? listing.root_rank ?? listing.bsr_root ?? null,
           root_display_group: (mergedListing as any).root_display_group ?? (mergedListing as any).bsr_root_category ?? listing.root_display_group ?? listing.bsr_root_category ?? null,
           bsr_root: (mergedListing as any).bsr_root ?? listing.bsr_root ?? null,
           bsr_root_category: (mergedListing as any).bsr_root_category ?? listing.bsr_root_category ?? null,
           // Backwards-compatible aliases (snake_case)
-          main_category_bsr: mainCategoryBsrValue,
+          main_category_bsr: mainCategoryBsrValue, // Root rank
           main_category_name: mainCategoryNameValue,
           // CamelCase versions for UI compatibility
           mainCategoryBsr: mainCategoryBsrValue,
           mainCategoryName: mainCategoryNameValue,
+          // BSR source and category fields
+          bsr_source: bsrSourceValue,
+          category: categoryValue,
+          primary_category: categoryValue,
+          main_category: categoryValue,
         };
       }
       
@@ -3696,21 +3709,36 @@ export async function POST(req: NextRequest) {
       const mainCategoryBsrValue = listing.main_category_bsr ?? listing.root_rank ?? listing.bsr_root ?? null;
       const mainCategoryNameValue = listing.main_category_name ?? listing.root_display_group ?? listing.bsr_root_category ?? null;
       
+      // CRITICAL: bsr should be subcategory rank, NOT root rank
+      const subcategoryBsrValue = listing.subcategory_bsr ?? listing.subcategory_rank ?? listing.bsr ?? null;
+      const subcategoryNameValue = listing.subcategory_name ?? null;
+      const bsrSourceValue = listing.bsr_source ?? null;
+      const categoryValue = listing.category ?? listing.primary_category ?? listing.main_category ?? null;
+      
       return {
         ...listing,
+        // CRITICAL: bsr is subcategory rank (for backwards compatibility)
+        bsr: subcategoryBsrValue,
+        // Subcategory fields
         subcategory_rank: listing.subcategory_rank ?? listing.subcategory_bsr ?? null,
-        subcategory_name: listing.subcategory_name ?? null,
-        subcategory_bsr: listing.subcategory_bsr ?? null,
+        subcategory_name: subcategoryNameValue,
+        subcategory_bsr: subcategoryBsrValue,
+        // Root/main category fields
         root_rank: listing.root_rank ?? listing.bsr_root ?? null,
         root_display_group: listing.root_display_group ?? listing.bsr_root_category ?? null,
         bsr_root: listing.bsr_root ?? null,
         bsr_root_category: listing.bsr_root_category ?? null,
         // Backwards-compatible aliases (snake_case)
-        main_category_bsr: mainCategoryBsrValue,
+        main_category_bsr: mainCategoryBsrValue, // Root rank
         main_category_name: mainCategoryNameValue,
         // CamelCase versions for UI compatibility
         mainCategoryBsr: mainCategoryBsrValue,
         mainCategoryName: mainCategoryNameValue,
+        // BSR source and category fields
+        bsr_source: bsrSourceValue,
+        category: categoryValue,
+        primary_category: categoryValue,
+        main_category: categoryValue,
       };
     });
     
@@ -3892,7 +3920,8 @@ export async function POST(req: NextRequest) {
     // #region agent log
     if (first) {
       const logPath = '/Users/Shane/Desktop/sellerev/.cursor/debug.log';
-      const logEntry = JSON.stringify({location:'route.ts:3842',message:'Final response listing sample',data:{asin:first.asin,bsr:first.bsr,main_category_bsr:first.main_category_bsr,mainCategoryBsr:first.mainCategoryBsr,root_rank:first.root_rank,has_main_category_bsr:!!first.main_category_bsr,has_mainCategoryBsr:!!first.mainCategoryBsr,keys:Object.keys(first).slice(0,20)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'}) + '\n';
+      const allKeys = Object.keys(first).sort();
+      const logEntry = JSON.stringify({location:'route.ts:3842',message:'Final response listing sample',data:{asin:first.asin,bsr:first.bsr,subcategory_bsr:first.subcategory_bsr,subcategory_name:first.subcategory_name,main_category_bsr:first.main_category_bsr,mainCategoryBsr:first.mainCategoryBsr,root_rank:first.root_rank,root_display_group:first.root_display_group,bsr_source:first.bsr_source,category:first.category,primary_category:first.primary_category,has_main_category_bsr:!!first.main_category_bsr,has_mainCategoryBsr:!!first.mainCategoryBsr,has_root_rank:!!first.root_rank,has_subcategory_bsr:!!first.subcategory_bsr,has_bsr_source:!!first.bsr_source,total_keys:allKeys.length,keys:allKeys},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'}) + '\n';
       try { fs.appendFileSync(logPath, logEntry); } catch(e) {}
     }
     // #endregion

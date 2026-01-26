@@ -3446,8 +3446,9 @@ export async function fetchKeywordMarketSnapshot(
         if (catalog.bsr !== null && catalog.bsr !== undefined && catalog.bsr > 0) {
           bsrMergeCount++;
           // SP-API BSR is authoritative - always set when available
+          // CRITICAL: listing.bsr should be subcategory rank (catalog.bsr), NOT root rank
           // NOTE: main_category_bsr will be set below from root rank, not subcategory rank
-          listing.bsr = catalog.bsr;
+          listing.bsr = catalog.bsr; // This is the subcategory rank from SP-API
           
           // Merge subcategory rank fields (explicit field names with null coalescing)
           (listing as any).subcategory_rank = catalog.subcategory_rank ?? catalog.subcategory_bsr ?? null;
