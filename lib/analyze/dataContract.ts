@@ -70,7 +70,7 @@ export interface AuthoritativeFacts {
     top_reviews_product?: {
       asin: string;
       title: string | null;
-      review_count: number;
+      review_count: number | null; // Null if missing from Rainforest, never invented
     } | null;
     subcategory_dominance_top3?: Array<{
       subcategory_name: string;
