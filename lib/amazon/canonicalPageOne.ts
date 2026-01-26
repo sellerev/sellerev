@@ -75,6 +75,23 @@ export interface CanonicalProduct {
   // Prime eligibility and fulfillment status (from is_prime heuristic)
   primeEligible: boolean; // Prime eligibility (from is_prime, for UI display and AI reasoning)
   fulfillment_status: 'PRIME' | 'NON_PRIME'; // Prime/Non-Prime status (heuristic from is_prime, NOT FBA guarantee)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BSR RANK AND CATEGORY NAME FIELDS (from SP-API Catalog enrichment)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Main category BSR (root rank) - snake_case and camelCase for compatibility
+  main_category_bsr?: number | null; // Main category BSR (root rank, preferred, snake_case)
+  mainCategoryBsr?: number | null; // Main category BSR (root rank, camelCase, for UI compatibility)
+  root_rank?: number | null; // Root/main category rank (explicit field)
+  bsr_root?: number | null; // Root BSR (legacy alias)
+  // Subcategory BSR fields
+  subcategory_rank?: number | null; // Subcategory rank (explicit field name)
+  subcategory_bsr?: number | null; // Subcategory BSR (explicit field)
+  subcategory_name?: string | null; // Subcategory name
+  // Main category name fields
+  bsr_root_category?: string | null; // Root category name (legacy alias)
+  root_display_group?: string | null; // Root/main category display group name
+  main_category_name?: string | null; // Main category name (alias for root_display_group)
+  mainCategoryName?: string | null; // Main category name (camelCase alias)
 }
 
 /**
