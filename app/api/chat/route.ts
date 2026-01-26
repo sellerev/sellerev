@@ -2843,7 +2843,7 @@ CRITICAL RULES FOR ESCALATED DATA:
       has_ai_context,
       has_ai_context_products,
       has_computed_metrics,
-      computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
+        computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
       // Unique ASINs vs Total Appearances
       page1_unique_asins: page1UniqueAsins,
       page1_total_appearances: page1TotalAppearances,
@@ -2869,6 +2869,152 @@ CRITICAL RULES FOR ESCALATED DATA:
       has_authoritative_facts: !!(ai as any)?.authoritative_facts,
       has_page1_market_summary: !!(ai as any)?.page1_market_summary,
     });
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MATH/EQUALITY FAST PATH (Deterministic - Bypasses LLM)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Detects equality check questions and computes answer deterministically
+    // This prevents LLM from incorrectly saying "No" when math shows equality
+    const equalityPatterns = [
+      /(is|does).*(all|total).*(=|equal).*(organic).*sponsored/i,
+      /(is|does).*(organic).*sponsored.*(=|equal).*(all|total)/i,
+      /show.*math/i,
+      /equal.*organic.*sponsored/i,
+      /organic.*sponsored.*equal/i,
+    ];
+    
+    const isEqualityQuestion = equalityPatterns.some(pattern => pattern.test(body.message));
+    
+    if (isEqualityQuestion && computedMetrics && typeof computedMetrics === 'object') {
+      try {
+        // Type-safe access to computed_metrics
+        const counts = (computedMetrics as any).counts;
+        if (!counts || typeof counts !== 'object') {
+          throw new Error("computed_metrics.counts not available");
+        }
+        
+        // Parse metric type from question
+        const mentionsReviews = /(<|less than|under|below)\s*(\d+)\s*(reviews?|review)/i.test(body.message);
+        const mentionsListings = /(listings?|products?|asins?|appearances?)/i.test(body.message);
+        
+        let metric = "unknown";
+        let left: { known_count: number; unknown_count: number } | null = null;
+        let right: { known_count: number; unknown_count: number } | null = null;
+        let equals = false;
+        let organicValue = 0;
+        let sponsoredValue = 0;
+        let organicUnknown = 0;
+        let sponsoredUnknown = 0;
+        
+        if (mentionsReviews) {
+          // Extract threshold (e.g., "500", "50", "100")
+          const thresholdMatch = body.message.match(/(\d+)/);
+          const threshold = thresholdMatch ? parseInt(thresholdMatch[1], 10) : 500;
+          
+          // Use review_thresholds if available
+          const thresholds = counts.review_thresholds;
+          const thresholdKey = threshold === 50 ? 'lt50' : 'lt500';
+          const thresholdData = thresholds?.[thresholdKey];
+          
+          if (thresholdData && thresholdData.all && thresholdData.organic && thresholdData.sponsored) {
+            metric = `review_thresholds.${thresholdKey}`;
+            const allData = thresholdData.all;
+            const organicData = thresholdData.organic;
+            const sponsoredData = thresholdData.sponsored;
+            left = allData;
+            organicValue = organicData.known_count || 0;
+            sponsoredValue = sponsoredData.known_count || 0;
+            organicUnknown = organicData.unknown_count || 0;
+            sponsoredUnknown = sponsoredData.unknown_count || 0;
+            right = {
+              known_count: organicValue + sponsoredValue,
+              unknown_count: organicUnknown + sponsoredUnknown,
+            };
+            equals = (allData.known_count === right.known_count) && (allData.unknown_count === right.unknown_count);
+          }
+        } else if (mentionsListings) {
+          // Listing count comparison
+          metric = "listing_counts";
+          const byStatus = counts.by_sponsored_status;
+          const page1UniqueAsins = counts.page1_unique_asins || 0;
+          
+          if (byStatus) {
+            organicValue = byStatus.organic_unique_asins || 0;
+            sponsoredValue = byStatus.sponsored_unique_asins || 0;
+            left = {
+              known_count: page1UniqueAsins,
+              unknown_count: 0, // No unknown for listing counts
+            };
+            right = {
+              known_count: organicValue + sponsoredValue,
+              unknown_count: 0,
+            };
+            equals = left.known_count === right.known_count;
+          }
+        }
+        
+        if (left && right) {
+          // Build deterministic response
+          // TypeScript: left and right are guaranteed non-null here
+          const leftValue = left;
+          const rightValue = right;
+          let responseText = "";
+          
+          if (equals) {
+            responseText = `Yes, all equals organic + sponsored.\n\nMath:\n`;
+            responseText += `- All: ${leftValue.known_count}${leftValue.unknown_count > 0 ? ` (${leftValue.unknown_count} unknown)` : ''}\n`;
+            responseText += `- Organic: ${organicValue}${mentionsReviews && organicUnknown > 0 ? ` (${organicUnknown} unknown)` : ''}\n`;
+            responseText += `- Sponsored: ${sponsoredValue}${mentionsReviews && sponsoredUnknown > 0 ? ` (${sponsoredUnknown} unknown)` : ''}\n`;
+            responseText += `- Sum: ${rightValue.known_count}${rightValue.unknown_count > 0 ? ` (${rightValue.unknown_count} unknown)` : ''}\n\n`;
+            responseText += `${leftValue.known_count} = ${rightValue.known_count}`;
+            if (leftValue.unknown_count > 0 || rightValue.unknown_count > 0) {
+              responseText += `\n\nNote: Equality is for known_count only. Unknown counts: All=${leftValue.unknown_count}, Organic+Sponsored=${rightValue.unknown_count}`;
+            }
+          } else {
+            responseText = `No, all does not equal organic + sponsored.\n\nMath:\n`;
+            responseText += `- All: ${leftValue.known_count}${leftValue.unknown_count > 0 ? ` (${leftValue.unknown_count} unknown)` : ''}\n`;
+            responseText += `- Organic: ${organicValue}${mentionsReviews && organicUnknown > 0 ? ` (${organicUnknown} unknown)` : ''}\n`;
+            responseText += `- Sponsored: ${sponsoredValue}${mentionsReviews && sponsoredUnknown > 0 ? ` (${sponsoredUnknown} unknown)` : ''}\n`;
+            responseText += `- Sum: ${rightValue.known_count}${rightValue.unknown_count > 0 ? ` (${rightValue.unknown_count} unknown)` : ''}\n\n`;
+            responseText += `${leftValue.known_count} ≠ ${rightValue.known_count}`;
+            if (leftValue.unknown_count > 0 || rightValue.unknown_count > 0) {
+              responseText += `\n\nNote: Unknown counts: All=${leftValue.unknown_count}, Organic+Sponsored=${rightValue.unknown_count}`;
+            }
+          }
+          
+          console.log("🔢 MATH_FAST_PATH_USED", {
+            question: body.message,
+            metric,
+            left,
+            right,
+            equals,
+            analysisRunId: body.analysisRunId,
+          });
+          
+          // Return deterministic response directly (no OpenAI call)
+          return new NextResponse(
+            JSON.stringify({
+              ok: true,
+              message: responseText,
+              source: "math_fast_path",
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                ...res.headers,
+              },
+            }
+          );
+        }
+      } catch (error) {
+        // If fast path fails, fall through to normal OpenAI call
+        console.warn("⚠️ MATH_FAST_PATH_ERROR", {
+          question: body.message,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     
     const openaiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",
