@@ -336,26 +336,30 @@ export function ProductCard({
       ) : null}
 
       {/* BSR Display */}
-      <div className="text-sm text-[#6B7280] mb-3 space-y-1">
-        {/* MAIN (Root) BSR - render first */}
+      <div className="text-sm text-[#6B7280] mb-3 space-y-3">
+        {/* Main Category */}
         {mainBsr !== null && mainBsr !== undefined && mainBsr > 0 ? (
-          <div>
-            Main Category BSR: #{mainBsr.toLocaleString()}
-            {displayMainCategoryName ? ` in ${displayMainCategoryName}` : ''}
-            {displaySubcategoryName ? ` • ${displaySubcategoryName}` : ''}
+          <div className="space-y-1">
+            <div>Main Category BSR: #{mainBsr.toLocaleString()}</div>
+            <div className="text-xs text-[#9CA3AF]">
+              {displayMainCategoryName ? displayMainCategoryName : '—'}
+            </div>
           </div>
-        ) : (
-          <div>Main Category BSR: —</div>
-        )}
+        ) : null}
 
-        {/* SUBCATEGORY Rank - render second */}
+        {/* Subcategory */}
         {displaySubcategoryBsr !== null && displaySubcategoryBsr !== undefined && displaySubcategoryBsr > 0 ? (
-          <div>
-            Subcategory Rank: #{displaySubcategoryBsr.toLocaleString()}
-            {displaySubcategoryName ? ` in ${displaySubcategoryName}` : ''}
+          <div className="space-y-1">
+            <div>Subcategory Rank: #{displaySubcategoryBsr.toLocaleString()}</div>
+            <div className="text-xs text-[#9CA3AF]">
+              {displaySubcategoryName ? displaySubcategoryName : '—'}
+            </div>
           </div>
         ) : (
-          <div>Subcategory Rank: —</div>
+          <div className="space-y-1">
+            <div>Subcategory Rank: —</div>
+            <div className="text-xs text-[#9CA3AF]">—</div>
+          </div>
         )}
       </div>
 
