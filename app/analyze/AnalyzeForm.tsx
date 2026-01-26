@@ -2124,11 +2124,13 @@ export default function AnalyzeForm({
                             // Subcategory: prefer subcategory_rank, fallback to subcategory_bsr
                             const subcategoryRank = (listing as any).subcategory_rank ?? null;
                             const subcategoryBsr = (listing as any).subcategory_bsr ?? null;
-                            const subcategoryName = (listing as any).subcategory_name ?? null;
+                            // Subcategory name: prefer subcategory_name, fallback to category/category_from_context/primary_category
+                            const subcategoryName = (listing as any).subcategory_name ?? (listing as any).subcategoryName ?? (listing as any).category ?? (listing as any).category_from_context ?? (listing as any).primary_category ?? null;
                             // Main category: read both snake_case and camelCase, with fallbacks
                             // Try mainCategoryBsr (camelCase) first, then main_category_bsr (snake_case), then fallbacks
                             const mainCategoryBsr = (listing as any).mainCategoryBsr ?? (listing as any).main_category_bsr ?? (listing as any).bsr_root ?? (listing as any).root_rank ?? null;
-                            const mainCategoryName = (listing as any).mainCategoryName ?? (listing as any).main_category_name ?? (listing as any).bsr_root_category ?? (listing as any).root_display_group ?? null;
+                            // Main category name: prefer bsr_root_category (Pet Supplies), then root_display_group, then main_category_name
+                            const mainCategoryName = (listing as any).bsr_root_category ?? (listing as any).root_display_group ?? (listing as any).main_category_name ?? (listing as any).mainCategoryName ?? null;
                             
                             // 🧪 TEMP DEBUG: Log first listing to verify main category BSR
                             if (idx === 0 && asin) {

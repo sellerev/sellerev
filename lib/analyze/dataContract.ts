@@ -633,7 +633,7 @@ export async function buildKeywordAnalyzeResponse(
         bsr_root_category: (p as any).bsr_root_category ?? (p as any).root_display_group ?? (p as any).main_category_name ?? (p as any).mainCategoryName ?? null,
         subcategory_rank: (p as any).subcategory_rank ?? (p as any).subcategory_bsr ?? null,
         subcategory_bsr: (p as any).subcategory_bsr ?? (p as any).subcategory_rank ?? null,
-        subcategory_name: (p as any).subcategory_name ?? null,
+        subcategory_name: (p as any).subcategory_name ?? (p as any).subcategoryName ?? (p as any).category ?? (p as any).category_from_context ?? (p as any).primary_category ?? null,
         main_category_name: (p as any).main_category_name ?? (p as any).mainCategoryName ?? (p as any).root_display_group ?? (p as any).bsr_root_category ?? null,
         mainCategoryName: (p as any).mainCategoryName ?? (p as any).main_category_name ?? (p as any).root_display_group ?? (p as any).bsr_root_category ?? null,
       };

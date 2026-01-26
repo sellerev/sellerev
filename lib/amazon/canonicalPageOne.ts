@@ -1169,6 +1169,22 @@ export function buildKeywordPageOne(
       // These fields flow through canonical processing for UI display and AI reasoning
       primeEligible: l.primeEligible ?? (l.is_prime === true),
       fulfillment_status: l.fulfillment_status ?? (l.primeEligible || l.is_prime === true ? 'PRIME' : 'NON_PRIME'),
+      // ═══════════════════════════════════════════════════════════════════════════
+      // BSR RANK AND CATEGORY NAME FIELDS (PRESERVE FROM SP-API MERGE)
+      // ═══════════════════════════════════════════════════════════════════════════
+      // Preserve BSR rank and category name fields from merged listing (post SP-API enrichment)
+      // These are needed for UI display of BSR ranks with category names
+      main_category_bsr: (l as any).main_category_bsr ?? (l as any).mainCategoryBsr ?? (l as any).root_rank ?? (l as any).bsr_root ?? null,
+      mainCategoryBsr: (l as any).mainCategoryBsr ?? (l as any).main_category_bsr ?? (l as any).root_rank ?? (l as any).bsr_root ?? null,
+      root_rank: (l as any).root_rank ?? (l as any).bsr_root ?? null,
+      bsr_root: (l as any).bsr_root ?? (l as any).root_rank ?? null,
+      subcategory_rank: (l as any).subcategory_rank ?? (l as any).subcategory_bsr ?? null,
+      subcategory_bsr: (l as any).subcategory_bsr ?? (l as any).subcategory_rank ?? null,
+      subcategory_name: (l as any).subcategory_name ?? null,
+      bsr_root_category: (l as any).bsr_root_category ?? (l as any).root_display_group ?? (l as any).main_category_name ?? (l as any).mainCategoryName ?? null,
+      root_display_group: (l as any).root_display_group ?? (l as any).bsr_root_category ?? (l as any).main_category_name ?? (l as any).mainCategoryName ?? null,
+      main_category_name: (l as any).main_category_name ?? (l as any).mainCategoryName ?? (l as any).root_display_group ?? (l as any).bsr_root_category ?? null,
+      mainCategoryName: (l as any).mainCategoryName ?? (l as any).main_category_name ?? (l as any).root_display_group ?? (l as any).bsr_root_category ?? null,
     };
     
     // Store mapping for parent-child normalization (use ASIN as key)
