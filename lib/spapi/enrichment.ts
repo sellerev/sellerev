@@ -146,7 +146,8 @@ export async function getCatalogItemEnrichment(
     const path = `/catalog/2022-04-01/items/${asin}`;
     const params = new URLSearchParams();
     params.set("marketplaceIds", marketplaceId);
-    params.set("includedData", "relationships,summaries,attributes");
+    // GOAL 4A: Include attributes, summaries, relationships, productTypes, images
+    params.set("includedData", "relationships,summaries,attributes,productTypes,images");
     const queryString = params.toString();
     
     console.log("SP_API_ENRICHMENT_REQUEST", {
@@ -217,9 +218,37 @@ export async function getCatalogItemEnrichment(
     const brand = summaries.brand || null;
     const color = summaries.color || null;
     
-    // Extract attributes
+    // Extract attributes (includes bullet_points, description, etc.)
     const attributes = item.attributes || {};
     const colorAttr = attributes.color?.[0]?.value || null;
+    
+    // Extract bullet points from attributes
+    const bulletPoints: string[] | null = attributes.bullet_point || attributes.bullet_points || null;
+    const bulletPointsArray = bulletPoints 
+      ? (Array.isArray(bulletPoints) ? bulletPoints : [bulletPoints]).map((bp: any) => 
+          typeof bp === 'string' ? bp : (bp?.value || bp?.label || String(bp))
+        ).filter(Boolean)
+      : null;
+    
+    // Extract description from attributes
+    const description = attributes.product_description?.[0]?.value 
+      || attributes.description?.[0]?.value 
+      || attributes.item_description?.[0]?.value 
+      || null;
+    
+    // Extract product type from productTypes
+    const productTypes = item.productTypes || [];
+    const productType = productTypes.length > 0 
+      ? (productTypes[0]?.productType || productTypes[0]?.displayName || null)
+      : null;
+    
+    // Build attributes map (excluding already extracted fields)
+    const attributesMap: Record<string, any> = {};
+    for (const [key, value] of Object.entries(attributes)) {
+      if (!['bullet_point', 'bullet_points', 'product_description', 'description', 'item_description', 'color'].includes(key)) {
+        attributesMap[key] = value;
+      }
+    }
     
     console.log("SP_API_ENRICHMENT_SUCCESS", {
       endpoint: "catalogItems",
@@ -229,9 +258,12 @@ export async function getCatalogItemEnrichment(
       has_parents: !!parentAsins?.length,
       has_children: !!childAsins?.length,
       has_variation_theme: !!variationTheme,
+      has_bullet_points: !!bulletPointsArray?.length,
+      has_description: !!description,
+      has_product_type: !!productType,
     });
     
-    // Normalize to flat structure
+    // Normalize to flat structure with all fields
     return {
       asin,
       parent_asins: parentAsins && parentAsins.length > 0 ? parentAsins : null,
@@ -239,6 +271,10 @@ export async function getCatalogItemEnrichment(
       variation_theme: variationTheme || null,
       color: color || colorAttr || null,
       item_name: itemName || null,
+      bullet_points: bulletPointsArray,
+      description: description,
+      product_type: productType,
+      attributes: Object.keys(attributesMap).length > 0 ? attributesMap : null,
     };
   } catch (error) {
     const duration = Date.now() - startTime;

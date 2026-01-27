@@ -2176,39 +2176,34 @@ export async function POST(req: NextRequest) {
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // ENRICHMENT DECISION (SP-API enrichment for variants/review topics)
+    // ENRICHMENT DECISION (SP-API catalog + Rainforest product)
     // ═══════════════════════════════════════════════════════════════════════════
-    // PRIORITY B: No credits gating - use hard limits instead
-    // PRIORITY C: Enhanced intent detection
-    const MAX_ENRICHMENT_ASINS_PER_MESSAGE = 2; // Per user message
-    const MAX_ENRICHMENT_CALLS_PER_ANALYSIS = 10; // Total across chat for this analysis_run_id
+    // GOAL: No credits gating - use hard limits instead
+    const MAX_ENRICHMENT_ASINS_PER_MESSAGE = 3; // Per user message (hard cap)
+    const MAX_ENRICHMENT_CALLS_PER_SESSION = 20; // Total across chat for this analysis_run_id
     
     const normalizedQuestion = body.message.toLowerCase();
     
-    // PRIORITY C.7: Enhanced variants intent detection
-    const variantsIntent = /variant|variants|variation|variations|size|sizes|color|colors|colour|colours|version|versions|how many variants|which variant/i.test(body.message);
+    // GOAL 4A: Variants/attributes/bullets/description intent detection
+    const variantsAttributesIntent = /variant|variants|variation|variations|size|sizes|color|colors|colour|colours|version|versions|how many variants|which variant|attributes?|bullet points?|bullets?|description|title details?|material|dimensions?|specifications?/i.test(body.message);
     
-    // PRIORITY C.7: Enhanced review topics intent detection
-    const reviewInsightsIntent = /bad reviews|complaints|what do customers complain about|negative reviews|review topics|worst reviews|most common complaints|customer complaints/i.test(body.message);
+    // GOAL 4B: Complaints/customers say intent detection (use Rainforest, not SP-API)
+    const complaintsIntent = /bad reviews|complaints|what do customers complain about|negative reviews|worst reviews|most common complaints|customer complaints|what customers say|what do customers say/i.test(body.message);
     
-    // PRIORITY C.8: If selectedAsins exists AND any intent is true, enrichment MUST execute
-    const requiresEnrichment = (variantsIntent || reviewInsightsIntent) && selectedAsins.length > 0;
+    // If selectedAsins exists AND any intent is true, enrichment MUST execute
+    const requiresEnrichment = (variantsAttributesIntent || complaintsIntent) && selectedAsins.length > 0;
     const enrichmentAsins = requiresEnrichment ? selectedAsins.slice(0, MAX_ENRICHMENT_ASINS_PER_MESSAGE) : [];
-    const enrichmentTypes: Array<'catalog' | 'reviewTopics'> = [];
+    const enrichmentTypes: Array<'spapi_catalog' | 'rainforest_product'> = [];
     if (requiresEnrichment) {
-      if (variantsIntent) enrichmentTypes.push('catalog');
-      if (reviewInsightsIntent) enrichmentTypes.push('reviewTopics');
-      // If both intents detected, fetch both types
-      if (variantsIntent && reviewInsightsIntent) {
-        enrichmentTypes.push('catalog', 'reviewTopics');
-      }
+      if (variantsAttributesIntent) enrichmentTypes.push('spapi_catalog');
+      if (complaintsIntent) enrichmentTypes.push('rainforest_product');
     }
     
     console.log("ENRICHMENT_DECISION", {
       analysisRunId: body.analysisRunId,
       requires_enrichment: requiresEnrichment,
-      variants_intent: variantsIntent,
-      review_insights_intent: reviewInsightsIntent,
+      variants_attributes_intent: variantsAttributesIntent,
+      complaints_intent: complaintsIntent,
       selected_asins: selectedAsins,
       selected_asins_count: selectedAsins.length,
       enrichment_asins: enrichmentAsins,
@@ -2571,17 +2566,17 @@ export async function POST(req: NextRequest) {
       total_selected?: number; // Total selected count
     } | null = null;
     
-    // PRIORITY B.6: Check enrichment limits (per analysis_run_id)
+    // GOAL 3: Check enrichment limits (per session/analysis_run_id)
     let enrichmentCallsUsed = 0;
     if (requiresEnrichment && enrichmentAsins.length > 0) {
-      // Count existing enrichment calls for this analysis_run_id
+      // Count existing enrichment calls for this analysis_run_id (check both spapi and rainforest)
       try {
         const { data: existingCalls } = await supabase
           .from('chat_messages')
-          .select('id')
+          .select('id, metadata')
           .eq('analysis_run_id', body.analysisRunId)
-          .not('metadata->spapi_enrichment', 'is', null)
-          .limit(MAX_ENRICHMENT_CALLS_PER_ANALYSIS);
+          .or('metadata->spapi_enrichment.not.is.null,metadata->rainforest_enrichment.not.is.null')
+          .limit(MAX_ENRICHMENT_CALLS_PER_SESSION);
         
         enrichmentCallsUsed = existingCalls?.length || 0;
       } catch (error) {
@@ -2591,11 +2586,11 @@ export async function POST(req: NextRequest) {
         });
       }
       
-      if (enrichmentCallsUsed >= MAX_ENRICHMENT_CALLS_PER_ANALYSIS) {
+      if (enrichmentCallsUsed >= MAX_ENRICHMENT_CALLS_PER_SESSION) {
         // Limit reached - return early with explanation
         const stream = new ReadableStream({
           start(controller) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: `I've reached the limit for enrichment calls in this analysis (${MAX_ENRICHMENT_CALLS_PER_ANALYSIS} total). Please pick 1-2 ASINs to analyze.` })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: `I've reached the limit for enrichment calls in this analysis (${MAX_ENRICHMENT_CALLS_PER_SESSION} total). Please pick 1-3 ASINs to analyze.` })}\n\n`));
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             controller.close();
           },
@@ -2611,148 +2606,196 @@ export async function POST(req: NextRequest) {
       }
     }
     
-    // In-memory cache for enrichment (24h TTL)
-    const ENRICHMENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-    const enrichmentCache = new Map<string, { expiresAt: number; catalog: any | null; review_topics: any | null }>();
+    // GOAL 3: In-memory cache for enrichment (7 days TTL)
+    const ENRICHMENT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+    const spapiCache = new Map<string, { expiresAt: number; data: any }>();
+    const rainforestCache = new Map<string, { expiresAt: number; data: any }>();
     
-    function getCachedEnrichment(asin: string, endpoint: 'catalog' | 'reviewTopics'): any | null {
-      const cacheKey = `${asin}:${endpoint}`;
-      const entry = enrichmentCache.get(cacheKey);
+    function getCachedSPAPI(asin: string, marketplaceId: string): any | null {
+      const cacheKey = `${asin}:${marketplaceId}:spapi`;
+      const entry = spapiCache.get(cacheKey);
       if (!entry || Date.now() > entry.expiresAt) {
         return null;
       }
-      return endpoint === 'catalog' ? entry.catalog : entry.review_topics;
+      return entry.data;
     }
     
-    function setCachedEnrichment(asin: string, catalog: any | null, review_topics: any | null) {
-      const catalogKey = `${asin}:catalog`;
-      const reviewTopicsKey = `${asin}:reviewTopics`;
-      const expiresAt = Date.now() + ENRICHMENT_CACHE_TTL_MS;
-      if (catalog !== null) {
-        enrichmentCache.set(catalogKey, { expiresAt, catalog, review_topics: null });
-      }
-      if (review_topics !== null) {
-        enrichmentCache.set(reviewTopicsKey, { expiresAt, catalog: null, review_topics });
-      }
+    function setCachedSPAPI(asin: string, marketplaceId: string, data: any) {
+      const cacheKey = `${asin}:${marketplaceId}:spapi`;
+      spapiCache.set(cacheKey, { expiresAt: Date.now() + ENRICHMENT_CACHE_TTL_MS, data });
     }
+    
+    function getCachedRainforest(asin: string, amazonDomain: string): any | null {
+      const cacheKey = `${asin}:${amazonDomain}:rainforest`;
+      const entry = rainforestCache.get(cacheKey);
+      if (!entry || Date.now() > entry.expiresAt) {
+        return null;
+      }
+      return entry.data;
+    }
+    
+    function setCachedRainforest(asin: string, amazonDomain: string, data: any) {
+      const cacheKey = `${asin}:${amazonDomain}:rainforest`;
+      rainforestCache.set(cacheKey, { expiresAt: Date.now() + ENRICHMENT_CACHE_TTL_MS, data });
+    }
+    
+    // GOAL 4A: SP-API Catalog enrichment for variants/attributes/bullets/description
+    let spapiEnrichment: {
+      executed: boolean;
+      asins: string[];
+      by_asin: Record<string, {
+        title?: string | null;
+        bullet_points?: string[] | null;
+        description?: string | null;
+        attributes?: Record<string, any> | null;
+        variation_relationships?: {
+          parent_asins?: string[] | null;
+          child_asins?: string[] | null;
+          variation_theme?: string | null;
+        } | null;
+        product_type?: string | null;
+        errors: string[];
+      }>;
+    } | null = null;
+    
+    // GOAL 4B: Rainforest product enrichment for complaints/customers_say
+    let rainforestEnrichment: {
+      executed: boolean;
+      asins: string[];
+      by_asin: Record<string, {
+        customers_say?: {
+          themes?: Array<{ label: string; sentiment: 'positive' | 'negative'; mentions?: number }>;
+          snippets?: Array<{ text: string; sentiment: 'positive' | 'negative' }>;
+        } | null;
+        summarization_attributes?: Record<string, { rating: number; count?: number }> | null;
+        variants?: {
+          child_asins?: string[];
+          parent_asin?: string;
+          variation_theme?: string;
+        } | null;
+        errors: string[];
+      }>;
+    } | null = null;
     
     if (requiresEnrichment && enrichmentAsins.length > 0) {
-      const { getCatalogItemEnrichment, getReviewTopics } = await import("@/lib/spapi/enrichment");
       const marketplaceId = "ATVPDKIKX0DER"; // US marketplace
+      const amazonDomain = "amazon.com";
       
-      spapiEnrichment = {
-        executed: true,
-        asins: enrichmentAsins,
-        by_asin: {},
-      };
-      
-      // PRIORITY D.9-10: Fetch enrichment for each ASIN with caching and 403 handling
-      for (const asin of enrichmentAsins) {
-        const errors: string[] = [];
-        let catalog: any | null = null;
-        let reviewTopics: any | null = null;
+      // GOAL 4A: SP-API Catalog enrichment
+      if (enrichmentTypes.includes('spapi_catalog')) {
+        const { getCatalogItemEnrichment } = await import("@/lib/spapi/enrichment");
         
-        // Check cache first
-        const cachedCatalog = getCachedEnrichment(asin, 'catalog');
-        const cachedReviewTopics = getCachedEnrichment(asin, 'reviewTopics');
-        
-        if (cachedCatalog) {
-          catalog = cachedCatalog;
-          console.log("SP_API_ENRICHMENT_CACHE_HIT", { asin, endpoint: "catalog" });
-        } else {
-          // Fetch catalog enrichment
-          try {
-            catalog = await getCatalogItemEnrichment(asin, marketplaceId, user.id);
-            if (!catalog) {
-              errors.push("Catalog enrichment failed");
-            } else {
-              setCachedEnrichment(asin, catalog, null);
-            }
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            // PRIORITY D.10: Handle 403 Unauthorized explicitly
-            if (errorMessage.includes('403') || errorMessage.includes('Unauthorized') || errorMessage.includes('Forbidden')) {
-              errors.push("Permission denied: Catalog API access not authorized");
-            } else {
-              errors.push(`Catalog enrichment error: ${errorMessage}`);
-            }
-          }
-        }
-        
-        if (cachedReviewTopics) {
-          reviewTopics = cachedReviewTopics;
-          console.log("SP_API_ENRICHMENT_CACHE_HIT", { asin, endpoint: "reviewTopics" });
-        } else {
-          // Fetch review topics enrichment
-          try {
-            reviewTopics = await getReviewTopics(asin, marketplaceId, user.id);
-            if (!reviewTopics) {
-              errors.push("Review topics enrichment failed");
-            } else {
-              setCachedEnrichment(asin, null, reviewTopics);
-            }
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            // PRIORITY D.10: Handle 403 Unauthorized explicitly
-            if (errorMessage.includes('403') || errorMessage.includes('Unauthorized') || errorMessage.includes('Forbidden')) {
-              errors.push("Permission denied: Review Topics API access not authorized");
-            } else {
-              errors.push(`Review topics enrichment error: ${errorMessage}`);
-            }
-          }
-        }
-        
-        // PRIORITY D.9: If relationships are empty on a child, detect parent ASIN and fetch parent
-        if (catalog && !catalog.child_asins && catalog.parent_asins && catalog.parent_asins.length > 0) {
-          const parentAsin = catalog.parent_asins[0];
-          console.log("SP_API_ENRICHMENT_FETCHING_PARENT", { child_asin: asin, parent_asin: parentAsin });
-          
-          try {
-            const parentCatalog = await getCatalogItemEnrichment(parentAsin, marketplaceId, user.id);
-            if (parentCatalog && parentCatalog.child_asins) {
-              // Update catalog with parent's child count
-              catalog.child_asins = parentCatalog.child_asins;
-              catalog.variation_theme = parentCatalog.variation_theme || catalog.variation_theme;
-              console.log("SP_API_ENRICHMENT_PARENT_FETCHED", { 
-                child_asin: asin, 
-                parent_asin: parentAsin,
-                child_count: parentCatalog.child_asins?.length || 0,
-              });
-            }
-          } catch (error) {
-            console.warn("SP_API_ENRICHMENT_PARENT_FETCH_FAILED", {
-              child_asin: asin,
-              parent_asin: parentAsin,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-        
-        spapiEnrichment.by_asin[asin] = {
-          catalog,
-          review_topics: reviewTopics,
-          errors,
+        spapiEnrichment = {
+          executed: true,
+          asins: enrichmentAsins,
+          by_asin: {},
         };
+        
+        for (const asin of enrichmentAsins) {
+          const errors: string[] = [];
+          let catalogData: any | null = null;
+          
+          // Check cache first
+          const cached = getCachedSPAPI(asin, marketplaceId);
+          if (cached) {
+            catalogData = cached;
+            console.log("SP_API_ENRICHMENT_CACHE_HIT", { asin, endpoint: "catalog" });
+          } else {
+            try {
+              catalogData = await getCatalogItemEnrichment(asin, marketplaceId, user.id);
+              if (catalogData) {
+                setCachedSPAPI(asin, marketplaceId, catalogData);
+              } else {
+                errors.push("Catalog enrichment failed");
+              }
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              if (errorMessage.includes('403') || errorMessage.includes('Unauthorized') || errorMessage.includes('Forbidden')) {
+                errors.push("Permission denied: Catalog API access not authorized");
+              } else {
+                errors.push(`Catalog enrichment error: ${errorMessage}`);
+              }
+            }
+          }
+          
+          // Parse catalog data into compact format
+          spapiEnrichment.by_asin[asin] = {
+            title: catalogData?.item_name || null,
+            bullet_points: catalogData?.bullet_points || null,
+            description: catalogData?.description || null,
+            attributes: catalogData?.attributes || null,
+            variation_relationships: catalogData ? {
+              parent_asins: catalogData.parent_asins || null,
+              child_asins: catalogData.child_asins || null,
+              variation_theme: catalogData.variation_theme || null,
+            } : null,
+            product_type: catalogData?.product_type || null,
+            errors,
+          };
+        }
       }
       
-      // If user selected more than cap, note it in the enrichment data
-      if (selectedAsins.length > MAX_ENRICHMENT_ASINS_PER_MESSAGE) {
-        spapiEnrichment.only_fetched_for = enrichmentAsins[0];
-        spapiEnrichment.total_selected = selectedAsins.length;
+      // GOAL 4B: Rainforest product enrichment for complaints
+      if (enrichmentTypes.includes('rainforest_product')) {
+        const { getRainforestProductEnrichment } = await import("@/lib/rainforest/productEnrichment");
+        
+        rainforestEnrichment = {
+          executed: true,
+          asins: enrichmentAsins,
+          by_asin: {},
+        };
+        
+        for (const asin of enrichmentAsins) {
+          const errors: string[] = [];
+          let productData: any | null = null;
+          
+          // Check cache first
+          const cached = getCachedRainforest(asin, amazonDomain);
+          if (cached) {
+            productData = cached;
+            console.log("RAINFOREST_ENRICHMENT_CACHE_HIT", { asin, endpoint: "product" });
+          } else {
+            try {
+              productData = await getRainforestProductEnrichment(asin, amazonDomain, user.id);
+              if (productData) {
+                setCachedRainforest(asin, amazonDomain, productData);
+              } else {
+                errors.push("Rainforest product enrichment failed");
+              }
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              errors.push(`Rainforest product enrichment error: ${errorMessage}`);
+            }
+          }
+          
+          // Parse product data
+          if (productData) {
+            rainforestEnrichment.by_asin[asin] = {
+              customers_say: productData.customers_say || null,
+              summarization_attributes: productData.summarization_attributes || null,
+              variants: productData.variants || null,
+              errors: productData.errors || [],
+            };
+          } else {
+            rainforestEnrichment.by_asin[asin] = {
+              customers_say: null,
+              summarization_attributes: null,
+              variants: null,
+              errors,
+            };
+          }
+        }
       }
       
-      console.log("SP_API_ENRICHMENT_COMPLETE", {
+      console.log("ENRICHMENT_COMPLETE", {
         analysisRunId: body.analysisRunId,
         asins: enrichmentAsins,
         total_selected: selectedAsins.length,
         enrichment_types: enrichmentTypes,
-        success_count: Object.values(spapiEnrichment.by_asin).filter(v => v.catalog || v.review_topics).length,
-        error_count: Object.values(spapiEnrichment.by_asin).reduce((sum, v) => sum + v.errors.length, 0),
-        catalog_success: Object.values(spapiEnrichment.by_asin).filter(v => v.catalog).length,
-        review_topics_success: Object.values(spapiEnrichment.by_asin).filter(v => v.review_topics).length,
+        spapi_success: spapiEnrichment ? Object.values(spapiEnrichment.by_asin).filter(v => !v.errors.length).length : 0,
+        rainforest_success: rainforestEnrichment ? Object.values(rainforestEnrichment.by_asin).filter(v => !v.errors.length).length : 0,
         calls_used: enrichmentCallsUsed + 1,
-        calls_remaining: MAX_ENRICHMENT_CALLS_PER_ANALYSIS - (enrichmentCallsUsed + 1),
-        has_403_errors: Object.values(spapiEnrichment.by_asin).some(v => v.errors.some(e => e.includes('Permission denied'))),
+        calls_remaining: MAX_ENRICHMENT_CALLS_PER_SESSION - (enrichmentCallsUsed + 1),
       });
     }
     
@@ -2772,16 +2815,18 @@ export async function POST(req: NextRequest) {
     
     // 8c. Inject selected_asins and enrichment into ai_context
     // ═══════════════════════════════════════════════════════════════════════════
-    // Add selected_asins and spapi_enrichment to ai_context so the AI can reference them in answers
+    // Add selected_asins and enrichment objects to ai_context so the AI can reference them in answers
     const aiContextWithSelectedAsins = aiContext 
       ? {
           ...aiContext,
           selected_asins: selectedAsinsArray,
           ...(spapiEnrichment ? { spapi_enrichment: spapiEnrichment } : {}),
+          ...(rainforestEnrichment ? { rainforest_enrichment: rainforestEnrichment } : {}),
         }
       : {
           selected_asins: selectedAsinsArray,
           ...(spapiEnrichment ? { spapi_enrichment: spapiEnrichment } : {}),
+          ...(rainforestEnrichment ? { rainforest_enrichment: rainforestEnrichment } : {}),
         };
     
     // 8d. Determine response mode (concise by default, expanded if user requests)
@@ -2879,18 +2924,30 @@ export async function POST(req: NextRequest) {
       aiContextToUse = { spapi_enrichment: spapiEnrichment };
     }
     
-    // PRIORITY D.11: Log what ai_context.spapi_enrichment contains before OpenAI call
+    // GOAL 7: Log enrichment objects in ai_context before OpenAI call
     const spapiEnrichmentInContext = (aiContextToUse as any)?.spapi_enrichment;
+    const rainforestEnrichmentInContext = (aiContextToUse as any)?.rainforest_enrichment;
+    
     if (spapiEnrichmentInContext) {
       console.log("SPAPI_ENRICHMENT_IN_CONTEXT", {
         analysisRunId: body.analysisRunId,
         executed: spapiEnrichmentInContext.executed,
         asins: spapiEnrichmentInContext.asins || [],
         by_asin_keys: Object.keys(spapiEnrichmentInContext.by_asin || {}),
-        catalog_success_count: Object.values(spapiEnrichmentInContext.by_asin || {}).filter((v: any) => v.catalog).length,
-        review_topics_success_count: Object.values(spapiEnrichmentInContext.by_asin || {}).filter((v: any) => v.review_topics).length,
+        success_count: Object.values(spapiEnrichmentInContext.by_asin || {}).filter((v: any) => v.errors?.length === 0).length,
         error_count: Object.values(spapiEnrichmentInContext.by_asin || {}).reduce((sum: number, v: any) => sum + (v.errors?.length || 0), 0),
         has_403_errors: Object.values(spapiEnrichmentInContext.by_asin || {}).some((v: any) => v.errors?.some((e: string) => e.includes('Permission denied'))),
+      });
+    }
+    
+    if (rainforestEnrichmentInContext) {
+      console.log("RAINFOREST_ENRICHMENT_IN_CONTEXT", {
+        analysisRunId: body.analysisRunId,
+        executed: rainforestEnrichmentInContext.executed,
+        asins: rainforestEnrichmentInContext.asins || [],
+        by_asin_keys: Object.keys(rainforestEnrichmentInContext.by_asin || {}),
+        success_count: Object.values(rainforestEnrichmentInContext.by_asin || {}).filter((v: any) => v.errors?.length === 0).length,
+        error_count: Object.values(rainforestEnrichmentInContext.by_asin || {}).reduce((sum: number, v: any) => sum + (v.errors?.length || 0), 0),
       });
     }
     
@@ -2903,8 +2960,9 @@ export async function POST(req: NextRequest) {
       products_count: Array.isArray((aiContextToUse as any)?.products) ? (aiContextToUse as any).products.length : 0,
       has_computed_metrics: !!(aiContextToUse as any)?.computed_metrics,
       has_spapi_enrichment: !!spapiEnrichmentInContext,
+      has_rainforest_enrichment: !!rainforestEnrichmentInContext,
       spapi_enrichment_asins: spapiEnrichmentInContext?.asins || [],
-      spapi_enrichment_executed: spapiEnrichmentInContext?.executed || false,
+      rainforest_enrichment_asins: rainforestEnrichmentInContext?.asins || [],
     });
     
     const copilotContext = {
@@ -3183,8 +3241,13 @@ CRITICAL RULES FOR ESCALATED DATA:
       has_ai_context_products,
       has_computed_metrics,
         computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
+      selected_asins_count: selectedAsins.length,
       has_spapi_enrichment: !!(ai as any)?.spapi_enrichment,
+      has_rainforest_enrichment: !!(ai as any)?.rainforest_enrichment,
       spapi_enrichment_asins: (ai as any)?.spapi_enrichment?.asins || [],
+      rainforest_enrichment_asins: (ai as any)?.rainforest_enrichment?.asins || [],
+      spapi_enrichment_count: (ai as any)?.spapi_enrichment?.asins?.length || 0,
+      rainforest_enrichment_count: (ai as any)?.rainforest_enrichment?.asins?.length || 0,
       // Unique ASINs vs Total Appearances
       page1_unique_asins: page1UniqueAsins,
       page1_total_appearances: page1TotalAppearances,
