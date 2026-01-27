@@ -144,9 +144,10 @@ export async function getRainforestProductEnrichment(
       summarization_attributes = {};
       for (const [key, value] of Object.entries(product.summarization_attributes)) {
         if (value && typeof value === 'object' && 'rating' in value) {
+          const valueObj = value as { rating?: unknown; count?: unknown };
           summarization_attributes[key] = {
-            rating: typeof value.rating === 'number' ? value.rating : 0,
-            count: typeof value.count === 'number' ? value.count : undefined,
+            rating: typeof valueObj.rating === 'number' ? valueObj.rating : 0,
+            count: typeof valueObj.count === 'number' ? valueObj.count : undefined,
           };
         }
       }
