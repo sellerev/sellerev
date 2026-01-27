@@ -113,6 +113,10 @@ export interface CatalogEnrichment {
   variation_theme: string | null;
   color: string | null;
   item_name: string | null;
+  bullet_points: string[] | null;
+  description: string | null;
+  product_type: string | null;
+  attributes: Record<string, any> | null;
 }
 
 export interface ReviewTopicsEnrichment {
