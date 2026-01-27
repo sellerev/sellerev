@@ -2551,21 +2551,6 @@ export async function POST(req: NextRequest) {
       matched_asins: selectedAsinsArray.map(p => p.asin),
     });
     
-    // ═══════════════════════════════════════════════════════════════════════════
-    // SP-API ENRICHMENT EXECUTION (for variants/review topics)
-    // ═══════════════════════════════════════════════════════════════════════════
-    let spapiEnrichment: {
-      executed: boolean;
-      asins: string[];
-      by_asin: Record<string, {
-        catalog: any | null;
-        review_topics: any | null;
-        errors: string[];
-      }>;
-      only_fetched_for?: string; // If user selected more than cap
-      total_selected?: number; // Total selected count
-    } | null = null;
-    
     // GOAL 3: Check enrichment limits (per session/analysis_run_id)
     let enrichmentCallsUsed = 0;
     if (requiresEnrichment && enrichmentAsins.length > 0) {
