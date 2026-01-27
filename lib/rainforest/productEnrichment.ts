@@ -5,8 +5,9 @@
 
 export interface RainforestProductEnrichment {
   asin: string;
+  title: string | null;
   customers_say: {
-    themes: Array<{ label: string; sentiment: 'positive' | 'negative'; mentions?: number }>;
+    themes?: Array<{ label: string; sentiment: 'positive' | 'negative'; mentions?: number }>;
     snippets?: Array<{ text: string; sentiment: 'positive' | 'negative' }>;
   } | null;
   summarization_attributes: Record<string, { rating: number; count?: number }> | null;
@@ -15,6 +16,11 @@ export interface RainforestProductEnrichment {
     parent_asin?: string;
     variation_theme?: string;
   } | null;
+  extracted: {
+    top_complaints: string[];
+    top_praise: string[];
+    attribute_signals: Array<{ name: string; value: string }>;
+  };
   errors: string[];
 }
 
@@ -74,9 +80,15 @@ export async function getRainforestProductEnrichment(
       });
       return {
         asin,
+        title: null,
         customers_say: null,
         summarization_attributes: null,
         variants: null,
+        extracted: {
+          top_complaints: [],
+          top_praise: [],
+          attribute_signals: [],
+        },
         errors: [`HTTP ${httpStatus}: ${errorText.substring(0, 100)}`],
       };
     }
@@ -91,17 +103,29 @@ export async function getRainforestProductEnrichment(
       });
       return {
         asin,
+        title: null,
         customers_say: null,
         summarization_attributes: null,
         variants: null,
+        extracted: {
+          top_complaints: [],
+          top_praise: [],
+          attribute_signals: [],
+        },
         errors: [data.error],
       };
     }
     
     const product = data.product || {};
     
+    // Extract title
+    const title = product.title || null;
+    
     // Extract customers_say (themes + sentiment snippets)
     let customers_say: RainforestProductEnrichment['customers_say'] = null;
+    const topComplaints: string[] = [];
+    const topPraise: string[] = [];
+    
     if (product.customers_say) {
       const themes: Array<{ label: string; sentiment: 'positive' | 'negative'; mentions?: number }> = [];
       const snippets: Array<{ text: string; sentiment: 'positive' | 'negative' }> = [];
@@ -110,11 +134,20 @@ export async function getRainforestProductEnrichment(
       if (Array.isArray(product.customers_say)) {
         for (const item of product.customers_say) {
           if (item.theme || item.label) {
+            const themeLabel = item.theme || item.label || '';
+            const sentiment = item.sentiment === 'positive' ? 'positive' : 'negative';
             themes.push({
-              label: item.theme || item.label || '',
-              sentiment: item.sentiment === 'positive' ? 'positive' : 'negative',
+              label: themeLabel,
+              sentiment,
               mentions: typeof item.mentions === 'number' ? item.mentions : undefined,
             });
+            
+            // Extract to top_complaints or top_praise
+            if (sentiment === 'negative' && themeLabel) {
+              topComplaints.push(themeLabel);
+            } else if (sentiment === 'positive' && themeLabel) {
+              topPraise.push(themeLabel);
+            }
           }
           if (item.text || item.snippet) {
             snippets.push({
@@ -125,11 +158,26 @@ export async function getRainforestProductEnrichment(
         }
       } else if (typeof product.customers_say === 'object') {
         // Handle object structure
-        if (product.customers_say.themes) {
-          themes.push(...(product.customers_say.themes || []));
+        if (product.customers_say.themes && Array.isArray(product.customers_say.themes)) {
+          for (const theme of product.customers_say.themes) {
+            const themeLabel = theme.label || theme.theme || '';
+            const sentiment = theme.sentiment === 'positive' ? 'positive' : 'negative';
+            themes.push({
+              label: themeLabel,
+              sentiment,
+              mentions: typeof theme.mentions === 'number' ? theme.mentions : undefined,
+            });
+            
+            // Extract to top_complaints or top_praise
+            if (sentiment === 'negative' && themeLabel) {
+              topComplaints.push(themeLabel);
+            } else if (sentiment === 'positive' && themeLabel) {
+              topPraise.push(themeLabel);
+            }
+          }
         }
-        if (product.customers_say.snippets) {
-          snippets.push(...(product.customers_say.snippets || []));
+        if (product.customers_say.snippets && Array.isArray(product.customers_say.snippets)) {
+          snippets.push(...product.customers_say.snippets);
         }
       }
       
@@ -140,15 +188,26 @@ export async function getRainforestProductEnrichment(
     
     // Extract summarization_attributes (attribute ratings)
     let summarization_attributes: Record<string, { rating: number; count?: number }> | null = null;
+    const attributeSignals: Array<{ name: string; value: string }> = [];
+    
     if (product.summarization_attributes && typeof product.summarization_attributes === 'object') {
       summarization_attributes = {};
       for (const [key, value] of Object.entries(product.summarization_attributes)) {
         if (value && typeof value === 'object' && 'rating' in value) {
           const valueObj = value as { rating?: unknown; count?: unknown };
+          const rating = typeof valueObj.rating === 'number' ? valueObj.rating : 0;
           summarization_attributes[key] = {
-            rating: typeof valueObj.rating === 'number' ? valueObj.rating : 0,
+            rating,
             count: typeof valueObj.count === 'number' ? valueObj.count : undefined,
           };
+          
+          // Extract to attribute_signals (format: "name: value")
+          if (key && rating > 0) {
+            attributeSignals.push({
+              name: key,
+              value: rating.toString(),
+            });
+          }
         }
       }
       if (Object.keys(summarization_attributes).length === 0) {
@@ -179,18 +238,28 @@ export async function getRainforestProductEnrichment(
       asin,
       http_status: httpStatus,
       duration_ms: duration,
+      has_title: !!title,
       has_customers_say: !!customers_say,
       customers_say_themes_count: customers_say?.themes?.length || 0,
+      top_complaints_count: topComplaints.length,
+      top_praise_count: topPraise.length,
       has_summarization_attributes: !!summarization_attributes,
       summarization_attributes_count: summarization_attributes ? Object.keys(summarization_attributes).length : 0,
+      attribute_signals_count: attributeSignals.length,
       has_variants: !!variants,
     });
     
     return {
       asin,
+      title,
       customers_say,
       summarization_attributes,
       variants,
+      extracted: {
+        top_complaints: topComplaints,
+        top_praise: topPraise,
+        attribute_signals: attributeSignals,
+      },
       errors: [],
     };
   } catch (error) {
@@ -202,9 +271,15 @@ export async function getRainforestProductEnrichment(
     });
     return {
       asin,
+      title: null,
       customers_say: null,
       summarization_attributes: null,
       variants: null,
+      extracted: {
+        top_complaints: [],
+        top_praise: [],
+        attribute_signals: [],
+      },
       errors: [error instanceof Error ? error.message : String(error)],
     };
   }

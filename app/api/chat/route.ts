@@ -2187,28 +2187,46 @@ export async function POST(req: NextRequest) {
     // GOAL 4A: Variants/attributes/bullets/description intent detection
     const variantsAttributesIntent = /variant|variants|variation|variations|size|sizes|color|colors|colour|colours|version|versions|how many variants|which variant|attributes?|bullet points?|bullets?|description|title details?|material|dimensions?|specifications?/i.test(body.message);
     
-    // GOAL 4B: Complaints/customers say intent detection (use Rainforest, not SP-API)
-    const complaintsIntent = /bad reviews|complaints|what do customers complain about|negative reviews|worst reviews|most common complaints|customer complaints|what customers say|what do customers say/i.test(body.message);
+    // GOAL 4B: Review insights intent detection (complaints, praise, customer feedback)
+    // Keywords: complain, complaints, bad reviews, negative reviews, common issues, pros and cons,
+    // what do customers say, praise, good reviews, positive reviews, customer feedback
+    const reviewInsightsIntent = /complain|complaints|bad reviews?|negative reviews?|common issues?|pros and cons|what do customers (say|complain about)|praise|good reviews?|positive reviews?|customer feedback|issues?|problems?/i.test(body.message);
     
     // If selectedAsins exists AND any intent is true, enrichment MUST execute
-    const requiresEnrichment = (variantsAttributesIntent || complaintsIntent) && selectedAsins.length > 0;
-    const enrichmentAsins = requiresEnrichment ? selectedAsins.slice(0, MAX_ENRICHMENT_ASINS_PER_MESSAGE) : [];
-    const enrichmentTypes: Array<'spapi_catalog' | 'rainforest_product'> = [];
+    // For review insights: max 2 ASINs (hard cap)
+    const requiresEnrichment = (variantsAttributesIntent || reviewInsightsIntent) && selectedAsins.length > 0;
+    
+    // Special handling for review insights: block if 3+ ASINs selected
+    let enrichmentAsins: string[] = [];
     if (requiresEnrichment) {
+      if (reviewInsightsIntent && selectedAsins.length > 2) {
+        // Block enrichment for 3+ ASINs on review insights
+        // Will return a message asking user to select max 2
+        enrichmentAsins = [];
+      } else {
+        // Cap at 2 for review insights, 3 for variants
+        const maxAsins = reviewInsightsIntent ? 2 : MAX_ENRICHMENT_ASINS_PER_MESSAGE;
+        enrichmentAsins = selectedAsins.slice(0, maxAsins);
+      }
+    }
+    
+    const enrichmentTypes: Array<'spapi_catalog' | 'rainforest_product'> = [];
+    if (requiresEnrichment && enrichmentAsins.length > 0) {
       if (variantsAttributesIntent) enrichmentTypes.push('spapi_catalog');
-      if (complaintsIntent) enrichmentTypes.push('rainforest_product');
+      if (reviewInsightsIntent) enrichmentTypes.push('rainforest_product');
     }
     
     console.log("ENRICHMENT_DECISION", {
       analysisRunId: body.analysisRunId,
       requires_enrichment: requiresEnrichment,
       variants_attributes_intent: variantsAttributesIntent,
-      complaints_intent: complaintsIntent,
+      review_insights_intent: reviewInsightsIntent,
       selected_asins: selectedAsins,
       selected_asins_count: selectedAsins.length,
       enrichment_asins: enrichmentAsins,
       enrichment_types: enrichmentTypes,
-      capped_to: MAX_ENRICHMENT_ASINS_PER_MESSAGE,
+      capped_to: reviewInsightsIntent ? 2 : MAX_ENRICHMENT_ASINS_PER_MESSAGE,
+      blocked_for_3plus: reviewInsightsIntent && selectedAsins.length > 2,
     });
 
     // Pass 1: decide escalation WITHOUT hitting credits DB (fast, and does not block history chat).
@@ -2551,6 +2569,25 @@ export async function POST(req: NextRequest) {
       matched_asins: selectedAsinsArray.map(p => p.asin),
     });
     
+    // GOAL 3: Block review insights enrichment if 3+ ASINs selected
+    if (reviewInsightsIntent && selectedAsins.length > 2) {
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: "Select up to 2 products for review insights." })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new NextResponse(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
+    }
+    
     // GOAL 3: Check enrichment limits (per session/analysis_run_id)
     let enrichmentCallsUsed = 0;
     if (requiresEnrichment && enrichmentAsins.length > 0) {
@@ -2643,23 +2680,23 @@ export async function POST(req: NextRequest) {
       }>;
     } | null = null;
     
-    // GOAL 4B: Rainforest product enrichment for complaints/customers_say
+    // GOAL 4B: Rainforest product enrichment for review insights
     let rainforestEnrichment: {
       executed: boolean;
       asins: string[];
       by_asin: Record<string, {
-        customers_say?: {
-          themes?: Array<{ label: string; sentiment: 'positive' | 'negative'; mentions?: number }>;
-          snippets?: Array<{ text: string; sentiment: 'positive' | 'negative' }>;
-        } | null;
-        summarization_attributes?: Record<string, { rating: number; count?: number }> | null;
-        variants?: {
-          child_asins?: string[];
-          parent_asin?: string;
-          variation_theme?: string;
-        } | null;
+        asin: string;
+        title: string | null;
+        customers_say: any | null;
+        summarization_attributes: any | null;
+        extracted: {
+          top_complaints: string[];
+          top_praise: string[];
+          attribute_signals: Array<{ name: string; value: string }>;
+        };
         errors: string[];
       }>;
+      errors: Array<{ asin: string; error: string }>;
     } | null = null;
     
     if (requiresEnrichment && enrichmentAsins.length > 0) {
@@ -2720,7 +2757,7 @@ export async function POST(req: NextRequest) {
         }
       }
       
-      // GOAL 4B: Rainforest product enrichment for complaints
+      // GOAL 4B: Rainforest product enrichment for review insights
       if (enrichmentTypes.includes('rainforest_product')) {
         const { getRainforestProductEnrichment } = await import("@/lib/rainforest/productEnrichment");
         
@@ -2728,48 +2765,78 @@ export async function POST(req: NextRequest) {
           executed: true,
           asins: enrichmentAsins,
           by_asin: {},
+          errors: [],
         };
+        
+        const cacheHits: Record<string, boolean> = {};
         
         for (const asin of enrichmentAsins) {
           const errors: string[] = [];
           let productData: any | null = null;
+          let cacheHit = false;
           
           // Check cache first
           const cached = getCachedRainforest(asin, amazonDomain);
           if (cached) {
             productData = cached;
-            console.log("RAINFOREST_ENRICHMENT_CACHE_HIT", { asin, endpoint: "product" });
+            cacheHit = true;
+            cacheHits[asin] = true;
+            console.log("RAINFOREST_ENRICHMENT_CACHE_HIT", { asin, endpoint: "product", cache_hit: true });
           } else {
+            cacheHits[asin] = false;
             try {
               productData = await getRainforestProductEnrichment(asin, amazonDomain, user.id);
               if (productData) {
                 setCachedRainforest(asin, amazonDomain, productData);
+                console.log("RAINFOREST_ENRICHMENT_CACHE_MISS", { asin, endpoint: "product", cache_hit: false });
               } else {
                 errors.push("Rainforest product enrichment failed");
               }
             } catch (error) {
               const errorMessage = error instanceof Error ? error.message : String(error);
               errors.push(`Rainforest product enrichment error: ${errorMessage}`);
+              rainforestEnrichment.errors.push({ asin, error: errorMessage });
             }
           }
           
-          // Parse product data
+          // Parse product data into required structure
           if (productData) {
             rainforestEnrichment.by_asin[asin] = {
+              asin: productData.asin || asin,
+              title: productData.title || null,
               customers_say: productData.customers_say || null,
               summarization_attributes: productData.summarization_attributes || null,
-              variants: productData.variants || null,
+              extracted: productData.extracted || {
+                top_complaints: [],
+                top_praise: [],
+                attribute_signals: [],
+              },
               errors: productData.errors || [],
             };
           } else {
             rainforestEnrichment.by_asin[asin] = {
+              asin,
+              title: null,
               customers_say: null,
               summarization_attributes: null,
-              variants: null,
+              extracted: {
+                top_complaints: [],
+                top_praise: [],
+                attribute_signals: [],
+              },
               errors,
             };
           }
         }
+        
+        // Log enrichment completion with cache hit info
+        console.log("RAINFOREST_ENRICHMENT_COMPLETE", {
+          analysisRunId: body.analysisRunId,
+          asins: enrichmentAsins,
+          cache_hits: cacheHits,
+          cache_hit_count: Object.values(cacheHits).filter(h => h).length,
+          cache_miss_count: Object.values(cacheHits).filter(h => !h).length,
+        });
       }
       
       console.log("ENRICHMENT_COMPLETE", {
@@ -3235,7 +3302,7 @@ CRITICAL RULES FOR ESCALATED DATA:
       spapi_enrichment_asins: (ai as any)?.spapi_enrichment?.asins || [],
       rainforest_enrichment_asins: (ai as any)?.rainforest_enrichment?.asins || [],
       spapi_enrichment_count: (ai as any)?.spapi_enrichment?.asins?.length || 0,
-      rainforest_enrichment_count: (ai as any)?.rainforest_enrichment?.asins?.length || 0,
+      rainforest_enriched_asins_count: (ai as any)?.rainforest_enrichment?.asins?.length || 0,
       // Unique ASINs vs Total Appearances
       page1_unique_asins: page1UniqueAsins,
       page1_total_appearances: page1TotalAppearances,
