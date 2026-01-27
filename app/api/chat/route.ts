@@ -2791,10 +2791,13 @@ export async function POST(req: NextRequest) {
         executed: spapiEnrichment.executed,
         asins: spapiEnrichment.asins,
         by_asin_keys: Object.keys(spapiEnrichment.by_asin),
-        catalog_success_count: Object.values(spapiEnrichment.by_asin).filter(v => v.catalog).length,
-        review_topics_success_count: Object.values(spapiEnrichment.by_asin).filter(v => v.review_topics).length,
+        success_count: Object.values(spapiEnrichment.by_asin).filter(v => v.errors.length === 0).length,
         error_count: Object.values(spapiEnrichment.by_asin).reduce((sum, v) => sum + v.errors.length, 0),
         has_403_errors: Object.values(spapiEnrichment.by_asin).some(v => v.errors.some(e => e.includes('Permission denied'))),
+        has_title: Object.values(spapiEnrichment.by_asin).filter(v => v.title).length,
+        has_bullet_points: Object.values(spapiEnrichment.by_asin).filter(v => v.bullet_points?.length).length,
+        has_description: Object.values(spapiEnrichment.by_asin).filter(v => v.description).length,
+        has_variation_relationships: Object.values(spapiEnrichment.by_asin).filter(v => v.variation_relationships).length,
       });
     }
     
