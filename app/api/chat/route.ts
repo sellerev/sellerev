@@ -2795,6 +2795,23 @@ export async function POST(req: NextRequest) {
       errors: Array<{ asin: string; error: string }>;
     } | null = null;
     
+    // Aggregated, model-friendly review insights for this request
+    let reviewInsights: {
+      asins: string[];
+      by_asin: Record<string, {
+        source: "product_summary" | "reviews_snippets" | "fallback_unavailable";
+        top_complaints: Array<{ theme: string; support_snippet?: string }>;
+        top_praise: Array<{ theme: string; support_snippet?: string }>;
+        note?: string;
+      }>;
+      errors: Array<{ asin: string; error: string }>;
+    } | null = null;
+    const reviewInsightsStats = {
+      used_type_product_count: 0,
+      used_type_reviews_count: 0,
+      reviews_503_count: 0,
+    };
+    
     if (requiresEnrichment && enrichmentAsins.length > 0) {
       const marketplaceId = "ATVPDKIKX0DER"; // US marketplace
       const amazonDomain = "amazon.com";
@@ -3201,6 +3218,98 @@ export async function POST(req: NextRequest) {
       });
     }
     
+    // Build per-request review_insights from enrichment for up to 2 selected ASINs
+    if (reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2) {
+      const insightAsins = selectedAsins.slice(0, 2);
+      reviewInsights = {
+        asins: insightAsins,
+        by_asin: {},
+        errors: [],
+      };
+      
+      for (const asin of insightAsins) {
+        const product = rainforestEnrichment?.by_asin?.[asin];
+        const reviews = rainforestReviewsEnrichment?.by_asin?.[asin];
+        
+        const hasCustomersSay = !!(product?.customers_say && Object.keys(product.customers_say).length > 0);
+        const hasSummarizationAttributes = !!(product?.summarization_attributes && Object.keys(product.summarization_attributes).length > 0);
+        const hasSummarySignals = hasCustomersSay || hasSummarizationAttributes;
+        
+        const productComplaints = Array.isArray(product?.extracted?.top_complaints) ? product!.extracted.top_complaints : [];
+        const productPraise = Array.isArray(product?.extracted?.top_praise) ? product!.extracted.top_praise : [];
+        
+        if (hasSummarySignals && (productComplaints.length > 0 || productPraise.length > 0)) {
+          // Use Amazon's review-summary module / attribute summary only
+          reviewInsights.by_asin[asin] = {
+            source: "product_summary",
+            top_complaints: productComplaints.slice(0, 3).map((theme) => ({ theme })),
+            top_praise: productPraise.slice(0, 3).map((theme) => ({ theme })),
+            note: "Based on Amazon’s review-summary module and attribute summary.",
+          };
+          reviewInsightsStats.used_type_product_count += 1;
+          continue;
+        }
+        
+        const reviewsErrors = reviews?.errors || [];
+        const is503 = reviewsErrors.some((e) => typeof e === "string" && e.includes("TEMPORARILY_UNAVAILABLE"));
+        if (is503) {
+          reviewInsightsStats.reviews_503_count += 1;
+        }
+        
+        if (reviews && reviews.extracted && (reviews.extracted.top_complaints.length > 0 || reviews.extracted.top_praise.length > 0) && !is503) {
+          // Use reviews snippets when product summary signals are missing
+          reviewInsights.by_asin[asin] = {
+            source: "reviews_snippets",
+            top_complaints: reviews.extracted.top_complaints.slice(0, 3),
+            top_praise: reviews.extracted.top_praise.slice(0, 3),
+            note: "Based on recent Amazon review snippets.",
+          };
+          reviewInsightsStats.used_type_reviews_count += 1;
+          continue;
+        }
+        
+        // Fallback when reviews are temporarily unavailable (503) and no product summary
+        if (is503) {
+          const spapi = spapiEnrichment?.by_asin?.[asin];
+          const productExtracted = product?.extracted;
+          
+          const hasSpapiCatalog =
+            !!spapi &&
+            ((Array.isArray(spapi.bullet_points) && spapi.bullet_points.length > 0) ||
+              !!spapi.description ||
+              (spapi.attributes && Object.keys(spapi.attributes).length > 0));
+          
+          const hasRainforestCatalog =
+            !!productExtracted &&
+            (productExtracted.feature_bullets ||
+              productExtracted.description ||
+              (productExtracted.attributes && Object.keys(productExtracted.attributes).length > 0));
+          
+          let detailSourceNote = "";
+          if (hasSpapiCatalog) {
+            detailSourceNote =
+              "Use SP-API bullet points, description, and attributes for any product-detail inferences.";
+          } else if (hasRainforestCatalog) {
+            detailSourceNote =
+              "Use Rainforest feature bullets, description, and attributes for any product-detail inferences.";
+          }
+          
+          reviewInsights.by_asin[asin] = {
+            source: "fallback_unavailable",
+            top_complaints: [],
+            top_praise: [],
+            note: `Amazon doesn’t show a review-summary module for this product right now, and our review provider is temporarily unavailable. Here’s what I can infer from the product details we pulled (bullets, attributes, variation themes). ${detailSourceNote}Try again in a minute and I’ll pull review snippets.`,
+          };
+          continue;
+        }
+        
+        // No usable review data available (non-503 errors or missing enrichment)
+        if (!product && !reviews) {
+          reviewInsights.errors.push({ asin, error: "NO_REVIEW_DATA" });
+        }
+      }
+    }
+    
     // PRIORITY D.11: Log what ai_context.spapi_enrichment contains before OpenAI call
     if (spapiEnrichment) {
       console.log("SPAPI_ENRICHMENT_INJECTED", {
@@ -3229,12 +3338,14 @@ export async function POST(req: NextRequest) {
           ...(spapiEnrichment ? { spapi_enrichment: spapiEnrichment } : {}),
           ...(rainforestEnrichment ? { rainforest_enrichment: rainforestEnrichment } : {}),
           ...(rainforestReviewsEnrichment ? { rainforest_reviews_enrichment: rainforestReviewsEnrichment } : {}),
+          ...(reviewInsights ? { review_insights: reviewInsights } : {}),
         }
       : {
           selected_asins: selectedAsinsArray,
           ...(spapiEnrichment ? { spapi_enrichment: spapiEnrichment } : {}),
           ...(rainforestEnrichment ? { rainforest_enrichment: rainforestEnrichment } : {}),
           ...(rainforestReviewsEnrichment ? { rainforest_reviews_enrichment: rainforestReviewsEnrichment } : {}),
+          ...(reviewInsights ? { review_insights: reviewInsights } : {}),
         };
     
     // 8d. Determine response mode (concise by default, expanded if user requests)
@@ -3346,16 +3457,24 @@ export async function POST(req: NextRequest) {
       aiContextToUse = { ...(aiContextToUse || {}), rainforest_reviews_enrichment: rainforestReviewsEnrichment };
     }
     
+    if (reviewInsights && aiContextToUse) {
+      (aiContextToUse as any).review_insights = reviewInsights;
+    } else if (reviewInsights && !aiContextToUse) {
+      aiContextToUse = { ...(aiContextToUse || {}), review_insights: reviewInsights };
+    }
+    
     // GOAL 7: Log enrichment objects in ai_context before OpenAI call
     const spapiEnrichmentInContext = (aiContextToUse as any)?.spapi_enrichment;
     const rainforestEnrichmentInContext = (aiContextToUse as any)?.rainforest_enrichment;
     const rainforestReviewsEnrichmentInContext = (aiContextToUse as any)?.rainforest_reviews_enrichment;
+    const reviewInsightsInContext = (aiContextToUse as any)?.review_insights;
     
     // Log enrichment details for each selected ASIN
     console.log("ENRICHMENT_BEFORE_OPENAI_CALL", {
       analysisRunId: body.analysisRunId,
       has_spapi_enrichment: !!spapiEnrichmentInContext,
       has_rainforest_reviews_enrichment: !!rainforestReviewsEnrichmentInContext,
+      has_review_insights: !!reviewInsightsInContext,
       selected_asins: selectedAsins,
       enrichment_by_asin: selectedAsins.map((asin: string) => {
         const spapi = spapiEnrichmentInContext?.by_asin?.[asin];
@@ -3393,6 +3512,23 @@ export async function POST(req: NextRequest) {
         error_count: Object.values(rainforestEnrichmentInContext.by_asin || {}).reduce((sum: number, v: any) => sum + (v.errors?.length || 0), 0),
       });
     }
+    
+    // REVIEW_INSIGHTS contextual log (for debugging review flows)
+    console.log("REVIEW_INSIGHTS_CONTEXT", {
+      selected_asins: selectedAsins,
+      review_insights_present: !!reviewInsightsInContext,
+      sources_by_asin: reviewInsightsInContext
+        ? Object.entries((reviewInsightsInContext as any).by_asin || {}).map(
+            ([asin, value]: [string, any]) => ({
+              asin,
+              source: value?.source,
+            })
+          )
+        : [],
+      used_type_product_count: reviewInsightsStats.used_type_product_count,
+      used_type_reviews_count: reviewInsightsStats.used_type_reviews_count,
+      reviews_503_count: reviewInsightsStats.reviews_503_count,
+    });
     
     console.log("🔍 AI_CONTEXT_NORMALIZED", {
       analysisRunId: body.analysisRunId,
