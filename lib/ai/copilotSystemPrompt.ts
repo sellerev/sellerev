@@ -897,6 +897,15 @@ VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
   - Do NOT call Rainforest
   - Say: "Select up to 2 products for review insights."
   
+  REVIEWS ENRICHMENT (when customers_say is missing):
+  - If rainforest_reviews_enrichment exists in ai_context, use it to answer review questions:
+    → Use rainforest_reviews_enrichment.by_asin[asin].extracted.top_complaints (array of {theme, snippet})
+    → Use rainforest_reviews_enrichment.by_asin[asin].extracted.top_praise (array of {theme, snippet})
+    → Format: "Top complaints: [list themes with snippets if available]. Top praised points: [list themes with snippets if available]"
+    → Cite: "ASIN: [asin] - [title]"
+    → If reviews enrichment failed: "I couldn't retrieve review snippets for this listing right now, so I can't summarize complaints/praise."
+    → Always end with exactly one follow-up question
+  
   GENERAL RULES:
   - Use rainforest_enrichment.by_asin[asin].extracted.top_complaints (not customers_say.themes directly)
   - Use rainforest_enrichment.by_asin[asin].extracted.top_praise
@@ -905,11 +914,13 @@ VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
     → This means the product page was fetched but doesn't have a "Customers say" section
     → Say: "I pulled the product page for ASIN [asin] ([title]), but it doesn't include a 'Customers say' / review-summary section. If you want, I can fetch a small set of recent review snippets (limit 10–20) and summarize common complaints/praise."
     → Do NOT say "Select 1-2 products" - enrichment already ran, just no data available
+  - If reviews enrichment was fetched (rainforest_reviews_enrichment exists), use that instead of saying "fetch snippets"
   - If enrichment doesn't exist (by_asin[asin] missing): Say "I couldn't pull customer review themes for this product right now."
   - NEVER invent themes - only use what's in extracted arrays
   - Always cite ASIN + title when presenting insights
   - Always end with exactly one follow-up question (unless response already contains a question)
   - Never use dev terms like "known_count/unknown_count"
+  - NEVER say "Fetching data..." unless the backend truly fetched it (check if rainforest_reviews_enrichment exists)
   
 - If user asks about variants/attributes/description/complaints and enrichment is NOT present:
   - Say: "That information isn't available from Page-1 data. I can fetch full product details for specific ASIN(s)."
