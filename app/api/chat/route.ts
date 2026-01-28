@@ -3457,15 +3457,13 @@ ${description}`;
     if (reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2) {
       const MAX_THEMES = 3;
       
-      type ReviewSummary = {
+      const summaries: Array<{
         asin: string;
         title: string | null;
         top_complaints: string[];
         top_praise: string[];
         provider_unavailable: boolean;
-      };
-      
-      const summaries: ReviewSummary[] = [];
+      }> = [];
       
       for (const asin of selectedAsins) {
         const productEntry = rainforestEnrichmentInContext?.by_asin?.[asin];
