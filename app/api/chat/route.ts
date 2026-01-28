@@ -39,6 +39,8 @@ import { evaluateChatGuardrails } from "@/lib/ai/chatGuardrails";
  * now uses direct responders for bullets/description and review insights,
  * and NEVER relies on credits or escalation gating.
  *
+ * (Deploy note) This file changed to trigger a fresh Vercel build.
+ *
  * This endpoint continues a conversation anchored to a completed analysis.
  *
  * HARD CONSTRAINTS:
