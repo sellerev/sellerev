@@ -2754,6 +2754,10 @@ export async function POST(req: NextRequest) {
           top_complaints: string[];
           top_praise: string[];
           attribute_signals: Array<{ name: string; value: string }>;
+          // Catalog fallback fields (for when SP-API is empty or missing fields)
+          feature_bullets?: string[] | string | null;
+          description?: string | null;
+          attributes?: Record<string, any> | null;
         };
         errors: string[];
       }>;
