@@ -86,12 +86,6 @@ export interface ChatMessage {
   content: string;
   isStreaming?: boolean;
   citations?: Citation[];
-  pendingAction?: {
-    type: "rainforest_reviews";
-    asins: string[];
-    limit: number;
-    expires_at: number;
-  };
 }
 
 interface MarketSnapshot {
@@ -354,7 +348,6 @@ export default function ChatSidebar({
   const [escalationState, setEscalationState] = useState<{ question: string; asin: string | null } | null>(null);
   const [escalationMessage, setEscalationMessage] = useState<string | null>(null);
   const [currentCitations, setCurrentCitations] = useState<Citation[]>([]);
-  const pendingActionForMessageRef = useRef<ChatMessage["pendingAction"] | null>(null);
 
   useEffect(() => {
     try {
@@ -1215,18 +1208,6 @@ export default function ChatSidebar({
                   const cits = (json.metadata.citations || []) as Citation[];
                   citationsForFinal = cits;
                   setCurrentCitations(cits);
-                } else if (json.metadata.type === "pending_action") {
-                  // Store pending action metadata for rendering action buttons
-                  // This will be attached to the assistant message when it's finalized
-                  if (json.metadata.action_type === "rainforest_reviews") {
-                    // Store in a ref or state to attach to the final message
-                    pendingActionForMessageRef.current = {
-                      type: "rainforest_reviews",
-                      asins: json.metadata.asins || [],
-                      limit: json.metadata.limit || 20,
-                      expires_at: json.metadata.expires_at || Date.now() + 10 * 60 * 1000,
-                    };
-                  }
                 }
               }
               
@@ -1248,18 +1229,16 @@ export default function ChatSidebar({
         }
       }
 
-      // Add complete assistant message with citations and pending action
+      // Add complete assistant message with citations
       if (accumulatedContent.trim()) {
         const assistantMessage: ChatMessage = {
           role: "assistant",
           content: accumulatedContent,
           citations: citationsForFinal.length > 0 ? citationsForFinal : undefined,
-          pendingAction: pendingActionForMessageRef.current || undefined,
         };
         setMessages((prev) => [...prev, assistantMessage]);
-        // Clear citations and pending action for next message
+        // Clear citations for next message
         setCurrentCitations([]);
-        pendingActionForMessageRef.current = null;
       }
     } catch (error) {
       // Add error message
@@ -1490,330 +1469,6 @@ export default function ChatSidebar({
                           {msg.citations.map((citation, citationIdx) => (
                             <AsinCitationChip key={citationIdx} citation={citation} />
                           ))}
-                        </div>
-                      )}
-                      
-                      {/* Action Buttons - for pending actions */}
-                      {msg.role === "assistant" && msg.pendingAction && msg.pendingAction.type === "rainforest_reviews" && (
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <button
-                            onClick={async () => {
-                              if (!analysisRunId) return;
-                              setIsLoading(true);
-                              setCopilotStatus("fetching");
-                              
-                              try {
-                                const response = await fetch("/api/chat/action", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({
-                                    analysisRunId,
-                                    action_type: msg.pendingAction!.type,
-                                    asins: msg.pendingAction!.asins,
-                                    user_choice: "yes",
-                                    limit: msg.pendingAction!.limit,
-                                  }),
-                                });
-
-                                if (!response.ok) {
-                                  throw new Error("Action request failed");
-                                }
-
-                                // Handle streaming response
-                                const reader = response.body?.getReader();
-                                if (!reader) {
-                                  throw new Error("No response body");
-                                }
-
-                                const decoder = new TextDecoder();
-                                let actionContent = "";
-
-                                while (true) {
-                                  const { done, value } = await reader.read();
-                                  if (done) break;
-
-                                  const chunk = decoder.decode(value, { stream: true });
-                                  const lines = chunk.split("\n").filter((line) => line.trim() !== "");
-
-                                  for (const line of lines) {
-                                    if (line === "data: [DONE]") continue;
-                                    if (line.startsWith("data: ")) {
-                                      try {
-                                        const json = JSON.parse(line.replace(/^data: /, ""));
-                                        if (json.content) {
-                                          actionContent += json.content;
-                                          setStreamingContent(actionContent);
-                                        }
-                                      } catch {
-                                        // Skip malformed chunks
-                                      }
-                                    }
-                                  }
-                                }
-
-                                // Add assistant message with action result
-                                if (actionContent.trim()) {
-                                  setMessages((prev) => [
-                                    ...prev,
-                                    {
-                                      role: "assistant",
-                                      content: actionContent.trim(),
-                                    },
-                                  ]);
-                                }
-                              } catch (error) {
-                                const errorMessage = error instanceof Error ? error.message : "Failed to fetch reviews";
-                                setMessages((prev) => [
-                                  ...prev,
-                                  {
-                                    role: "assistant",
-                                    content: `I couldn't retrieve review snippets right now: ${errorMessage}`,
-                                  },
-                                ]);
-                              } finally {
-                                setIsLoading(false);
-                                setStreamingContent("");
-                                setCopilotStatus("idle");
-                                inputRef.current?.focus();
-                              }
-                            }}
-                            className="px-4 py-2 bg-[#3B82F6] text-white rounded-lg text-sm font-medium hover:bg-[#2563EB] transition-colors focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:ring-offset-2"
-                          >
-                            Yes — fetch now
-                          </button>
-                          <button
-                            onClick={async () => {
-                              if (!analysisRunId) return;
-                              
-                              try {
-                                const response = await fetch("/api/chat/action", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({
-                                    analysisRunId,
-                                    action_type: msg.pendingAction!.type,
-                                    asins: msg.pendingAction!.asins,
-                                    user_choice: "no",
-                                  }),
-                                });
-
-                                if (!response.ok) {
-                                  throw new Error("Action request failed");
-                                }
-
-                                // Handle streaming response
-                                const reader = response.body?.getReader();
-                                if (!reader) return;
-
-                                const decoder = new TextDecoder();
-                                let actionContent = "";
-
-                                while (true) {
-                                  const { done, value } = await reader.read();
-                                  if (done) break;
-
-                                  const chunk = decoder.decode(value, { stream: true });
-                                  const lines = chunk.split("\n").filter((line) => line.trim() !== "");
-
-                                  for (const line of lines) {
-                                    if (line === "data: [DONE]") continue;
-                                    if (line.startsWith("data: ")) {
-                                      try {
-                                        const json = JSON.parse(line.replace(/^data: /, ""));
-                                        if (json.content) {
-                                          actionContent += json.content;
-                                        }
-                                      } catch {
-                                        // Skip malformed chunks
-                                      }
-                                    }
-                                  }
-                                }
-
-                                // Add assistant message
-                                if (actionContent.trim()) {
-                                  setMessages((prev) => [
-                                    ...prev,
-                                    {
-                                      role: "assistant",
-                                      content: actionContent.trim(),
-                                    },
-                                  ]);
-                                }
-                              } catch (error) {
-                                console.error("Failed to handle action:", error);
-                              }
-                            }}
-                            className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2"
-                          >
-                            No
-                          </button>
-                          {msg.pendingAction.limit === 20 && (
-                            <>
-                              <button
-                                onClick={async () => {
-                                  if (!analysisRunId) return;
-                                  setIsLoading(true);
-                                  setCopilotStatus("fetching");
-                                  
-                                  try {
-                                    const response = await fetch("/api/chat/action", {
-                                      method: "POST",
-                                      headers: { "Content-Type": "application/json" },
-                                      body: JSON.stringify({
-                                        analysisRunId,
-                                        action_type: msg.pendingAction!.type,
-                                        asins: msg.pendingAction!.asins,
-                                        user_choice: "yes",
-                                        limit: 10,
-                                      }),
-                                    });
-
-                                    if (!response.ok) {
-                                      throw new Error("Action request failed");
-                                    }
-
-                                    const reader = response.body?.getReader();
-                                    if (!reader) throw new Error("No response body");
-
-                                    const decoder = new TextDecoder();
-                                    let actionContent = "";
-
-                                    while (true) {
-                                      const { done, value } = await reader.read();
-                                      if (done) break;
-
-                                      const chunk = decoder.decode(value, { stream: true });
-                                      const lines = chunk.split("\n").filter((line) => line.trim() !== "");
-
-                                      for (const line of lines) {
-                                        if (line === "data: [DONE]") continue;
-                                        if (line.startsWith("data: ")) {
-                                          try {
-                                            const json = JSON.parse(line.replace(/^data: /, ""));
-                                            if (json.content) {
-                                              actionContent += json.content;
-                                              setStreamingContent(actionContent);
-                                            }
-                                          } catch {
-                                            // Skip malformed chunks
-                                          }
-                                        }
-                                      }
-                                    }
-
-                                    if (actionContent.trim()) {
-                                      setMessages((prev) => [
-                                        ...prev,
-                                        {
-                                          role: "assistant",
-                                          content: actionContent.trim(),
-                                        },
-                                      ]);
-                                    }
-                                  } catch (error) {
-                                    const errorMessage = error instanceof Error ? error.message : "Failed to fetch reviews";
-                                    setMessages((prev) => [
-                                      ...prev,
-                                      {
-                                        role: "assistant",
-                                        content: `I couldn't retrieve review snippets right now: ${errorMessage}`,
-                                      },
-                                    ]);
-                                  } finally {
-                                    setIsLoading(false);
-                                    setStreamingContent("");
-                                    setCopilotStatus("idle");
-                                    inputRef.current?.focus();
-                                  }
-                                }}
-                                className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2"
-                              >
-                                Fetch 10
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  if (!analysisRunId) return;
-                                  setIsLoading(true);
-                                  setCopilotStatus("fetching");
-                                  
-                                  try {
-                                    const response = await fetch("/api/chat/action", {
-                                      method: "POST",
-                                      headers: { "Content-Type": "application/json" },
-                                      body: JSON.stringify({
-                                        analysisRunId,
-                                        action_type: msg.pendingAction!.type,
-                                        asins: msg.pendingAction!.asins,
-                                        user_choice: "yes",
-                                        limit: 20,
-                                      }),
-                                    });
-
-                                    if (!response.ok) {
-                                      throw new Error("Action request failed");
-                                    }
-
-                                    const reader = response.body?.getReader();
-                                    if (!reader) throw new Error("No response body");
-
-                                    const decoder = new TextDecoder();
-                                    let actionContent = "";
-
-                                    while (true) {
-                                      const { done, value } = await reader.read();
-                                      if (done) break;
-
-                                      const chunk = decoder.decode(value, { stream: true });
-                                      const lines = chunk.split("\n").filter((line) => line.trim() !== "");
-
-                                      for (const line of lines) {
-                                        if (line === "data: [DONE]") continue;
-                                        if (line.startsWith("data: ")) {
-                                          try {
-                                            const json = JSON.parse(line.replace(/^data: /, ""));
-                                            if (json.content) {
-                                              actionContent += json.content;
-                                              setStreamingContent(actionContent);
-                                            }
-                                          } catch {
-                                            // Skip malformed chunks
-                                          }
-                                        }
-                                      }
-                                    }
-
-                                    if (actionContent.trim()) {
-                                      setMessages((prev) => [
-                                        ...prev,
-                                        {
-                                          role: "assistant",
-                                          content: actionContent.trim(),
-                                        },
-                                      ]);
-                                    }
-                                  } catch (error) {
-                                    const errorMessage = error instanceof Error ? error.message : "Failed to fetch reviews";
-                                    setMessages((prev) => [
-                                      ...prev,
-                                      {
-                                        role: "assistant",
-                                        content: `I couldn't retrieve review snippets right now: ${errorMessage}`,
-                                      },
-                                    ]);
-                                  } finally {
-                                    setIsLoading(false);
-                                    setStreamingContent("");
-                                    setCopilotStatus("idle");
-                                    inputRef.current?.focus();
-                                  }
-                                }}
-                                className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-200 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2"
-                              >
-                                Fetch 20
-                              </button>
-                            </>
-                          )}
                         </div>
                       )}
                       

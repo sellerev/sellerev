@@ -864,30 +864,36 @@ VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
   
   SINGLE ASIN (1 selected):
   - "What do customers complain about most?" / "bad reviews" / "complaints" / "what customers say" / "most common complaints" / "negative feedback" / "issues"
-    → Check if rainforest_enrichment.by_asin[asin] exists
-    → If enrichment exists but extracted.top_complaints is empty AND extracted.top_praise is empty:
-      Say: "I pulled the product page for ASIN [asin] ([title]), but it doesn't include a 'Customers say' / review-summary section. If you want, I can fetch a small set of recent review snippets (limit 10–20) and summarize common complaints/praise."
-      Always end with one relevant follow-up question (e.g., "Should I fetch recent review snippets for this product?")
-    → If top_complaints has items: List top 3-6 complaints as bullets
-    → Also include: rainforest_enrichment.by_asin[asin].extracted.top_praise (top 2-4 praised points)
-    → If summarization_attributes exist: List attribute_signals (e.g., "Comfort: 4.5", "ANC: 4.2")
-    → Format: "Top complaints: [bullets]. Top praised points: [bullets]. Attribute ratings: [list]"
-    → Cite: "ASIN: [asin] - [title]"
+    → Check if rainforest_enrichment.by_asin[asin] exists OR rainforest_reviews_enrichment.by_asin[asin] exists
+    → PRIORITY: Use rainforest_reviews_enrichment if it exists (auto-fetched when customers_say missing)
+    → If rainforest_reviews_enrichment.by_asin[asin] exists:
+      - Use extracted.top_complaints (array of {theme, snippet}) - list top 3 with snippets if available
+      - Use extracted.top_praise (array of {theme, snippet}) - list top 3 with snippets if available
+      - Format: "Top complaints: [themes with snippets]. Top praised points: [themes with snippets]"
+      - Cite: "ASIN: [asin] - [title]"
+    → Else if rainforest_enrichment.by_asin[asin] exists and extracted.top_complaints has items:
+      - List top 3-6 complaints as bullets
+      - Include extracted.top_praise (top 2-4 praised points)
+      - If summarization_attributes exist: List attribute_signals (e.g., "Comfort: 4.5", "ANC: 4.2")
+      - Format: "Top complaints: [bullets]. Top praised points: [bullets]. Attribute ratings: [list]"
+      - Cite: "ASIN: [asin] - [title]"
     → If enrichment doesn't exist: "I couldn't pull customer review themes for this product right now. Try again or select a different ASIN."
     → NEVER invent themes - only use extracted.top_complaints/top_praise from enrichment
     → Always end with exactly one follow-up question (e.g., "Want me to compare this against another Page-1 listing?")
   
   TWO ASINs (2 selected):
   - Same question triggers side-by-side comparison
-    → Fetch both ASINs from rainforest_enrichment.by_asin
-    → For each ASIN, check if enrichment exists but extracted arrays are empty:
-      If empty: "I pulled the product page for ASIN [asin] ([title]), but it doesn't include a 'Customers say' / review-summary section. [Continue with other ASIN if available]"
+    → Check both ASINs in rainforest_enrichment.by_asin AND rainforest_reviews_enrichment.by_asin
+    → PRIORITY: Use rainforest_reviews_enrichment if it exists (auto-fetched when customers_say missing)
+    → For each ASIN:
+      - If rainforest_reviews_enrichment.by_asin[asin] exists: Use extracted.top_complaints and top_praise
+      - Else if rainforest_enrichment.by_asin[asin] exists: Use extracted.top_complaints and top_praise
+      - If both missing: Note that review themes are not available for that ASIN
     → Format: "Most complained about: [ASIN 1: top 3 themes] | [ASIN 2: top 3 themes]"
     → Format: "Most praised: [ASIN 1: top 2-3 themes] | [ASIN 2: top 2-3 themes]"
     → Add "Key differences" section: What buyers care about differently between the two
     → Cite both ASINs + titles
-    → If enrichment doesn't exist for either: "Review themes not available for [ASIN]. [Continue with available data]"
-    → Always end with exactly one follow-up question (e.g., "Do you want to compare price/reviews next?" or "Should I fetch recent review snippets for the products missing review summaries?")
+    → Always end with exactly one follow-up question (e.g., "Do you want to compare price/reviews next?")
   
   ZERO ASINs (0 selected):
   - Do NOT call Rainforest
@@ -912,19 +918,22 @@ VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
   - Use rainforest_enrichment.by_asin[asin].extracted.attribute_signals for attribute ratings
   - CRITICAL: If enrichment exists (by_asin[asin] present) but extracted arrays are empty:
     → This means the product page was fetched but doesn't have a "Customers say" section
-    → Say: "I pulled the product page for ASIN [asin] ([title]), but it doesn't include a 'Customers say' / review-summary section. If you want, I can fetch a small set of recent review snippets (limit 10–20) and summarize common complaints/praise."
+    → Note: Backend automatically fetches review snippets if customers_say is missing
+    → Use rainforest_reviews_enrichment data to answer with themes from review snippets
     → Do NOT say "Select 1-2 products" - enrichment already ran, just no data available
-  - If reviews enrichment was fetched (rainforest_reviews_enrichment exists), use that instead of saying "fetch snippets"
+  - If reviews enrichment was fetched (rainforest_reviews_enrichment exists), use that data
+  - If reviews enrichment has errors containing "TEMPORARILY_UNAVAILABLE", say:
+    "Our review provider is temporarily unavailable right now (no charge). Try again in a few minutes."
+    Then fall back to any available customers_say from rainforest_enrichment if it exists; otherwise stop (don't hallucinate)
   - If enrichment doesn't exist (by_asin[asin] missing): Say "I couldn't pull customer review themes for this product right now."
   - NEVER invent themes - only use what's in extracted arrays
   - Always cite ASIN + title when presenting insights
   - Always end with exactly one follow-up question (unless response already contains a question)
   - Never use dev terms like "known_count/unknown_count"
-  - NEVER say "Fetching data..." unless the backend truly fetched it (check if rainforest_reviews_enrichment exists)
+  - NEVER say "Fetching data..." or "Would you like me to fetch..." - enrichment is automatic (zero-confirmation)
   
 - If user asks about variants/attributes/description/complaints and enrichment is NOT present:
-  - Say: "That information isn't available from Page-1 data. I can fetch full product details for specific ASIN(s)."
-  - Ask: "Do you want Page-1 only, or should I pull full product data for the specific ASIN(s)?"
+  - Say: "That information isn't available from Page-1 data. Select 1-2 products to fetch full product details."
   
 - ALWAYS end with a helpful follow-up question in normal language (no technical jargon like "unknown_count", "known_count", "computed_metrics")
 

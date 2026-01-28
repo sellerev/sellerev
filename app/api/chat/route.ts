@@ -97,38 +97,29 @@ function validateRequestBody(body: unknown): body is ChatRequestBody {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PENDING ACTION STORAGE (shared module)
-// ═══════════════════════════════════════════════════════════════════════════
-import { setPendingAction, getPendingAction, clearPendingAction, isAffirmation, type PendingAction } from "@/lib/chat/pendingActions";
-
-function extractAsinsFromText(text: string, page1Asins?: string[]): string[] {
-  if (!text) return [];
+/**
+ * Extract ASINs from text - ONLY if they exist in ai_context.products or selected_asins
+ * This prevents false positives like "COMPLAINTS" being treated as ASINs
+ */
+function extractAsinsFromText(
+  text: string,
+  validAsins: string[] // ASINs from ai_context.products or selected_asins
+): string[] {
+  if (!text || !validAsins || validAsins.length === 0) return [];
+  
   const matches = text.toUpperCase().match(/\b([A-Z0-9]{10})\b/g) || [];
+  if (matches.length === 0) return [];
   
   // Validate: Must be exactly 10 chars [A-Z0-9] AND contain at least 1 digit
-  // This filters out words like "COMPLAINTS" which are 10 chars but have no digits
-  const validAsins = matches.filter((asin) => {
+  const validMatches = matches.filter((asin) => {
     // Must contain at least one digit
-    return /\d/.test(asin);
+    if (!/\d/.test(asin)) return false;
+    // Must exist in valid ASINs list
+    const validSet = new Set(validAsins.map(a => a.toUpperCase()));
+    return validSet.has(asin);
   });
   
-  if (validAsins.length === 0) return [];
-  
-  const uniq = Array.from(new Set(validAsins));
-  
-  // Prefer ASINs that exist in Page-1 (if provided)
-  if (page1Asins && page1Asins.length > 0) {
-    const page1Set = new Set(page1Asins.map(a => a.toUpperCase()));
-    const inPage1 = uniq.filter(a => page1Set.has(a));
-    if (inPage1.length > 0) {
-      return inPage1.slice(0, 5);
-    }
-  }
-  
-  // Prefer typical Amazon ASIN format starting with "B0", but keep others as fallback
-  const b0 = uniq.filter((a) => a.startsWith("B0"));
-  return (b0.length > 0 ? b0 : uniq).slice(0, 5);
+  return Array.from(new Set(validMatches)).slice(0, 5);
 }
 
 function intersects(a: string[], b: string[]): string[] {
@@ -1927,13 +1918,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // CHECK FOR PENDING ACTION (review snippets fetch)
-    // ═══════════════════════════════════════════════════════════════════════════
-    const pendingAction = getPendingAction(body.analysisRunId);
-    const isAffirmativeResponse = isAffirmation(body.message);
-    
-    // If pending action exists and user affirms, we'll trigger it after extracting selected ASINs
+    // ASIN extraction and validation
     // ═══════════════════════════════════════════════════════════════════════════
     // EXTRACT SELECTED ASINS / EXPLICIT ASINS (SINGLE SOURCE OF TRUTH)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1948,17 +1933,19 @@ export async function POST(req: NextRequest) {
     
     // PRIORITY A.3: Extract ASINs from message text (only when selectedAsins is empty)
     // CRITICAL: UI selection is authoritative - only use extracted ASINs when no UI selection exists
+    // CRITICAL: Only extract ASINs that exist in ai_context.products OR selected_asins
     let extractedAsinsFromMessage: string[] = [];
     let mergeSkipped = false;
     
     if (selectedAsins.length === 0) {
-      // Get Page-1 ASINs for validation (optional but preferred)
+      // Get valid ASINs from ai_context.products (Page-1 listings)
       const page1Listings = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
-      const page1Asins = page1Listings
+      const validAsins = page1Listings
         .map((p: any) => p.asin)
         .filter((asin: any): asin is string => asin && typeof asin === 'string');
       
-      extractedAsinsFromMessage = extractAsinsFromText(body.message, page1Asins);
+      // Only extract ASINs that exist in valid ASINs list
+      extractedAsinsFromMessage = extractAsinsFromText(body.message, validAsins);
       
       if (extractedAsinsFromMessage.length > 0) {
         // Only merge when selectedAsins is empty (user typed ASINs manually)
@@ -2248,29 +2235,22 @@ export async function POST(req: NextRequest) {
     // what do customers say, praise, good reviews, positive reviews, customer feedback
     const reviewInsightsIntent = /complain|complaints|bad reviews?|negative reviews?|common issues?|pros and cons|what do customers (say|complain about)|praise|good reviews?|positive reviews?|customer feedback|issues?|problems?/i.test(body.message);
     
-    // Check if pending action should be triggered (user affirmed review snippet fetch)
-    let pendingActionTriggered = false;
-    if (pendingAction && isAffirmativeResponse && pendingAction.type === "rainforest_reviews") {
-      // Validate ASINs: use selected_asins as authoritative, but fallback to pending action ASINs
-      const actionAsins = selectedAsins.length > 0 ? selectedAsins.slice(0, 2) : pendingAction.asins.slice(0, 2);
-      
-      if (actionAsins.length > 0 && actionAsins.length <= 2) {
-        pendingActionTriggered = true;
-        console.log("PENDING_ACTION_TRIGGERED", {
-          analysis_run_id: body.analysisRunId,
-          action_type: pendingAction.type,
-          asins: actionAsins,
-          selected_asins: selectedAsins,
-          user_message: body.message,
-        });
-        // Clear pending action - we're executing it now
-        clearPendingAction(body.analysisRunId);
-      } else if (actionAsins.length > 2) {
-        // Too many ASINs - refuse and clear pending action
-        clearPendingAction(body.analysisRunId);
+    // If selectedAsins exists AND any intent is true, enrichment MUST execute (zero-confirmation)
+    // For review insights: max 2 ASINs (hard cap)
+    const requiresEnrichment = (variantsAttributesIntent || reviewInsightsIntent) && selectedAsins.length > 0;
+    
+    // Special handling: block enrichment if 3+ ASINs selected (for both variants and review insights)
+    let enrichmentAsins: string[] = [];
+    if (requiresEnrichment) {
+      if (selectedAsins.length > 2) {
+        // Block enrichment for 3+ ASINs - return early with clear message
+        const message = reviewInsightsIntent 
+          ? `Select 1–2 products to analyze reviews. You currently have ${selectedAsins.length} selected.`
+          : `Select 1–2 products to analyze product details. You currently have ${selectedAsins.length} selected.`;
+        
         const stream = new ReadableStream({
           start(controller) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: `Select 1 or 2 products to fetch review snippets. You currently have ${actionAsins.length} selected.` })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: message })}\n\n`));
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             controller.close();
           },
@@ -2283,21 +2263,6 @@ export async function POST(req: NextRequest) {
             ...Object.fromEntries(res.headers.entries()),
           },
         });
-      }
-    }
-    
-    // If selectedAsins exists AND any intent is true, enrichment MUST execute
-    // For review insights: max 2 ASINs (hard cap)
-    // OR if pending action is triggered, force review insights enrichment
-    const requiresEnrichment = (variantsAttributesIntent || reviewInsightsIntent || pendingActionTriggered) && selectedAsins.length > 0;
-    
-    // Special handling: block enrichment if 3+ ASINs selected (for both variants and review insights)
-    let enrichmentAsins: string[] = [];
-    if (requiresEnrichment) {
-      if (selectedAsins.length > 2) {
-        // Block enrichment for 3+ ASINs (both variants and review insights)
-        // Will return a message asking user to select max 2
-        enrichmentAsins = [];
       } else {
         // Cap at 2 ASINs for all enrichment types
         enrichmentAsins = selectedAsins.slice(0, 2);
@@ -2307,8 +2272,11 @@ export async function POST(req: NextRequest) {
     const enrichmentTypes: Array<'spapi_catalog' | 'rainforest_product' | 'rainforest_reviews'> = [];
     if (requiresEnrichment && enrichmentAsins.length > 0) {
       if (variantsAttributesIntent) enrichmentTypes.push('spapi_catalog');
-      if (reviewInsightsIntent && !pendingActionTriggered) enrichmentTypes.push('rainforest_product');
-      if (pendingActionTriggered) enrichmentTypes.push('rainforest_reviews');
+      if (reviewInsightsIntent) {
+        // For review insights: try product endpoint first, fallback to reviews if needed
+        enrichmentTypes.push('rainforest_product');
+        // Note: reviews endpoint will be called automatically if customers_say is missing
+      }
     }
     
     console.log("ENRICHMENT_DECISION", {
@@ -2664,25 +2632,6 @@ export async function POST(req: NextRequest) {
       matched_asins: selectedAsinsArray.map(p => p.asin),
     });
     
-    // GOAL 3: Block enrichment if 3+ ASINs selected (for both variants and review insights)
-    if (requiresEnrichment && selectedAsins.length > 2) {
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: `Select 1 or 2 products to analyze ${reviewInsightsIntent ? 'review themes' : 'product details'}. You currently have ${selectedAsins.length} selected.` })}\n\n`));
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
-        },
-      });
-      return new NextResponse(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-transform",
-          Connection: "keep-alive",
-          ...Object.fromEntries(res.headers.entries()),
-        },
-      });
-    }
-    
     // GOAL 3: Check enrichment limits (per session/analysis_run_id)
     let enrichmentCallsUsed = 0;
     if (requiresEnrichment && enrichmentAsins.length > 0) {
@@ -2967,74 +2916,105 @@ export async function POST(req: NextRequest) {
         });
       }
       
-      // GOAL 4C: Rainforest reviews enrichment (when pending action triggered)
-      if (enrichmentTypes.includes('rainforest_reviews')) {
+      // GOAL 4C: Auto-fallback to Rainforest reviews if customers_say is missing
+      // After product enrichment, check if customers_say is missing/empty and auto-fetch reviews
+      if (enrichmentTypes.includes('rainforest_product') && reviewInsightsIntent) {
         const { getRainforestReviewsEnrichment } = await import("@/lib/rainforest/reviewsEnrichment");
-        
-        rainforestReviewsEnrichment = {
-          executed: true,
-          asins: enrichmentAsins,
-          by_asin: {},
-          errors: [],
-        };
-        
-        // Get limit from pending action if it was triggered, otherwise default to 20
-        const reviewsLimit = (pendingActionTriggered && pendingAction) ? pendingAction.limit : 20;
+        const MAX_REVIEWS_PER_ASIN = 20;
         
         for (const asin of enrichmentAsins) {
-          const errors: string[] = [];
-          let reviewsData: any | null = null;
+          const productData = rainforestEnrichment?.by_asin[asin];
+          const hasCustomersSay = productData?.customers_say && 
+            (typeof productData.customers_say === 'object' && Object.keys(productData.customers_say).length > 0);
           
-          // Check cache first (use separate cache for reviews)
-          const cached = getCachedReviews(asin, amazonDomain);
-          if (cached) {
-            reviewsData = cached;
-            console.log("RAINFOREST_REVIEWS_ENRICHMENT_CACHE_HIT", { asin, endpoint: "reviews", cache_hit: true });
-          } else {
-            try {
-              reviewsData = await getRainforestReviewsEnrichment(asin, amazonDomain, reviewsLimit);
-              if (reviewsData) {
-                setCachedReviews(asin, amazonDomain, reviewsData);
-                console.log("RAINFOREST_REVIEWS_ENRICHMENT_CACHE_MISS", { asin, endpoint: "reviews", cache_hit: false });
-              } else {
-                errors.push("Rainforest reviews enrichment failed");
-              }
-            } catch (error) {
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              errors.push(`Rainforest reviews enrichment error: ${errorMessage}`);
-              rainforestReviewsEnrichment.errors.push({ asin, error: errorMessage });
+          // If customers_say is missing or empty, automatically fetch reviews
+          if (!hasCustomersSay && !productData?.errors?.length) {
+            if (!rainforestReviewsEnrichment) {
+              rainforestReviewsEnrichment = {
+                executed: true,
+                asins: [],
+                by_asin: {},
+                errors: [],
+              };
             }
-          }
-          
-          // Parse reviews data into required structure
-          if (reviewsData) {
-            rainforestReviewsEnrichment.by_asin[asin] = {
-              asin: reviewsData.asin || asin,
-              title: reviewsData.title || null,
-              extracted: reviewsData.extracted || {
-                top_complaints: [],
-                top_praise: [],
-              },
-              errors: reviewsData.errors || [],
-            };
-          } else {
-            rainforestReviewsEnrichment.by_asin[asin] = {
-              asin,
-              title: null,
-              extracted: {
-                top_complaints: [],
-                top_praise: [],
-              },
-              errors,
-            };
+            
+            if (!rainforestReviewsEnrichment.asins.includes(asin)) {
+              rainforestReviewsEnrichment.asins.push(asin);
+            }
+            
+            const errors: string[] = [];
+            let reviewsData: any | null = null;
+            
+            // Check cache first
+            const cached = getCachedReviews(asin, amazonDomain);
+            if (cached) {
+              reviewsData = cached;
+              console.log("RAINFOREST_REVIEWS_ENRICHMENT_CACHE_HIT", { 
+                asin, 
+                endpoint: "reviews", 
+                cache_hit: true,
+                reason: "customers_say_missing"
+              });
+            } else {
+              try {
+                reviewsData = await getRainforestReviewsEnrichment(asin, amazonDomain, MAX_REVIEWS_PER_ASIN);
+                if (reviewsData) {
+                  setCachedReviews(asin, amazonDomain, reviewsData);
+                  console.log("RAINFOREST_REVIEWS_ENRICHMENT_CACHE_MISS", { 
+                    asin, 
+                    endpoint: "reviews", 
+                    cache_hit: false,
+                    reason: "customers_say_missing"
+                  });
+                } else {
+                  errors.push("Rainforest reviews enrichment failed");
+                }
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                // Handle 503 errors gracefully
+                if (errorMessage.includes('503') || errorMessage.includes('temporarily unavailable')) {
+                  errors.push("TEMPORARILY_UNAVAILABLE");
+                  console.log("RAINFOREST_REVIEWS_503_ERROR", { asin, error: errorMessage });
+                } else {
+                  errors.push(`Rainforest reviews enrichment error: ${errorMessage}`);
+                }
+                rainforestReviewsEnrichment.errors.push({ asin, error: errorMessage });
+              }
+            }
+            
+            // Parse reviews data
+            if (reviewsData) {
+              rainforestReviewsEnrichment.by_asin[asin] = {
+                asin: reviewsData.asin || asin,
+                title: reviewsData.title || null,
+                extracted: reviewsData.extracted || {
+                  top_complaints: [],
+                  top_praise: [],
+                },
+                errors: reviewsData.errors || [],
+              };
+            } else {
+              rainforestReviewsEnrichment.by_asin[asin] = {
+                asin,
+                title: null,
+                extracted: {
+                  top_complaints: [],
+                  top_praise: [],
+                },
+                errors,
+              };
+            }
           }
         }
         
-        console.log("RAINFOREST_REVIEWS_ENRICHMENT_COMPLETE", {
-          analysisRunId: body.analysisRunId,
-          asins: enrichmentAsins,
-          success_count: Object.values(rainforestReviewsEnrichment.by_asin).filter(v => v.errors.length === 0).length,
-        });
+        if (rainforestReviewsEnrichment && rainforestReviewsEnrichment.asins.length > 0) {
+          console.log("RAINFOREST_REVIEWS_ENRICHMENT_COMPLETE", {
+            analysisRunId: body.analysisRunId,
+            asins: rainforestReviewsEnrichment.asins,
+            success_count: Object.values(rainforestReviewsEnrichment.by_asin).filter(v => v.errors.length === 0).length,
+            reason: "auto_fallback_customers_say_missing"
+          });
+        }
       }
       
       console.log("ENRICHMENT_COMPLETE", {
@@ -4229,40 +4209,6 @@ CRITICAL RULES FOR ESCALATED DATA:
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata: { type: "citations", citations } })}\n\n`));
             // Capture citations for database storage
             citationsForDb = citations;
-          }
-          
-          // 15.5. Detect review snippet offer and set pending action (BEFORE closing stream)
-          // ────────────────────────────────────────────────────────────────
-          // Check if copilot offered to fetch review snippets
-          const reviewSnippetOfferPattern = /fetch.*review.*snippet|retrieve.*review.*snippet|get.*review.*snippet|pull.*review.*snippet/i;
-          if (finalMessage && reviewSnippetOfferPattern.test(finalMessage) && selectedAsins.length > 0 && selectedAsins.length <= 2) {
-            // Set pending action for review snippets fetch
-            const expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
-            const pendingAction = {
-              type: "rainforest_reviews" as const,
-              asins: selectedAsins.slice(0, 2), // Use selected_asins as authoritative
-              limit: 20,
-              created_at: Date.now(),
-              expires_at: expiresAt,
-            };
-            setPendingAction(body.analysisRunId, pendingAction);
-            
-            // Send action metadata to frontend so it can render buttons
-            // Send this BEFORE [DONE] so frontend can attach it to the message
-            const actionMetadata = {
-              type: "pending_action",
-              action_type: pendingAction.type,
-              asins: pendingAction.asins,
-              limit: pendingAction.limit,
-              expires_at: expiresAt,
-            };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata: actionMetadata })}\n\n`));
-            
-            console.log("PENDING_ACTION_SET_FROM_OFFER", {
-              analysis_run_id: body.analysisRunId,
-              selected_asins: selectedAsins,
-              final_message_snippet: finalMessage.substring(0, 200),
-            });
           }
           
           // Signal end of stream FIRST (don't block on database save)

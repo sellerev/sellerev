@@ -72,6 +72,21 @@ export async function getRainforestReviewsEnrichment(
         error: errorText.substring(0, 200),
         duration_ms: duration,
       });
+      
+      // Handle 503 errors specifically
+      if (httpStatus === 503 || errorText.toLowerCase().includes('temporarily unavailable')) {
+        return {
+          asin,
+          title: null,
+          reviews: [],
+          extracted: {
+            top_complaints: [],
+            top_praise: [],
+          },
+          errors: ["TEMPORARILY_UNAVAILABLE"],
+        };
+      }
+      
       return {
         asin,
         title: null,
