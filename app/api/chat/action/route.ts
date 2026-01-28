@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { buildCopilotSystemPrompt } from "@/lib/ai/copilotSystemPrompt";
+import {
+  SellerMemory,
+  createDefaultSellerMemory,
+  mapSellerProfileToMemory,
+} from "@/lib/ai/sellerMemory";
 
 interface ChatActionRequestBody {
   analysisRunId: string;
@@ -277,7 +282,8 @@ export async function POST(req: NextRequest) {
     };
 
     // 11. Build system prompt and get AI response
-    const sellerProfile = {
+    // Create seller memory from analysis response data
+    const sellerProfileData = {
       stage: (analysisResponse.seller_stage as string) || "pre-revenue",
       experience_months: (analysisResponse.seller_experience_months as number) || null,
       monthly_revenue_range: (analysisResponse.seller_monthly_revenue_range as string) || null,
@@ -289,6 +295,18 @@ export async function POST(req: NextRequest) {
       updated_at: null,
     };
 
+    // Create proper SellerMemory object
+    let sellerMemory: SellerMemory = createDefaultSellerMemory();
+    try {
+      const profileData = mapSellerProfileToMemory(sellerProfileData);
+      sellerMemory.seller_profile = {
+        ...sellerMemory.seller_profile,
+        ...profileData,
+      };
+    } catch (e) {
+      console.error("Failed to map seller profile into sellerMemory (non-blocking):", e);
+    }
+
     const decision = analysisResponse.decision
       ? {
           verdict: (analysisResponse.decision as { verdict: string }).verdict as "GO" | "CAUTION" | "NO_GO",
@@ -299,12 +317,9 @@ export async function POST(req: NextRequest) {
 
     const copilotContext = {
       ai_context: aiContextWithReviews,
-      seller_memory: {
-        seller_profile: sellerProfile,
-        structured_memories: [],
-      },
+      seller_memory: sellerMemory,
       structured_memories: [],
-      seller_profile_version: null,
+      seller_profile_version: sellerProfileData.updated_at || null,
       decision,
       session_context: {
         current_feature: "analyze" as const,
