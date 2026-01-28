@@ -2334,6 +2334,14 @@ export async function POST(req: NextRequest) {
       timestamp: new Date().toISOString(),
     });
 
+    // IMPORTANT: Enrichment intents (variants/attributes or review insights) MUST NOT require escalation/credits.
+    // Force escalation off for these intents so ESCALATION_GATE never blocks enrichment flows.
+    if (variantsAttributesIntent || reviewInsightsIntent) {
+      escalationDecision.requires_escalation = false;
+      escalationDecision.required_asins = [];
+      escalationDecision.required_credits = 0;
+    }
+
     // Only now (and only if needed) load real credit context and re-run decision.
     const creditContext: CreditContext = escalationDecision.requires_escalation
       ? await checkCreditBalance(user.id, supabase, body.analysisRunId)
@@ -3335,11 +3343,13 @@ export async function POST(req: NextRequest) {
     // GOAL 7: Log enrichment objects in ai_context before OpenAI call
     const spapiEnrichmentInContext = (aiContextToUse as any)?.spapi_enrichment;
     const rainforestEnrichmentInContext = (aiContextToUse as any)?.rainforest_enrichment;
+    const rainforestReviewsEnrichmentInContext = (aiContextToUse as any)?.rainforest_reviews_enrichment;
     
     // Log enrichment details for each selected ASIN
     console.log("ENRICHMENT_BEFORE_OPENAI_CALL", {
       analysisRunId: body.analysisRunId,
       has_spapi_enrichment: !!spapiEnrichmentInContext,
+      has_rainforest_reviews_enrichment: !!rainforestReviewsEnrichmentInContext,
       selected_asins: selectedAsins,
       enrichment_by_asin: selectedAsins.map((asin: string) => {
         const spapi = spapiEnrichmentInContext?.by_asin?.[asin];
@@ -3391,6 +3401,252 @@ export async function POST(req: NextRequest) {
       spapi_enrichment_asins: spapiEnrichmentInContext?.asins || [],
       rainforest_enrichment_asins: rainforestEnrichmentInContext?.asins || [],
     });
+
+    // ────────────────────────────────────────────────────────────────────────
+    // DIRECT RESPONSES FOR ENRICHMENT INTENTS (NO OPENAI CALL)
+    // ────────────────────────────────────────────────────────────────────────
+    // A) VARIANTS / ATTRIBUTES / BULLETS / DESCRIPTION (single ASIN)
+    if (variantsAttributesIntent && selectedAsins.length === 1 && spapiEnrichmentInContext) {
+      const asin = selectedAsins[0];
+      const spapi = spapiEnrichmentInContext.by_asin?.[asin];
+      
+      if (spapi && ((spapi.bullet_points && spapi.bullet_points.length > 0) || spapi.description)) {
+        const title = spapi.title || "(title unavailable)";
+        const bullets = spapi.bullet_points || [];
+        const description = spapi.description || "No description text was provided for this ASIN via Catalog.";
+        
+        console.log("DIRECT_RESPONSE_USED", {
+          type: "spapi_catalog_fields",
+          asins: [asin],
+          bullet_count: bullets.length,
+          has_description: !!spapi.description,
+        });
+        
+        const bulletLines = bullets.length
+          ? bullets.map((b: string) => `- ${b}`).join("\n")
+          : "No bullet points were provided for this ASIN via Catalog.";
+        
+        const directResponse = `ASIN ${asin} (${title})
+
+Bullet points:
+${bulletLines}
+
+Description:
+${description}`;
+        
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: directResponse })}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        
+        return new NextResponse(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            ...Object.fromEntries(res.headers.entries()),
+          },
+        });
+      }
+    }
+
+    // B) REVIEW INSIGHTS (complaints/praise) – 1–2 selected ASINs
+    if (reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2) {
+      const MAX_THEMES = 3;
+      
+      type ReviewSummary = {
+        asin: string;
+        title: string | null;
+        top_complaints: string[];
+        top_praise: string[];
+        provider_unavailable: boolean;
+      };
+      
+      const summaries: ReviewSummary[] = [];
+      
+      for (const asin of selectedAsins) {
+        const productEntry = rainforestEnrichmentInContext?.by_asin?.[asin];
+        const reviewsEntry = rainforestReviewsEnrichmentInContext?.by_asin?.[asin];
+        
+        const title =
+          productEntry?.title ??
+          reviewsEntry?.title ??
+          null;
+        
+        // Prefer customers_say-derived themes from product enrichment
+        let topComplaints: string[] = [];
+        let topPraise: string[] = [];
+        
+        if (productEntry?.extracted) {
+          if (Array.isArray(productEntry.extracted.top_complaints)) {
+            topComplaints = productEntry.extracted.top_complaints.slice(0, MAX_THEMES);
+          }
+          if (Array.isArray(productEntry.extracted.top_praise)) {
+            topPraise = productEntry.extracted.top_praise.slice(0, MAX_THEMES);
+          }
+        }
+        
+        // If product themes missing, fall back to reviews enrichment
+        if ((!topComplaints.length && !topPraise.length) && reviewsEntry?.extracted) {
+          if (Array.isArray(reviewsEntry.extracted.top_complaints)) {
+            topComplaints = reviewsEntry.extracted.top_complaints
+              .map((t: any) => (typeof t === "string" ? t : t.theme))
+              .filter(Boolean)
+              .slice(0, MAX_THEMES);
+          }
+          if (Array.isArray(reviewsEntry.extracted.top_praise)) {
+            topPraise = reviewsEntry.extracted.top_praise
+              .map((t: any) => (typeof t === "string" ? t : t.theme))
+              .filter(Boolean)
+              .slice(0, MAX_THEMES);
+          }
+        }
+        
+        // Detect 503 / TEMPORARILY_UNAVAILABLE from reviews enrichment
+        const hasTempUnavailable =
+          (reviewsEntry?.errors || []).some((e: string) =>
+            typeof e === "string" && e.includes("TEMPORARILY_UNAVAILABLE")
+          ) ||
+          (Array.isArray(rainforestReviewsEnrichmentInContext?.errors)
+            ? rainforestReviewsEnrichmentInContext.errors.some(
+                (e: any) =>
+                  e?.asin === asin &&
+                  typeof e.error === "string" &&
+                  e.error.includes("TEMPORARILY_UNAVAILABLE")
+              )
+            : false);
+        
+        summaries.push({
+          asin,
+          title,
+          top_complaints: topComplaints,
+          top_praise: topPraise,
+          provider_unavailable: hasTempUnavailable,
+        });
+      }
+      
+      // If any selected ASIN has provider unavailable and no themes, short-circuit with clear message
+      const anyProviderUnavailableWithoutThemes = summaries.some(
+        (s) => s.provider_unavailable && !s.top_complaints.length && !s.top_praise.length
+      );
+      
+      if (anyProviderUnavailableWithoutThemes) {
+        console.log("DIRECT_RESPONSE_USED", {
+          type: "review_insights",
+          asins: summaries.map((s) => s.asin),
+          reason: "provider_temporarily_unavailable",
+        });
+        
+        const content =
+          summaries.length === 1
+            ? "Our review provider is temporarily unavailable right now — try again in a few minutes."
+            : "Our review provider is temporarily unavailable for at least one of the selected products — try again in a few minutes.";
+        
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        
+        return new NextResponse(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            ...Object.fromEntries(res.headers.entries()),
+          },
+        });
+      }
+      
+      // If we have any themes, build a direct comparison/summary response
+      const anyThemes = summaries.some(
+        (s) => s.top_complaints.length || s.top_praise.length
+      );
+      
+      if (anyThemes) {
+        console.log("DIRECT_RESPONSE_USED", {
+          type: "review_insights",
+          asins: summaries.map((s) => s.asin),
+          reason: "themes_available",
+        });
+        
+        let content = "";
+        
+        if (summaries.length === 1) {
+          const s = summaries[0];
+          const headerTitle = s.title ? `${s.asin} (${s.title})` : s.asin;
+          
+          content += `Review insights for ${headerTitle}\n\n`;
+          
+          content += "Top complaints:\n";
+          if (s.top_complaints.length) {
+            for (const t of s.top_complaints) {
+              content += `- ${t}\n`;
+            }
+          } else {
+            content += "- No clear complaint themes available from the current review data.\n";
+          }
+          
+          content += "\nTop praise:\n";
+          if (s.top_praise.length) {
+            for (const t of s.top_praise) {
+              content += `- ${t}\n`;
+            }
+          } else {
+            content += "- No clear praise themes available from the current review data.\n";
+          }
+        } else {
+          // Two-ASIN side-by-side compare
+          content += "Review insights comparison (2 selected products):\n\n";
+          
+          for (const s of summaries) {
+            const headerTitle = s.title ? `${s.asin} (${s.title})` : s.asin;
+            content += `${headerTitle}\n`;
+            
+            content += "  Top complaints:\n";
+            if (s.top_complaints.length) {
+              for (const t of s.top_complaints) {
+                content += `  - ${t}\n`;
+              }
+            } else {
+              content += "  - No clear complaint themes available.\n";
+            }
+            
+            content += "  Top praise:\n";
+            if (s.top_praise.length) {
+              for (const t of s.top_praise) {
+                content += `  - ${t}\n`;
+              }
+            } else {
+              content += "  - No clear praise themes available.\n";
+            }
+            
+            content += "\n";
+          }
+        }
+        
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        
+        return new NextResponse(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            ...Object.fromEntries(res.headers.entries()),
+          },
+        });
+      }
     
     const copilotContext = {
       ai_context: aiContextToUse || {}, // Use normalized ai_context, not the wrapper
