@@ -2239,7 +2239,10 @@ export async function POST(req: NextRequest) {
     // GOAL 4B: Review insights intent detection (complaints, praise, customer feedback)
     // Keywords: complain, complaints, bad reviews, negative reviews, common issues, pros and cons,
     // what do customers say, praise, good reviews, positive reviews, customer feedback
-    const reviewInsightsIntent = /complain|complaints|bad reviews?|negative reviews?|common issues?|pros and cons|what do customers (say|complain about)|praise|good reviews?|positive reviews?|customer feedback|issues?|problems?/i.test(body.message);
+    const reviewInsightsIntent =
+      /complain|complaints|bad reviews?|negative reviews?|common issues?|pros and cons|what do customers (say|complain about)|praise|good reviews?|positive reviews?|customer feedback|issues?|problems?|review insights|review summary|review themes|get (me )?the reviews|fetch reviews|pull reviews/i.test(
+        body.message
+      );
     
     // If selectedAsins exists AND any intent is true, enrichment MUST execute (zero-confirmation)
     // For review insights: max 2 ASINs (hard cap)
@@ -3787,6 +3790,8 @@ ${description}`;
           },
         });
       }
+
+    }
     
     const copilotContext = {
       ai_context: aiContextToUse || {}, // Use normalized ai_context, not the wrapper
@@ -4915,6 +4920,5 @@ CRITICAL RULES FOR ESCALATED DATA:
         ...Object.fromEntries(res.headers.entries()),
       },
     });
-  }
 }
 
