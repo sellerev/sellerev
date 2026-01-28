@@ -1585,30 +1585,10 @@ export default function AnalyzeForm({
                             )}
                           </div>
                           
-                          {/* 8. Median Subcategory Rank */}
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Median Subcategory Rank</div>
-                            <div className="text-lg font-semibold text-gray-900">
-                              {medianBSR !== null && medianBSR !== undefined
-                                ? `#${Math.round(medianBSR).toLocaleString()}${medianBsrCategory ? ` in ${medianBsrCategory}` : ''}`
-                                : "—"}
-                            </div>
-                            {top10MedianBSR !== null && top10MedianBSR !== undefined && (
-                              <div className="text-xs text-gray-400 mt-0.5">
-                                Top-10: #{Math.round(top10MedianBSR).toLocaleString()}{top10BsrCategory ? ` in ${top10BsrCategory}` : ''}
-                              </div>
-                            )}
-                            {(medianBSR !== null || top10MedianBSR !== null) && (
-                              <div className="text-xs text-gray-400 mt-0.5 italic">
-                                Subcategory rank from Amazon category node (not root category BSR)
-                              </div>
-                            )}
-                          </div>
-                          
-                          {/* 9. Median Main Category BSR (only show if we have enough data) */}
+                          {/* 8. Average BSR (root category, only if enough data) */}
                           {medianRootBsr !== null && medianRootBsr !== undefined && rootBsrSampleSize >= 3 && (
                             <div>
-                              <div className="text-xs text-gray-500 mb-1">Median Main Category BSR</div>
+                              <div className="text-xs text-gray-500 mb-1">Average BSR</div>
                               <div className="text-lg font-semibold text-gray-900">
                                 #{Math.round(medianRootBsr).toLocaleString()}{medianRootBsrCategory ? ` in ${medianRootBsrCategory}` : ''}
                               </div>
