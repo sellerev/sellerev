@@ -20,6 +20,10 @@ export interface RainforestProductEnrichment {
     top_complaints: string[];
     top_praise: string[];
     attribute_signals: Array<{ name: string; value: string }>;
+    // Catalog fallback fields (for when SP-API is empty or missing fields)
+    feature_bullets?: string[] | string | null;
+    description?: string | null;
+    attributes?: Record<string, any> | null;
   };
   errors: string[];
 }
@@ -50,7 +54,7 @@ export async function getRainforestProductEnrichment(
       asin: asin,
       include_summarization_attributes: "true",
       // Request only needed fields if supported
-      fields: "product.customers_say,product.summarization_attributes,product.variants,product.title",
+      fields: "product.customers_say,product.summarization_attributes,product.variants,product.title,product.feature_bullets,product.description,product.attributes",
     });
     
     const apiUrl = `https://api.rainforestapi.com/request?${params.toString()}`;
@@ -234,6 +238,11 @@ export async function getRainforestProductEnrichment(
       }
     }
     
+    // Extract feature_bullets and description (for catalog fallback)
+    const featureBullets = product.feature_bullets || product.bullet_points || null;
+    const description = product.description || product.product_description || null;
+    const productAttributes = product.attributes || product.specifications || null;
+    
     console.log("RAINFOREST_PRODUCT_ENRICHMENT_SUCCESS", {
       asin,
       http_status: httpStatus,
@@ -247,6 +256,9 @@ export async function getRainforestProductEnrichment(
       summarization_attributes_count: summarization_attributes ? Object.keys(summarization_attributes).length : 0,
       attribute_signals_count: attributeSignals.length,
       has_variants: !!variants,
+      has_feature_bullets: !!featureBullets,
+      has_description: !!description,
+      has_attributes: !!productAttributes,
     });
     
     return {
@@ -259,6 +271,10 @@ export async function getRainforestProductEnrichment(
         top_complaints: topComplaints,
         top_praise: topPraise,
         attribute_signals: attributeSignals,
+        // Include catalog fields for fallback use
+        feature_bullets: featureBullets,
+        description: description,
+        attributes: productAttributes,
       },
       errors: [],
     };

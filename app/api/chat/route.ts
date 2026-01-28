@@ -2793,6 +2793,8 @@ export async function POST(req: NextRequest) {
         for (const asin of enrichmentAsins) {
           const errors: string[] = [];
           let catalogData: any | null = null;
+          let needsRainforestFallback = false;
+          let fallbackReason: "spapi_empty" | "missing_fields" | null = null;
           
           // Check cache first
           const cached = getCachedSPAPI(asin, marketplaceId);
@@ -2806,15 +2808,33 @@ export async function POST(req: NextRequest) {
                 setCachedSPAPI(asin, marketplaceId, catalogData);
               } else {
                 errors.push("Catalog enrichment failed");
+                needsRainforestFallback = true;
+                fallbackReason = "spapi_empty";
               }
             } catch (error) {
               const errorMessage = error instanceof Error ? error.message : String(error);
               if (errorMessage.includes('403') || errorMessage.includes('Unauthorized') || errorMessage.includes('Forbidden')) {
                 errors.push("Permission denied: Catalog API access not authorized");
+                // Still try fallback for 403 errors
+                needsRainforestFallback = true;
+                fallbackReason = "spapi_empty";
               } else {
                 errors.push(`Catalog enrichment error: ${errorMessage}`);
+                needsRainforestFallback = true;
+                fallbackReason = "spapi_empty";
               }
             }
+          }
+          
+          // Check if SP-API data is missing bullets or description (even if catalogData exists)
+          const hasBullets = catalogData?.bullet_points && 
+            (Array.isArray(catalogData.bullet_points) ? catalogData.bullet_points.length > 0 : true);
+          const hasDescription = catalogData?.description && 
+            (typeof catalogData.description === 'string' && catalogData.description.trim().length > 0);
+          
+          if (catalogData && (!hasBullets || !hasDescription)) {
+            needsRainforestFallback = true;
+            fallbackReason = "missing_fields";
           }
           
           // Parse catalog data into compact format
@@ -2831,6 +2851,138 @@ export async function POST(req: NextRequest) {
             product_type: catalogData?.product_type || null,
             errors,
           };
+          
+          // FALLBACK: If SP-API returned empty or missing bullets/description, fetch from Rainforest
+          if (needsRainforestFallback) {
+            const { getRainforestProductEnrichment } = await import("@/lib/rainforest/productEnrichment");
+            
+            // Ensure rainforestEnrichment exists
+            if (!rainforestEnrichment) {
+              rainforestEnrichment = {
+                executed: true,
+                asins: [],
+                by_asin: {},
+                errors: [],
+              };
+            }
+            
+            if (!rainforestEnrichment.asins.includes(asin)) {
+              rainforestEnrichment.asins.push(asin);
+            }
+            
+            let rainforestData: any | null = null;
+            const rainforestErrors: string[] = [];
+            
+            // Check Rainforest cache first
+            const cachedRainforest = getCachedRainforest(asin, amazonDomain);
+            if (cachedRainforest) {
+              rainforestData = cachedRainforest;
+              console.log("RAINFOREST_ENRICHMENT_CACHE_HIT", { 
+                asin, 
+                endpoint: "product", 
+                cache_hit: true,
+                reason: "catalog_fallback"
+              });
+            } else {
+              try {
+                rainforestData = await getRainforestProductEnrichment(asin, amazonDomain, user.id);
+                if (rainforestData) {
+                  setCachedRainforest(asin, amazonDomain, rainforestData);
+                  console.log("RAINFOREST_ENRICHMENT_CACHE_MISS", { 
+                    asin, 
+                    endpoint: "product", 
+                    cache_hit: false,
+                    reason: "catalog_fallback"
+                  });
+                } else {
+                  rainforestErrors.push("Rainforest product enrichment failed");
+                }
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                rainforestErrors.push(`Rainforest product enrichment error: ${errorMessage}`);
+                rainforestEnrichment.errors.push({ asin, error: errorMessage });
+              }
+            }
+            
+            // Extract bullets and description from Rainforest
+            if (rainforestData) {
+              // Get feature_bullets and description from extracted object (stored by getRainforestProductEnrichment)
+              const extracted = (rainforestData as any).extracted || {};
+              const featureBullets = extracted.feature_bullets || null;
+              const description = extracted.description || null;
+              const attributes = extracted.attributes || null;
+              
+              // Merge into existing rainforest_enrichment entry or create new one
+              if (rainforestEnrichment.by_asin[asin]) {
+                // Merge with existing entry (from review insights)
+                const existing = rainforestEnrichment.by_asin[asin];
+                rainforestEnrichment.by_asin[asin] = {
+                  ...existing,
+                  title: existing.title || rainforestData.title || null,
+                  // Merge extracted fields (preserve existing, add catalog fields)
+                  extracted: {
+                    ...existing.extracted,
+                    feature_bullets: featureBullets || existing.extracted.feature_bullets,
+                    description: description || existing.extracted.description,
+                    attributes: attributes || existing.extracted.attributes,
+                  },
+                };
+              } else {
+                // Create new entry for catalog fallback
+                rainforestEnrichment.by_asin[asin] = {
+                  asin: rainforestData.asin || asin,
+                  title: rainforestData.title || null,
+                  customers_say: null, // Not needed for catalog fallback
+                  summarization_attributes: null, // Not needed for catalog fallback
+                  extracted: {
+                    top_complaints: [],
+                    top_praise: [],
+                    attribute_signals: [],
+                    // Store catalog fields in extracted for copilot access
+                    feature_bullets: featureBullets,
+                    description: description,
+                    attributes: attributes,
+                  },
+                  errors: rainforestErrors,
+                };
+              }
+              
+              // Also update spapiEnrichment with Rainforest data if SP-API was empty or missing fields
+              if (!catalogData || !hasBullets || !hasDescription) {
+                if (featureBullets && !spapiEnrichment.by_asin[asin].bullet_points) {
+                  spapiEnrichment.by_asin[asin].bullet_points = Array.isArray(featureBullets) 
+                    ? featureBullets 
+                    : (typeof featureBullets === 'string' ? [featureBullets] : null);
+                }
+                if (description && !spapiEnrichment.by_asin[asin].description) {
+                  spapiEnrichment.by_asin[asin].description = description;
+                }
+                if (attributes && !spapiEnrichment.by_asin[asin].attributes) {
+                  spapiEnrichment.by_asin[asin].attributes = attributes;
+                }
+                if (rainforestData.title && !spapiEnrichment.by_asin[asin].title) {
+                  spapiEnrichment.by_asin[asin].title = rainforestData.title;
+                }
+              }
+              
+              console.log("CATALOG_FALLBACK_TO_RAINFOREST_PRODUCT", {
+                asin,
+                reason: fallbackReason,
+                spapi_has_bullets: hasBullets,
+                spapi_has_description: hasDescription,
+                rainforest_has_bullets: !!featureBullets,
+                rainforest_has_description: !!description,
+              });
+            } else {
+              // Rainforest fallback also failed
+              console.log("CATALOG_FALLBACK_TO_RAINFOREST_PRODUCT", {
+                asin,
+                reason: fallbackReason,
+                fallback_failed: true,
+                errors: rainforestErrors,
+              });
+            }
+          }
         }
       }
       
