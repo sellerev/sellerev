@@ -97,11 +97,31 @@ function validateRequestBody(body: unknown): body is ChatRequestBody {
   );
 }
 
-function extractAsinsFromText(text: string): string[] {
+function extractAsinsFromText(text: string, page1Asins?: string[]): string[] {
   if (!text) return [];
   const matches = text.toUpperCase().match(/\b([A-Z0-9]{10})\b/g) || [];
+  
+  // Validate: Must be exactly 10 chars [A-Z0-9] AND contain at least 1 digit
+  // This filters out words like "COMPLAINTS" which are 10 chars but have no digits
+  const validAsins = matches.filter((asin) => {
+    // Must contain at least one digit
+    return /\d/.test(asin);
+  });
+  
+  if (validAsins.length === 0) return [];
+  
+  const uniq = Array.from(new Set(validAsins));
+  
+  // Prefer ASINs that exist in Page-1 (if provided)
+  if (page1Asins && page1Asins.length > 0) {
+    const page1Set = new Set(page1Asins.map(a => a.toUpperCase()));
+    const inPage1 = uniq.filter(a => page1Set.has(a));
+    if (inPage1.length > 0) {
+      return inPage1.slice(0, 5);
+    }
+  }
+  
   // Prefer typical Amazon ASIN format starting with "B0", but keep others as fallback
-  const uniq = Array.from(new Set(matches));
   const b0 = uniq.filter((a) => a.startsWith("B0"));
   return (b0.length > 0 ? b0 : uniq).slice(0, 5);
 }
@@ -1914,19 +1934,38 @@ export async function POST(req: NextRequest) {
         ? [body.selectedListing.asin] // Backward compatibility fallback
         : []); // Empty array = no selection
     
-    // PRIORITY A.3: Extract ASINs from message text and merge with selectedAsins
-    const extractedAsinsFromMessage = extractAsinsFromText(body.message);
-    if (extractedAsinsFromMessage.length > 0) {
-      // Merge extracted ASINs with selected ASINs (deduplicate)
-      const mergedAsins = Array.from(new Set([...selectedAsins, ...extractedAsinsFromMessage]));
-      selectedAsins = mergedAsins;
-      console.log("ASIN_EXTRACTION_FROM_MESSAGE", {
-        analysisRunId: body.analysisRunId,
-        extracted_asins: extractedAsinsFromMessage,
-        original_selected: body.selectedAsins || [],
-        merged_selected: selectedAsins,
-      });
+    // PRIORITY A.3: Extract ASINs from message text (only when selectedAsins is empty)
+    // CRITICAL: UI selection is authoritative - only use extracted ASINs when no UI selection exists
+    let extractedAsinsFromMessage: string[] = [];
+    let mergeSkipped = false;
+    
+    if (selectedAsins.length === 0) {
+      // Get Page-1 ASINs for validation (optional but preferred)
+      const page1Listings = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
+      const page1Asins = page1Listings
+        .map((p: any) => p.asin)
+        .filter((asin: any): asin is string => asin && typeof asin === 'string');
+      
+      extractedAsinsFromMessage = extractAsinsFromText(body.message, page1Asins);
+      
+      if (extractedAsinsFromMessage.length > 0) {
+        // Only merge when selectedAsins is empty (user typed ASINs manually)
+        selectedAsins = extractedAsinsFromMessage;
+      }
+    } else {
+      // UI selection exists - skip extraction merge
+      mergeSkipped = true;
     }
+    
+    console.log("ASIN_EXTRACTION_FROM_MESSAGE", {
+      analysisRunId: body.analysisRunId,
+      extracted_asins: extractedAsinsFromMessage,
+      filtered_extracted_asins: extractedAsinsFromMessage, // After validation
+      original_selected: body.selectedAsins || [],
+      merge_skipped: mergeSkipped,
+      final_selected: selectedAsins,
+      selected_count: selectedAsins.length,
+    });
     
     // PRIORITY A.4: Handle "this one/selected/that listing" when selectedAsins is empty
     const normalizedMessage = body.message.toLowerCase();
@@ -2045,7 +2084,12 @@ export async function POST(req: NextRequest) {
     }
     
     // Guardrail input: explicit ASINs in user question (allows escalation only when explicitly referenced)
-    const explicitAsins = extractAsinsFromText(body.message);
+    // Get Page-1 ASINs for validation (optional but preferred)
+    const page1ListingsForEscalation = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
+    const page1AsinsForEscalation = page1ListingsForEscalation
+      .map((p: any) => p.asin)
+      .filter((asin: any): asin is string => asin && typeof asin === 'string');
+    const explicitAsins = extractAsinsFromText(body.message, page1AsinsForEscalation);
     const isExplicitCompare =
       /\b(vs|versus|compare|comparison)\b/i.test(body.message) || explicitAsins.length >= 2;
     const maxEscalationAsins = isExplicitCompare ? 2 : 1;
@@ -2572,7 +2616,7 @@ export async function POST(req: NextRequest) {
     if (requiresEnrichment && selectedAsins.length > 2) {
       const stream = new ReadableStream({
         start(controller) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: "Select up to 2 products for detailed product information." })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: `Select 1 or 2 products to analyze ${reviewInsightsIntent ? 'review themes' : 'product details'}. You currently have ${selectedAsins.length} selected.` })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
         },
