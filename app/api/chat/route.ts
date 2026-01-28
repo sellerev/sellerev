@@ -1561,8 +1561,8 @@ export async function POST(req: NextRequest) {
   const res = new NextResponse();
   const supabase = createApiClient(req, res);
 
-  try {
-    // 1. Authenticate user
+  // NOTE: outer try/catch removed; errors will bubble to Next.js
+  // 1. Authenticate user
     const {
       data: { user },
       error: authError,
@@ -4779,28 +4779,6 @@ CRITICAL RULES FOR ESCALATED DATA:
         ...Object.fromEntries(res.headers.entries()),
       },
     });
-  } catch (error) {
-    console.error("Chat endpoint error:", error);
-    const errorDetails = error instanceof Error ? {
-      message: error.message,
-      stack: error.stack,
-      name: error.name,
-    } : { error: String(error) };
-    
-    console.error("CHAT_ERROR_DETAILS", {
-      ...errorDetails,
-      timestamp: new Date().toISOString(),
-    });
-    
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Internal server error",
-        details: error instanceof Error ? error.message : "Unknown error",
-        stack: error instanceof Error ? error.stack : undefined,
-      },
-      { status: 500, headers: res.headers }
-    );
   }
 }
 
