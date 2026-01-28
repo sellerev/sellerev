@@ -251,13 +251,20 @@ export function ProductCard({
         </a>
       )}
 
-      {/* Selected Checkmark Badge - Subtle neutral styling */}
-      {isSelected && (
-        <div className="absolute top-4 left-4 w-6 h-6 bg-gray-700 text-white 
-                        rounded-full flex items-center justify-center z-10 shadow-md">
-          <Check className="w-4 h-4" />
-        </div>
-      )}
+      {/* Selection Checkbox - Always visible for multi-select */}
+      <div 
+        className={`absolute top-4 left-4 w-6 h-6 border-2 rounded flex items-center justify-center z-10 shadow-md transition-all ${
+          isSelected 
+            ? 'bg-gray-700 border-gray-700' 
+            : 'bg-white border-gray-300 hover:border-gray-400'
+        }`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect?.(e);
+        }}
+      >
+        {isSelected && <Check className="w-4 h-4 text-white" />}
+      </div>
 
       {/* Product Image - Larger size for visibility */}
       <div className="w-full max-w-[160px] h-[160px] bg-[#F3F4F6] rounded-lg mb-3 flex items-center justify-center overflow-hidden mx-auto">

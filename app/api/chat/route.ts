@@ -2179,7 +2179,7 @@ export async function POST(req: NextRequest) {
     // ENRICHMENT DECISION (SP-API catalog + Rainforest product)
     // ═══════════════════════════════════════════════════════════════════════════
     // GOAL: No credits gating - use hard limits instead
-    const MAX_ENRICHMENT_ASINS_PER_MESSAGE = 3; // Per user message (hard cap)
+    const MAX_ENRICHMENT_ASINS_PER_MESSAGE = 2; // Per user message (hard cap for all enrichment types)
     const MAX_ENRICHMENT_CALLS_PER_SESSION = 20; // Total across chat for this analysis_run_id
     
     const normalizedQuestion = body.message.toLowerCase();
@@ -2196,17 +2196,16 @@ export async function POST(req: NextRequest) {
     // For review insights: max 2 ASINs (hard cap)
     const requiresEnrichment = (variantsAttributesIntent || reviewInsightsIntent) && selectedAsins.length > 0;
     
-    // Special handling for review insights: block if 3+ ASINs selected
+    // Special handling: block enrichment if 3+ ASINs selected (for both variants and review insights)
     let enrichmentAsins: string[] = [];
     if (requiresEnrichment) {
-      if (reviewInsightsIntent && selectedAsins.length > 2) {
-        // Block enrichment for 3+ ASINs on review insights
+      if (selectedAsins.length > 2) {
+        // Block enrichment for 3+ ASINs (both variants and review insights)
         // Will return a message asking user to select max 2
         enrichmentAsins = [];
       } else {
-        // Cap at 2 for review insights, 3 for variants
-        const maxAsins = reviewInsightsIntent ? 2 : MAX_ENRICHMENT_ASINS_PER_MESSAGE;
-        enrichmentAsins = selectedAsins.slice(0, maxAsins);
+        // Cap at 2 ASINs for all enrichment types
+        enrichmentAsins = selectedAsins.slice(0, 2);
       }
     }
     
@@ -2225,8 +2224,8 @@ export async function POST(req: NextRequest) {
       selected_asins_count: selectedAsins.length,
       enrichment_asins: enrichmentAsins,
       enrichment_types: enrichmentTypes,
-      capped_to: reviewInsightsIntent ? 2 : MAX_ENRICHMENT_ASINS_PER_MESSAGE,
-      blocked_for_3plus: reviewInsightsIntent && selectedAsins.length > 2,
+      capped_to: MAX_ENRICHMENT_ASINS_PER_MESSAGE,
+      blocked_for_3plus: selectedAsins.length > 2,
     });
 
     // Pass 1: decide escalation WITHOUT hitting credits DB (fast, and does not block history chat).
@@ -2569,11 +2568,11 @@ export async function POST(req: NextRequest) {
       matched_asins: selectedAsinsArray.map(p => p.asin),
     });
     
-    // GOAL 3: Block review insights enrichment if 3+ ASINs selected
-    if (reviewInsightsIntent && selectedAsins.length > 2) {
+    // GOAL 3: Block enrichment if 3+ ASINs selected (for both variants and review insights)
+    if (requiresEnrichment && selectedAsins.length > 2) {
       const stream = new ReadableStream({
         start(controller) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: "Select up to 2 products for review insights." })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: "Select up to 2 products for detailed product information." })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
         },
@@ -2871,7 +2870,8 @@ export async function POST(req: NextRequest) {
     // 8c. Inject selected_asins and enrichment into ai_context
     // ═══════════════════════════════════════════════════════════════════════════
     // Add selected_asins and enrichment objects to ai_context so the AI can reference them in answers
-    const aiContextWithSelectedAsins = aiContext 
+    // CRITICAL: This must be done BEFORE building contextToUse so enrichment is included
+    const aiContextWithEnrichment = aiContext 
       ? {
           ...aiContext,
           selected_asins: selectedAsinsArray,
@@ -2895,8 +2895,8 @@ export async function POST(req: NextRequest) {
     // CRITICAL: Use stable contract format for AI Copilot consumption
     const useCompactContext = responseMode === "concise";
     
-    // Remove selected_asins from aiContextWithSelectedAsins to avoid duplicate
-    const { selected_asins: _, ...aiContextWithoutSelectedAsins } = aiContextWithSelectedAsins || {};
+    // Remove selected_asins from aiContextWithEnrichment to avoid duplicate (selected_asins is added separately)
+    const { selected_asins: _, ...aiContextWithoutSelectedAsins } = aiContextWithEnrichment || {};
     
     // ═══════════════════════════════════════════════════════════════════════════
     // PHASE B FIX: Ensure ai_context is ALWAYS included with products and computed_metrics
@@ -2908,7 +2908,8 @@ export async function POST(req: NextRequest) {
           selected_asins: selectedAsinsArray, // Always include selected_asins even in compact mode
           // CRITICAL: Include ai_context even in compact mode (required for copilot)
           // This ensures has_ai_context=true, has_ai_context_products=true, has_computed_metrics=true
-          ...(aiContext ? { ai_context: aiContext } : {}),
+          // Include enrichment in ai_context
+          ...(aiContextWithEnrichment ? { ai_context: aiContextWithEnrichment } : {}),
           // Legacy fields for backward compatibility (deprecated)
           ...buildCompactContext(
             analysisResponse, 
@@ -2923,7 +2924,8 @@ export async function POST(req: NextRequest) {
           selected_asins: selectedAsinsArray,
           // CRITICAL: Include full ai_context in expanded mode
           // This ensures has_ai_context=true, has_ai_context_products=true, has_computed_metrics=true
-          ...(aiContext ? { ai_context: aiContext } : {}),
+          // Include enrichment in ai_context
+          ...(aiContextWithEnrichment ? { ai_context: aiContextWithEnrichment } : {}),
           // Legacy ai_context fields for backward compatibility (deprecated, without selected_asins to avoid duplicate)
           ...aiContextWithoutSelectedAsins,
         };
@@ -2972,11 +2974,17 @@ export async function POST(req: NextRequest) {
       }
     }
     
-    // Ensure spapi_enrichment is included in ai_context if it exists
+    // Ensure enrichment is included in ai_context if it exists
     if (spapiEnrichment && aiContextToUse) {
       aiContextToUse.spapi_enrichment = spapiEnrichment;
     } else if (spapiEnrichment && !aiContextToUse) {
       aiContextToUse = { spapi_enrichment: spapiEnrichment };
+    }
+    
+    if (rainforestEnrichment && aiContextToUse) {
+      aiContextToUse.rainforest_enrichment = rainforestEnrichment;
+    } else if (rainforestEnrichment && !aiContextToUse) {
+      aiContextToUse = { ...(aiContextToUse || {}), rainforest_enrichment: rainforestEnrichment };
     }
     
     // GOAL 7: Log enrichment objects in ai_context before OpenAI call
@@ -3297,6 +3305,8 @@ CRITICAL RULES FOR ESCALATED DATA:
       has_computed_metrics,
         computed_metrics_keys: computedMetrics ? Object.keys(computedMetrics) : [],
       selected_asins_count: selectedAsins.length,
+      selected_asins: selectedAsins,
+      enrichment_triggered_types: enrichmentTypes,
       has_spapi_enrichment: !!(ai as any)?.spapi_enrichment,
       has_rainforest_enrichment: !!(ai as any)?.rainforest_enrichment,
       spapi_enrichment_asins: (ai as any)?.spapi_enrichment?.asins || [],

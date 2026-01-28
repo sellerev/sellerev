@@ -2234,26 +2234,13 @@ export default function AnalyzeForm({
                                   // CRITICAL: Use the extracted asin (not listing.asin) for consistency
                                   if (!asin) return;
 
-                                  const isMulti =
-                                    ("metaKey" in e && e.metaKey) ||
-                                    ("ctrlKey" in e && e.ctrlKey) ||
-                                    ("shiftKey" in e && e.shiftKey);
-
-                                  if (isMulti) {
-                                    // Multi-select toggle
-                                    if (isSelected) {
-                                      setSelectedAsins(prev => prev.filter(selectedAsin => selectedAsin !== asin));
-                                    } else {
-                                      setSelectedAsins(prev => [...prev, asin]);
-                                    }
-                                    return;
-                                  }
-
-                                  // Default click: single-select toggle
-                                  if (isSelected && selectedAsins.length === 1) {
-                                    setSelectedAsins([]);
+                                  // Always allow multi-select - toggle selection on click
+                                  if (isSelected) {
+                                    // Deselect if already selected
+                                    setSelectedAsins(prev => prev.filter(selectedAsin => selectedAsin !== asin));
                                   } else {
-                                    setSelectedAsins([asin]);
+                                    // Add to selection (multi-select by default)
+                                    setSelectedAsins(prev => [...prev, asin]);
                                   }
 
                                   // Clear focus after mouse click to avoid stuck focus styles

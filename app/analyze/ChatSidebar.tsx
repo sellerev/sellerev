@@ -1113,7 +1113,7 @@ export default function ChatSidebar({
           analysisRunId,
           message: messageToSend,
           selectedListing: selectedListing || null, // Backward compatibility
-          selectedAsins: selectedAsins || [], // Multi-ASIN selection
+          selectedAsins: Array.isArray(selectedAsins) ? selectedAsins : [], // Always send selected_asins array (even if empty)
           escalationConfirmed: opts.escalationConfirmed === true,
           escalationAsins: Array.isArray(opts.escalationAsins) ? opts.escalationAsins : undefined,
         }),
