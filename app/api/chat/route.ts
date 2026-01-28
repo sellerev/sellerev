@@ -98,59 +98,9 @@ function validateRequestBody(body: unknown): body is ChatRequestBody {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PENDING ACTION STORAGE (in-memory cache with expiration)
+// PENDING ACTION STORAGE (shared module)
 // ═══════════════════════════════════════════════════════════════════════════
-interface PendingAction {
-  type: "rainforest_reviews";
-  asins: string[];
-  limit: number;
-  created_at: number;
-  expires_at: number;
-}
-
-const pendingActionsCache = new Map<string, PendingAction>();
-
-function setPendingAction(analysisRunId: string, action: PendingAction): void {
-  pendingActionsCache.set(analysisRunId, action);
-  console.log("PENDING_ACTION_SET", {
-    analysis_run_id: analysisRunId,
-    action_type: action.type,
-    asins: action.asins,
-    limit: action.limit,
-    expires_at: new Date(action.expires_at).toISOString(),
-  });
-}
-
-function getPendingAction(analysisRunId: string): PendingAction | null {
-  const action = pendingActionsCache.get(analysisRunId);
-  if (!action) return null;
-  
-  // Check expiration
-  if (Date.now() > action.expires_at) {
-    pendingActionsCache.delete(analysisRunId);
-    console.log("PENDING_ACTION_EXPIRED", { analysis_run_id: analysisRunId });
-    return null;
-  }
-  
-  return action;
-}
-
-function clearPendingAction(analysisRunId: string): void {
-  const existed = pendingActionsCache.delete(analysisRunId);
-  if (existed) {
-    console.log("PENDING_ACTION_CLEARED", { analysis_run_id: analysisRunId });
-  }
-}
-
-function isAffirmation(message: string): boolean {
-  const normalized = message.toLowerCase().trim();
-  const affirmations = [
-    'yes', 'yep', 'yeah', 'y', 'ok', 'okay', 'sure', 'do it', 'go ahead',
-    'please', 'fetch', 'get', 'pull', 'retrieve', 'show me', 'i want',
-    'sounds good', 'that works', 'go for it', 'proceed'
-  ];
-  return affirmations.some(aff => normalized === aff || normalized.startsWith(aff + ' ') || normalized.endsWith(' ' + aff));
-}
+import { setPendingAction, getPendingAction, clearPendingAction, isAffirmation, type PendingAction } from "@/lib/chat/pendingActions";
 
 function extractAsinsFromText(text: string, page1Asins?: string[]): string[] {
   if (!text) return [];
@@ -4281,32 +4231,43 @@ CRITICAL RULES FOR ESCALATED DATA:
             citationsForDb = citations;
           }
           
+          // 15.5. Detect review snippet offer and set pending action (BEFORE closing stream)
+          // ────────────────────────────────────────────────────────────────
+          // Check if copilot offered to fetch review snippets
+          const reviewSnippetOfferPattern = /fetch.*review.*snippet|retrieve.*review.*snippet|get.*review.*snippet|pull.*review.*snippet/i;
+          if (finalMessage && reviewSnippetOfferPattern.test(finalMessage) && selectedAsins.length > 0 && selectedAsins.length <= 2) {
+            // Set pending action for review snippets fetch
+            const expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
+            const pendingAction = {
+              type: "rainforest_reviews" as const,
+              asins: selectedAsins.slice(0, 2), // Use selected_asins as authoritative
+              limit: 20,
+              created_at: Date.now(),
+              expires_at: expiresAt,
+            };
+            setPendingAction(body.analysisRunId, pendingAction);
+            
+            // Send action metadata to frontend so it can render buttons
+            // Send this BEFORE [DONE] so frontend can attach it to the message
+            const actionMetadata = {
+              type: "pending_action",
+              action_type: pendingAction.type,
+              asins: pendingAction.asins,
+              limit: pendingAction.limit,
+              expires_at: expiresAt,
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ metadata: actionMetadata })}\n\n`));
+            
+            console.log("PENDING_ACTION_SET_FROM_OFFER", {
+              analysis_run_id: body.analysisRunId,
+              selected_asins: selectedAsins,
+              final_message_snippet: finalMessage.substring(0, 200),
+            });
+          }
+          
           // Signal end of stream FIRST (don't block on database save)
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
-          
-          // 15.5. Detect review snippet offer and set pending action
-          // ────────────────────────────────────────────────────────────────
-          // Check if copilot offered to fetch review snippets
-          if (finalMessage) {
-            const reviewSnippetOfferPattern = /fetch.*review.*snippet|retrieve.*review.*snippet|get.*review.*snippet|pull.*review.*snippet/i;
-            if (reviewSnippetOfferPattern.test(finalMessage) && selectedAsins.length > 0 && selectedAsins.length <= 2) {
-              // Set pending action for review snippets fetch
-              const expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
-              setPendingAction(body.analysisRunId, {
-                type: "rainforest_reviews",
-                asins: selectedAsins.slice(0, 2), // Use selected_asins as authoritative
-                limit: 20,
-                created_at: Date.now(),
-                expires_at: expiresAt,
-              });
-              console.log("PENDING_ACTION_SET_FROM_OFFER", {
-                analysis_run_id: body.analysisRunId,
-                selected_asins: selectedAsins,
-                final_message_snippet: finalMessage.substring(0, 200),
-              });
-            }
-          }
           
           // 16. Save messages to database after streaming completes (non-blocking)
           // ────────────────────────────────────────────────────────────────
