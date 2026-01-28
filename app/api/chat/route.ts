@@ -2302,16 +2302,17 @@ export async function POST(req: NextRequest) {
     );
     
     // ═══════════════════════════════════════════════════════════════════════════
-    // ENRICHMENT OVERRIDES PAGE-1 ANSWERABLE
+    // ENRICHMENT IS INDEPENDENT OF ESCALATION
     // ═══════════════════════════════════════════════════════════════════════════
-    // If enrichment is required, this question cannot be answered from Page-1 alone
-    // because Page-1 doesn't contain variants or review topic summaries
+    // Enrichment (SP-API catalog, Rainforest product/reviews) does NOT require escalation or credits
+    // Enrichment runs independently and uses caps + caching only
+    // DO NOT modify escalationDecision for enrichment - they are separate flows
     if (requiresEnrichment) {
-      escalationDecision.can_answer_from_page1 = false;
-      console.log("ENRICHMENT_OVERRIDE_PAGE1", {
+      console.log("ENRICHMENT_DETECTED", {
         analysisRunId: body.analysisRunId,
-        original_can_answer_from_page1: escalationDecision.can_answer_from_page1,
-        override_reason: "Enrichment required for variants/review topics (not available in Page-1 data)",
+        enrichment_types: enrichmentTypes,
+        enrichment_asins: enrichmentAsins,
+        note: "Enrichment runs independently of escalation - no credits required",
       });
     }
 
@@ -3335,6 +3336,25 @@ export async function POST(req: NextRequest) {
     const spapiEnrichmentInContext = (aiContextToUse as any)?.spapi_enrichment;
     const rainforestEnrichmentInContext = (aiContextToUse as any)?.rainforest_enrichment;
     
+    // Log enrichment details for each selected ASIN
+    console.log("ENRICHMENT_BEFORE_OPENAI_CALL", {
+      analysisRunId: body.analysisRunId,
+      has_spapi_enrichment: !!spapiEnrichmentInContext,
+      selected_asins: selectedAsins,
+      enrichment_by_asin: selectedAsins.map((asin: string) => {
+        const spapi = spapiEnrichmentInContext?.by_asin?.[asin];
+        return {
+          asin,
+          has_description: !!spapi?.description,
+          bullets_count: spapi?.bullet_points?.length || 0,
+          has_title: !!spapi?.title,
+          has_attributes: !!spapi?.attributes,
+          has_variations: !!(spapi?.variation_relationships?.child_asins?.length || spapi?.variation_relationships?.parent_asins?.length),
+          errors: spapi?.errors || [],
+        };
+      }),
+    });
+    
     if (spapiEnrichmentInContext) {
       console.log("SPAPI_ENRICHMENT_IN_CONTEXT", {
         analysisRunId: body.analysisRunId,
@@ -3404,9 +3424,10 @@ export async function POST(req: NextRequest) {
       );
     }
     
-    // STEP 2: BLOCK LLM ANSWERS WHEN ESCALATION IS REQUIRED
-    // If escalation is required, inject a hard rule that prevents answering from Page-1
-    if (escalationDecision.requires_escalation && escalationDecision.required_asins.length > 0) {
+    // STEP 2: BLOCK LLM ANSWERS WHEN ESCALATION IS REQUIRED (NOT ENRICHMENT)
+    // IMPORTANT: Enrichment (SP-API catalog, Rainforest product/reviews) does NOT require escalation
+    // Only block if escalation is required AND it's NOT just enrichment
+    if (escalationDecision.requires_escalation && escalationDecision.required_asins.length > 0 && !requiresEnrichment) {
       // Check if escalation was blocked (insufficient credits, limits)
       const hasEnoughCredits = creditContext.available_credits >= escalationDecision.required_credits;
       const sessionLimitOk = (creditContext.session_credits_used + escalationDecision.required_credits) <= (creditContext.max_session_credits ?? 10);
