@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
 import { buildCopilotSystemPrompt } from "@/lib/ai/copilotSystemPrompt";
-import OpenAI from "openai";
 
 interface ChatActionRequestBody {
   analysisRunId: string;
@@ -316,33 +315,79 @@ export async function POST(req: NextRequest) {
 
     const systemPrompt = buildCopilotSystemPrompt(copilotContext, "keyword");
 
-    // 12. Call OpenAI to generate summary
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
+    // 12. Call OpenAI to generate summary (using fetch like the main chat route)
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+    if (!openaiApiKey) {
+      return NextResponse.json(
+        { ok: false, error: "OpenAI API key not configured" },
+        { status: 500, headers: res.headers }
+      );
+    }
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [
-              { role: "system", content: systemPrompt },
-              {
-                role: "user",
-                content: `I just fetched review snippets for ${actionAsins.length === 1 ? "this product" : "these products"}. Summarize the top complaints and praise themes. Use the data from rainforest_reviews_enrichment.`,
+          const openaiResponse = await fetch(
+            "https://api.openai.com/v1/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${openaiApiKey}`,
               },
-            ],
-            stream: true,
-            temperature: 0.7,
-            max_tokens: 800,
-          });
+              body: JSON.stringify({
+                model: "gpt-4o-mini",
+                messages: [
+                  { role: "system", content: systemPrompt },
+                  {
+                    role: "user",
+                    content: `I just fetched review snippets for ${actionAsins.length === 1 ? "this product" : "these products"}. Summarize the top complaints and praise themes. Use the data from rainforest_reviews_enrichment.`,
+                  },
+                ],
+                stream: true,
+                temperature: 0.7,
+                max_tokens: 800,
+              }),
+            }
+          );
 
-          for await (const chunk of completion) {
-            const content = chunk.choices[0]?.delta?.content;
-            if (content) {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+          if (!openaiResponse.ok) {
+            const errorData = await openaiResponse.text();
+            throw new Error(`OpenAI API error: ${openaiResponse.statusText} - ${errorData}`);
+          }
+
+          const reader = openaiResponse.body?.getReader();
+          if (!reader) {
+            throw new Error("No response body from OpenAI");
+          }
+
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              if (line.trim() === "") continue;
+              if (line.startsWith("data: ")) {
+                const data = line.slice(6);
+                if (data === "[DONE]") continue;
+                try {
+                  const json = JSON.parse(data);
+                  const content = json.choices?.[0]?.delta?.content;
+                  if (content) {
+                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+                  }
+                } catch {
+                  // Skip malformed JSON
+                }
+              }
             }
           }
 
