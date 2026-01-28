@@ -3107,19 +3107,42 @@ export async function POST(req: NextRequest) {
         });
       }
       
-      // GOAL 4C: Auto-fallback to Rainforest reviews if customers_say is missing
-      // After product enrichment, check if customers_say is missing/empty and auto-fetch reviews
+      // GOAL 4C: Auto-fallback to Rainforest reviews ONLY when product page has no review signals
+      // After product enrichment, check if customers_say, summarization_attributes, top_reviews, and
+      // rating_breakdown are ALL missing/empty before calling type=reviews (last resort).
       if (enrichmentTypes.includes('rainforest_product') && reviewInsightsIntent) {
         const { getRainforestReviewsEnrichment } = await import("@/lib/rainforest/reviewsEnrichment");
         const MAX_REVIEWS_PER_ASIN = 20;
         
         for (const asin of enrichmentAsins) {
           const productData = rainforestEnrichment?.by_asin[asin];
-          const hasCustomersSay = productData?.customers_say && 
-            (typeof productData.customers_say === 'object' && Object.keys(productData.customers_say).length > 0);
+          const hasCustomersSay =
+            productData?.customers_say &&
+            typeof productData.customers_say === "object" &&
+            Object.keys(productData.customers_say).length > 0;
+
+          const hasSummarizationAttributes =
+            productData?.summarization_attributes &&
+            typeof productData.summarization_attributes === "object" &&
+            Object.keys(productData.summarization_attributes).length > 0;
+
+          const hasTopReviews =
+            Array.isArray((productData as any)?.top_reviews) &&
+            ((productData as any).top_reviews as any[]).length > 0;
+
+          const hasRatingBreakdown =
+            (productData as any)?.rating_breakdown &&
+            typeof (productData as any).rating_breakdown === "object" &&
+            Object.keys((productData as any).rating_breakdown).length > 0;
           
-          // If customers_say is missing or empty, automatically fetch reviews
-          if (!hasCustomersSay && !productData?.errors?.length) {
+          const hasAnyReviewSignals =
+            hasCustomersSay ||
+            hasSummarizationAttributes ||
+            hasTopReviews ||
+            hasRatingBreakdown;
+          
+          // Only if the product page has NO review summary signals at all, fall back to reviews
+          if (!hasAnyReviewSignals && !productData?.errors?.length) {
             if (!rainforestReviewsEnrichment) {
               rainforestReviewsEnrichment = {
                 executed: true,

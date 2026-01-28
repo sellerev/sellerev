@@ -1,7 +1,15 @@
 /**
  * Rainforest API Product Enrichment
- * Fetches product details including customers_say, summarization_attributes, and variants
+ * Fetches product details including customers_say, summarization_attributes, variants,
+ * top_reviews, and rating_breakdown. Also computes lightweight review themes directly
+ * from the product page to minimize reliance on type=reviews.
  */
+
+import {
+  buildReviewThemesFromProduct,
+  ProductReviewSignals,
+  ReviewThemeSource,
+} from "./reviewThemesFromProduct";
 
 export interface RainforestProductEnrichment {
   asin: string;
@@ -11,14 +19,23 @@ export interface RainforestProductEnrichment {
     snippets?: Array<{ text: string; sentiment: 'positive' | 'negative' }>;
   } | null;
   summarization_attributes: Record<string, { rating: number; count?: number }> | null;
+  top_reviews?: Array<{
+    rating: number;
+    title: string | null;
+    text: string;
+    verified_purchase: boolean | null;
+    date: string | null;
+  }> | null;
+  rating_breakdown?: Record<string, { percentage?: number; count?: number }> | null;
   variants: {
     child_asins?: string[];
     parent_asin?: string;
     variation_theme?: string;
   } | null;
   extracted: {
-    top_complaints: string[];
-    top_praise: string[];
+    top_complaints: Array<{ theme: string; evidence?: string }>;
+    top_praise: Array<{ theme: string; evidence?: string }>;
+    review_themes_source?: ReviewThemeSource | null;
     attribute_signals: Array<{ name: string; value: string }>;
     // Catalog fallback fields (for when SP-API is empty or missing fields)
     feature_bullets?: string[] | string | null;
@@ -126,9 +143,7 @@ export async function getRainforestProductEnrichment(
     const title = product.title || null;
     
     // Extract customers_say (themes + sentiment snippets)
-    let customers_say: RainforestProductEnrichment['customers_say'] = null;
-    const topComplaints: string[] = [];
-    const topPraise: string[] = [];
+    let customers_say: RainforestProductEnrichment["customers_say"] = null;
     
     if (product.customers_say) {
       const themes: Array<{ label: string; sentiment: 'positive' | 'negative'; mentions?: number }> = [];
@@ -146,12 +161,8 @@ export async function getRainforestProductEnrichment(
               mentions: typeof item.mentions === 'number' ? item.mentions : undefined,
             });
             
-            // Extract to top_complaints or top_praise
-            if (sentiment === 'negative' && themeLabel) {
-              topComplaints.push(themeLabel);
-            } else if (sentiment === 'positive' && themeLabel) {
-              topPraise.push(themeLabel);
-            }
+            // Themes themselves are carried through customers_say;
+            // final top_complaints/top_praise are computed later via helper.
           }
           if (item.text || item.snippet) {
             snippets.push({
@@ -172,12 +183,8 @@ export async function getRainforestProductEnrichment(
               mentions: typeof theme.mentions === 'number' ? theme.mentions : undefined,
             });
             
-            // Extract to top_complaints or top_praise
-            if (sentiment === 'negative' && themeLabel) {
-              topComplaints.push(themeLabel);
-            } else if (sentiment === 'positive' && themeLabel) {
-              topPraise.push(themeLabel);
-            }
+            // Themes themselves are carried through customers_say;
+            // final top_complaints/top_praise are computed later via helper.
           }
         }
         if (product.customers_say.snippets && Array.isArray(product.customers_say.snippets)) {
@@ -238,10 +245,60 @@ export async function getRainforestProductEnrichment(
       }
     }
     
+    // Extract top_reviews (representative reviews on PDP)
+    let topReviews: RainforestProductEnrichment["top_reviews"] = null;
+    const rawTopReviews = product.top_reviews || product.representative_reviews || null;
+    if (Array.isArray(rawTopReviews) && rawTopReviews.length > 0) {
+      topReviews = rawTopReviews
+        .map((r: any) => ({
+          rating: typeof r.rating === "number" ? r.rating : 0,
+          title: (r.title || r.review_title || null) as string | null,
+          text: (r.body || r.text || r.review_text || "").trim(),
+          verified_purchase:
+            r.verified_purchase === true
+              ? true
+              : r.verified_purchase === false
+              ? false
+              : null,
+          date: (r.date || r.review_date || null) as string | null,
+        }))
+        .filter((r: any) => r.text && r.text.length > 0);
+      if (topReviews.length === 0) {
+        topReviews = null;
+      }
+    }
+
+    // Extract rating_breakdown (percentage/count per star)
+    let ratingBreakdown: RainforestProductEnrichment["rating_breakdown"] = null;
+    if (product.rating_breakdown && typeof product.rating_breakdown === "object") {
+      ratingBreakdown = {};
+      for (const [key, value] of Object.entries(product.rating_breakdown)) {
+        if (!value || typeof value !== "object") continue;
+        const v = value as { percentage?: unknown; count?: unknown };
+        const pct = typeof v.percentage === "number" ? v.percentage : undefined;
+        const count = typeof v.count === "number" ? v.count : undefined;
+        if (pct !== undefined || count !== undefined) {
+          ratingBreakdown[key] = { ...(pct !== undefined ? { percentage: pct } : {}), ...(count !== undefined ? { count } : {}) };
+        }
+      }
+      if (Object.keys(ratingBreakdown).length === 0) {
+        ratingBreakdown = null;
+      }
+    }
+
     // Extract feature_bullets and description (for catalog fallback)
     const featureBullets = product.feature_bullets || product.bullet_points || null;
     const description = product.description || product.product_description || null;
     const productAttributes = product.attributes || product.specifications || null;
+
+    // Build deterministic review themes from product-level signals
+    const reviewSignals: ProductReviewSignals = {
+      customers_say,
+      summarization_attributes,
+      top_reviews: topReviews,
+      rating_breakdown: ratingBreakdown,
+    };
+    const reviewThemes = buildReviewThemesFromProduct(reviewSignals);
     
     console.log("RAINFOREST_PRODUCT_ENRICHMENT_SUCCESS", {
       asin,
@@ -250,15 +307,19 @@ export async function getRainforestProductEnrichment(
       has_title: !!title,
       has_customers_say: !!customers_say,
       customers_say_themes_count: customers_say?.themes?.length || 0,
-      top_complaints_count: topComplaints.length,
-      top_praise_count: topPraise.length,
+      top_complaints_count: reviewThemes.top_complaints.length,
+      top_praise_count: reviewThemes.top_praise.length,
       has_summarization_attributes: !!summarization_attributes,
       summarization_attributes_count: summarization_attributes ? Object.keys(summarization_attributes).length : 0,
       attribute_signals_count: attributeSignals.length,
+      has_top_reviews: !!topReviews,
+      top_reviews_count: topReviews?.length || 0,
+      has_rating_breakdown: !!ratingBreakdown,
       has_variants: !!variants,
       has_feature_bullets: !!featureBullets,
       has_description: !!description,
       has_attributes: !!productAttributes,
+      review_themes_source_used: reviewThemes.source_used || null,
     });
     
     return {
@@ -266,10 +327,13 @@ export async function getRainforestProductEnrichment(
       title,
       customers_say,
       summarization_attributes,
+      top_reviews: topReviews,
+      rating_breakdown: ratingBreakdown,
       variants,
       extracted: {
-        top_complaints: topComplaints,
-        top_praise: topPraise,
+        top_complaints: reviewThemes.top_complaints,
+        top_praise: reviewThemes.top_praise,
+        review_themes_source: reviewThemes.source_used,
         attribute_signals: attributeSignals,
         // Include catalog fields for fallback use
         feature_bullets: featureBullets,
