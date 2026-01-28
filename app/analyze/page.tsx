@@ -158,6 +158,16 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
           content: msg.content,
         }));
       }
+
+      console.log("HISTORY_VIEW_LOADED", {
+        analysisRunId: analysisRun.id,
+        products_count:
+          (initialAnalysis.page_one_listings?.length ??
+            initialAnalysis.products?.length ??
+            0),
+        messages_count: initialMessages.length,
+        used_db_only: true,
+      });
     }
   }
 

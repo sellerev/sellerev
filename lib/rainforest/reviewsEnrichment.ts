@@ -3,6 +3,11 @@
  * Fetches recent product reviews and extracts themes
  */
 
+import {
+  getCachedEnrichment,
+  setCachedEnrichment,
+} from "./enrichmentCache";
+
 export interface RainforestReviewsEnrichment {
   asin: string;
   title: string | null;
@@ -37,6 +42,30 @@ export async function getRainforestReviewsEnrichment(
   }
   
   try {
+    const endpoint = "reviews";
+    const paramsHash = `limit=${limit}`;
+    
+    // Global 7-day cache lookup (shared across users)
+    const cached = await getCachedEnrichment<RainforestReviewsEnrichment>({
+      asin,
+      amazonDomain,
+      endpoint,
+      paramsHash,
+    });
+    if (cached && cached.payload) {
+      return cached.payload;
+    }
+    
+    console.log("RAINFOREST_CACHE_MISS", {
+      asin,
+      endpoint,
+      params_hash: paramsHash,
+    });
+    console.log("RAINFOREST_CALL_MADE", {
+      asin,
+      endpoint,
+      credits: 1,
+    });
     // Build request URL with type=reviews
     const params = new URLSearchParams({
       api_key: rainforestApiKey,
@@ -217,7 +246,7 @@ export async function getRainforestReviewsEnrichment(
       top_praise_count: topPraise.length,
     });
     
-    return {
+    const result: RainforestReviewsEnrichment = {
       asin,
       title: productTitle,
       reviews,
@@ -227,6 +256,14 @@ export async function getRainforestReviewsEnrichment(
       },
       errors: [],
     };
+    
+    // Store in global cache (best-effort; failures are non-fatal)
+    await setCachedEnrichment(
+      { asin, amazonDomain, endpoint, paramsHash },
+      { payload: result }
+    );
+    
+    return result;
   } catch (error) {
     const duration = Date.now() - startTime;
     console.error("RAINFOREST_REVIEWS_ENRICHMENT_EXCEPTION", {
