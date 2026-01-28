@@ -34,9 +34,13 @@ import { evaluateChatGuardrails } from "@/lib/ai/chatGuardrails";
 
 /**
  * Sellerev Chat API Route (Streaming)
- * 
+ *
+ * NOTE: Copilot enrichment (SP-API catalog + Rainforest reviews/product)
+ * now uses direct responders for bullets/description and review insights,
+ * and NEVER relies on credits or escalation gating.
+ *
  * This endpoint continues a conversation anchored to a completed analysis.
- * 
+ *
  * HARD CONSTRAINTS:
  * ─────────────────────────────────────────────────────────────────────────────
  * 1. Chat only works if analysis_run_id exists and belongs to the user
@@ -48,7 +52,7 @@ import { evaluateChatGuardrails } from "@/lib/ai/chatGuardrails";
  * 4. NEVER fetches new market data
  * 5. If data is missing, says so explicitly
  * ─────────────────────────────────────────────────────────────────────────────
- * 
+ *
  * ANTI-HALLUCINATION GUARANTEES:
  * - NO LIVE DATA FETCHING: This route does NOT call Rainforest API or SP-API
  * - GROUNDED CONTEXT INJECTION: AI receives explicit, structured context
