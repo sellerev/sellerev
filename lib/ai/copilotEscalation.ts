@@ -419,7 +419,10 @@ export function decideEscalation(
   if (effectiveSelectedAsins.length > 0) {
     // STRICT: If ASINs are selected, extract ASINs from question ONLY to validate
     // Do NOT use extracted ASINs - only use selected ASINs
-    const extractedAsins = extractAsinsFromQuestion(question, page1Context);
+    const extractedAsinsRaw = extractAsinsFromQuestion(question, page1Context);
+    const extractedAsins = extractedAsinsRaw.filter(
+      (asin) => typeof asin === "string" && asin.trim().length > 0
+    );
     
     // Check if question mentions any ASINs that don't match selected ASINs
     if (extractedAsins.length > 0) {

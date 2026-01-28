@@ -2768,14 +2768,17 @@ export async function POST(req: NextRequest) {
         title: string | null;
         customers_say: any | null;
         summarization_attributes: any | null;
+        top_reviews?: any[] | null;
+        rating_breakdown?: Record<string, { percentage?: number; count?: number }> | null;
         extracted: {
-          top_complaints: string[];
-          top_praise: string[];
+          top_complaints: any[];
+          top_praise: any[];
           attribute_signals: Array<{ name: string; value: string }>;
           // Catalog fallback fields (for when SP-API is empty or missing fields)
           feature_bullets?: string[] | string | null;
           description?: string | null;
           attributes?: Record<string, any> | null;
+          review_themes_source?: string | null;
         };
         errors: string[];
       }>;
@@ -2802,9 +2805,10 @@ export async function POST(req: NextRequest) {
     let reviewInsights: {
       asins: string[];
       by_asin: Record<string, {
-        source: "product_summary" | "reviews_snippets" | "fallback_unavailable";
-        top_complaints: Array<{ theme: string; support_snippet?: string }>;
-        top_praise: Array<{ theme: string; support_snippet?: string }>;
+        source: "customers_say" | "top_reviews" | "reviews" | "unavailable";
+        top_complaints: string[];
+        top_praise: string[];
+        evidence?: { praise_quotes?: string[]; complaint_quotes?: string[] };
         note?: string;
       }>;
       errors: Array<{ asin: string; error: string }>;
@@ -3074,6 +3078,8 @@ export async function POST(req: NextRequest) {
               title: productData.title || null,
               customers_say: productData.customers_say || null,
               summarization_attributes: productData.summarization_attributes || null,
+              top_reviews: (productData as any).top_reviews || null,
+              rating_breakdown: (productData as any).rating_breakdown || null,
               extracted: productData.extracted || {
                 top_complaints: [],
                 top_praise: [],
@@ -3253,24 +3259,82 @@ export async function POST(req: NextRequest) {
         errors: [],
       };
       
+      // Helper: normalize themes (string | {theme,snippet/evidence}) → string[]
+      const normalizeThemeList = (items: any[] | undefined | null, max: number): string[] => {
+        if (!items || !Array.isArray(items)) return [];
+        const result: string[] = [];
+        for (const item of items) {
+          if (result.length >= max) break;
+          if (typeof item === "string") {
+            if (item.trim()) result.push(item.trim());
+            continue;
+          }
+          if (item && typeof item === "object") {
+            const rawTheme = (item.theme || item.label || "").toString().trim();
+            const rawSnippet =
+              (item.evidence || item.snippet || item.text || "").toString().trim();
+            const combined = rawSnippet
+              ? `${rawTheme || "Review theme"} — ${rawSnippet}`
+              : rawTheme || rawSnippet;
+            if (combined) result.push(combined);
+          }
+        }
+        return result;
+      };
+      
+      // Helper: extract short quotes from top_reviews
+      const extractQuotes = (topReviews: any[] | null | undefined, max: number): string[] => {
+        if (!Array.isArray(topReviews)) return [];
+        const quotes: string[] = [];
+        for (const r of topReviews) {
+          if (quotes.length >= max) break;
+          const body = (r?.text || r?.body || "").trim();
+          if (!body) continue;
+          const snippet =
+            body.length > 160 ? body.substring(0, 160).trim() + "…" : body;
+          quotes.push(snippet);
+        }
+        return quotes;
+      };
+      
       for (const asin of insightAsins) {
         const product = rainforestEnrichment?.by_asin?.[asin];
         const reviews = rainforestReviewsEnrichment?.by_asin?.[asin];
         
-        const hasCustomersSay = !!(product?.customers_say && Object.keys(product.customers_say).length > 0);
-        const hasSummarizationAttributes = !!(product?.summarization_attributes && Object.keys(product.summarization_attributes).length > 0);
-        const hasSummarySignals = hasCustomersSay || hasSummarizationAttributes;
+        // PRODUCT-FIRST: use pre-computed product themes (customers_say, attrs, top_reviews, rating_breakdown)
+        const extracted: any = product?.extracted || {};
+        const productComplaintsRaw = extracted.top_complaints || [];
+        const productPraiseRaw = extracted.top_praise || [];
+        const productComplaints = normalizeThemeList(productComplaintsRaw, 3);
+        const productPraise = normalizeThemeList(productPraiseRaw, 3);
         
-        const productComplaints = Array.isArray(product?.extracted?.top_complaints) ? product!.extracted.top_complaints : [];
-        const productPraise = Array.isArray(product?.extracted?.top_praise) ? product!.extracted.top_praise : [];
-        
-        if (hasSummarySignals && (productComplaints.length > 0 || productPraise.length > 0)) {
-          // Use Amazon's review-summary module / attribute summary only
+        if ((productComplaints.length > 0 || productPraise.length > 0)) {
+          const praiseQuotes = extractQuotes((product as any)?.top_reviews, 3);
+          const complaintQuotes = extractQuotes(
+            (product as any)?.top_reviews?.filter((r: any) => r?.rating <= 3),
+            3
+          );
+          
+          const sourceTag =
+            typeof extracted.review_themes_source === "string"
+              ? extracted.review_themes_source
+              : "customers_say";
+          
           reviewInsights.by_asin[asin] = {
-            source: "product_summary",
-            top_complaints: productComplaints.slice(0, 3).map((theme) => ({ theme })),
-            top_praise: productPraise.slice(0, 3).map((theme) => ({ theme })),
-            note: "Based on Amazon’s review-summary module and attribute summary.",
+            source:
+              sourceTag === "top_reviews"
+                ? "top_reviews"
+                : "customers_say",
+            top_complaints: productComplaints,
+            top_praise: productPraise,
+            evidence:
+              praiseQuotes.length || complaintQuotes.length
+                ? {
+                    praise_quotes: praiseQuotes.length ? praiseQuotes : undefined,
+                    complaint_quotes: complaintQuotes.length ? complaintQuotes : undefined,
+                  }
+                : undefined,
+            note: "Based on review summary signals visible on the Amazon product page.",
           };
           reviewInsightsStats.used_type_product_count += 1;
           continue;
@@ -3284,10 +3348,19 @@ export async function POST(req: NextRequest) {
         
         if (reviews && reviews.extracted && (reviews.extracted.top_complaints.length > 0 || reviews.extracted.top_praise.length > 0) && !is503) {
           // Use reviews snippets when product summary signals are missing
+          const reviewsComplaints = normalizeThemeList(
+            reviews.extracted.top_complaints,
+            3
+          );
+          const reviewsPraise = normalizeThemeList(
+            reviews.extracted.top_praise,
+            3
+          );
+          
           reviewInsights.by_asin[asin] = {
-            source: "reviews_snippets",
-            top_complaints: reviews.extracted.top_complaints.slice(0, 3),
-            top_praise: reviews.extracted.top_praise.slice(0, 3),
+            source: "reviews",
+            top_complaints: reviewsComplaints,
+            top_praise: reviewsPraise,
             note: "Based on recent Amazon review snippets.",
           };
           reviewInsightsStats.used_type_reviews_count += 1;
@@ -3321,10 +3394,10 @@ export async function POST(req: NextRequest) {
           }
           
           reviewInsights.by_asin[asin] = {
-            source: "fallback_unavailable",
+            source: "unavailable",
             top_complaints: [],
             top_praise: [],
-            note: `Amazon doesn’t show a review-summary module for this product right now, and our review provider is temporarily unavailable. Here’s what I can infer from the product details we pulled (bullets, attributes, variation themes). ${detailSourceNote}Try again in a minute and I’ll pull review snippets.`,
+            note: `Amazon doesn’t show a detailed review-summary module for this product right now, and our review provider is temporarily unavailable. Here’s what I can infer from the product details we pulled (bullets, attributes, variation themes). ${detailSourceNote}Try again in a minute and I’ll pull additional review snippets.`,
           };
           continue;
         }
@@ -3633,6 +3706,29 @@ ${description}`;
         provider_unavailable: boolean;
       }> = [];
       
+      // Helper: normalize theme arrays to strings
+      const normalizeThemesForDirectResponse = (items: any[], max: number): string[] => {
+        if (!items || !Array.isArray(items)) return [];
+        const result: string[] = [];
+        for (const item of items) {
+          if (result.length >= max) break;
+          if (typeof item === "string") {
+            if (item.trim()) result.push(item.trim());
+            continue;
+          }
+          if (item && typeof item === "object") {
+            const rawTheme = (item.theme || item.label || "").toString().trim();
+            const rawSnippet =
+              (item.evidence || item.snippet || item.text || "").toString().trim();
+            const combined = rawSnippet
+              ? `${rawTheme || "Review theme"} — ${rawSnippet}`
+              : rawTheme || rawSnippet;
+            if (combined) result.push(combined);
+          }
+        }
+        return result;
+      };
+      
       for (const asin of selectedAsins) {
         const productEntry = rainforestEnrichmentInContext?.by_asin?.[asin];
         const reviewsEntry = rainforestReviewsEnrichmentInContext?.by_asin?.[asin];
@@ -3648,10 +3744,16 @@ ${description}`;
         
         if (productEntry?.extracted) {
           if (Array.isArray(productEntry.extracted.top_complaints)) {
-            topComplaints = productEntry.extracted.top_complaints.slice(0, MAX_THEMES);
+            topComplaints = normalizeThemesForDirectResponse(
+              productEntry.extracted.top_complaints,
+              MAX_THEMES
+            );
           }
           if (Array.isArray(productEntry.extracted.top_praise)) {
-            topPraise = productEntry.extracted.top_praise.slice(0, MAX_THEMES);
+            topPraise = normalizeThemesForDirectResponse(
+              productEntry.extracted.top_praise,
+              MAX_THEMES
+            );
           }
         }
         
