@@ -203,10 +203,47 @@ export async function getCatalogItemEnrichment(
     
     const data = await response.json();
     
-    // Normalize response
-    const item = data.items?.[0];
+    // DEV-ONLY: Log raw response structure for debugging
+    if (process.env.NODE_ENV === 'development') {
+      console.log("SP_API_CATALOG_RAW_RESPONSE_KEYS", {
+        asin,
+        top_level_keys: Object.keys(data),
+        payload_keys: data.payload ? Object.keys(data.payload) : null,
+        payload_items_keys: data.payload?.items?.[0] ? Object.keys(data.payload.items[0]) : null,
+      });
+    }
+    
+    // Normalize response: Handle both single item and batch response shapes
+    let item: any = null;
+    
+    // Try batch response shape first: json.payload.items[0]
+    if (data.payload?.items && Array.isArray(data.payload.items) && data.payload.items.length > 0) {
+      item = data.payload.items[0];
+    }
+    // Try single item in payload: json.payload (if it looks like an item - has asin or identifiers)
+    else if (data.payload && (data.payload.asin || data.payload.identifiers || data.payload.summaries || data.payload.relationships)) {
+      item = data.payload;
+    }
+    // Try legacy shape: data.items[0]
+    else if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+      item = data.items[0];
+    }
+    // Try direct item shape: data itself (if it looks like an item)
+    else if (data.asin || data.identifiers || data.summaries || data.relationships) {
+      item = data;
+    }
+    
+    // Only mark "no item data returned" if truly no item exists
     if (!item) {
-      console.warn("SP_API_ENRICHMENT: No item data returned", { asin });
+      console.warn("SP_API_ENRICHMENT: No item data returned", { 
+        asin,
+        response_shape: {
+          has_payload: !!data.payload,
+          has_payload_items: !!data.payload?.items,
+          has_items: !!data.items,
+          has_direct_item_fields: !!(data.asin || data.identifiers),
+        }
+      });
       return null;
     }
     
@@ -254,6 +291,18 @@ export async function getCatalogItemEnrichment(
       }
     }
     
+    // Check if we have variations (parent/child relationships)
+    const hasVariations = !!(parentAsins?.length || childAsins?.length || variationTheme);
+    
+    // Log normalized item structure
+    console.log("SPAPI_CATALOG_NORMALIZED_ITEM", {
+      asin,
+      has_title: !!itemName,
+      has_bullets: !!bulletPointsArray?.length,
+      has_description: !!description,
+      has_variations: hasVariations,
+    });
+    
     console.log("SP_API_ENRICHMENT_SUCCESS", {
       endpoint: "catalogItems",
       asin,
@@ -268,6 +317,7 @@ export async function getCatalogItemEnrichment(
     });
     
     // Normalize to flat structure with all fields
+    // IMPORTANT: Return item even if bullets/description are missing - return whatever fields exist
     return {
       asin,
       parent_asins: parentAsins && parentAsins.length > 0 ? parentAsins : null,
