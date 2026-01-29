@@ -327,8 +327,6 @@ export default function ChatSidebar({
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  // Context line shown ABOVE assistant response (not a chat message)
-  const [responseContextLine, setResponseContextLine] = useState<string | null>(null);
   // UI-only hint for historical snapshots (shown once per session per run when stale > 24h)
   const [showHistoricalSnapshotHint, setShowHistoricalSnapshotHint] = useState(false);
   const [historicalHintText, setHistoricalHintText] = useState<string | null>(null);
@@ -1069,19 +1067,7 @@ export default function ChatSidebar({
         content: messageToSend,
       };
       
-      // New user message = clear prior context line (it should only persist until the next user send)
-      // Then initialize for this response from real selection state.
       hadEscalationThisResponseRef.current = false;
-      if (selectedAsins && selectedAsins.length > 0) {
-        if (selectedAsins.length === 1) {
-          setResponseContextLine(`Answering using selected ASIN: ${selectedAsins[0]}`);
-        } else {
-          setResponseContextLine(`Answering using ${selectedAsins.length} selected ASINs`);
-        }
-      } else {
-        setResponseContextLine("Answering using Page-1 market data");
-      }
-
       setMessages((prev) => [...prev, userMessage]);
       setInput("");
     }
@@ -1393,8 +1379,6 @@ export default function ChatSidebar({
             {messages.map((msg, idx) => {
               const messageContent = msg.role === "assistant" ? sanitizeVerdictLanguage(msg.content) : msg.content;
               const isCopied = copiedIndex === idx;
-              // Check if this is the last user message (for showing Copilot status indicator)
-              const isLastUserMessage = msg.role === "user" && idx === messages.length - 1;
               const isLastMessage = idx === messages.length - 1;
               
               const handleCopy = async (e: React.MouseEvent | React.KeyboardEvent) => {
@@ -1415,14 +1399,6 @@ export default function ChatSidebar({
                       msg.role === "user" ? "justify-start" : "justify-start"
                     }`}
                   >
-                    {/* Copilot context line ABOVE assistant response (not a bubble) */}
-                    {msg.role === "assistant" && isLastMessage && responseContextLine && (
-                      <div className="w-full flex justify-start mb-1 pl-1">
-                        <div className="text-[11px] text-gray-500">
-                          {responseContextLine}
-                        </div>
-                      </div>
-                    )}
                     <div
                       className={`group relative max-w-[85%] px-4 py-3 rounded-lg border shadow-sm ${
                         msg.role === "user"
@@ -1475,18 +1451,6 @@ export default function ChatSidebar({
                       {/* Trust indicator chips removed (UX requirement) */}
                     </div>
                   </div>
-                  
-                  {/* Global Copilot Activity Indicator (Figma AI / Lovable AI style) */}
-                  {/* Renders UNDER the last user message, before assistant response */}
-                  {isLastUserMessage && copilotStatus !== "idle" && !streamingContent && (
-                    <div className="w-full flex justify-start mt-1.5 pl-1">
-                      <div className="text-xs text-gray-500">
-                        {copilotStatus === "thinking" && "Thinking"}
-                        {copilotStatus === "analyzing" && "Analyzing selection…"}
-                        {copilotStatus === "fetching" && "Looking up product details…"}
-                      </div>
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -1495,12 +1459,6 @@ export default function ChatSidebar({
             {isLoading && streamingContent && (
               <div className="w-full flex justify-start">
                 <div className="max-w-[85%]">
-                  {/* Copilot context line ABOVE assistant response (not a bubble) */}
-                  {responseContextLine && (
-                    <div className="text-[11px] text-gray-500 mb-1 pl-1">
-                      {responseContextLine}
-                    </div>
-                  )}
                   <div className="group relative bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
                   {/* Message header */}
                   <div className="text-[11px] font-medium mb-2 text-gray-500">
@@ -1552,12 +1510,6 @@ export default function ChatSidebar({
             {isLoading && !streamingContent && !escalationState && (
               <div className="w-full flex justify-start">
                 <div className="max-w-[85%]">
-                  {/* Copilot context line ABOVE assistant response (not a bubble) */}
-                  {responseContextLine && (
-                    <div className="text-[11px] text-gray-500 mb-1 pl-1">
-                      {responseContextLine}
-                    </div>
-                  )}
                   <div className="bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
                     <div className="text-[11px] font-medium mb-2 text-gray-500">
                       Sellerev
@@ -2044,11 +1996,7 @@ export default function ChatSidebar({
               lineHeight: "24px"
             }}
             value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              // Copilot context line should disappear as soon as the user starts the next input.
-              if (responseContextLine) setResponseContextLine(null);
-            }}
+            onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={isDisabled ? "Open a saved analysis run to chat" : "Ask about the analysis..."}
             disabled={isDisabled || isLoading}
