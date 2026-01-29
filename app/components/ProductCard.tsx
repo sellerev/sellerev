@@ -1,11 +1,41 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Star, Image as ImageIcon, Check, Copy, ExternalLink, Info } from "lucide-react";
+
+const TOOLTIP_W = 220;
 
 function InfoTooltip({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const wrapRef = useRef<HTMLSpanElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+
+  const updatePos = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({
+      left: r.left + r.width / 2 - TOOLTIP_W / 2,
+      top: r.top - 8,
+    });
+  };
+
+  useEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    updatePos();
+    const onScrollOrResize = () => updatePos();
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -22,30 +52,43 @@ function InfoTooltip({ text }: { text: string }) {
     };
   }, [open]);
 
+  const tooltipEl =
+    open && pos && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={tooltipRef}
+            className="fixed z-[9999] px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg whitespace-normal break-words"
+            style={{
+              width: TOOLTIP_W,
+              maxWidth: `min(${TOOLTIP_W}px, calc(100vw - 24px))`,
+              left: Math.max(12, Math.min(pos.left, window.innerWidth - TOOLTIP_W - 12)),
+              top: pos.top,
+              transform: "translateY(-100%)",
+            }}
+            role="tooltip"
+          >
+            {text}
+          </div>,
+          document.body
+        )
+      : null;
+
   return (
-    <span
-      ref={wrapRef}
-      className="relative inline-flex align-baseline ml-1"
-    >
-      <button
-        type="button"
-        aria-label="More info"
-        onClick={() => setOpen((o) => !o)}
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
-        className="inline-flex items-center justify-center text-[#9CA3AF] hover:text-[#6B7280] focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:ring-offset-1 rounded-full p-0"
-      >
-        <Info className="w-4 h-4" strokeWidth={2.5} />
-      </button>
-      {open && (
-        <div
-          className="absolute left-0 bottom-full mb-1.5 z-50 w-[220px] max-w-[220px] px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg whitespace-normal"
-          role="tooltip"
+    <>
+      <span ref={wrapRef} className="inline-flex items-center justify-center shrink-0 ml-1">
+        <button
+          type="button"
+          aria-label="More info"
+          onClick={() => setOpen((o) => !o)}
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => setOpen(false)}
+          className="inline-flex items-center justify-center text-[#9CA3AF] hover:text-[#6B7280] focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:ring-offset-1 rounded-full p-0"
         >
-          {text}
-        </div>
-      )}
-    </span>
+          <Info className="w-4 h-4" strokeWidth={2.5} />
+        </button>
+      </span>
+      {tooltipEl}
+    </>
   );
 }
 
@@ -393,10 +436,11 @@ export function ProductCard({
         {/* Main Category */}
         {mainBsr !== null && mainBsr !== undefined && mainBsr > 0 ? (
           <div className="space-y-1">
-            <div>
-              Main Category BSR
-              <InfoTooltip text="Overall rank in the main category (lower = better sales)." />
-              : #{mainBsr.toLocaleString()}
+            <div className="flex items-center flex-wrap gap-x-1">
+              <span>Main Category BSR: #{mainBsr.toLocaleString()}</span>
+              <span className="inline-flex items-center">
+                <InfoTooltip text="Overall rank in the main category (lower = better sales)." />
+              </span>
             </div>
             <div className="text-xs text-[#9CA3AF]">
               {displayMainCategoryName ? displayMainCategoryName : '—'}
@@ -407,10 +451,11 @@ export function ProductCard({
         {/* Subcategory */}
         {displaySubcategoryBsr !== null && displaySubcategoryBsr !== undefined && displaySubcategoryBsr > 0 ? (
           <div className="space-y-1">
-            <div>
-              Subcategory Rank
-              <InfoTooltip text="Rank within this specific subcategory (best for comparing similar products)." />
-              : #{displaySubcategoryBsr.toLocaleString()}
+            <div className="flex items-center flex-wrap gap-x-1">
+              <span>Subcategory Rank: #{displaySubcategoryBsr.toLocaleString()}</span>
+              <span className="inline-flex items-center">
+                <InfoTooltip text="Rank within this specific subcategory (best for comparing similar products)." />
+              </span>
             </div>
             <div className="text-xs text-[#9CA3AF]">
               {displaySubcategoryName ? displaySubcategoryName : '—'}
@@ -418,10 +463,11 @@ export function ProductCard({
           </div>
         ) : (
           <div className="space-y-1">
-            <div>
-              Subcategory Rank
-              <InfoTooltip text="Rank within this specific subcategory (best for comparing similar products)." />
-              : —
+            <div className="flex items-center flex-wrap gap-x-1">
+              <span>Subcategory Rank: —</span>
+              <span className="inline-flex items-center">
+                <InfoTooltip text="Rank within this specific subcategory (best for comparing similar products)." />
+              </span>
             </div>
             <div className="text-xs text-[#9CA3AF]">—</div>
           </div>
