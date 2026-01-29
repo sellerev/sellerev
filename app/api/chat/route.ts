@@ -31,8 +31,7 @@ import {
   executeEscalation,
 } from "@/lib/ai/copilotEscalationHelpers";
 import { evaluateChatGuardrails } from "@/lib/ai/chatGuardrails";
-import { hasAmazonConnection } from "@/lib/amazon/getUserToken";
-import { getOrFetchFeesEstimate } from "@/lib/spapi/feesEstimate";
+import { getFeesResult, type FeesResultPayload } from "@/lib/spapi/feesResult";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -1475,10 +1474,14 @@ function detectFeesProfitIntent(message: string): boolean {
   const explicit = [
     /\brun\s+fees\b/,
     /\bfetch\s+fees\b/,
-    /\bamazon\s+fees?\b/,
-    /\bfees\s+estimate\b/,
-    /\bcalculate\s+profit\b/,
+    /\bfees\b/,
     /\bprofitability\b/,
+    /\bprofit\b/,
+    /\bmargin\b/,
+    /\broi\b/,
+    /\bnet\s+profit\b/,
+    /\bamazon\s+fees?\b/,
+    /\bfee\s+estimate\b/,
   ];
   return explicit.some((p) => p.test(t));
 }
@@ -1495,6 +1498,8 @@ function detectFeesFollowUp(message: string): boolean {
     /\b(is|are)\s+(this|these|it)\s+worth\s+(it| pursuing)\b/,
     /\bhow\s+(good|profitable)\s+(is|are)\s+/,
     /\bshould\s+i\s+(enter|pursue|launch)\b/,
+    /\bwhy\s+(is\s+it\s+)?off\b/,
+    /\bseller\s+central\b/,
   ];
   return patterns.some((p) => p.test(t));
 }
@@ -2100,50 +2105,36 @@ export async function POST(req: NextRequest) {
       const products = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
       const listing = products.find((p: any) => (p.asin ?? "").trim() === asin.trim());
       const price = typeof listing?.price === "number" && listing.price > 0 ? listing.price : null;
+      const category = (analysisResponse.market_snapshot as any)?.category ?? listing?.category ?? listing?.chosen_category_name ?? null;
 
-      const connected = await hasAmazonConnection(user.id);
-      if (!connected) {
-        const connectContent = "Connect Amazon to fetch exact SP-API fees for this ASIN.";
-        const connectPayload = { message: connectContent, ctaUrl: "/connect-amazon" };
-        const stream = new ReadableStream({
-          start(controller) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: connectContent })}\n\n`));
-            controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify({ type: "ui_card", cardType: "connect_amazon", payload: connectPayload })}\n\n`)
-            );
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
-          },
-        });
-        void (async () => {
-          try {
-            await supabase.from("analysis_messages").insert([
-              { analysis_run_id: body.analysisRunId, user_id: user.id, role: "user", content: body.message, source_asins: [asin], credits_used: 0 },
-              { analysis_run_id: body.analysisRunId, user_id: user.id, role: "assistant", content: connectContent, source_asins: [asin], credits_used: 0 },
-            ]);
-          } catch (e) {
-            console.error("Failed to save connect-amazon messages:", e);
-          }
-        })();
-        return new NextResponse(stream, {
-          headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", ...Object.fromEntries(res.headers.entries()) },
-        });
-      }
-
-      let fees: Awaited<ReturnType<typeof getOrFetchFeesEstimate>> = null;
-      if (price != null) {
-        fees = await getOrFetchFeesEstimate(supabase, user.id, { asin, marketplaceId, price });
+      let feesResult: FeesResultPayload;
+      if (price != null && price > 0) {
+        feesResult = await getFeesResult(supabase, user.id, { asin, marketplaceId, price, category });
+      } else {
+        feesResult = {
+          type: "fees_result",
+          source: "estimate",
+          asin,
+          marketplace_id: marketplaceId,
+          price_used: null,
+          currency: "USD",
+          total_fees: 0,
+          fee_lines: [],
+          fetched_at: new Date().toISOString(),
+          assumptions: ["Enter selling price to calculate fees."],
+          cta_connect: true,
+        };
       }
 
       const content =
-        "Here's your **Fees & Profit** breakdown for this ASIN. Use the card below to fetch Amazon fees (if needed) and adjust costs.";
-      const payload = { asin, marketplaceId, price: price ?? null, fees };
+        "Here's your **Fees & Profit** breakdown for this ASIN. Use the card below to adjust price or costs.";
+      const payload = { ...feesResult, marketplaceId };
 
       const s2 = new ReadableStream({
         start(controller) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
           controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ type: "ui_card", cardType: "fees_profit", payload })}\n\n`)
+            encoder.encode(`data: ${JSON.stringify({ type: "ui_card", cardType: "fees_result", payload })}\n\n`)
           );
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();

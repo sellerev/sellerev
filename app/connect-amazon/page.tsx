@@ -236,6 +236,17 @@ function ConnectAmazonContent() {
 
         {/* Actions */}
         <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            Don't have an Amazon account yet? Fees will be close but estimated.{" "}
+            <button
+              type="button"
+              onClick={handleConnect}
+              disabled={connecting}
+              className="text-orange-600 font-medium hover:underline disabled:opacity-50"
+            >
+              Connect for exact fees.
+            </button>
+          </p>
           <button
             onClick={handleConnect}
             disabled={connecting}

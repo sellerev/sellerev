@@ -181,13 +181,26 @@ export default function IntegrationsTab() {
                 {disconnecting ? "Disconnecting..." : "Disconnect"}
               </button>
             ) : (
-              <button
-                onClick={handleConnect}
-                disabled={connecting}
-                className="px-4 py-2 text-sm font-medium text-white bg-orange-600 rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {connecting ? "Connecting..." : "Connect Amazon"}
-              </button>
+              <div className="flex flex-col items-end gap-1">
+                <p className="text-xs text-gray-500 text-right max-w-[200px]">
+                  Don't have an Amazon account yet? Fees will be close but estimated.{" "}
+                  <button
+                    type="button"
+                    onClick={handleConnect}
+                    disabled={connecting}
+                    className="text-orange-600 font-medium hover:underline disabled:opacity-50"
+                  >
+                    Connect for exact fees.
+                  </button>
+                </p>
+                <button
+                  onClick={handleConnect}
+                  disabled={connecting}
+                  className="px-4 py-2 text-sm font-medium text-white bg-orange-600 rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {connecting ? "Connecting..." : "Connect Amazon"}
+                </button>
+              </div>
             )}
           </div>
         </div>

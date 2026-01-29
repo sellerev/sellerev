@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Copy, Check, ChevronRight, History, Sparkles } from "lucide-react";
 import HistoryPanel from "./components/HistoryPanel";
 import FeesProfitChatCard, {
-  type FeesProfitCardPayload,
+  type FeesResultCardPayload,
 } from "./components/FeesProfitChatCard";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
@@ -586,21 +586,22 @@ export default function ChatSidebar({
 
     let feesContext: { asin: string; selling_price: number; total_fees: number; referral_fee?: number; fba_fee?: number; fetched_at: string; source: string } | undefined;
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
-    const feesCard = lastAssistant?.cards?.find((c) => c.type === "fees_profit");
-    const pl = feesCard?.payload as { asin?: string; price?: number | null; fees?: { total_fees?: number | null; fee_lines?: Array<{ name: string; amount: number }>; fetched_at?: string } } | undefined;
-    if (isFeesFollowUp(messageToSend) && pl?.asin && pl?.fees && typeof pl.price === "number" && pl.price > 0) {
-      const total = pl.fees.total_fees ?? 0;
-      const lines = pl.fees.fee_lines ?? [];
-      const ref = lines.find((l) => /referral/i.test(l.name))?.amount;
-      const fba = lines.find((l) => /fba|fulfillment/i.test(l.name))?.amount;
+    const feesCard = lastAssistant?.cards?.find((c) => c.type === "fees_result" || c.type === "fees_profit");
+    const pl = feesCard?.payload as { asin?: string; price_used?: number | null; total_fees?: number; fee_lines?: Array<{ name: string; amount: number }>; fetched_at?: string; source?: string } | undefined;
+    const priceVal = pl?.price_used ?? (pl as any)?.price;
+    if (isFeesFollowUp(messageToSend) && pl?.asin && typeof priceVal === "number" && priceVal > 0) {
+      const total = pl?.total_fees ?? (pl as any)?.fees?.total_fees ?? 0;
+      const lines = pl?.fee_lines ?? (pl as any)?.fees?.fee_lines ?? [];
+      const ref = lines.find((l: { name: string; amount: number }) => /referral/i.test(l.name))?.amount;
+      const fba = lines.find((l: { name: string; amount: number }) => /fba|fulfillment/i.test(l.name))?.amount;
       feesContext = {
         asin: pl.asin,
-        selling_price: pl.price,
+        selling_price: priceVal,
         total_fees: total,
         referral_fee: ref,
         fba_fee: fba,
-        fetched_at: pl.fees.fetched_at ?? new Date().toISOString(),
-        source: "sp-api",
+        fetched_at: (pl?.fetched_at ?? (pl as any)?.fees?.fetched_at) || new Date().toISOString(),
+        source: pl?.source ?? "sp-api",
       };
     }
 
@@ -713,7 +714,8 @@ export default function ChatSidebar({
               }
 
               if (json.type === "ui_card" && json.payload != null) {
-                if (json.cardType === "fees_profit") cardsForFinal.push({ type: "fees_profit", payload: json.payload });
+                if (json.cardType === "fees_result") cardsForFinal.push({ type: "fees_result", payload: json.payload });
+                else if (json.cardType === "fees_profit") cardsForFinal.push({ type: "fees_profit", payload: json.payload });
                 else if (json.cardType === "connect_amazon") cardsForFinal.push({ type: "connect_amazon", payload: json.payload });
               }
             } catch {
@@ -980,8 +982,25 @@ export default function ChatSidebar({
                               </div>
                             );
                           }
-                          if (card.type !== "fees_profit") return null;
-                          const pl = card.payload as FeesProfitCardPayload;
+                          if (card.type !== "fees_result" && card.type !== "fees_profit") return null;
+                          const raw = card.payload as Record<string, unknown>;
+                          const pl: FeesResultCardPayload =
+                            card.type === "fees_result"
+                              ? (raw as unknown as FeesResultCardPayload)
+                              : {
+                                  type: "fees_result",
+                                  source: raw?.fees ? "sp_api" : "estimate",
+                                  asin: (raw?.asin as string) ?? "",
+                                  marketplace_id: (raw?.marketplaceId as string) ?? "",
+                                  marketplaceId: (raw?.marketplaceId as string) ?? undefined,
+                                  price_used: (raw?.price as number) ?? null,
+                                  currency: "USD",
+                                  total_fees: (raw?.fees as any)?.total_fees ?? 0,
+                                  fee_lines: (raw?.fees as any)?.fee_lines ?? [],
+                                  fetched_at: (raw?.fees as any)?.fetched_at ?? new Date().toISOString(),
+                                  cta_connect: !raw?.fees,
+                                  assumptions: !raw?.fees ? ["Enter selling price to calculate fees."] : undefined,
+                                };
                           return (
                             <FeesProfitChatCard
                               key={cIdx}
@@ -992,10 +1011,7 @@ export default function ChatSidebar({
                                   const m = n[idx];
                                   if (!m?.cards) return prev;
                                   const cards = [...m.cards];
-                                  cards[cIdx] = {
-                                    type: "fees_profit",
-                                    payload: { ...pl, fees: data },
-                                  };
+                                  cards[cIdx] = { type: "fees_result", payload: data };
                                   n[idx] = { ...m, cards };
                                   return n;
                                 });

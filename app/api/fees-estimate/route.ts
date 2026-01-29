@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
-import { hasAmazonConnection } from "@/lib/amazon/getUserToken";
-import { getOrFetchFeesEstimate, type FeesEstimatePayload } from "@/lib/spapi/feesEstimate";
+import { getFeesResult, type FeesResultPayload } from "@/lib/spapi/feesResult";
 
 const DEFAULT_MARKETPLACE = "ATVPDKIKX0DER";
 
-export type { FeesEstimatePayload };
+export type { FeesResultPayload };
 
 export async function POST(req: NextRequest) {
   const res = new NextResponse();
@@ -23,7 +22,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let body: { asin?: string; marketplaceId?: string; price?: number } = {};
+  let body: { asin?: string; marketplaceId?: string; price?: number; category?: string | null } = {};
   try {
     body = await req.json();
   } catch {
@@ -39,6 +38,7 @@ export async function POST(req: NextRequest) {
       ? body.marketplaceId
       : DEFAULT_MARKETPLACE;
   const price = typeof body.price === "number" && body.price > 0 ? body.price : null;
+  const category = typeof body.category === "string" ? body.category : null;
 
   if (!asin || asin.length < 10) {
     return NextResponse.json(
@@ -53,29 +53,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const connected = await hasAmazonConnection(user.id);
-  if (!connected) {
-    return NextResponse.json(
-      {
-        error: "no_amazon_connection",
-        message: "Connect Amazon to fetch exact SP-API fees for this ASIN.",
-      },
-      { status: 403, headers: Object.fromEntries(res.headers.entries()) }
-    );
-  }
-
-  const payload = await getOrFetchFeesEstimate(supabase, user.id, {
+  const payload = await getFeesResult(supabase, user.id, {
     asin,
     marketplaceId,
     price,
+    category,
   });
-
-  if (!payload) {
-    return NextResponse.json(
-      { error: "Fee lookup failed. Check SP-API configuration or try again." },
-      { status: 502, headers: Object.fromEntries(res.headers.entries()) }
-    );
-  }
 
   return NextResponse.json(payload, {
     status: 200,
