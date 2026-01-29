@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Copy, Check, ChevronRight, History } from "lucide-react";
+import { Copy, Check, ChevronRight, History, Sparkles } from "lucide-react";
 import HistoryPanel from "./components/HistoryPanel";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
@@ -141,6 +141,10 @@ interface ChatSidebarProps {
   insertIntoChatText?: string | null;
   /** Callback when insertIntoChatText has been applied (clear from parent). */
   onInsertConsumed?: () => void;
+  /** Whether the Question Library (Help) drawer is open. */
+  helpDrawerOpen?: boolean;
+  /** Toggle the Question Library drawer. */
+  onToggleHelpDrawer?: () => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -318,6 +322,8 @@ export default function ChatSidebar({
   onToggleCollapse,
   insertIntoChatText = null,
   onInsertConsumed,
+  helpDrawerOpen = false,
+  onToggleHelpDrawer,
 }: ChatSidebarProps) {
   // Use snapshotId as primary identifier if analysisRunId is not available (Tier-1/Tier-2 model)
   // For chat API, we still need analysisRunId, but UI unlocking uses snapshotId
@@ -1311,6 +1317,21 @@ export default function ChatSidebar({
           </p>
         </div>
         <div className="flex items-center gap-1">
+          {/* Question Library (star AI) */}
+          {onToggleHelpDrawer && (
+            <button
+              type="button"
+              onClick={onToggleHelpDrawer}
+              className={`flex-shrink-0 p-1.5 rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-gray-300 ${
+                helpDrawerOpen ? "bg-gray-900 text-white hover:bg-gray-800" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"
+              }`}
+              aria-label="Question Library"
+              title="Question Library"
+              aria-expanded={helpDrawerOpen}
+            >
+              <Sparkles className="w-4 h-4" />
+            </button>
+          )}
           {/* History button */}
           <button
             ref={historyButtonRef}
