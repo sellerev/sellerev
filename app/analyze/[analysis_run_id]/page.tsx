@@ -97,8 +97,11 @@ export default async function AnalysisDetailPage({ params }: AnalysisDetailPageP
       total_page1_listings: snapshot.total_page1_listings as number,
       sponsored_count: snapshot.sponsored_count as number,
       dominance_score: snapshot.dominance_score as number,
-      total_page1_brands: (snapshot as Record<string, unknown>).total_page1_brands ?? null,
-      brand_stats: (snapshot as Record<string, unknown>).brand_stats ?? null,
+      total_page1_brands: ((snapshot as Record<string, unknown>).total_page1_brands ?? null) as number | null,
+      brand_stats: ((snapshot as Record<string, unknown>).brand_stats ?? null) as {
+        page1_brand_count: number;
+        top_5_brand_share_pct: number;
+      } | null,
       representative_asin: snapshot.representative_asin as string | null | undefined,
       fba_fees: snapshot.fba_fees
         ? (snapshot.fba_fees as {
