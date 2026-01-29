@@ -1504,6 +1504,49 @@ function detectFeesFollowUp(message: string): boolean {
   return patterns.some((p) => p.test(t));
 }
 
+const REVIEW_NEGATIVE = [
+  "dislike", "hate", "issue", "issues", "problem", "problems", "complaint", "complaints",
+  "negative", "negatives", "bad", "worst", "cons", "drawbacks", "defects", "broken",
+  "cheap", "flimsy", "doesnt", "doesn't", "stopped", "failed", "return", "refund",
+];
+const REVIEW_POSITIVE = [
+  "like", "love", "praise", "good", "great", "best", "pros", "positive", "positives",
+  "works", "perfect", "recommend", "recommended",
+];
+const REVIEW_GENERIC = [
+  "review", "reviews", "feedback", "ratings",
+];
+const REVIEW_PHRASES = [
+  "customers say", "customer say", "what do people say", "what do customers say",
+  "what do customers complain about", "what do customers praise", "customer feedback",
+  "review summary", "common complaints", "common praise",
+];
+
+/** Token-based review intent: normalize (lowercase, strip punctuation), match synonyms. */
+function detectReviewIntent(message: string): { match: boolean; matchedTerms: string[] } {
+  const t = message.toLowerCase().replace(/'/g, "").trim();
+  const normalized = t.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+  const tokens = new Set(normalized.split(" ").filter(Boolean));
+  const matched: string[] = [];
+
+  const check = (term: string) => {
+    if (tokens.has(term) || normalized.includes(term)) {
+      matched.push(term);
+      return true;
+    }
+    return false;
+  };
+
+  for (const w of [...REVIEW_NEGATIVE, ...REVIEW_POSITIVE, ...REVIEW_GENERIC]) {
+    check(w);
+  }
+  for (const p of REVIEW_PHRASES) {
+    if (normalized.includes(p.replace(/'/g, ""))) matched.push(p);
+  }
+
+  return { match: matched.length > 0, matchedTerms: [...new Set(matched)] };
+}
+
 /**
  * Builds Market Snapshot Summary from cached response.market_snapshot data.
  * NO recomputation - uses only cached values.
@@ -2314,8 +2357,6 @@ export async function POST(req: NextRequest) {
     const MAX_ENRICHMENT_ASINS_PER_MESSAGE = 2; // Per user message (hard cap for all enrichment types)
     const MAX_ENRICHMENT_CALLS_PER_SESSION = 20; // Total across chat for this analysis_run_id
     
-    const normalizedQuestion = body.message.toLowerCase();
-    
     // USP intent: unique selling proposition, differentiation, positioning angle. Page-1 only; no review gating.
     const uspIntent =
       /unique selling proposition|USP\b|differentiation|positioning angle|what should I sell|what angle|selling angle|recommend.*(unique|USP|differentiation|positioning)/i.test(
@@ -2328,26 +2369,53 @@ export async function POST(req: NextRequest) {
         body.message
       );
     
-    // GOAL 4B: Review insights intent (complaints, praise, customer feedback). Exclude USP — never gate USP on reviews.
-    const reviewInsightsIntentRaw =
-      /complain|complaints|bad reviews?|negative reviews?|what people hate|common issues?|pros and cons|from reviews|what do customers (say|complain about)|customers say|praise|good reviews?|positive reviews?|what people love|pros\b|customer feedback|issues?|problems?|review insights|review summary|review themes|get (me )?the reviews|fetch reviews|pull reviews/i.test(
-        body.message
-      );
-    const reviewInsightsIntent = reviewInsightsIntentRaw && !uspIntent;
-    
+    // GOAL 4B: Review insights intent (token-based: dislike/praise/reviews/feedback/etc.). Exclude USP.
+    const { match: reviewIntentFromMessage, matchedTerms: reviewMatchedTerms } = detectReviewIntent(body.message);
+    const reviewInsightsIntent =
+      reviewIntentFromMessage &&
+      !uspIntent &&
+      selectedAsins.length >= 1 &&
+      selectedAsins.length <= 2;
+
+    // 0 ASINs + review intent → short-circuit: do NOT call Rainforest
+    if (reviewIntentFromMessage && !uspIntent && selectedAsins.length === 0) {
+      const content = "Select 1–2 products to analyze reviews.";
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      console.log("REVIEW_INTENT_MATCH", {
+        matched_terms: reviewMatchedTerms,
+        selected_asins: selectedAsins,
+        review_intent: true,
+        short_circuit: "0_asins_select_1_2",
+      });
+      return new NextResponse(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
+    }
+
     // If selectedAsins exists AND any intent is true, enrichment MUST execute (zero-confirmation)
     // For review insights: max 2 ASINs (hard cap)
     const requiresEnrichment = (variantsAttributesIntent || reviewInsightsIntent) && selectedAsins.length > 0;
-    
+
     // Special handling: block enrichment if 3+ ASINs selected (for both variants and review insights)
     let enrichmentAsins: string[] = [];
     if (requiresEnrichment) {
       if (selectedAsins.length > 2) {
-        // Block enrichment for 3+ ASINs - return early with clear message
-        const message = reviewInsightsIntent 
-          ? `Select 1–2 products to analyze reviews. You currently have ${selectedAsins.length} selected.`
-          : `Select 1–2 products to analyze product details. You currently have ${selectedAsins.length} selected.`;
-        
+        const message =
+          reviewIntentFromMessage && !uspIntent
+            ? `Select 1–2 products to analyze reviews. You currently have ${selectedAsins.length} selected.`
+            : `Select 1–2 products to analyze product details. You currently have ${selectedAsins.length} selected.`;
+
         const stream = new ReadableStream({
           start(controller) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: message })}\n\n`));
@@ -2364,20 +2432,24 @@ export async function POST(req: NextRequest) {
           },
         });
       } else {
-        // Cap at 2 ASINs for all enrichment types
         enrichmentAsins = selectedAsins.slice(0, 2);
       }
     }
-    
-    const enrichmentTypes: Array<'spapi_catalog' | 'rainforest_product'> = [];
+
+    const enrichmentTypes: Array<"spapi_catalog" | "rainforest_product"> = [];
     if (requiresEnrichment && enrichmentAsins.length > 0) {
-      if (variantsAttributesIntent) enrichmentTypes.push('spapi_catalog');
+      if (variantsAttributesIntent) enrichmentTypes.push("spapi_catalog");
       if (reviewInsightsIntent) {
-        // For review insights: use a single Rainforest type=product call via ProductDossier
-        enrichmentTypes.push('rainforest_product');
+        enrichmentTypes.push("rainforest_product");
       }
     }
-    
+
+    console.log("REVIEW_INTENT_MATCH", {
+      matched_terms: reviewMatchedTerms,
+      selected_asins: selectedAsins,
+      review_intent: reviewInsightsIntent,
+      review_intent_from_message: reviewIntentFromMessage,
+    });
     console.log("ENRICHMENT_DECISION", {
       analysisRunId: body.analysisRunId,
       requires_enrichment: requiresEnrichment,
@@ -2888,7 +2960,7 @@ export async function POST(req: NextRequest) {
       by_asin: Record<string, {
         asin: string;
         title: string | null;
-        source_used: "customers_say" | "top_reviews" | "none";
+        source_used: "customers_say" | "summarization_attributes" | "top_reviews" | "type_reviews" | "none";
         top_complaints: Array<{ theme: string; evidence?: string | null }>;
         top_praise: Array<{ theme: string; evidence?: string | null }>;
         notes: string[];
@@ -3037,6 +3109,12 @@ export async function POST(req: NextRequest) {
       
       // GOAL 4B: Unified product dossiers for review insights & specs (single type=product call)
       if (enrichmentTypes.includes("rainforest_product")) {
+        if (reviewInsightsIntent) {
+          console.log("REVIEW_ENRICHMENT_TRIGGERED", {
+            asins: enrichmentAsins,
+            strategy: "type_product_first",
+          });
+        }
         const { getProductDossier } = await import("@/lib/rainforest/productDossier");
 
         productDossiers = {
@@ -3091,11 +3169,14 @@ export async function POST(req: NextRequest) {
         const customersSay = dossier.review_material?.customers_say as
           | Array<{ name: string; value: string }>
           | undefined;
+        const summarizationAttrs = dossier.review_material?.summarization_attributes as
+          | Array<{ name: string; value: string }>
+          | undefined;
         const topReviews = dossier.review_material?.top_reviews as
           | Array<{ rating?: number; title?: string; body?: string; verified_purchase?: boolean }>
           | undefined;
 
-        let source_used: "customers_say" | "top_reviews" | "none" = "none";
+        let source_used: "customers_say" | "summarization_attributes" | "top_reviews" | "type_reviews" | "none" = "none";
         const top_complaints: Array<{ theme: string; evidence?: string | null }> = [];
         const top_praise: Array<{ theme: string; evidence?: string | null }> = [];
         const notes: string[] = [];
@@ -3125,7 +3206,20 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // 2) Fallback: derive themes from top_reviews when customers_say is missing
+        // 2) summarization_attributes when customers_say missing or empty
+        if (source_used === "none" && Array.isArray(summarizationAttrs) && summarizationAttrs.length > 0) {
+          for (const a of summarizationAttrs.slice(0, 5)) {
+            if (a.name && String(a.name).trim()) {
+              top_praise.push({ theme: String(a.name).trim(), evidence: null });
+            }
+          }
+          if (top_praise.length > 0) {
+            source_used = "summarization_attributes";
+            notes.push("Themes from summarization_attributes on the product page.");
+          }
+        }
+
+        // 3) top_reviews when still no themes
         if (source_used === "none" && Array.isArray(topReviews) && topReviews.length > 0) {
           const { themeFromTopReviews } = await import("@/lib/reviews/themeFromTopReviews");
           const mapped = topReviews.map((r) => ({
@@ -3157,6 +3251,29 @@ export async function POST(req: NextRequest) {
             notes.push(
               "Themes derived from representative top review snippets on the product page."
             );
+          }
+        }
+
+        // 4) type=reviews fallback (once per ASIN, limit 10–20) when still no themes
+        if (source_used === "none") {
+          try {
+            const { getRainforestReviewsEnrichment } = await import("@/lib/rainforest/reviewsEnrichment");
+            const reviewsData = await getRainforestReviewsEnrichment(asin, "amazon.com", 15);
+            if (reviewsData?.extracted) {
+              const ex = reviewsData.extracted;
+              for (const c of (ex.top_complaints || []).slice(0, 3)) {
+                top_complaints.push({ theme: c.theme, evidence: c.snippet ?? null });
+              }
+              for (const p of (ex.top_praise || []).slice(0, 3)) {
+                top_praise.push({ theme: p.theme, evidence: p.snippet ?? null });
+              }
+              if (top_complaints.length || top_praise.length) {
+                source_used = "type_reviews";
+                notes.push("Themes from Rainforest type=reviews API (fallback when product page had no review signals).");
+              }
+            }
+          } catch (e) {
+            console.warn("REVIEW_FALLBACK_TYPE_REVIEWS_ERROR", { asin, error: String(e) });
           }
         }
 

@@ -411,43 +411,12 @@ export function decideEscalation(
     };
   }
   
-  // Step 1.5: HARD LOCK - Enforce selected ASINs only
+  // Step 1.5: UI selected ASINs are authoritative. When selected_asins is non-empty, we never
+  // run "mentions other ASINs" checks or use extracted ASINs for escalation gating.
   const effectiveSelectedAsins = selectedAsins && selectedAsins.length > 0
     ? selectedAsins
     : (selectedAsin ? [selectedAsin] : []);
-  
-  if (effectiveSelectedAsins.length > 0) {
-    // STRICT: If ASINs are selected, extract ASINs from question ONLY to validate
-    // Do NOT use extracted ASINs - only use selected ASINs
-    const extractedAsinsRaw = extractAsinsFromQuestion(question, page1Context);
-    const extractedAsins = extractedAsinsRaw.filter(
-      (asin) => typeof asin === "string" && asin.trim().length > 0
-    );
-    
-    // Check if question mentions any ASINs that don't match selected ASINs
-    if (extractedAsins.length > 0) {
-      const nonMatchingAsins = extractedAsins.filter(asin => !effectiveSelectedAsins.includes(asin));
-      if (nonMatchingAsins.length > 0) {
-        // Question references ASINs other than selected - block escalation
-        // STRICT: If exactly 1 ASIN is selected, this enforces single-ASIN behavior
-        const selectedText = effectiveSelectedAsins.length === 1
-          ? `the currently selected ASIN (${effectiveSelectedAsins[0]})`
-          : `the currently selected ASINs (${effectiveSelectedAsins.join(', ')})`;
-        return {
-          can_answer_from_page1: false,
-          requires_escalation: false,
-          required_asins: [],
-          required_credits: 0,
-          escalation_reason: `I can only reference ${selectedText}. Your question mentions other ASINs (${nonMatchingAsins.join(', ')}). Please select the products you want to discuss, or clarify your question.`,
-        };
-      }
-    }
-    
-    // STRICT: If escalation is needed, ONLY use selected ASINs (max 2 for escalation)
-    // If exactly 1 ASIN is selected, escalation will use ONLY that ASIN
-    // Do NOT auto-expand to other page-1 products
-    // Continue to Step 2 to check if escalation is actually needed
-  }
+  // If escalation is needed, we use only effectiveSelectedAsins (max 2). Continue to Step 2.
   
   // Step 1.75: CRITICAL - Explicitly block escalation for revenue/units questions
   // Revenue and units questions MUST use Page-1 estimates, never escalate
