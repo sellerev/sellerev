@@ -1487,7 +1487,8 @@ export default function AnalyzeForm({
                     };
                     const snapshotFilteredListings = pageOneListings.filter((listing: any) => {
                       if (selectedBrands.size > 0) {
-                        const brandKey = getRawBrandForSnapshot(listing) === null ? "Unknown" : getRawBrandForSnapshot(listing);
+                        const rawBrand = getRawBrandForSnapshot(listing);
+                        const brandKey: string = rawBrand === null ? "Unknown" : rawBrand;
                         if (!selectedBrands.has(brandKey)) return false;
                       }
                       if (selectedFulfillment.size > 0) {
