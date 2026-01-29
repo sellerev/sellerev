@@ -137,6 +137,10 @@ interface ChatSidebarProps {
   isCollapsed?: boolean;
   /** Callback to toggle collapse state */
   onToggleCollapse?: () => void;
+  /** Text to insert into chat input (e.g. from HelpDrawer question launcher). Consumed after apply. */
+  insertIntoChatText?: string | null;
+  /** Callback when insertIntoChatText has been applied (clear from parent). */
+  onInsertConsumed?: () => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -312,6 +316,8 @@ export default function ChatSidebar({
   onSelectedAsinsChange,
   isCollapsed = false,
   onToggleCollapse,
+  insertIntoChatText = null,
+  onInsertConsumed,
 }: ChatSidebarProps) {
   // Use snapshotId as primary identifier if analysisRunId is not available (Tier-1/Tier-2 model)
   // For chat API, we still need analysisRunId, but UI unlocking uses snapshotId
@@ -473,6 +479,14 @@ export default function ChatSidebar({
       cancelled = true;
     };
   }, []);
+
+  // Insert-into-chat from HelpDrawer (question launcher): set input, focus, consume
+  useEffect(() => {
+    if (!insertIntoChatText || typeof insertIntoChatText !== "string") return;
+    setInput(insertIntoChatText);
+    inputRef.current?.focus();
+    onInsertConsumed?.();
+  }, [insertIntoChatText, onInsertConsumed]);
 
   // Check if user is near bottom (within 50px threshold)
   const checkIfNearBottom = useCallback(() => {

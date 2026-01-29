@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
+import { ChevronLeft, ChevronDown, ChevronRight, ExternalLink, Sparkles } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
@@ -12,6 +12,7 @@ import SearchBar from "@/app/components/SearchBar";
 import { MetricSkeleton, TextSkeleton } from "./components/MetricSkeleton";
 import AIThinkingMessage from "./components/AIThinkingMessage";
 import ResultsLoadingState from "./components/ResultsLoadingState";
+import HelpDrawer from "./components/HelpDrawer";
 import { median } from "@/lib/ui/stats";
 
 // Hard safety check: Prevent localhost calls in production
@@ -645,6 +646,10 @@ export default function AnalyzeForm({
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const sidebarResizeRef = useRef<HTMLDivElement>(null);
+
+  // Help drawer (question launcher) and insert-into-chat
+  const [helpDrawerOpen, setHelpDrawerOpen] = useState(false);
+  const [questionToInsert, setQuestionToInsert] = useState<string | null>(null);
 
   // ─────────────────────────────────────────────────────────────────────────
   // EFFECTS: Sync props to state when URL changes (page refresh or navigation)
@@ -2308,6 +2313,23 @@ export default function AnalyzeForm({
                                 </select>
                               </div>
                             )}
+
+                            {/* Star AI — How to use Sellerev (question launcher) */}
+                            <button
+                              type="button"
+                              onClick={() => setHelpDrawerOpen((o) => !o)}
+                              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs font-medium transition-colors ${
+                                helpDrawerOpen
+                                  ? "bg-gray-900 text-white border-gray-900"
+                                  : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400"
+                              }`}
+                              title="How to use Sellerev"
+                              aria-label="Open How to use Sellerev"
+                              aria-expanded={helpDrawerOpen}
+                            >
+                              <Sparkles className="w-3.5 h-3.5" />
+                              <span>AI questions</span>
+                            </button>
                           </div>
                         )}
                       </div>
@@ -2751,10 +2773,22 @@ export default function AnalyzeForm({
             onSelectedAsinsChange={setSelectedAsins}
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={handleToggleCollapse}
+            insertIntoChatText={questionToInsert}
+            onInsertConsumed={() => setQuestionToInsert(null)}
           />
         </div>
       </div>
       
+      <HelpDrawer
+        isOpen={helpDrawerOpen}
+        onClose={() => setHelpDrawerOpen(false)}
+        selectedAsins={selectedAsins}
+        onSelectQuestion={(text) => {
+          setQuestionToInsert(text);
+          setHelpDrawerOpen(false);
+        }}
+      />
+
       {/* Collapsed Chat Chevron - small icon in top-right edge when collapsed */}
       {isSidebarCollapsed && (
         <button
