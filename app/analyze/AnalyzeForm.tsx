@@ -526,6 +526,13 @@ export default function AnalyzeForm({
   // Track Tier-2 refinement status (from ui_hints)
   const [showRefiningBadge, setShowRefiningBadge] = useState(false);
   const [nextUpdateExpectedSec, setNextUpdateExpectedSec] = useState<number | null>(null);
+  // Stale run banner (runs older than 7 days): dismissible, show Re-run option
+  const [staleBannerDismissed, setStaleBannerDismissed] = useState(false);
+  const STALE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  const isStale =
+    readOnly &&
+    !!analysis?.created_at &&
+    Date.now() - new Date(analysis.created_at).getTime() > STALE_TTL_MS;
 
 
 
@@ -1184,6 +1191,33 @@ export default function AnalyzeForm({
     }
   };
 
+  // Re-run search from history (same keyword + marketplace) and navigate to new run
+  const handleRerunSearch = useCallback(async () => {
+    if (!analysis?.input_value || readOnly !== true) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          input_type: "keyword",
+          input_value: analysis.input_value.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.analysisRunId) {
+        setError(data.error || "Re-run failed");
+        setLoading(false);
+        return;
+      }
+      router.replace(`/analyze?run=${data.analysisRunId}`, { scroll: false });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Re-run failed");
+      setLoading(false);
+    }
+  }, [analysis?.input_value, readOnly, router]);
+
   // ─────────────────────────────────────────────────────────────────────────
   // SIDEBAR RESIZE HANDLERS
   // ─────────────────────────────────────────────────────────────────────────
@@ -1289,12 +1323,40 @@ export default function AnalyzeForm({
             {readOnly && (
               <div className="mt-4">
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
-                  <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 text-blue-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                   <p className="text-blue-700 text-sm">
                     Viewing saved analysis. Chat is available for follow-up questions.
                   </p>
+                </div>
+              </div>
+            )}
+
+            {/* Stale run banner: run older than 7 days, dismissible, with Re-run */}
+            {readOnly && isStale && !staleBannerDismissed && (
+              <div className="mt-4">
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-amber-800 text-sm">
+                    Search results may have changed since this run. Re-run for updated market data?
+                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleRerunSearch}
+                      disabled={loading}
+                      className="px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 disabled:opacity-50"
+                    >
+                      {loading ? "Re-running…" : "Re-run search"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStaleBannerDismissed(true)}
+                      className="px-3 py-1.5 border border-amber-300 text-amber-800 text-sm font-medium rounded-md hover:bg-amber-100"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

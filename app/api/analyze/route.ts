@@ -3090,6 +3090,9 @@ export async function POST(req: NextRequest) {
       page_one_listings: canonicalProducts,
       products: canonicalProducts,
       aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
+      // Persist market_snapshot for history view (same shape UI expects)
+      market_snapshot: marketSnapshot && typeof marketSnapshot === "object" && !Array.isArray(marketSnapshot)
+        ? { ...marketSnapshot } : null,
       ...(contractResponse ? contractResponse : {}),
     };
 

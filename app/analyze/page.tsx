@@ -74,9 +74,15 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
       );
       
       // Extract page_one_listings and products from response (these fields exist in stored JSON)
-      // DO NOT derive, recalc, or normalize - just pass through what's stored
-      const pageOneListings = Array.isArray(response.page_one_listings) ? response.page_one_listings : [];
-      const products = Array.isArray(response.products) ? response.products : [];
+      // Fallback: response.listings for older or API-returned shape
+      const pageOneListings = Array.isArray(response.page_one_listings)
+        ? response.page_one_listings
+        : Array.isArray(response.products)
+        ? response.products
+        : Array.isArray(response.listings)
+        ? response.listings
+        : [];
+      const products = Array.isArray(response.products) ? response.products : pageOneListings;
       
       // Extract aggregates if present
       const aggregatesRaw = response.aggregates_derived_from_page_one;
@@ -121,18 +127,31 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
         };
       }
       
+      // Null-safe fallbacks for AI-disabled runs (no decision in response)
+      const decision = (response.decision && typeof response.decision === "object" && ["GO", "CAUTION", "NO_GO"].includes((response.decision as { verdict?: string }).verdict))
+        ? (response.decision as { verdict: "GO" | "CAUTION" | "NO_GO"; confidence: number })
+        : { verdict: "GO" as const, confidence: 0 };
+      const executiveSummary = typeof response.executive_summary === "string" ? response.executive_summary : "Market data loaded.";
+      const reasoning = (response.reasoning && typeof response.reasoning === "object")
+        ? (response.reasoning as { primary_factors: string[]; seller_context_impact: string })
+        : { primary_factors: [], seller_context_impact: "" };
+      const recommendedActions = (response.recommended_actions && typeof response.recommended_actions === "object")
+        ? (response.recommended_actions as { must_do: string[]; should_do: string[]; avoid: string[] })
+        : { must_do: [], should_do: [], avoid: [] };
+      const assumptionsAndLimits = Array.isArray(response.assumptions_and_limits) ? response.assumptions_and_limits : [];
+
       // Ensure initialAnalysis is explicitly typed
       initialAnalysis = {
         analysis_run_id: analysisRun.id,
         created_at: analysisRun.created_at,
         input_type: analysisRun.input_type as "asin" | "keyword",
         input_value: analysisRun.input_value,
-        decision: response.decision as { verdict: "GO" | "CAUTION" | "NO_GO"; confidence: number },
-        executive_summary: response.executive_summary as string,
-        reasoning: response.reasoning as { primary_factors: string[]; seller_context_impact: string },
+        decision,
+        executive_summary: executiveSummary,
+        reasoning,
         risks: normalizedRisks,
-        recommended_actions: response.recommended_actions as { must_do: string[]; should_do: string[]; avoid: string[] },
-        assumptions_and_limits: response.assumptions_and_limits as string[],
+        recommended_actions: recommendedActions,
+        assumptions_and_limits: assumptionsAndLimits,
         // Include market data if available (from rainforest_data column)
         market_data: analysisRun.rainforest_data as Record<string, unknown> | undefined,
         // Include keyword market snapshot with listings array preserved
