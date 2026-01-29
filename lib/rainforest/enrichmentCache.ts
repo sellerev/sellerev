@@ -126,6 +126,22 @@ export async function setCachedEnrichment<TPayload = any, TExtracted = any>(
     const now = new Date();
     const expires = new Date(now.getTime() + TTL_DAYS * 24 * 60 * 60 * 1000);
 
+    // Extract first_available fields from ProductDossier payload if present
+    // (for optional queryable columns - payload JSONB remains source of truth)
+    let firstAvailableRaw: string | null = null;
+    let firstAvailableUtc: string | null = null;
+    if (
+      data.payload &&
+      typeof data.payload === "object" &&
+      "product" in data.payload
+    ) {
+      const product = (data.payload as any).product;
+      if (product && typeof product === "object") {
+        firstAvailableRaw = product.first_available_raw ?? null;
+        firstAvailableUtc = product.first_available_utc ?? null;
+      }
+    }
+
     const { error } = await client
       .from("asin_enrichment_cache")
       .upsert(
@@ -143,6 +159,9 @@ export async function setCachedEnrichment<TPayload = any, TExtracted = any>(
             typeof opts?.creditsEstimated === "number"
               ? opts.creditsEstimated
               : 1,
+          // Optional queryable columns (populated from payload when available)
+          first_available_raw: firstAvailableRaw,
+          first_available_utc: firstAvailableUtc,
         },
         {
           onConflict: "asin,amazon_domain,endpoint,params_hash",

@@ -862,6 +862,20 @@ VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
     → If missing: "Product type isn't available for this ASIN."
     → Always end with a helpful follow-up question
   
+  - "How long has this listing been live?" / "is this new?" / "when did it launch?" / "listing age" / "how old is this product?"
+    → Check ai_context.product_dossiers.by_asin[asin].product.first_available_utc first (preferred - ISO8601 date)
+    → FALLBACK: If utc missing, use ai_context.product_dossiers.by_asin[asin].product.first_available_raw
+    → If first_available_utc exists:
+      - Parse as ISO8601 date string
+      - Calculate listing age: months/years from utc date to now
+      - Format: "Amazon lists 'Date First Available' as [date]. This listing has been live for approximately [X months/years]."
+    → If only first_available_raw exists:
+      - Cite the raw string: "Amazon lists 'Date First Available' as [raw value]."
+      - If you can infer approximate age from the raw string, mention it
+    → If neither exists: "Amazon didn't expose 'Date First Available' for this ASIN via the product page scrape."
+    → Always cite: "Amazon lists 'Date First Available' as ..." (don't say "we found" or "the data shows")
+    → Always end with a helpful follow-up question
+  
   - If enrichment failed due to 403/unauthorized:
     → Backend automatically falls back to Rainforest product data
     → Use rainforest_enrichment.by_asin[asin].extracted.feature_bullets, description, or attributes if available

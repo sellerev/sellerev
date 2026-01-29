@@ -17,6 +17,8 @@ export type ProductDossier = {
     ratings_total?: number | null;
     rating_breakdown?: any;
     variants?: any[];
+    first_available_raw?: string | null;
+    first_available_utc?: string | null;
   };
   review_material: {
     customers_say?: { name: string; value: "Positive" | "Mixed" | "Negative" | string }[];
@@ -80,9 +82,9 @@ export async function getProductDossier(
       amazon_domain: amazonDomain,
       asin,
       include_summarization_attributes: "true",
-      // Request core fields we rely on for specs + reviews
+      // Request core fields we rely on for specs + reviews + listing age
       fields:
-        "product.title,product.description,product.feature_bullets,product.attributes,product.specifications,product.item_dimensions,product.item_weight,product.rating,product.rating_breakdown,product.reviews_total,product.total_reviews,product.customers_say,product.summarization_attributes,product.top_reviews,product.variants",
+        "product.title,product.description,product.feature_bullets,product.attributes,product.specifications,product.item_dimensions,product.item_weight,product.rating,product.rating_breakdown,product.reviews_total,product.total_reviews,product.customers_say,product.summarization_attributes,product.top_reviews,product.variants,product.first_available",
     });
 
     const url = `https://api.rainforestapi.com/request?${params.toString()}`;
@@ -185,6 +187,60 @@ export async function getProductDossier(
       : product.variants
       ? [product.variants]
       : [];
+
+    // DATE FIRST AVAILABLE (listing age)
+    let first_available_raw: string | null = null;
+    let first_available_utc: string | null = null;
+
+    // Try product.first_available first
+    const firstAvailableRaw = product.first_available;
+    if (firstAvailableRaw) {
+      if (typeof firstAvailableRaw === "object") {
+        // Structure: { raw: "...", utc: "..." }
+        first_available_raw =
+          (firstAvailableRaw.raw as string | undefined | null) ?? null;
+        const utcValue = firstAvailableRaw.utc;
+        if (utcValue) {
+          // Normalize to ISO8601 string if it's a date/timestamp
+          if (typeof utcValue === "string") {
+            first_available_utc = utcValue;
+          } else if (utcValue instanceof Date) {
+            first_available_utc = utcValue.toISOString();
+          } else if (typeof utcValue === "number") {
+            // Assume Unix timestamp (seconds or milliseconds)
+            const date =
+              utcValue > 1e10
+                ? new Date(utcValue)
+                : new Date(utcValue * 1000);
+            first_available_utc = date.toISOString();
+          }
+        }
+      } else if (typeof firstAvailableRaw === "string") {
+        // Simple string value
+        first_available_raw = firstAvailableRaw;
+      }
+    }
+
+    // Fallback: parse from specifications if first_available wasn't found
+    if (!first_available_raw && !first_available_utc && specifications) {
+      const dateFirstAvailableSpec = specifications.find(
+        (spec) =>
+          spec.name &&
+          spec.name.toLowerCase().includes("date first available")
+      );
+      if (dateFirstAvailableSpec && dateFirstAvailableSpec.value) {
+        first_available_raw = dateFirstAvailableSpec.value;
+        // Try to parse as ISO8601 or common date formats
+        try {
+          const parsed = new Date(dateFirstAvailableSpec.value);
+          if (!isNaN(parsed.getTime())) {
+            first_available_utc = parsed.toISOString();
+          }
+        } catch {
+          // Keep raw only if parsing fails
+        }
+      }
+    }
 
     // REVIEW MATERIAL
     const customersSayRaw = product.customers_say;
@@ -317,6 +373,10 @@ export async function getProductDossier(
         ratings_total,
         rating_breakdown,
         variants,
+        ...(first_available_raw !== null
+          ? { first_available_raw }
+          : {}),
+        ...(first_available_utc !== null ? { first_available_utc } : {}),
       },
       review_material: {
         ...(customers_say ? { customers_say } : {}),
@@ -334,6 +394,8 @@ export async function getProductDossier(
       has_specs: !!specifications && specifications.length > 0,
       has_weight: !!weight,
       has_dimensions: !!dimensions,
+      has_first_available_raw: !!first_available_raw,
+      has_first_available_utc: !!first_available_utc,
     });
 
     // Persist to global cache (best-effort)
