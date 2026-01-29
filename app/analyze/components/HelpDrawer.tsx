@@ -102,10 +102,11 @@ const QUESTION_TEMPLATES: QuestionTemplate[] = [
   { id: "q3", category: "data_quality", title: "How confident are the revenue estimates?", promptText: "How confident are the revenue estimates?", requiresSelection: 0, tags: ["revenue", "quality"], priority: 3 },
   { id: "q4", category: "data_quality", title: "Any obvious outliers skewing averages?", promptText: "Any obvious outliers skewing averages?", requiresSelection: 0, tags: ["outliers"], priority: 4 },
   { id: "q5", category: "data_quality", title: "What's the data coverage % for price/reviews/rank?", promptText: "What's the data coverage % for price/reviews/rank?", requiresSelection: 0, tags: ["coverage"], priority: 5 },
-  // ─── Workflow / What to do next ─────────────────────────────────────────
+  // ─── Workflow / What to do next ──────────────────────────────────────────
   { id: "w1", category: "workflow", title: "Based on this market, what should I check next?", promptText: "Based on this market, what should I check next?", requiresSelection: 0, tags: ["workflow"], priority: 1 },
   { id: "w2", category: "workflow", title: "Give me 3 entry angles for this market.", promptText: "Give me 3 entry angles for this market.", requiresSelection: 0, tags: ["strategy"], priority: 2 },
   { id: "w3", category: "workflow", title: "Suggest 5 long-tail keywords to analyze next (based on Page-1 patterns).", promptText: "Suggest 5 long-tail keywords to analyze next (based on Page-1 patterns).", requiresSelection: 0, tags: ["keywords"], priority: 3 },
+  { id: "w4", category: "workflow", title: "Recommend a unique selling proposition.", promptText: "Recommend a unique selling proposition.", requiresSelection: 0, tags: ["USP", "differentiation", "positioning"], priority: 4 },
 ];
 
 function interpolatePrompt(promptText: string, asins: string[]): string {
@@ -257,12 +258,16 @@ export default function HelpDrawer({
         return;
       }
 
-      // Require selection flow: show overlay
+      // Require selection flow: show overlay. Pre-fill from page selection only (single source of truth).
       setPendingQuestion(t);
-      setPickerSelected([]);
+      const need = t.requiresSelection;
+      const prefill = selectableProducts
+        ? selectedAsins.filter((a) => selectableProducts.some((p) => (p.asin ?? "") === a)).slice(0, need)
+        : [];
+      setPickerSelected(prefill);
       setMode("select");
     },
-    [selectedAsins, onSelectQuestion, onClose]
+    [selectedAsins, selectableProducts, onSelectQuestion, onClose]
   );
 
   const handleConfirmSelection = useCallback(() => {
@@ -294,6 +299,14 @@ export default function HelpDrawer({
   }, []);
 
   const need = pendingQuestion?.requiresSelection ?? 2;
+  const isSelectMode = mode === "select" && !!pendingQuestion;
+  const selectedAsinsCount = pickerSelected.length;
+  const canSend = selectedAsinsCount === need;
+  const whyDisabled = canSend ? undefined : `need ${need} selected, have ${selectedAsinsCount}`;
+  if (typeof window !== "undefined" && process.env.NODE_ENV === "development" && isSelectMode) {
+    console.log("QUESTION_GO_DEBUG", { selectedAsinsCount, requiredCount: need, canSend, whyDisabled });
+  }
+
   const toggleProduct = useCallback(
     (asin: string) => {
       setPickerSelected((prev) => {
@@ -305,8 +318,6 @@ export default function HelpDrawer({
   );
 
   if (!isOpen) return null;
-
-  const isSelectMode = mode === "select" && pendingQuestion;
 
   return (
     <>
@@ -354,7 +365,11 @@ export default function HelpDrawer({
         <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4">
           {isSelectMode ? (
             <>
-              <p className="text-xs text-gray-600">Select from Page 1. Then confirm to insert the question into chat.</p>
+              <p className="text-xs text-gray-600">
+                {selectedAsinsCount === 0
+                  ? "Select 1–2 ASINs to run this question."
+                  : "Select from Page 1. Then confirm to insert the question into chat."}
+              </p>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -366,7 +381,7 @@ export default function HelpDrawer({
                 <button
                   type="button"
                   onClick={handleConfirmSelection}
-                  disabled={pickerSelected.length !== need}
+                  disabled={!canSend}
                   className="ml-auto px-3 py-1.5 rounded-lg bg-[#3B82F6] text-white text-xs font-medium hover:bg-[#2563EB] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Confirm selection

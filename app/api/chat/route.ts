@@ -2325,19 +2325,24 @@ export async function POST(req: NextRequest) {
     
     const normalizedQuestion = body.message.toLowerCase();
     
+    // USP intent: unique selling proposition, differentiation, positioning angle. Page-1 only; no review gating.
+    const uspIntent =
+      /unique selling proposition|USP\b|differentiation|positioning angle|what should I sell|what angle|selling angle|recommend.*(unique|USP|differentiation|positioning)/i.test(
+        body.message
+      );
+    
     // GOAL 4A: Variants/attributes/bullets/description intent detection
     const variantsAttributesIntent =
       /variant|variants|variation|variations|size|sizes|color|colors|colour|colours|version|versions|how many variants|which variant|attributes?|bullet points?|bullets?|description|title details?|material|materials|dimensions?|dimension|specs?|specifications?|weight|weighs|heavy|light|thickness|height|width|length/i.test(
         body.message
       );
     
-    // GOAL 4B: Review insights intent detection (complaints, praise, customer feedback)
-    // Keywords: complain, complaints, bad reviews, negative reviews, common issues, pros and cons,
-    // what do customers say, praise, good reviews, positive reviews, customer feedback
-    const reviewInsightsIntent =
+    // GOAL 4B: Review insights intent (complaints, praise, customer feedback). Exclude USP — never gate USP on reviews.
+    const reviewInsightsIntentRaw =
       /complain|complaints|bad reviews?|negative reviews?|what people hate|common issues?|pros and cons|from reviews|what do customers (say|complain about)|customers say|praise|good reviews?|positive reviews?|what people love|pros\b|customer feedback|issues?|problems?|review insights|review summary|review themes|get (me )?the reviews|fetch reviews|pull reviews/i.test(
         body.message
       );
+    const reviewInsightsIntent = reviewInsightsIntentRaw && !uspIntent;
     
     // If selectedAsins exists AND any intent is true, enrichment MUST execute (zero-confirmation)
     // For review insights: max 2 ASINs (hard cap)
@@ -2385,6 +2390,7 @@ export async function POST(req: NextRequest) {
     console.log("ENRICHMENT_DECISION", {
       analysisRunId: body.analysisRunId,
       requires_enrichment: requiresEnrichment,
+      usp_intent: uspIntent,
       variants_attributes_intent: variantsAttributesIntent,
       review_insights_intent: reviewInsightsIntent,
       selected_asins: selectedAsins,
@@ -3754,6 +3760,17 @@ CRITICAL RULES:
 - Wait for escalated product data to be injected before answering
 - Once escalated data is provided, answer using ONLY that data`;
       }
+    }
+    
+    // USP intent: unique selling proposition / differentiation — Page-1 only, no review gating
+    if (uspIntent) {
+      const n = selectedAsins.length;
+      systemPrompt += `\n\n=== USP / UNIQUE SELLING PROPOSITION ===
+Answer this question using Page-1 data only. Do NOT require or fetch reviews. Do NOT gate on "Select 1–2 products."
+
+Format your response as:
+1. 3–5 USP options. For each: (a) Angle, (b) Why it works in THIS market, (c) How to execute, (d) Risk / what to validate.
+2.${n >= 1 && n <= 2 ? ` A "How you'd beat ASIN X / Y" section using selected product(s) and any cached enrichment or review_insights already in ai_context — only if present; never block or auto-fetch.` : " (Market-level only; no product-level 'beat' section.)"}`;
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
