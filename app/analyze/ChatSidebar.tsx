@@ -1339,8 +1339,8 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto px-4 py-4 space-y-2.5 relative bg-gray-50"
-        style={{ minHeight: 0 }}
+        className="flex-1 min-w-0 overflow-y-auto px-4 py-4 space-y-2.5 relative bg-gray-50"
+        style={{ minHeight: 0, scrollbarGutter: "stable" }}
       >
         {isDisabled ? (
           /* Pre-analysis: Show capabilities */
@@ -2008,13 +2008,13 @@ export default function ChatSidebar({
           </div>
         </div>
       )}
-      <div className="px-6 py-4 shrink-0 bg-white border-t border-[#E5E7EB]">
+      <div className="w-full min-w-0 shrink-0 px-6 py-4 bg-white border-t border-[#E5E7EB]">
         {showHistoricalSnapshotHint && historicalHintText && (
           <div className="mb-2 px-1">
             <div className="text-[11px] text-gray-500">{historicalHintText}</div>
           </div>
         )}
-        <div className="flex flex-wrap gap-2 items-end bg-white border border-gray-300 rounded-xl px-3 py-2 shadow-sm hover:border-gray-400 focus-within:ring-2 focus-within:ring-[#3B82F6] focus-within:border-transparent transition-all">
+        <div className="flex flex-wrap gap-2 items-end w-full min-w-0 bg-white border border-gray-300 rounded-xl px-3 py-2 shadow-sm hover:border-gray-400 focus-within:ring-2 focus-within:ring-[#3B82F6] focus-within:border-transparent transition-all box-border">
           {/* Selected ASIN chips (chat context) */}
           {selectedAsins.length > 0 && (
             <div className="flex flex-wrap gap-1.5 items-center">
@@ -2037,7 +2037,7 @@ export default function ChatSidebar({
           )}
           <textarea
             ref={inputRef}
-            className="flex-1 bg-transparent border-0 rounded-lg px-2 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none overflow-y-auto placeholder:text-gray-400"
+            className="flex-1 min-w-0 bg-transparent border-0 rounded-lg px-2 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none overflow-y-auto placeholder:text-gray-400"
             style={{
               minHeight: "36px",
               maxHeight: "144px",
