@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
@@ -418,6 +418,52 @@ function calculateFulfillmentMix(listings: Array<any>): {
   };
 }
 
+export interface BrandAggregate {
+  brand: string;
+  product_count: number;
+  total_units: number;
+  total_revenue: number;
+  market_share_pct: number;
+  products: any[];
+}
+
+/**
+ * Build brand aggregates from Page-1 listings: group by brand, sum units/revenue, compute market share.
+ * Uses listing.brand_resolution?.raw_brand ?? listing.brand; fallback "Unknown".
+ */
+function buildBrandAggregates(
+  listings: any[],
+  getRawBrand: (listing: any) => string | null
+): BrandAggregate[] {
+  const byBrand = new Map<string, { products: any[]; total_units: number; total_revenue: number }>();
+  for (const l of listings) {
+    const brand: string = getRawBrand(l) === null ? "Unknown" : getRawBrand(l) as string;
+    const units = Number((l as any).estimated_monthly_units ?? (l as any).est_monthly_units ?? 0) || 0;
+    const revenue = Number((l as any).estimated_monthly_revenue ?? (l as any).est_monthly_revenue ?? 0) || 0;
+    const existing = byBrand.get(brand);
+    if (existing) {
+      existing.products.push(l);
+      existing.total_units += units;
+      existing.total_revenue += revenue;
+    } else {
+      byBrand.set(brand, { products: [l], total_units: units, total_revenue: revenue });
+    }
+  }
+  const totalRevenueAll = [...byBrand.values()].reduce((s, v) => s + v.total_revenue, 0);
+  const result: BrandAggregate[] = [];
+  byBrand.forEach((v, brand) => {
+    result.push({
+      brand,
+      product_count: v.products.length,
+      total_units: v.total_units,
+      total_revenue: v.total_revenue,
+      market_share_pct: totalRevenueAll > 0 ? (v.total_revenue / totalRevenueAll) * 100 : 0,
+      products: v.products,
+    });
+  });
+  return result;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT PROPS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -580,7 +626,13 @@ export default function AnalyzeForm({
   
   // Sort state for Page 1 Results (default to rank to preserve Amazon order)
   const [sortBy, setSortBy] = useState<"rank" | "price-asc" | "price-desc" | "revenue-desc" | "units-desc" | "reviews-desc" | "rating-desc">("rank");
-  
+
+  // View: Products (default) | Brands (table + expand)
+  const [viewMode, setViewMode] = useState<"products" | "brands">("products");
+  type BrandSortOption = "revenue-desc" | "revenue-asc" | "units-desc" | "units-asc" | "products-desc" | "products-asc" | "brand-az" | "market-share-desc" | "market-share-asc";
+  const [brandSortBy, setBrandSortBy] = useState<BrandSortOption>("revenue-desc");
+  const [expandedBrandRow, setExpandedBrandRow] = useState<string | null>(null);
+
   // Filter state for Page 1 Results
   const [selectedBrands, setSelectedBrands] = useState<Set<string>>(new Set());
   const [selectedFulfillment, setSelectedFulfillment] = useState<Set<"PRIME" | "NON_PRIME">>(new Set());
@@ -2013,7 +2065,33 @@ export default function AnalyzeForm({
                       
                       return true;
                     });
-                    
+
+                    // Brand aggregates for Brand view (table + expand). Matches current filtered list.
+                    const brandAggregatesRaw = buildBrandAggregates(filteredListings, getRawBrand);
+                    const totalRevenueForShare = brandAggregatesRaw.reduce((s, b) => s + b.total_revenue, 0);
+                    const totalUnitsForShare = brandAggregatesRaw.reduce((s, b) => s + b.total_units, 0);
+                    const sortedBrandAggregates = [...brandAggregatesRaw].sort((a, b) => {
+                      switch (brandSortBy) {
+                        case "revenue-desc": return b.total_revenue - a.total_revenue;
+                        case "revenue-asc": return a.total_revenue - b.total_revenue;
+                        case "units-desc": return b.total_units - a.total_units;
+                        case "units-asc": return a.total_units - b.total_units;
+                        case "products-desc": return b.product_count - a.product_count;
+                        case "products-asc": return a.product_count - b.product_count;
+                        case "brand-az": return a.brand.localeCompare(b.brand);
+                        case "market-share-desc": return b.market_share_pct - a.market_share_pct;
+                        case "market-share-asc": return a.market_share_pct - b.market_share_pct;
+                        default: return b.total_revenue - a.total_revenue;
+                      }
+                    });
+                    if (typeof window !== "undefined" && process.env.NODE_ENV === "development" && brandAggregatesRaw.length > 0) {
+                      console.log("BRAND_AGGREGATES_BUILT", {
+                        brands_count: brandAggregatesRaw.length,
+                        total_revenue: totalRevenueForShare,
+                        total_units: totalUnitsForShare,
+                      });
+                    }
+
                     // Check if any filters are active
                     const hasActiveFilters = selectedBrands.size > 0 || sponsoredFilter !== null; // selectedFulfillment filter is hidden for now
                     
@@ -2165,32 +2243,77 @@ export default function AnalyzeForm({
                               </button>
                             )}
                             
-                            {/* Sort Dropdown */}
-                            <div className="flex items-center gap-2">
-                              <label htmlFor="sort-select" className="text-xs text-gray-500 font-medium">
-                                Sort:
-                              </label>
-                              <select
-                                id="sort-select"
-                                value={sortBy}
-                                onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-                                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            {/* View Toggle: Products | Brands */}
+                            <div className="flex items-center gap-1 border border-gray-300 rounded overflow-hidden">
+                              <button
+                                type="button"
+                                onClick={() => setViewMode("products")}
+                                className={`px-3 py-1.5 text-xs font-medium transition-colors ${viewMode === "products" ? "bg-gray-900 text-white" : "bg-white text-gray-700 hover:bg-gray-50"}`}
                               >
-                                <option value="rank">Amazon Rank</option>
-                                <option value="price-asc">Price: Low → High</option>
-                                <option value="price-desc">Price: High → Low</option>
-                                <option value="revenue-desc">Monthly Revenue: High → Low</option>
-                                <option value="units-desc">Monthly Units: High → Low</option>
-                                <option value="reviews-desc">Reviews: High → Low</option>
-                                <option value="rating-desc">Rating: High → Low</option>
-                              </select>
+                                Products
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setViewMode("brands")}
+                                className={`px-3 py-1.5 text-xs font-medium transition-colors ${viewMode === "brands" ? "bg-gray-900 text-white" : "bg-white text-gray-700 hover:bg-gray-50"}`}
+                              >
+                                Brands
+                              </button>
                             </div>
+
+                            {/* Sort Dropdown — Products view */}
+                            {viewMode === "products" && (
+                              <div className="flex items-center gap-2">
+                                <label htmlFor="sort-select" className="text-xs text-gray-500 font-medium">
+                                  Sort:
+                                </label>
+                                <select
+                                  id="sort-select"
+                                  value={sortBy}
+                                  onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                >
+                                  <option value="rank">Amazon Rank</option>
+                                  <option value="price-asc">Price: Low → High</option>
+                                  <option value="price-desc">Price: High → Low</option>
+                                  <option value="revenue-desc">Monthly Revenue: High → Low</option>
+                                  <option value="units-desc">Monthly Units: High → Low</option>
+                                  <option value="reviews-desc">Reviews: High → Low</option>
+                                  <option value="rating-desc">Rating: High → Low</option>
+                                </select>
+                              </div>
+                            )}
+
+                            {/* Sort Dropdown — Brand view */}
+                            {viewMode === "brands" && (
+                              <div className="flex items-center gap-2">
+                                <label htmlFor="brand-sort-select" className="text-xs text-gray-500 font-medium">
+                                  Sort:
+                                </label>
+                                <select
+                                  id="brand-sort-select"
+                                  value={brandSortBy}
+                                  onChange={(e) => setBrandSortBy(e.target.value as BrandSortOption)}
+                                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                >
+                                  <option value="revenue-desc">Revenue: High → Low</option>
+                                  <option value="revenue-asc">Revenue: Low → High</option>
+                                  <option value="units-desc">Units: High → Low</option>
+                                  <option value="units-asc">Units: Low → High</option>
+                                  <option value="products-desc"># Products: High → Low</option>
+                                  <option value="products-asc"># Products: Low → High</option>
+                                  <option value="brand-az">Brand A → Z</option>
+                                  <option value="market-share-desc">Market Share: High → Low</option>
+                                  <option value="market-share-asc">Market Share: Low → High</option>
+                                </select>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
                     </div>
-                    {/* Selection Count Indicator */}
-                    {selectedAsins.length > 0 && (
+                    {/* Selection Count Indicator — Products view only */}
+                    {viewMode === "products" && selectedAsins.length > 0 && (
                       <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
                         <div className="text-sm text-gray-900">
                           <span className="font-medium">
@@ -2207,10 +2330,134 @@ export default function AnalyzeForm({
                         </button>
                       </div>
                     )}
-                    {/* Product Cards Grid - auto-fill with minmax */}
                     {loading && pageOneListings.length === 0 ? (
                       <ResultsLoadingState />
+                    ) : viewMode === "brands" ? (
+                      /* Brand View: table with expandable rows */
+                      <div className="mt-4 border border-gray-200 rounded-lg overflow-hidden bg-white">
+                        <table className="w-full text-left text-sm">
+                          <thead className="bg-gray-50 border-b border-gray-200">
+                            <tr>
+                              <th className="w-8 py-2 pl-3 text-gray-500 font-medium"> </th>
+                              <th className="py-2 px-2 text-gray-500 font-medium">Brand</th>
+                              <th className="py-2 px-2 text-gray-500 font-medium text-right"># Products</th>
+                              <th className="py-2 px-2 text-gray-500 font-medium text-right">Monthly Units</th>
+                              <th className="py-2 px-2 text-gray-500 font-medium text-right">Monthly Revenue</th>
+                              <th className="py-2 px-2 text-gray-500 font-medium text-right">Market Share %</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sortedBrandAggregates.map((row) => {
+                              const isExpanded = expandedBrandRow === row.brand;
+                              const productsInRankOrder = [...row.products].sort((a: any, b: any) => {
+                                const aPos = a.page_position ?? a.organic_rank ?? 999;
+                                const bPos = b.page_position ?? b.organic_rank ?? 999;
+                                return aPos - bPos;
+                              });
+                              return (
+                                <Fragment key={row.brand}>
+                                  <tr
+                                    className="border-b border-gray-100 hover:bg-gray-50"
+                                  >
+                                    <td className="py-2 pl-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setExpandedBrandRow(isExpanded ? null : row.brand)}
+                                        className="p-0.5 rounded hover:bg-gray-200 text-gray-600"
+                                        aria-label={isExpanded ? "Collapse" : "Expand"}
+                                      >
+                                        {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                      </button>
+                                    </td>
+                                    <td className="py-2 px-2 font-medium text-gray-900">{row.brand}</td>
+                                    <td className="py-2 px-2 text-right text-gray-700">{row.product_count}</td>
+                                    <td className="py-2 px-2 text-right text-gray-700">
+                                      {totalUnitsForShare > 0 || row.total_units > 0
+                                        ? row.total_units.toLocaleString()
+                                        : "—"}
+                                    </td>
+                                    <td className="py-2 px-2 text-right text-gray-700">
+                                      {totalRevenueForShare > 0 || row.total_revenue > 0
+                                        ? formatCurrency(row.total_revenue)
+                                        : "—"}
+                                    </td>
+                                    <td className="py-2 px-2 text-right text-gray-700">
+                                      {totalRevenueForShare > 0 ? `${row.market_share_pct.toFixed(1)}%` : "—"}
+                                    </td>
+                                  </tr>
+                                  {isExpanded && (
+                                    <tr key={`${row.brand}-expanded`}>
+                                      <td colSpan={6} className="bg-gray-50 p-0">
+                                        <div className="px-4 py-3 border-t border-gray-100">
+                                          <div className="text-xs font-medium text-gray-500 mb-2">Products ({productsInRankOrder.length})</div>
+                                          <div className="space-y-2">
+                                            {productsInRankOrder.map((listing: any, idx: number) => {
+                                              const asin = listing.asin || normalizeListing(listing).asin || null;
+                                              const rank = listing.page_position ?? listing.organic_rank ?? (idx + 1);
+                                              const title = listing.title || null;
+                                              const price = listing.price ?? 0;
+                                              const rating = listing.rating ?? 0;
+                                              const reviews = listing.review_count ?? listing.reviews ?? 0;
+                                              const units = (listing as any).estimated_monthly_units ?? (listing as any).est_monthly_units ?? null;
+                                              const revenue = (listing as any).estimated_monthly_revenue ?? (listing as any).est_monthly_revenue ?? null;
+                                              const isSponsored = listing.is_sponsored === true || listing.isSponsored === true;
+                                              const imageUrl = listing.image_url ?? listing.image ?? null;
+                                              const amazonUrl = asin ? `https://www.amazon.com/dp/${asin}` : "#";
+                                              return (
+                                                <div
+                                                  key={asin || idx}
+                                                  className="flex items-center gap-3 py-2 px-3 bg-white border border-gray-100 rounded text-sm"
+                                                >
+                                                  <span className="w-8 h-8 flex items-center justify-center rounded bg-gray-100 text-gray-600 font-medium text-xs shrink-0">
+                                                    #{rank}
+                                                  </span>
+                                                  {imageUrl ? (
+                                                    <img src={imageUrl} alt="" className="w-10 h-10 object-contain rounded shrink-0" />
+                                                  ) : (
+                                                    <div className="w-10 h-10 bg-gray-100 rounded shrink-0" />
+                                                  )}
+                                                  <div className="min-w-0 flex-1">
+                                                    <div className="font-medium text-gray-900 truncate">{title || "—"}</div>
+                                                    <div className="text-xs text-gray-500">ASIN: {asin || "—"}</div>
+                                                  </div>
+                                                  <div className="text-gray-700 shrink-0">{price > 0 ? formatCurrency(price) : "—"}</div>
+                                                  <div className="text-gray-600 shrink-0 text-xs">
+                                                    {rating > 0 ? `${rating.toFixed(1)} ★` : "—"} {reviews > 0 ? `(${reviews.toLocaleString()} reviews)` : ""}
+                                                  </div>
+                                                  <div className="text-gray-700 shrink-0 text-xs w-20 text-right">
+                                                    {units != null ? units.toLocaleString() : "—"} u
+                                                  </div>
+                                                  <div className="text-gray-700 shrink-0 text-xs w-20 text-right">
+                                                    {revenue != null ? formatCurrency(revenue) : "—"}
+                                                  </div>
+                                                  {isSponsored && (
+                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 shrink-0">Sponsored</span>
+                                                  )}
+                                                  <a
+                                                    href={amazonUrl}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="text-gray-400 hover:text-gray-600 shrink-0"
+                                                    aria-label="Open on Amazon"
+                                                  >
+                                                    <ExternalLink className="w-4 h-4" />
+                                                  </a>
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </Fragment>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     ) : (
+                      /* Products View: card grid (unchanged) */
                       <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
                         <AnimatePresence mode="popLayout">
                           {filteredListings.map((listing: any, idx: number) => {
