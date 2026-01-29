@@ -1996,45 +1996,41 @@ export async function POST(req: NextRequest) {
     // CRITICAL: selectedAsins is the single source of truth
     // Only use selectedListing as fallback if selectedAsins is empty/undefined
     // If selectedAsins.length === 0, NO ASIN is selected (Copilot must not reference any ASIN)
-    let selectedAsins: string[] = Array.isArray(body.selectedAsins) && body.selectedAsins.length > 0
-      ? body.selectedAsins.filter(asin => asin && typeof asin === 'string') // Filter out invalid ASINs
-      : (body.selectedListing?.asin && typeof body.selectedListing.asin === 'string'
-        ? [body.selectedListing.asin] // Backward compatibility fallback
-        : []); // Empty array = no selection
-    
-    // PRIORITY A.3: Extract ASINs from message text (only when selectedAsins is empty)
-    // CRITICAL: UI selection is authoritative - only use extracted ASINs when no UI selection exists
-    // CRITICAL: Only extract ASINs that exist in ai_context.products OR selected_asins
+    const fromPayload = Array.isArray(body.selectedAsins) && body.selectedAsins.length > 0
+      ? body.selectedAsins.filter((asin: unknown) => asin && typeof asin === "string") as string[]
+      : (body.selectedListing?.asin && typeof body.selectedListing.asin === "string"
+        ? [body.selectedListing.asin]
+        : []);
+    let selectedAsins: string[] = fromPayload;
+
+    // PRIORITY A.3: Message fallback — only when payload is empty. Extract ASINs from message
+    // if they exist in Page-1. Use for this request only; do NOT overwrite UI selection.
     let extractedAsinsFromMessage: string[] = [];
     let mergeSkipped = false;
-    
+    let selectedAsinsSource: "payload" | "message_fallback" = "payload";
+
     if (selectedAsins.length === 0) {
-      // Get valid ASINs from ai_context.products (Page-1 listings)
       const page1Listings = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
       const validAsins = page1Listings
         .map((p: any) => p.asin)
-        .filter((asin: any): asin is string => asin && typeof asin === 'string');
-      
-      // Only extract ASINs that exist in valid ASINs list
+        .filter((asin: any): asin is string => asin && typeof asin === "string");
       extractedAsinsFromMessage = extractAsinsFromText(body.message, validAsins);
-      
       if (extractedAsinsFromMessage.length > 0) {
-        // Only merge when selectedAsins is empty (user typed ASINs manually)
         selectedAsins = extractedAsinsFromMessage;
+        selectedAsinsSource = "message_fallback";
       }
     } else {
-      // UI selection exists - skip extraction merge
       mergeSkipped = true;
     }
-    
+
     console.log("ASIN_EXTRACTION_FROM_MESSAGE", {
       analysisRunId: body.analysisRunId,
       extracted_asins: extractedAsinsFromMessage,
-      filtered_extracted_asins: extractedAsinsFromMessage, // After validation
       original_selected: body.selectedAsins || [],
       merge_skipped: mergeSkipped,
       final_selected: selectedAsins,
       selected_count: selectedAsins.length,
+      selected_asins_source: selectedAsinsSource,
     });
     
     // PRIORITY A.4: Handle "this one/selected/that listing" when selectedAsins is empty
@@ -2063,6 +2059,7 @@ export async function POST(req: NextRequest) {
       analysisRunId: body.analysisRunId,
       selected_asins: selectedAsins,
       selected_count: selectedAsins.length,
+      selected_asins_source: selectedAsinsSource,
       extracted_from_message: extractedAsinsFromMessage,
     });
 

@@ -605,7 +605,13 @@ export default function AnalyzeForm({
   // Selected listing state (for AI context)
   // Multi-ASIN selection state (replaces single selectedListing)
   const [selectedAsins, setSelectedAsins] = useState<string[]>([]);
-  
+  const selectedAsinsRef = useRef<string[]>([]);
+
+  const updateSelectedAsins = useCallback((next: string[]) => {
+    selectedAsinsRef.current = next;
+    setSelectedAsins(next);
+  }, []);
+
   // Helper: Get selected listing objects from selectedAsins
   // CRITICAL: Use exact ASIN matching - selectedAsins is the single source of truth
   const getSelectedListings = () => {
@@ -719,7 +725,7 @@ export default function AnalyzeForm({
         setShowRefiningBadge(false);
         setNextUpdateExpectedSec(null);
         setChatMessages([]);
-        setSelectedAsins([]);
+        updateSelectedAsins([]);
         setSortBy("rank");
         setSelectedBrands(new Set());
         setSelectedFulfillment(new Set());
@@ -784,7 +790,7 @@ export default function AnalyzeForm({
     setIsEstimated(false);
     setSnapshotType("snapshot");
     setChatMessages(initialMessages);
-    setSelectedAsins([]);
+    updateSelectedAsins([]);
     setSortBy("rank");
     setSelectedBrands(new Set());
     setSelectedFulfillment(new Set());
@@ -793,7 +799,7 @@ export default function AnalyzeForm({
     if (isFromHistory) {
       setAnalysisUIState("complete");
     }
-  }, [initialAnalysis?.analysis_run_id, initialAnalysis?.input_value, clientRunId]); // Do NOT depend on analysis or analysisRunIdForChat
+  }, [initialAnalysis?.analysis_run_id, initialAnalysis?.input_value, clientRunId, updateSelectedAsins]); // Do NOT depend on analysis or analysisRunIdForChat
 
   // Hydrate from URL when user selects a past run from dropdown (HistoryPanel): client-side
   // navigation may not re-run the server component, so initialAnalysis can stay stale. Fetch
@@ -851,7 +857,7 @@ export default function AnalyzeForm({
         setInputValue(keyword);
         setChatMessages(Array.isArray(data.messages) ? data.messages.map((m: { role: string; content: string }) => ({ role: m.role as "user" | "assistant", content: m.content })) : []);
         setAnalysisUIState("complete");
-        setSelectedAsins([]);
+        updateSelectedAsins([]);
         setSortBy("rank");
         setSelectedBrands(new Set());
         setSelectedFulfillment(new Set());
@@ -861,7 +867,7 @@ export default function AnalyzeForm({
       }
     })();
     return () => { cancelled = true; };
-  }, [urlRunId, clientRunId, analysis?.analysis_run_id]);
+  }, [urlRunId, clientRunId, analysis?.analysis_run_id, updateSelectedAsins]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -2328,7 +2334,7 @@ export default function AnalyzeForm({
                           </span>
                         </div>
                         <button
-                          onClick={() => setSelectedAsins([])}
+                          onClick={() => updateSelectedAsins([])}
                           className="text-xs text-gray-600 hover:text-gray-900 underline"
                         >
                           Clear selection
@@ -2637,19 +2643,12 @@ export default function AnalyzeForm({
                                   fulfillment_status={fulfillmentStatus}
                                   listing={listing}
                                   onSelect={(e) => {
-                                  // CRITICAL: Use the extracted asin (not listing.asin) for consistency
                                   if (!asin) return;
-
-                                  // Always allow multi-select - toggle selection on click
-                                  if (isSelected) {
-                                    // Deselect if already selected
-                                    setSelectedAsins(prev => prev.filter(selectedAsin => selectedAsin !== asin));
-                                  } else {
-                                    // Add to selection (multi-select by default)
-                                    setSelectedAsins(prev => [...prev, asin]);
-                                  }
-
-                                  // Clear focus after mouse click to avoid stuck focus styles
+                                  const next = isSelected
+                                    ? selectedAsins.filter((a) => a !== asin)
+                                    : [...selectedAsins, asin];
+                                  updateSelectedAsins(next);
+                                  console.log("PRODUCT_SELECTED", { asin, selected_asins_after: next });
                                   if ("currentTarget" in e) {
                                     (e.currentTarget as HTMLElement).blur?.();
                                   }
@@ -2752,8 +2751,9 @@ export default function AnalyzeForm({
               estimated_monthly_units: (selectedListing as any).estimated_monthly_units ?? null,
               estimated_monthly_revenue: (selectedListing as any).estimated_monthly_revenue ?? null,
             } : null}
-            selectedAsins={selectedAsins} // Single source of truth - ChatSidebar should use this
-            onSelectedAsinsChange={setSelectedAsins}
+            selectedAsins={selectedAsins}
+            selectedAsinsRef={selectedAsinsRef}
+            onSelectedAsinsChange={updateSelectedAsins}
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={handleToggleCollapse}
             insertIntoChatText={questionToInsert}
@@ -2768,7 +2768,7 @@ export default function AnalyzeForm({
         isOpen={helpDrawerOpen}
         onClose={() => setHelpDrawerOpen(false)}
         selectedAsins={selectedAsins}
-        onSelectedAsinsChange={setSelectedAsins}
+        onSelectedAsinsChange={updateSelectedAsins}
         onSelectQuestion={(text) => setQuestionToInsert(text)}
         products={analysis?.page_one_listings ?? analysis?.products ?? []}
       />

@@ -90,6 +90,8 @@ interface ChatSidebarProps {
   selectedListing?: any | null;
   /** Selected ASINs array (for multi-select) */
   selectedAsins?: string[];
+  /** Ref holding latest selected ASINs (used at send time to avoid race with state) */
+  selectedAsinsRef?: React.MutableRefObject<string[]>;
   /** Setter for selected ASINs (used by input chips) */
   onSelectedAsinsChange?: (asins: string[]) => void;
   /** Whether the sidebar is collapsed */
@@ -276,6 +278,7 @@ export default function ChatSidebar({
   analysisMode = null,
   selectedListing = null,
   selectedAsins = [],
+  selectedAsinsRef,
   onSelectedAsinsChange,
   isCollapsed = false,
   onToggleCollapse,
@@ -584,6 +587,13 @@ export default function ChatSidebar({
     setStreamingContent("");
     setCopilotStatus("thinking");
 
+    const asinsToSend = Array.isArray(selectedAsinsRef?.current) ? selectedAsinsRef!.current : (Array.isArray(selectedAsins) ? selectedAsins : []);
+    console.log("CHAT_SEND", {
+      selected_asins_payload: asinsToSend,
+      selected_asins_store: Array.isArray(selectedAsins) ? selectedAsins : [],
+      message: messageToSend?.slice(0, 100),
+    });
+
     let feesContext: { asin: string; selling_price: number; total_fees: number; referral_fee?: number; fba_fee?: number; fetched_at: string; source: string } | undefined;
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
     const feesCard = lastAssistant?.cards?.find((c) => c.type === "fees_result" || c.type === "fees_profit");
@@ -613,7 +623,7 @@ export default function ChatSidebar({
           analysisRunId,
           message: messageToSend,
           selectedListing: selectedListing || null,
-          selectedAsins: Array.isArray(selectedAsins) ? selectedAsins : [],
+          selectedAsins: asinsToSend,
           escalationConfirmed: opts.escalationConfirmed === true,
           escalationAsins: Array.isArray(opts.escalationAsins) ? opts.escalationAsins : undefined,
           ...(feesContext && { feesContext }),
@@ -754,7 +764,7 @@ export default function ChatSidebar({
       // Focus input after send
       inputRef.current?.focus();
     }
-  }, [analysisRunId, input, messages, isFeesFollowUp, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange, escalationState, escalationMessage]);
+  }, [analysisRunId, input, messages, isFeesFollowUp, onMarginSnapshotUpdate, selectedListing, selectedAsins, selectedAsinsRef, onMessagesChange, escalationState, escalationMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Use effectiveId for UI enabling, but chat API still needs analysisRunId
