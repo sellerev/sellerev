@@ -128,7 +128,8 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
       }
       
       // Null-safe fallbacks for AI-disabled runs (no decision in response)
-      const decision = (response.decision && typeof response.decision === "object" && ["GO", "CAUTION", "NO_GO"].includes((response.decision as { verdict?: string }).verdict))
+      const verdict = response.decision && typeof response.decision === "object" ? (response.decision as { verdict?: string }).verdict : undefined;
+      const decision = (verdict && ["GO", "CAUTION", "NO_GO"].includes(verdict))
         ? (response.decision as { verdict: "GO" | "CAUTION" | "NO_GO"; confidence: number })
         : { verdict: "GO" as const, confidence: 0 };
       const executiveSummary = typeof response.executive_summary === "string" ? response.executive_summary : "Market data loaded.";

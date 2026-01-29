@@ -111,14 +111,13 @@ export default async function AnalysisDetailPage({ params }: AnalysisDetailPageP
             price_used: number;
           })
         : undefined,
-      listings: Array.isArray(snapshot.listings) ? (snapshot.listings as unknown[]) : undefined,
+      listings: Array.isArray(snapshot.listings) ? (snapshot.listings as any) : undefined,
     };
   }
 
+  const verdict = response.decision && typeof response.decision === "object" ? (response.decision as { verdict?: string }).verdict : undefined;
   const decision =
-    response.decision &&
-    typeof response.decision === "object" &&
-    ["GO", "CAUTION", "NO_GO"].includes((response.decision as { verdict?: string }).verdict)
+    verdict && ["GO", "CAUTION", "NO_GO"].includes(verdict)
       ? (response.decision as { verdict: "GO" | "CAUTION" | "NO_GO"; confidence: number })
       : { verdict: "GO" as const, confidence: 0 };
   const executiveSummary =

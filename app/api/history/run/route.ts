@@ -79,8 +79,9 @@ export async function GET(req: NextRequest) {
       snapshot = marketSnapshotRaw as Record<string, unknown>;
     }
 
+    const verdict = response.decision && typeof response.decision === "object" ? (response.decision as { verdict?: string }).verdict : undefined;
     const decision =
-      response.decision && typeof response.decision === "object" && ["GO", "CAUTION", "NO_GO"].includes((response.decision as { verdict?: string }).verdict)
+      verdict && ["GO", "CAUTION", "NO_GO"].includes(verdict)
         ? (response.decision as { verdict: string; confidence: number })
         : { verdict: "GO", confidence: 0 };
     const risks = normalizeRisks(response.risks as Record<string, { level: string; explanation: string }> | undefined);
