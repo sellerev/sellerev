@@ -31,6 +31,7 @@ import {
   executeEscalation,
 } from "@/lib/ai/copilotEscalationHelpers";
 import { evaluateChatGuardrails } from "@/lib/ai/chatGuardrails";
+import { hasAmazonConnection } from "@/lib/amazon/getUserToken";
 import { getOrFetchFeesEstimate } from "@/lib/spapi/feesEstimate";
 
 /**
@@ -63,15 +64,28 @@ import { getOrFetchFeesEstimate } from "@/lib/spapi/feesEstimate";
  * - EXPLICIT LIMITATIONS: Must acknowledge gaps, not fill with estimates
  */
 
+interface FeesContext {
+  asin: string;
+  selling_price: number;
+  total_fees: number;
+  referral_fee?: number;
+  fba_fee?: number;
+  net_profit?: number;
+  net_margin?: number;
+  fetched_at: string;
+  source: string;
+}
+
 interface ChatRequestBody {
   analysisRunId: string;
   message: string;
-  selectedListing?: any | null; // Optional selected listing for AI context (DEPRECATED: use selectedAsins)
-  selectedAsins?: string[]; // Selected ASINs array (for multi-select)
-  responseMode?: "concise" | "expanded"; // Response mode (default: concise)
-  // UI-gated escalation confirmation (prevents silent credit usage)
+  selectedListing?: any | null;
+  selectedAsins?: string[];
+  responseMode?: "concise" | "expanded";
   escalationConfirmed?: boolean;
   escalationAsins?: string[];
+  /** When user asks a follow-up about existing fees (e.g. "is it profitable?"); avoid re-emitting Fees card */
+  feesContext?: FeesContext;
 }
 
 function validateRequestBody(body: unknown): body is ChatRequestBody {
@@ -90,12 +104,17 @@ function validateRequestBody(body: unknown): body is ChatRequestBody {
     }
   }
 
-  // Validate escalationAsins if present (must be array of strings)
   if ('escalationAsins' in b && b.escalationAsins !== undefined) {
     if (!Array.isArray(b.escalationAsins)) return false;
     if (!b.escalationAsins.every((item: unknown) => typeof item === "string")) return false;
   }
-  
+  if ('feesContext' in b && b.feesContext !== undefined) {
+    if (typeof b.feesContext !== 'object' || b.feesContext === null) return false;
+    const fc = b.feesContext as Record<string, unknown>;
+    if (typeof fc.asin !== 'string' || typeof fc.selling_price !== 'number' ||
+        typeof fc.total_fees !== 'number' || typeof fc.fetched_at !== 'string' ||
+        typeof fc.source !== 'string') return false;
+  }
   return (
     typeof b.analysisRunId === "string" &&
     b.analysisRunId.trim().length > 0 &&
@@ -1450,26 +1469,32 @@ function detectCostOverrides(
   return null;
 }
 
-/**
- * Detects fees/profit intent for the Fees & Profit chat card (SP-API fees, no LLM).
- * Keywords: run fees, fees, amazon fees, referral/fba/fulfillment fee, profit, margin,
- * profitability, break-even, net profit, net margin.
- */
+/** Explicit patterns only — avoids follow-ups like "is it profitable?" re-triggering the Fees card. */
 function detectFeesProfitIntent(message: string): boolean {
   const t = message.toLowerCase().trim();
-  const patterns = [
+  const explicit = [
     /\brun\s+fees\b/,
-    /\bfees\b/,
+    /\bfetch\s+fees\b/,
     /\bamazon\s+fees?\b/,
-    /\breferral\s+fee\b/,
-    /\bfba\s+fee\b/,
-    /\bfulfillment\s+fee\b/,
-    /\bprofit\b/,
-    /\bmargin\b/,
+    /\bfees\s+estimate\b/,
+    /\bcalculate\s+profit\b/,
     /\bprofitability\b/,
-    /\bbreak[- ]?even\b/,
-    /\bnet\s+profit\b/,
-    /\bnet\s+margin\b/,
+  ];
+  return explicit.some((p) => p.test(t));
+}
+
+/** Follow-up questions about existing fees — answer in plain text, do NOT re-emit Fees card. */
+function detectFeesFollowUp(message: string): boolean {
+  const t = message.toLowerCase().trim();
+  const patterns = [
+    /\bbased\s+on\s+those\s+numbers\b/,
+    /\bis\s+this\s+good\b/,
+    /\bis\s+it\s+profitable\b/,
+    /\bwhat\s+does\s+this\s+mean\b/,
+    /\b(is|are)\s+(this|these|it)\s+(good|profitable|worth)\b/,
+    /\b(is|are)\s+(this|these|it)\s+worth\s+(it| pursuing)\b/,
+    /\bhow\s+(good|profitable)\s+(is|are)\s+/,
+    /\bshould\s+i\s+(enter|pursue|launch)\b/,
   ];
   return patterns.some((p) => p.test(t));
 }
@@ -2004,7 +2029,14 @@ export async function POST(req: NextRequest) {
     // - emit SSE metadata to trigger the inline fees UI
     // - still call the LLM and stream a helpful assistant response
     const isFeesProfitIntent = detectFeesProfitIntent(body.message);
-    if (isFeesProfitIntent) {
+    const isFeesFollowUp = detectFeesFollowUp(body.message);
+    const hasFeesContext = !!(
+      body.feesContext &&
+      typeof body.feesContext === "object" &&
+      typeof (body.feesContext as any).asin === "string" &&
+      typeof (body.feesContext as any).total_fees === "number"
+    );
+    if (isFeesProfitIntent && !(isFeesFollowUp && hasFeesContext)) {
       console.log("[FEES_PROFIT_INTENT]", {
         user_id: user.id,
         analysis_run_id: body.analysisRunId,
@@ -2068,6 +2100,35 @@ export async function POST(req: NextRequest) {
       const products = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
       const listing = products.find((p: any) => (p.asin ?? "").trim() === asin.trim());
       const price = typeof listing?.price === "number" && listing.price > 0 ? listing.price : null;
+
+      const connected = await hasAmazonConnection(user.id);
+      if (!connected) {
+        const connectContent = "Connect Amazon to fetch exact SP-API fees for this ASIN.";
+        const connectPayload = { message: connectContent, ctaUrl: "/connect-amazon" };
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: connectContent })}\n\n`));
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ type: "ui_card", cardType: "connect_amazon", payload: connectPayload })}\n\n`)
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        void (async () => {
+          try {
+            await supabase.from("analysis_messages").insert([
+              { analysis_run_id: body.analysisRunId, user_id: user.id, role: "user", content: body.message, source_asins: [asin], credits_used: 0 },
+              { analysis_run_id: body.analysisRunId, user_id: user.id, role: "assistant", content: connectContent, source_asins: [asin], credits_used: 0 },
+            ]);
+          } catch (e) {
+            console.error("Failed to save connect-amazon messages:", e);
+          }
+        })();
+        return new NextResponse(stream, {
+          headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", ...Object.fromEntries(res.headers.entries()) },
+        });
+      }
 
       let fees: Awaited<ReturnType<typeof getOrFetchFeesEstimate>> = null;
       if (price != null) {
@@ -2170,10 +2231,14 @@ export async function POST(req: NextRequest) {
         selectedAsins // Multi-ASIN support
       );
 
-      // 9. Build Market Snapshot Summary (from cached response.market_snapshot only)
       marketSnapshotSummary = buildMarketSnapshotSummary(
         (analysisResponse.market_snapshot as Record<string, unknown>) || null
       );
+
+      if (body.feesContext && typeof body.feesContext === "object") {
+        const fc = body.feesContext as FeesContext;
+        contextMessage += `\n\nFEES_CONTEXT (use this for interpretive questions — do not call fees tools again):\nasin=${fc.asin} selling_price=$${fc.selling_price} total_fees=$${fc.total_fees} referral_fee=$${fc.referral_fee ?? "?"} fba_fee=$${fc.fba_fee ?? "?"} net_profit=$${fc.net_profit ?? "?"} net_margin=${fc.net_margin ?? "?"}% fetched_at=${fc.fetched_at} source=${fc.source}`;
+      }
     } catch (error) {
       console.error("Error building context message:", error);
       const errorDetails = error instanceof Error ? {

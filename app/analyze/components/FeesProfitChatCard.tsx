@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import Link from "next/link";
 
 type FeesPayload = {
   asin: string;
@@ -10,6 +11,7 @@ type FeesPayload = {
   total_fees: number | null;
   fee_lines: Array<{ name: string; amount: number }>;
   fetched_at: string;
+  cached?: boolean;
 };
 
 export type FeesProfitCardPayload = {
@@ -40,6 +42,7 @@ export default function FeesProfitChatCard({ payload, onFeesFetched }: FeesProfi
   const [fees, setFees] = useState<FeesPayload | null>(initialFees);
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [noAmazonConnection, setNoAmazonConnection] = useState(false);
   const [cogs, setCogs] = useState("");
   const [inbound, setInbound] = useState("");
   const [other, setOther] = useState("0");
@@ -48,9 +51,11 @@ export default function FeesProfitChatCard({ payload, onFeesFetched }: FeesProfi
     const p = Number.parseFloat(price);
     if (!Number.isFinite(p) || p <= 0) {
       setFetchError("Enter a valid price.");
+      setNoAmazonConnection(false);
       return;
     }
     setFetchError(null);
+    setNoAmazonConnection(false);
     setFetching(true);
     try {
       const res = await fetch("/api/fees-estimate", {
@@ -60,13 +65,20 @@ export default function FeesProfitChatCard({ payload, onFeesFetched }: FeesProfi
       });
       const data = await res.json();
       if (!res.ok) {
-        setFetchError(data?.error ?? "Fee lookup failed.");
+        if (data?.error === "no_amazon_connection") {
+          setNoAmazonConnection(true);
+          setFetchError(null);
+        } else {
+          setFetchError(data?.message ?? data?.error ?? "Fee lookup failed.");
+          setNoAmazonConnection(false);
+        }
         return;
       }
       setFees(data);
       onFeesFetched?.(data);
     } catch (e) {
       setFetchError(e instanceof Error ? e.message : "Request failed.");
+      setNoAmazonConnection(false);
     } finally {
       setFetching(false);
     }
@@ -122,7 +134,18 @@ export default function FeesProfitChatCard({ payload, onFeesFetched }: FeesProfi
           </button>
         </div>
         {fetchError && <div className="text-amber-600 text-xs">{fetchError}</div>}
-        {fees && (
+        {noAmazonConnection && (
+          <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-900 text-sm">
+            <p>Connect Amazon to fetch exact SP-API fees for this ASIN.</p>
+            <Link
+              href="/connect-amazon"
+              className="mt-2 inline-block rounded bg-amber-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-amber-700"
+            >
+              Connect Amazon
+            </Link>
+          </div>
+        )}
+        {fees && !noAmazonConnection && (
           <div className="rounded border border-gray-200 bg-white p-3 text-gray-800">
             <div className="font-medium text-gray-700">
               Total Amazon fees: {formatCurrency(fees.total_fees ?? 0)}
@@ -137,7 +160,7 @@ export default function FeesProfitChatCard({ payload, onFeesFetched }: FeesProfi
               </ul>
             )}
             <div className="mt-1 text-[11px] text-gray-500">
-              Source: Amazon SP-API · Cached 7 days · {fees.fetched_at.slice(0, 10)}
+              Source: Amazon SP-API{fees.cached ? " · Cached (7 days)" : ""} · {fees.fetched_at.slice(0, 10)}
             </div>
           </div>
         )}

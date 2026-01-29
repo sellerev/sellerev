@@ -14,15 +14,14 @@ export interface FbaFeesResult {
   fulfillment_fee: number | null;
   referral_fee: number | null;
   total_fba_fees: number | null;
+  fee_lines: Array<{ name: string; amount: number }>;
   currency: "USD";
-  // Optional debug metadata to help distinguish auth vs throttling vs other failures
   debug?: {
     http_status?: number;
     request_id?: string | null;
     rate_limit?: string | null;
     marketplace_id?: string;
     errors?: Array<{ code?: string; message?: string; details?: string }>;
-    // True if we attempted (and possibly succeeded with) a Catalog Items dimension retry.
     used_dimensions_retry?: boolean;
   };
 }
@@ -74,19 +73,29 @@ export async function getFbaFees({
       fulfillment_fee: null,
       referral_fee: null,
       total_fba_fees: null,
+      fee_lines: [],
       currency: "USD",
     };
   }
 
   try {
-    // Try to get user's refresh token if userId provided
+    // User-initiated fees: require user's Amazon connection. No env fallback.
     let refreshToken: string | undefined;
     if (userId) {
       try {
         const { getUserAmazonRefreshToken } = await import("@/lib/amazon/getUserToken");
-        refreshToken = await getUserAmazonRefreshToken(userId) || undefined;
+        refreshToken = (await getUserAmazonRefreshToken(userId)) ?? undefined;
       } catch (error) {
-        console.warn("Failed to get user refresh token, falling back to env token:", error);
+        console.warn("Failed to get user refresh token:", error);
+      }
+      if (!refreshToken) {
+        return {
+          fulfillment_fee: null,
+          referral_fee: null,
+          total_fba_fees: null,
+          fee_lines: [],
+          currency: "USD",
+        };
       }
     }
 
@@ -165,13 +174,13 @@ export async function getFbaFees({
 
     return attempt2.fulfillment_fee !== null && attempt2.referral_fee !== null ? attempt2 : attempt1;
   } catch (error) {
-    // Log error but don't throw - return nulls gracefully
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error(`SP-API getFbaFees error: ${errorMessage}`);
     return {
       fulfillment_fee: null,
       referral_fee: null,
       total_fba_fees: null,
+      fee_lines: [],
       currency: "USD",
     };
   }
@@ -202,37 +211,20 @@ async function callFeesEstimate({
 }): Promise<FbaFeesResult> {
   const path = `/products/fees/v0/items/${asin}/feesEstimate`;
 
-  // Prepare request body (matches FBA calculator format)
-  const bodyObj: any = {
-    FeesEstimateRequest: {
-      MarketplaceId: marketplaceId,
-      IsAmazonFulfilled: true, // CRITICAL: Must be true for FBA fees
-      PriceToEstimateFees: {
-        ListingPrice: {
-          Amount: price,
-          CurrencyCode: "USD",
-        },
-        Shipping: {
-          CurrencyCode: "USD",
-          Amount: 0.0,
-        },
-        Points: {
-          PointsNumber: 0,
-          PointsMonetaryValue: {
-            CurrencyCode: "USD",
-            Amount: 0.0,
-          },
-        },
-      },
-      Identifier: `fees-estimate-${asin}-${Date.now()}`,
-      OptionalFulfillmentProgram: "FBA_CORE",
+  const feesReq: Record<string, unknown> = {
+    MarketplaceId: marketplaceId,
+    IsAmazonFulfilled: true,
+    PriceToEstimateFees: {
+      ListingPrice: { Amount: price, CurrencyCode: "USD" },
+      Shipping: { CurrencyCode: "USD", Amount: 0 },
+      Points: { PointsNumber: 0, PointsMonetaryValue: { CurrencyCode: "USD", Amount: 0 } },
     },
+    Identifier: `fees-estimate-${asin}-${Date.now()}`,
   };
-
-  // Optional: provide dimensions (helps when ASIN isn't in seller catalog)
   if (productDimensions) {
-    bodyObj.FeesEstimateRequest.ProductDimensions = productDimensions;
+    feesReq.ProductDimensions = productDimensions;
   }
+  const bodyObj = { FeesEstimateRequest: feesReq };
 
   const requestBody = JSON.stringify(bodyObj);
 
@@ -291,6 +283,7 @@ async function callFeesEstimate({
       fulfillment_fee: null,
       referral_fee: null,
       total_fba_fees: null,
+      fee_lines: [],
       currency: "USD",
       debug: {
         http_status: response.status,
@@ -309,6 +302,7 @@ async function callFeesEstimate({
     fulfillment_fee: fees.fulfillmentFee,
     referral_fee: fees.referralFee,
     total_fba_fees: fees.totalFee,
+    fee_lines: fees.feeLines,
     currency: "USD",
     debug: { marketplace_id: marketplaceId },
   };
@@ -386,67 +380,50 @@ async function fetchCatalogProductDimensions({
     return null;
   };
 
-  const normalizeUnit = (u: any): string | null => {
-    if (typeof u !== "string") return null;
-    const s = u.toLowerCase().trim();
-    // SP-API fees commonly expects "inches"/"pounds" for US. Catalog may return in/cm/oz/lb etc.
-    if (s === "in" || s === "inch" || s === "inches") return "inches";
-    if (s === "cm" || s === "centimeter" || s === "centimeters") return "centimeters";
-    if (s === "lb" || s === "lbs" || s === "pound" || s === "pounds") return "pounds";
-    if (s === "oz" || s === "ounce" || s === "ounces") return "ounces";
-    if (s === "kg" || s === "kilogram" || s === "kilograms") return "kilograms";
-    if (s === "g" || s === "gram" || s === "grams") return "grams";
-    return u;
-  };
-
   const getFirst = (obj: any, key: string): any => {
     const v = obj?.[key];
     if (Array.isArray(v)) return v[0];
     return v;
   };
 
-  // Try item_package_dimensions first (best proxy for shipped item to Amazon)
+  // Use only item_package_dimensions and item_package_weight (not item dimensions).
   const pkgDims = attributes ? getFirst(attributes, "item_package_dimensions") : null;
   const pkgWeight = attributes ? getFirst(attributes, "item_package_weight") : null;
+  if (!pkgDims || !pkgWeight) return null;
 
-  // Fallback: item_dimensions / item_weight
-  const itemDims = attributes ? getFirst(attributes, "item_dimensions") : null;
-  const itemWeight = attributes ? getFirst(attributes, "item_weight") : null;
+  const rawLen = pickNumber(pkgDims?.length?.value ?? pkgDims?.length ?? pkgDims?.Length?.Value);
+  const rawWid = pickNumber(pkgDims?.width?.value ?? pkgDims?.width ?? pkgDims?.Width?.Value);
+  const rawHei = pickNumber(pkgDims?.height?.value ?? pkgDims?.height ?? pkgDims?.Height?.Value);
+  const rawWVal = pickNumber(pkgWeight?.value ?? pkgWeight?.weight?.value ?? pkgWeight?.Weight?.Value);
+  const dimUnitRaw = pkgDims?.length?.unit ?? pkgDims?.unit ?? pkgDims?.Length?.Unit ?? pkgDims?.width?.unit ?? pkgDims?.height?.unit;
+  const wUnitRaw = pkgWeight?.unit ?? pkgWeight?.weight?.unit ?? pkgWeight?.Weight?.Unit;
 
-  const dimsObj = pkgDims || itemDims || null;
-  const weightObj = pkgWeight || itemWeight || null;
+  if (rawLen == null || rawWid == null || rawHei == null || rawWVal == null) return null;
 
-  const len = pickNumber(dimsObj?.length?.value ?? dimsObj?.length ?? dimsObj?.Length?.Value);
-  const wid = pickNumber(dimsObj?.width?.value ?? dimsObj?.width ?? dimsObj?.Width?.Value);
-  const hei = pickNumber(dimsObj?.height?.value ?? dimsObj?.height ?? dimsObj?.Height?.Value);
-  const dimUnitRaw =
-    dimsObj?.length?.unit ??
-    dimsObj?.unit ??
-    dimsObj?.Length?.Unit ??
-    dimsObj?.width?.unit ??
-    dimsObj?.height?.unit;
-  const dimUnit = normalizeUnit(dimUnitRaw);
+  // Convert to inches and pounds for SP-API Fees (US).
+  const toInches = (v: number, u: any): number => {
+    const s = String(u ?? "").toLowerCase();
+    if (s === "cm" || s === "centimeter" || s === "centimeters") return v / 2.54;
+    return v; // assume inches
+  };
+  const toPounds = (v: number, u: any): number => {
+    const s = String(u ?? "").toLowerCase();
+    if (s === "kg" || s === "kilogram" || s === "kilograms") return v * 2.205;
+    if (s === "g" || s === "gram" || s === "grams") return (v / 1000) * 2.205;
+    if (s === "oz" || s === "ounce" || s === "ounces") return v / 16;
+    return v; // assume pounds
+  };
 
-  const wVal = pickNumber(weightObj?.value ?? weightObj?.weight?.value ?? weightObj?.Weight?.Value);
-  const wUnit = normalizeUnit(weightObj?.unit ?? weightObj?.weight?.unit ?? weightObj?.Weight?.Unit);
+  const len = Math.round(toInches(rawLen, dimUnitRaw) * 1000) / 1000;
+  const wid = Math.round(toInches(rawWid, dimUnitRaw) * 1000) / 1000;
+  const hei = Math.round(toInches(rawHei, dimUnitRaw) * 1000) / 1000;
+  const wVal = Math.round(toPounds(rawWVal, wUnitRaw) * 1000) / 1000;
 
-  if (
-    len === null ||
-    wid === null ||
-    hei === null ||
-    wVal === null ||
-    !dimUnit ||
-    !wUnit
-  ) {
-    return null;
-  }
-
-  // Prefer inches/pounds for US; if Catalog returned cm/kg, pass through as-is.
   return {
-    Length: { Unit: dimUnit, Value: len },
-    Width: { Unit: dimUnit, Value: wid },
-    Height: { Unit: dimUnit, Value: hei },
-    Weight: { Unit: wUnit, Value: wVal },
+    Length: { Unit: "inches", Value: len },
+    Width: { Unit: "inches", Value: wid },
+    Height: { Unit: "inches", Value: hei },
+    Weight: { Unit: "pounds", Value: wVal },
   };
 }
 
@@ -463,67 +440,65 @@ async function fetchCatalogProductDimensions({
  * Note: Response may have multiple entries (one per fulfillment program).
  * We use the first valid FeesEstimate.
  */
+const FEE_TYPE_LABELS: Record<string, string> = {
+  ReferralFee: "Referral",
+  FBAFulfillmentFee: "FBA fulfillment",
+  FBAPerOrderFulfillmentFee: "FBA fulfillment",
+  FBAFulfillmentFeePerUnit: "FBA fulfillment",
+  VariableClosingFee: "Variable closing fee",
+};
+
+function feeTypeToLabel(feeType: string): string {
+  return FEE_TYPE_LABELS[feeType] ?? feeType;
+}
+
 function extractFees(data: any): {
   fulfillmentFee: number | null;
   referralFee: number | null;
   totalFee: number | null;
+  feeLines: Array<{ name: string; amount: number }>;
 } {
+  const empty = {
+    fulfillmentFee: null as number | null,
+    referralFee: null as number | null,
+    totalFee: null as number | null,
+    feeLines: [] as Array<{ name: string; amount: number }>,
+  };
   try {
-    // SP-API docs: successful response is wrapped in `payload`:
-    // { payload: { FeesEstimateResult: ... }, errors?: [...] }
-    // Some clients/loggers may provide the inner object directly, so support both.
     const root = data?.payload ? data.payload : data;
-
-    // Handle array response (multiple fulfillment programs)
     const feesEstimateResult = root?.FeesEstimateResult;
-    if (!feesEstimateResult) {
-      return {
-        fulfillmentFee: null,
-        referralFee: null,
-        totalFee: null,
-      };
-    }
+    if (!feesEstimateResult) return empty;
 
-    // Get FeesEstimate (may be array or single object)
     let feesEstimate;
     if (Array.isArray(feesEstimateResult)) {
-      // Multiple estimates - use first one
       feesEstimate = feesEstimateResult[0]?.FeesEstimate;
     } else {
       feesEstimate = feesEstimateResult.FeesEstimate;
     }
+    if (!feesEstimate) return empty;
 
-    if (!feesEstimate) {
-      return {
-        fulfillmentFee: null,
-        referralFee: null,
-        totalFee: null,
-      };
-    }
-
-    // Extract total fee
     const totalFee = feesEstimate.TotalFeesEstimate?.Amount
       ? parseFloat(feesEstimate.TotalFeesEstimate.Amount)
       : null;
 
-    // Extract individual fees from FeeDetailList
     let fulfillmentFee: number | null = null;
     let referralFee: number | null = null;
+    const feeLines: Array<{ name: string; amount: number }> = [];
 
     const feeDetailList = feesEstimate.FeeDetailList || [];
     for (const feeDetail of feeDetailList) {
-      const feeType = feeDetail.FeeType;
+      const feeType = String(feeDetail.FeeType ?? "").trim();
       const amount = feeDetail.FeeAmount?.Amount
         ? parseFloat(feeDetail.FeeAmount.Amount)
         : null;
+      if (amount == null || !Number.isFinite(amount)) continue;
 
-      if (amount === null) continue;
+      const label = feeTypeToLabel(feeType);
+      const rounded = Math.round(amount * 100) / 100;
+      feeLines.push({ name: label, amount: rounded });
 
-      // Match FBA fulfillment fee (may have variations)
       if (
-        (feeType === "FBAFulfillmentFee" || 
-         feeType === "FBAPerOrderFulfillmentFee" ||
-         feeType === "FBAFulfillmentFeePerUnit") &&
+        (feeType === "FBAFulfillmentFee" || feeType === "FBAPerOrderFulfillmentFee" || feeType === "FBAFulfillmentFeePerUnit") &&
         fulfillmentFee === null
       ) {
         fulfillmentFee = amount;
@@ -536,14 +511,11 @@ function extractFees(data: any): {
       fulfillmentFee,
       referralFee,
       totalFee,
+      feeLines,
     };
   } catch (error) {
     console.error("Error extracting fees from SP-API response:", error);
-    return {
-      fulfillmentFee: null,
-      referralFee: null,
-      totalFee: null,
-    };
+    return empty;
   }
 }
 

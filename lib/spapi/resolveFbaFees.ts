@@ -84,10 +84,16 @@ export async function resolveFbaFees(
           : null;
 
       if (cachedFulfillment !== null && cachedReferral !== null) {
+        const rf = Math.round(cachedReferral * 100) / 100;
+        const ff = Math.round(cachedFulfillment * 100) / 100;
+        const fee_lines: Array<{ name: string; amount: number }> = [];
+        if (rf > 0) fee_lines.push({ name: "Referral", amount: rf });
+        if (ff > 0) fee_lines.push({ name: "FBA fulfillment", amount: ff });
         return {
           fulfillment_fee: cachedFulfillment,
           referral_fee: cachedReferral,
           total_fba_fees: cachedTotal,
+          fee_lines,
           currency: (cachedData.currency as "USD") || "USD",
         };
       }

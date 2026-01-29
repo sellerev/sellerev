@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiClient } from "@/lib/supabase/server-api";
+import { hasAmazonConnection } from "@/lib/amazon/getUserToken";
 import { getOrFetchFeesEstimate, type FeesEstimatePayload } from "@/lib/spapi/feesEstimate";
 
 const DEFAULT_MARKETPLACE = "ATVPDKIKX0DER";
@@ -49,6 +50,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: "Valid price is required" },
       { status: 400, headers: Object.fromEntries(res.headers.entries()) }
+    );
+  }
+
+  const connected = await hasAmazonConnection(user.id);
+  if (!connected) {
+    return NextResponse.json(
+      {
+        error: "no_amazon_connection",
+        message: "Connect Amazon to fetch exact SP-API fees for this ASIN.",
+      },
+      { status: 403, headers: Object.fromEntries(res.headers.entries()) }
     );
   }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { Copy, Check, ChevronRight, History, Sparkles } from "lucide-react";
 import HistoryPanel from "./components/HistoryPanel";
 import FeesProfitChatCard, {
@@ -538,9 +539,18 @@ export default function ChatSidebar({
     userHasScrolledRef.current = false;
   }, []);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // HANDLERS
-  // ─────────────────────────────────────────────────────────────────────────
+  const isFeesFollowUp = useCallback((text: string) => {
+    const t = text.toLowerCase().trim();
+    return [
+      /\bbased\s+on\s+those\s+numbers\b/,
+      /\bis\s+this\s+good\b/,
+      /\bis\s+it\s+profitable\b/,
+      /\bwhat\s+does\s+this\s+mean\b/,
+      /\b(is|are)\s+(this|these|it)\s+(good|profitable|worth)\b/,
+      /\bhow\s+(good|profitable)\s+(is|are)\s+/,
+      /\bshould\s+i\s+(enter|pursue|launch)\b/,
+    ].some((p) => p.test(t));
+  }, []);
 
   const sendMessage = useCallback(async (
     arg?: string | {
@@ -569,24 +579,43 @@ export default function ChatSidebar({
       setInput("");
     }
 
-    // Any new round-trip clears prior pending escalation confirmation (if present)
     setPendingEscalationConfirmation(null);
     setIsLoading(true);
     setStreamingContent("");
-    setCopilotStatus("thinking"); // Show "Thinking" immediately after user submits
+    setCopilotStatus("thinking");
+
+    let feesContext: { asin: string; selling_price: number; total_fees: number; referral_fee?: number; fba_fee?: number; fetched_at: string; source: string } | undefined;
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    const feesCard = lastAssistant?.cards?.find((c) => c.type === "fees_profit");
+    const pl = feesCard?.payload as { asin?: string; price?: number | null; fees?: { total_fees?: number | null; fee_lines?: Array<{ name: string; amount: number }>; fetched_at?: string } } | undefined;
+    if (isFeesFollowUp(messageToSend) && pl?.asin && pl?.fees && typeof pl.price === "number" && pl.price > 0) {
+      const total = pl.fees.total_fees ?? 0;
+      const lines = pl.fees.fee_lines ?? [];
+      const ref = lines.find((l) => /referral/i.test(l.name))?.amount;
+      const fba = lines.find((l) => /fba|fulfillment/i.test(l.name))?.amount;
+      feesContext = {
+        asin: pl.asin,
+        selling_price: pl.price,
+        total_fees: total,
+        referral_fee: ref,
+        fba_fee: fba,
+        fetched_at: pl.fees.fetched_at ?? new Date().toISOString(),
+        source: "sp-api",
+      };
+    }
 
     try {
-      // Call streaming API
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           analysisRunId,
           message: messageToSend,
-          selectedListing: selectedListing || null, // Backward compatibility
-          selectedAsins: Array.isArray(selectedAsins) ? selectedAsins : [], // Always send selected_asins array (even if empty)
+          selectedListing: selectedListing || null,
+          selectedAsins: Array.isArray(selectedAsins) ? selectedAsins : [],
           escalationConfirmed: opts.escalationConfirmed === true,
           escalationAsins: Array.isArray(opts.escalationAsins) ? opts.escalationAsins : undefined,
+          ...(feesContext && { feesContext }),
         }),
       });
 
@@ -683,9 +712,9 @@ export default function ChatSidebar({
                 setStreamingContent(accumulatedContent);
               }
 
-              // Handle ui_card (e.g. fees_profit)
-              if (json.type === "ui_card" && json.cardType === "fees_profit" && json.payload != null) {
-                cardsForFinal.push({ type: "fees_profit", payload: json.payload });
+              if (json.type === "ui_card" && json.payload != null) {
+                if (json.cardType === "fees_profit") cardsForFinal.push({ type: "fees_profit", payload: json.payload });
+                else if (json.cardType === "connect_amazon") cardsForFinal.push({ type: "connect_amazon", payload: json.payload });
               }
             } catch {
               // Skip malformed chunks
@@ -723,7 +752,7 @@ export default function ChatSidebar({
       // Focus input after send
       inputRef.current?.focus();
     }
-  }, [analysisRunId, input, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange, escalationState, escalationMessage]);
+  }, [analysisRunId, input, messages, isFeesFollowUp, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange, escalationState, escalationMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Use effectiveId for UI enabling, but chat API still needs analysisRunId
@@ -935,9 +964,22 @@ export default function ChatSidebar({
                         </div>
                       )}
 
-                      {/* Fees & Profit card */}
+                      {/* Fees & Profit / Connect Amazon cards */}
                       {msg.role === "assistant" &&
                         msg.cards?.map((card, cIdx) => {
+                          if (card.type === "connect_amazon") {
+                            const pl = card.payload as { message?: string; ctaUrl?: string };
+                            return (
+                              <div key={cIdx} className="mt-2">
+                                <Link
+                                  href={pl?.ctaUrl ?? "/connect-amazon"}
+                                  className="inline-block rounded bg-amber-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-amber-700"
+                                >
+                                  Connect Amazon
+                                </Link>
+                              </div>
+                            );
+                          }
                           if (card.type !== "fees_profit") return null;
                           const pl = card.payload as FeesProfitCardPayload;
                           return (

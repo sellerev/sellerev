@@ -72,3 +72,11 @@ export async function getUserAmazonRefreshToken(
   }
 }
 
+/**
+ * Check if user has an Amazon connection (connected status + valid refresh token).
+ */
+export async function hasAmazonConnection(userId: string): Promise<boolean> {
+  const token = await getUserAmazonRefreshToken(userId);
+  return token != null && token.length > 0;
+}
+
