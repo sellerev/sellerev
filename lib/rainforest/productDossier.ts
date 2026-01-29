@@ -23,7 +23,8 @@ export type ProductDossier = {
   review_material: {
     customers_say?: { name: string; value: "Positive" | "Mixed" | "Negative" | string }[];
     summarization_attributes?: { name: string; value: string }[];
-    top_reviews?: {
+    /** Always present (empty array if API returned none). rating, title, body per review. */
+    top_reviews: {
       rating?: number;
       title?: string;
       body?: string;
@@ -383,7 +384,7 @@ export async function getProductDossier(
         ...(summarization_attributes
           ? { summarization_attributes }
           : {}),
-        ...(top_reviews ? { top_reviews } : {}),
+        top_reviews: top_reviews ?? [],
       },
     };
 

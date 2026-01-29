@@ -1505,9 +1505,10 @@ function detectFeesFollowUp(message: string): boolean {
 }
 
 const REVIEW_NEGATIVE = [
-  "dislike", "hate", "issue", "issues", "problem", "problems", "complaint", "complaints",
-  "negative", "negatives", "bad", "worst", "cons", "drawbacks", "defects", "broken",
-  "cheap", "flimsy", "doesnt", "doesn't", "stopped", "failed", "return", "refund",
+  "dislike", "disliked", "hate", "hated", "issue", "issues", "problem", "problems",
+  "complaint", "complaints", "negative", "negatives", "bad", "worst", "cons", "drawbacks",
+  "defects", "broken", "broke", "return", "returns", "refund", "cheap", "flimsy",
+  "doesnt", "dont", "stopped", "failed",
 ];
 const REVIEW_POSITIVE = [
   "like", "love", "praise", "good", "great", "best", "pros", "positive", "positives",
@@ -1518,8 +1519,10 @@ const REVIEW_GENERIC = [
 ];
 const REVIEW_PHRASES = [
   "customers say", "customer say", "what do people say", "what do customers say",
-  "what do customers complain about", "what do customers praise", "customer feedback",
-  "review summary", "common complaints", "common praise",
+  "what do people dislike", "what do people like", "what do customers complain about",
+  "what do customers praise", "customer feedback", "review summary", "common complaints",
+  "common praise", "why is it bad", "why is it good", "tell me what customers are saying",
+  "poor quality", "quality issues", "doesn't work", "doesnt work", "dont work",
 ];
 
 /** Token-based review intent: normalize (lowercase, strip punctuation), match synonyms. */
@@ -2951,16 +2954,25 @@ export async function POST(req: NextRequest) {
       by_asin: Record<string, any>;
     } | null = null;
     
-    // Aggregated, model-friendly review insights for this request (built from product dossiers only)
+    // Aggregated, model-friendly review insights for this request (built from product dossiers only; one type=product call per ASIN)
     let reviewInsights: {
       asins: string[];
       by_asin: Record<string, {
         asin: string;
         title: string | null;
-        source_used: "customers_say" | "summarization_attributes" | "top_reviews" | "type_reviews" | "none";
-        top_complaints: Array<{ theme: string; evidence?: string | null }>;
-        top_praise: Array<{ theme: string; evidence?: string | null }>;
+        source_used: "customers_say" | "summarization_attributes" | "top_reviews" | "type_reviews" | "rating_breakdown_only" | "none";
+        top_complaints: string[];
+        top_praise: string[];
         notes: string[];
+        meta?: {
+          complaint_source_used: string;
+          overall_rating: number | null;
+          rating_breakdown_present: boolean;
+          top_reviews_count: number;
+          negative_reviews_count: number;
+          mixed_reviews_count: number;
+          positive_reviews_count: number;
+        };
       }>;
       errors: Array<{ asin: string; error: string }>;
     } | null = null;
@@ -3146,8 +3158,9 @@ export async function POST(req: NextRequest) {
       });
     }
     
-    // Build per-request review_insights from unified product dossiers for up to 2 selected ASINs
+    // Build per-request review_insights from product dossiers only (one Rainforest type=product per ASIN; no type=reviews).
     if (reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2 && productDossiers) {
+      const { buildReviewInsightsFromProductDossier } = await import("@/lib/rainforest/reviewInsightsFromDossier");
       const insightAsins = selectedAsins.slice(0, 2);
       reviewInsights = {
         asins: insightAsins,
@@ -3156,132 +3169,39 @@ export async function POST(req: NextRequest) {
       };
 
       for (const asin of insightAsins) {
-        const dossier: any = productDossiers.by_asin?.[asin];
+        const dossier = productDossiers.by_asin?.[asin];
         if (!dossier) {
           reviewInsights.errors.push({ asin, error: "NO_DOSSIER" });
           continue;
         }
 
         const title: string | null = dossier.product?.title ?? null;
-        const customersSay = dossier.review_material?.customers_say as
-          | Array<{ name: string; value: string }>
-          | undefined;
-        const summarizationAttrs = dossier.review_material?.summarization_attributes as
-          | Array<{ name: string; value: string }>
-          | undefined;
-        const topReviews = dossier.review_material?.top_reviews as
-          | Array<{ rating?: number; title?: string; body?: string; verified_purchase?: boolean }>
-          | undefined;
+        const { top_complaints: rawComplaints, top_praise: rawPraise, meta } = buildReviewInsightsFromProductDossier(dossier);
 
-        let source_used: "customers_say" | "summarization_attributes" | "top_reviews" | "type_reviews" | "none" = "none";
-        const top_complaints: Array<{ theme: string; evidence?: string | null }> = [];
-        const top_praise: Array<{ theme: string; evidence?: string | null }> = [];
+        // Normalize to strings so we never send raw objects (avoids "[object Object]" in responses).
+        const toDisplay = (item: string | { theme: string; snippet?: string; stars?: number }): string =>
+          typeof item === "string" ? item : (item.snippet ? `${item.theme} — ${item.snippet}` : item.theme);
+        const top_complaints: string[] = rawComplaints.map(toDisplay);
+        const top_praise: string[] = rawPraise.map(toDisplay);
+
+        const source_used =
+          meta.complaint_source_used === "customers_say"
+            ? "customers_say"
+            : meta.complaint_source_used === "negative_top_reviews" || meta.complaint_source_used === "mixed_top_reviews"
+              ? "top_reviews"
+              : meta.complaint_source_used === "rating_breakdown_only"
+                ? "rating_breakdown_only"
+                : "top_reviews";
+
         const notes: string[] = [];
-
-        // 1) customers_say-based themes
-        if (customersSay && customersSay.length > 0) {
-          const complaintEntries = customersSay.filter((c) =>
-            (c.value || "").toString().toLowerCase().includes("negative") ||
-            (c.value || "").toString().toLowerCase().includes("mixed")
-          );
-          const praiseEntries = customersSay.filter((c) =>
-            (c.value || "").toString().toLowerCase().includes("positive")
-          );
-
-          for (const item of complaintEntries.slice(0, 3)) {
-            top_complaints.push({ theme: item.name, evidence: null });
-          }
-          for (const item of praiseEntries.slice(0, 3)) {
-            top_praise.push({ theme: item.name, evidence: null });
-          }
-
-          if (top_complaints.length || top_praise.length) {
-            source_used = "customers_say";
-            notes.push(
-              "Themes derived from Amazon's Customers Say summary module on the product page."
-            );
-          }
-        }
-
-        // 2) summarization_attributes when customers_say missing or empty
-        if (source_used === "none" && Array.isArray(summarizationAttrs) && summarizationAttrs.length > 0) {
-          for (const a of summarizationAttrs.slice(0, 5)) {
-            if (a.name && String(a.name).trim()) {
-              top_praise.push({ theme: String(a.name).trim(), evidence: null });
-            }
-          }
-          if (top_praise.length > 0) {
-            source_used = "summarization_attributes";
-            notes.push("Themes from summarization_attributes on the product page.");
-          }
-        }
-
-        // 3) top_reviews when still no themes
-        if (source_used === "none" && Array.isArray(topReviews) && topReviews.length > 0) {
-          const { themeFromTopReviews } = await import("@/lib/reviews/themeFromTopReviews");
-          const mapped = topReviews.map((r) => ({
-            rating: typeof r.rating === "number" ? r.rating : 0,
-            title: (r.title ?? null) as string | null,
-            text: (r.body ?? "").toString(),
-            verified_purchase:
-              r.verified_purchase === true
-                ? true
-                : r.verified_purchase === false
-                ? false
-                : null,
-            date: null,
-          }));
-
-          const themes = themeFromTopReviews(mapped);
-
-          themes.top_complaints.slice(0, 3).forEach((theme, idx) => {
-            const evidence = themes.complaint_quotes[idx] || null;
-            top_complaints.push({ theme, evidence });
-          });
-          themes.top_praise.slice(0, 3).forEach((theme, idx) => {
-            const evidence = themes.praise_quotes[idx] || null;
-            top_praise.push({ theme, evidence });
-          });
-
-          if (top_complaints.length || top_praise.length) {
-            source_used = "top_reviews";
-            notes.push(
-              "Themes derived from representative top review snippets on the product page."
-            );
-          }
-        }
-
-        // 4) type=reviews fallback (once per ASIN, limit 10–20) when still no themes
-        if (source_used === "none") {
-          try {
-            const { getRainforestReviewsEnrichment } = await import("@/lib/rainforest/reviewsEnrichment");
-            const reviewsData = await getRainforestReviewsEnrichment(asin, "amazon.com", 15);
-            if (reviewsData?.extracted) {
-              const ex = reviewsData.extracted;
-              for (const c of (ex.top_complaints || []).slice(0, 3)) {
-                top_complaints.push({ theme: c.theme, evidence: c.snippet ?? null });
-              }
-              for (const p of (ex.top_praise || []).slice(0, 3)) {
-                top_praise.push({ theme: p.theme, evidence: p.snippet ?? null });
-              }
-              if (top_complaints.length || top_praise.length) {
-                source_used = "type_reviews";
-                notes.push("Themes from Rainforest type=reviews API (fallback when product page had no review signals).");
-              }
-            }
-          } catch (e) {
-            console.warn("REVIEW_FALLBACK_TYPE_REVIEWS_ERROR", { asin, error: String(e) });
-          }
-        }
-
-        if (source_used === "none") {
+        if (meta.complaint_source_used === "rating_breakdown_only" && meta.rating_breakdown_present) {
           notes.push(
-            "Amazon didn’t show a Customers Say module and the product page didn’t include usable top review text, so review themes could not be summarized for this ASIN."
+            "Low-star share exists, but this scrape didn't include low-star 'Top reviews' text. To pull more negative review text we'd need the reviews page (type=reviews)."
           );
-          reviewInsights.errors.push({ asin, error: "NO_REVIEW_SIGNALS" });
-        } else {
-          reviewInsightsStats.used_type_product_count += 1;
         }
+        notes.push("Source: Rainforest product page scrape (rating_breakdown + on-page top reviews).");
+
+        reviewInsightsStats.used_type_product_count += 1;
 
         reviewInsights.by_asin[asin] = {
           asin,
@@ -3290,10 +3210,19 @@ export async function POST(req: NextRequest) {
           top_complaints,
           top_praise,
           notes,
+          meta: {
+            complaint_source_used: meta.complaint_source_used,
+            overall_rating: meta.overall_rating,
+            rating_breakdown_present: meta.rating_breakdown_present,
+            top_reviews_count: meta.top_reviews_count,
+            negative_reviews_count: meta.negative_reviews_count,
+            mixed_reviews_count: meta.mixed_reviews_count,
+            positive_reviews_count: meta.positive_reviews_count,
+          },
         };
       }
     }
-    
+
     // PRIORITY D.11: Log what ai_context.spapi_enrichment contains before OpenAI call
     if (spapiEnrichment) {
       console.log("SPAPI_ENRICHMENT_INJECTED", {
@@ -3501,6 +3430,13 @@ export async function POST(req: NextRequest) {
             ([asin, value]: [string, any]) => ({
               asin,
               source_used: value?.source_used,
+              overall_rating: value?.meta?.overall_rating ?? null,
+              rating_breakdown_present: value?.meta?.rating_breakdown_present ?? false,
+              top_reviews_count: value?.meta?.top_reviews_count ?? 0,
+              negative_reviews_count: value?.meta?.negative_reviews_count ?? 0,
+              mixed_reviews_count: value?.meta?.mixed_reviews_count ?? 0,
+              positive_reviews_count: value?.meta?.positive_reviews_count ?? 0,
+              complaint_source_used: value?.meta?.complaint_source_used ?? null,
             })
           )
         : [],
