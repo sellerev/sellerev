@@ -10,6 +10,8 @@ interface SearchBarProps {
   loading?: boolean;
   readOnly?: boolean;
   inputError?: string | null;
+  /** When true, page already has search results (e.g. from history or completed search). Hide dropdown and do not show suggestions. */
+  hasResults?: boolean;
 }
 
 export default function SearchBar({
@@ -19,6 +21,7 @@ export default function SearchBar({
   loading = false,
   readOnly = false,
   inputError = null,
+  hasResults = false,
 }: SearchBarProps) {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -26,6 +29,15 @@ export default function SearchBar({
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Close dropdown when search is submitted (loading) or when page already has results
+  useEffect(() => {
+    if (loading || hasResults) {
+      setShowDropdown(false);
+      setSuggestions([]);
+      setSelectedIndex(-1);
+    }
+  }, [loading, hasResults]);
 
   // Fetch autocomplete suggestions
   const fetchSuggestions = useCallback(async (query: string) => {
@@ -59,9 +71,13 @@ export default function SearchBar({
     }
   }, []);
 
-  // Debounced effect for autocomplete
+  // Debounced effect for autocomplete — do not fetch when page already has results
   useEffect(() => {
-    if (readOnly || loading) {
+    if (readOnly || loading || hasResults) {
+      if (hasResults) {
+        setSuggestions([]);
+        setShowDropdown(false);
+      }
       return;
     }
 
@@ -80,7 +96,7 @@ export default function SearchBar({
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [inputValue, fetchSuggestions, readOnly, loading]);
+  }, [inputValue, fetchSuggestions, readOnly, loading, hasResults]);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -197,7 +213,7 @@ export default function SearchBar({
                 }}
                 onKeyDown={handleKeyDown}
                 onFocus={() => {
-                  if (!readOnly && suggestions.length > 0) {
+                  if (!readOnly && !hasResults && suggestions.length > 0) {
                     setShowDropdown(true);
                   }
                 }}
@@ -206,7 +222,7 @@ export default function SearchBar({
                 readOnly={readOnly}
               />
               {/* Autocomplete Dropdown */}
-              {showDropdown && suggestions.length > 0 && !readOnly && (
+              {showDropdown && suggestions.length > 0 && !readOnly && !hasResults && (
                 <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-50 max-h-[240px] overflow-y-auto">
                   {suggestions.map((suggestion, index) => (
                     <button

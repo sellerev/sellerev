@@ -1323,6 +1323,7 @@ export default function AnalyzeForm({
               loading={loading}
               readOnly={readOnly}
               inputError={inputError}
+              hasResults={!!(analysis && ((analysis.page_one_listings?.length ?? 0) > 0 || (analysis.products?.length ?? 0) > 0))}
             />
 
             {/* Global Error */}
