@@ -3,6 +3,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Copy, Check, ChevronRight, History, Sparkles } from "lucide-react";
 import HistoryPanel from "./components/HistoryPanel";
+import FeesProfitChatCard, {
+  type FeesProfitCardPayload,
+} from "./components/FeesProfitChatCard";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
 /**
@@ -34,58 +37,13 @@ export interface Citation {
 
 type SellerStage = "new" | "existing" | "scaling" | null;
 
-type FeesQuote = {
-  asin: string;
-  price: number;
-  referralFee: number;
-  fulfillmentFee: number;
-  totalAmazonFees: number;
-  source: "sp_api" | "estimated";
-  confidence: "high" | "medium" | "low";
-  cached?: boolean;
-  fetchedAt?: string | null;
-  cacheAgeHours?: number | null;
-  estimateBasis?: {
-    referral?: string;
-    fulfillment?: string;
-  };
-};
-
-type FeesFlowState =
-  | { status: "idle" }
-  | {
-      status: "quote_loading";
-      asin: string;
-      price: number;
-      startedAtMs: number;
-    }
-  | {
-      status: "quote_error";
-      asin: string;
-      price: number;
-      message: string;
-      reason?: string;
-      httpStatus?: number;
-      requestId?: string;
-      missingEnv?: string[];
-      errors?: any[];
-      fallbackQuote?: FeesQuote;
-    }
-  | {
-      status: "awaiting_profit_inputs";
-      asin: string;
-      prefilledPrice: number | null;
-      quote: FeesQuote;
-      cogs: number | null;
-      shipIn: number | null;
-      otherCosts: number | null;
-    };
-
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
   citations?: Citation[];
+  /** Inline UI cards (e.g. fees_profit) */
+  cards?: Array<{ type: string; payload: unknown }>;
 }
 
 interface MarketSnapshot {
@@ -408,14 +366,6 @@ export default function ChatSidebar({
   // Seller stage (from onboarding) for tailoring explanations
   const [sellerStage, setSellerStage] = useState<SellerStage>(null);
 
-  // Local guided flow: FBA fees + profitability (exactly 1 selected ASIN)
-  const [feesFlow, setFeesFlow] = useState<FeesFlowState>({ status: "idle" });
-  const [profitForm, setProfitForm] = useState<{
-    cogs: string;
-    shipIn: string;
-    otherCosts: string;
-  }>({ cogs: "", shipIn: "", otherCosts: "0" });
-  
   // Refs for auto-scroll
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -592,479 +542,6 @@ export default function ChatSidebar({
   // HANDLERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Queue assistant messages that should not interleave with the streaming assistant response.
-  // This keeps output clean (Cursor-style): one assistant response stream at a time.
-  const queuedAssistantMessagesRef = useRef<string[]>([]);
-
-  const appendAssistantMessage = useCallback((content: string) => {
-    setMessages((prev) => [...prev, { role: "assistant", content }]);
-  }, []);
-
-  const appendAssistantMessageDeferred = useCallback(
-    (content: string) => {
-      if (isLoading) {
-        queuedAssistantMessagesRef.current.push(content);
-        return;
-      }
-      setMessages((prev) => [...prev, { role: "assistant", content }]);
-    },
-    [isLoading]
-  );
-
-  const formatMoney = (n: number) => `$${n.toFixed(2)}`;
-
-  const isAffirmative = (text: string) =>
-    /^\s*(yes|y|yep|yeah|confirm|run|run it|go ahead|do it)\b/i.test(text);
-
-  const isNegative = (text: string) => /^\s*(no|n|not now|cancel)\b/i.test(text);
-
-  const parseFeesInputs = (text: string) => {
-    const t = text.trim();
-    const keepPrice =
-      /\bkeep(ing)?\s+price\b/i.test(t) ||
-      /\buse\s+(the\s+)?(listing|current)\s+price\b/i.test(t);
-
-    // Accept: "$8", "8$", "8", "8.50", with optional commas.
-    const pickMoney = (re: RegExp) => {
-      const m = t.match(re);
-      if (!m) return undefined;
-      const raw = (m[m.length - 1] || "").replace(/,/g, "");
-      const n = Number.parseFloat(raw);
-      return Number.isFinite(n) ? n : undefined;
-    };
-
-    const cogs = pickMoney(
-      /\b(cogs|cost of goods|product cost)\b\s*(?:is|are|:|=)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*\$)?/i
-    );
-    const shipIn = pickMoney(
-      /\b(ship|shipping|inbound|freight|prep)\b(?:\s+to\s+amazon)?\s*(?:is|are|:|=)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*\$)?/i
-    );
-    const price = pickMoney(
-      /\b(price|selling price|sell price)\b\s*(?:is|are|:|=)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*\$)?/i
-    );
-
-    const otherCosts = pickMoney(
-      /\b(other costs?|misc(?:ellaneous)? costs?)\b\s*(?:is|are|:|=)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*\$)?/i
-    );
-
-    return { keepPrice, cogs, shipIn, otherCosts, price };
-  };
-
-  const getPrefilledPrice = useCallback((): number | null => {
-    const raw = (selectedListing as any)?.price;
-    return typeof raw === "number" && raw > 0 ? raw : null;
-  }, [selectedListing]);
-
-  const getMarginBand = (marginPct: number): "thin" | "okay" | "strong" => {
-    if (marginPct < 15) return "thin";
-    if (marginPct < 25) return "okay";
-    return "strong";
-  };
-
-  const renderMissingInputsLabel = (missing: Array<"cogs" | "shipIn">) => {
-    const parts = missing.map((m) => (m === "cogs" ? "COGS" : "Shipping to Amazon"));
-    if (parts.length === 1) return parts[0];
-    return `${parts[0]} and ${parts[1]}`;
-  };
-
-  type FeesQuoteFetchResult =
-    | { kind: "ok"; quote: FeesQuote }
-    | {
-        kind: "error";
-        message: string;
-        reason?: string;
-        httpStatus?: number;
-        requestId?: string;
-        missingEnv?: string[];
-        errors?: any[];
-        fallbackQuote?: FeesQuote;
-      }
-    | { kind: "timeout"; message: string };
-
-  const fetchFeesQuoteDetailed = useCallback(
-    async (asin: string, price: number): Promise<FeesQuoteFetchResult> => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      try {
-        const response = await fetch("/api/fba-fees", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ asin, price }),
-          signal: controller.signal,
-        });
-        const data = await response.json().catch(() => null);
-
-        // ok=true with source sp_api/estimated
-        if (data?.ok === true && (data?.source === "sp_api" || data?.source === "estimated")) {
-          const fulfillmentFee =
-            typeof data?.fulfillment_fee === "number" ? data.fulfillment_fee : null;
-          const referralFee = typeof data?.referral_fee === "number" ? data.referral_fee : null;
-          if (fulfillmentFee === null || referralFee === null) {
-            return {
-              kind: "error",
-              message: "Fee quote response was incomplete.",
-              reason: "quote_incomplete",
-            };
-          }
-          const totalAmazonFees =
-            typeof data?.total_amazon_fees === "number"
-              ? data.total_amazon_fees
-              : fulfillmentFee + referralFee;
-          const cached = typeof data?.cached === "boolean" ? (data.cached as boolean) : undefined;
-          const fetchedAt = typeof data?.fetched_at === "string" ? (data.fetched_at as string) : null;
-          const cacheAgeHours =
-            typeof data?.cache_age_hours === "number" ? (data.cache_age_hours as number) : null;
-          return {
-            kind: "ok",
-            quote: {
-              asin,
-              price,
-              referralFee,
-              fulfillmentFee,
-              totalAmazonFees,
-              source: data.source,
-              confidence:
-                data.source === "sp_api"
-                  ? "high"
-                  : (data.confidence === "medium" ? "medium" : "low"),
-              cached,
-              fetchedAt,
-              cacheAgeHours,
-              estimateBasis: data.source === "estimated" ? data.estimate_basis : undefined,
-            },
-          };
-        }
-
-        // ok=false with reason + optional fallback
-        if (data?.ok === false) {
-          const reason = typeof data?.reason === "string" ? data.reason : "unknown";
-          const missingEnv = Array.isArray(data?.missing_env)
-            ? (data.missing_env as string[])
-            : undefined;
-          const httpStatus = typeof data?.status === "number" ? data.status : undefined;
-          const requestId = typeof data?.request_id === "string" ? data.request_id : undefined;
-          const errors = Array.isArray(data?.errors) ? (data.errors as any[]) : undefined;
-
-          let message = "I couldn’t retrieve an exact Seller API fee quote within 5 seconds.";
-          if (reason === "sp_api_not_configured") {
-            message = "Seller API fee quote isn’t available (not configured).";
-          } else if (reason === "sp_api_error") {
-            message = "Seller API fee quote failed.";
-          } else if (reason === "quote_unavailable") {
-            message = "Seller API couldn’t generate a fee quote for this ASIN at this price.";
-          }
-
-          const fb = data?.fallback;
-          let fallbackQuote: FeesQuote | undefined;
-          if (fb?.ok === true && fb?.source === "estimated") {
-            const fFulfillmentFee =
-              typeof fb?.fulfillment_fee === "number" ? fb.fulfillment_fee : null;
-            const fReferralFee = typeof fb?.referral_fee === "number" ? fb.referral_fee : null;
-            if (fFulfillmentFee !== null && fReferralFee !== null) {
-              const fTotal =
-                typeof fb?.total_amazon_fees === "number"
-                  ? fb.total_amazon_fees
-                  : fFulfillmentFee + fReferralFee;
-              fallbackQuote = {
-                asin,
-                price,
-                referralFee: fReferralFee,
-                fulfillmentFee: fFulfillmentFee,
-                totalAmazonFees: fTotal,
-                source: "estimated",
-                confidence: fb.confidence === "medium" ? "medium" : "low",
-                estimateBasis: fb.estimate_basis,
-              };
-            }
-          }
-
-          return {
-            kind: "error",
-            message,
-            reason,
-            httpStatus,
-            requestId,
-            missingEnv,
-            errors,
-            fallbackQuote,
-          };
-        }
-
-        return {
-          kind: "error",
-          message: "Unexpected fee quote response.",
-          reason: "unexpected_response",
-        };
-      } catch (err: any) {
-        if (err?.name === "AbortError") {
-          return {
-            kind: "timeout",
-            message:
-              "Fee quote timed out after 5 seconds. You can retry, or use estimated fees if available.",
-          };
-        }
-        return {
-          kind: "error",
-          message: "Fee quote request failed. You can retry in a moment.",
-          reason: "network_error",
-        };
-      } finally {
-        clearTimeout(timeout);
-      }
-    },
-    []
-  );
-
-  const explainMarketContextForProfitability = useCallback(
-    (marginPct: number) => {
-      const pressure = marketSnapshot
-        ? calculateMarketPressure(
-            marketSnapshot.avg_reviews ?? null,
-            marketSnapshot.sponsored_count ?? 0,
-            marketSnapshot.dominance_score ?? 0
-          )
-        : "Moderate";
-      const band = getMarginBand(marginPct);
-      const stageLabel: SellerStage = sellerStage ?? "existing";
-
-      appendAssistantMessage(
-        `What this means in *this* market:\n- Your **${marginPct.toFixed(1)}% net margin** is **${band}** for a Page‑1 competitive niche. In tighter markets, small fee or price swings can erase profit quickly.\n- With **${pressure}** competitive pressure on Page‑1, you’ll want margin headroom for **PPC** and **returns**—especially if price is compressed.\n\nTailored to your experience level (**${stageLabel}**):\n- If you’re **new**, I’d look for **healthier margin headroom** before committing inventory.\n- If you’re an **existing seller**, this can work if inbound costs and conversion are predictable.\n- If you’re **scaling a brand**, the question is whether you can defend price or win on conversion.`
-      );
-    },
-    [appendAssistantMessage, getMarginBand, marketSnapshot, sellerStage]
-  );
-
-  const computeAndRespondProfitability = useCallback(
-    (quote: FeesQuote, cogs: number, shipIn: number, otherCosts: number) => {
-      const totalCosts = cogs + shipIn + otherCosts;
-      const profit = quote.price - quote.totalAmazonFees - totalCosts;
-      const marginPct = quote.price > 0 ? (profit / quote.price) * 100 : 0;
-
-      appendAssistantMessage(
-        `Profitability at **${formatMoney(quote.price)}**:\n- **Referral fee: ${formatMoney(quote.referralFee)}**\n- **FBA fulfillment fee: ${formatMoney(quote.fulfillmentFee)}**\n- **Total Amazon fees: ${formatMoney(quote.totalAmazonFees)}**\n- **COGS: ${formatMoney(cogs)}**\n- **Inbound shipping to Amazon: ${formatMoney(shipIn)}**\n- **Other costs: ${formatMoney(otherCosts)}**\n- **Net profit per unit: ${formatMoney(profit)}**\n- **Net margin: ${marginPct.toFixed(1)}%**`
-      );
-
-      explainMarketContextForProfitability(marginPct);
-    },
-    [appendAssistantMessage, explainMarketContextForProfitability, formatMoney]
-  );
-
-  const runFeesQuote = useCallback(
-    async (
-      asin: string,
-      price: number,
-      opts?: { silent?: boolean }
-    ): Promise<void> => {
-      setCopilotStatus("fetching");
-      setFeesFlow({
-        status: "quote_loading",
-        asin,
-        price,
-        startedAtMs: Date.now(),
-      });
-
-      const res = await fetchFeesQuoteDetailed(asin, price);
-      setCopilotStatus("idle");
-
-      if (res.kind !== "ok") {
-        const msg =
-          res.kind === "timeout"
-            ? res.message
-            : `${res.message}\n\nYou can retry now, or try a different item price.${
-                res.fallbackQuote ? " Or you can use an estimated fee breakdown." : ""
-              }`;
-
-        // Collapse fee responses: no pre-run bubble; only emit a single message per attempt (unless silent UI action).
-        if (opts?.silent !== true) {
-          appendAssistantMessageDeferred(msg);
-        }
-
-        setFeesFlow({
-          status: "quote_error",
-          asin,
-          price,
-          message: msg,
-          reason: res.kind === "timeout" ? "timeout" : res.reason,
-          httpStatus: res.kind === "error" ? res.httpStatus : undefined,
-          requestId: res.kind === "error" ? res.requestId : undefined,
-          missingEnv: res.kind === "error" ? res.missingEnv : undefined,
-          errors: res.kind === "error" ? res.errors : undefined,
-          fallbackQuote: res.kind === "error" ? res.fallbackQuote : undefined,
-        });
-        return;
-      }
-
-      // Successful quote: update inline panel state (and preserve any existing cost inputs).
-      setFeesFlow((prev) => {
-        if (prev.status === "awaiting_profit_inputs" && prev.asin === asin) {
-          return { ...prev, quote: res.quote };
-        }
-        return {
-          status: "awaiting_profit_inputs",
-          asin,
-          prefilledPrice: price,
-          quote: res.quote,
-          cogs: null,
-          shipIn: null,
-          otherCosts: 0,
-        };
-      });
-
-      // Only initialize profit form if we're not already in profit-input mode
-      setProfitForm((prev) => (feesFlow.status === "awaiting_profit_inputs" ? prev : { cogs: "", shipIn: "", otherCosts: "0" }));
-
-      if (opts?.silent !== true) {
-        appendAssistantMessageDeferred(
-          `Amazon fees at **${formatMoney(res.quote.price)}**:\n- **Total Amazon fees: ${formatMoney(res.quote.totalAmazonFees)}**\n  - Referral fee: ${formatMoney(res.quote.referralFee)}\n  - FBA fulfillment fee: ${formatMoney(res.quote.fulfillmentFee)}\n\nWant to calculate your **profitability** for this product? Add your costs below (COGS + inbound shipping are required).`
-        );
-      }
-    },
-    [appendAssistantMessage, fetchFeesQuoteDetailed, formatMoney, feesFlow.status]
-  );
-
-  const startFeesFlow = useCallback(
-    (asin: string) => {
-      // Prevent duplicate starts (e.g., repeated intent metadata chunks)
-      if (feesFlow.status !== "idle" && "asin" in feesFlow && feesFlow.asin === asin) return;
-
-      const prefilledPrice = getPrefilledPrice();
-      console.log("[FBA_FEES_QUOTE_START]", { asin, prefilledPrice });
-
-      // Clear other prompts
-      setPendingEscalationConfirmation(null);
-
-      if (prefilledPrice === null) {
-        appendAssistantMessage(
-          `I can calculate **exact Amazon fees** using Amazon’s **Seller API** for this product.\n\nI’m missing an item price to quote fees. Reply with a price like: \`Price 74.95\`.`
-        );
-        setFeesFlow({ status: "idle" });
-        return;
-      }
-
-      void runFeesQuote(asin, prefilledPrice, { silent: false });
-    },
-    [appendAssistantMessage, feesFlow, getPrefilledPrice, runFeesQuote]
-  );
-
-  const handleFeesFlowTurn = useCallback(
-    async (messageToSend: string, opts?: { silent?: boolean }): Promise<boolean> => {
-      const prefilledPrice = getPrefilledPrice();
-
-      if (feesFlow.status === "idle") return false;
-
-      // If selection changes mid-flow, enforce again
-      if (!selectedAsins || selectedAsins.length !== 1 || selectedAsins[0] !== feesFlow.asin) {
-        if (!selectedAsins || selectedAsins.length === 0) {
-          appendAssistantMessage(
-            `I can calculate **exact FBA fees** for a product using Amazon’s **Seller API**—but I need you to **select exactly 1 ASIN** first.\n\nRight now you have **0 selected**, so I can’t run the fee lookup yet.\n\nPlease select **one** product card and then tell me “run fees”.`
-          );
-          setFeesFlow({ status: "idle" });
-          return true;
-        }
-
-        if (selectedAsins.length > 1) {
-          appendAssistantMessage(
-            `I can calculate **exact FBA fees** using Amazon’s **Seller API**, but the fee lookup supports **exactly 1 ASIN at a time**.\n\nYou currently have **${selectedAsins.length} ASINs selected**, so I’m going to pause here to avoid mixing products.\n\nPlease **deselect down to 1 ASIN**, then tell me “run fees”.`
-          );
-          setFeesFlow({ status: "idle" });
-          return true;
-        }
-      }
-
-      // Price guidance question
-      if (/\bwhat price\b/i.test(messageToSend) || /\bwhich price\b/i.test(messageToSend)) {
-        const p = prefilledPrice !== null ? prefilledPrice.toFixed(2) : "___";
-        appendAssistantMessage(
-          `You can use the current listing price (**$ ${p}**) or a target price you’re considering.\n\nTell me the price you want to model (e.g. \`Price 89\`) and I’ll rerun the Amazon fee quote.`
-        );
-        return true;
-      }
-
-      const parsed = parseFeesInputs(messageToSend);
-      const hasAnyFeesInput =
-        parsed.keepPrice ||
-        typeof parsed.cogs === "number" ||
-        typeof parsed.shipIn === "number" ||
-        typeof parsed.otherCosts === "number" ||
-        typeof parsed.price === "number";
-
-      // Allow rerun of fees quote at a new price (Price X)
-      if (typeof parsed.price === "number" && parsed.price > 0) {
-        await runFeesQuote(feesFlow.asin, parsed.price, { silent: opts?.silent === true });
-        return true;
-      }
-
-      // If we have a quote, we can compute profitability once COGS + ship-in are provided
-      if (feesFlow.status === "awaiting_profit_inputs") {
-        // If user is asking something unrelated, don't hijack the chat.
-        if (!hasAnyFeesInput) return false;
-        const quote = feesFlow.quote;
-        const currentCogs =
-          feesFlow.status === "awaiting_profit_inputs" ? feesFlow.cogs : null;
-        const currentShipIn =
-          feesFlow.status === "awaiting_profit_inputs" ? feesFlow.shipIn : null;
-        const currentOther =
-          feesFlow.status === "awaiting_profit_inputs" ? feesFlow.otherCosts : 0;
-
-        const nextCogs =
-          typeof parsed.cogs === "number" && parsed.cogs > 0 ? parsed.cogs : currentCogs;
-        const nextShipIn =
-          typeof parsed.shipIn === "number" && parsed.shipIn >= 0 ? parsed.shipIn : currentShipIn;
-        const nextOther =
-          typeof parsed.otherCosts === "number" && parsed.otherCosts >= 0
-            ? parsed.otherCosts
-            : currentOther;
-
-        const missing: Array<"cogs" | "shipIn"> = [];
-        if (nextCogs === null) missing.push("cogs");
-        if (nextShipIn === null) missing.push("shipIn");
-
-        if (missing.length > 0) {
-          appendAssistantMessage(
-            `To calculate profitability, I still need **${renderMissingInputsLabel(missing)}**.\n\nReply like: \`COGS 8, Shipping 3, Other costs 0\``
-          );
-          setFeesFlow({
-            status: "awaiting_profit_inputs",
-            asin: feesFlow.asin,
-            prefilledPrice: feesFlow.prefilledPrice,
-            quote,
-            cogs: nextCogs,
-            shipIn: nextShipIn,
-            otherCosts: nextOther,
-          });
-          return true;
-        }
-
-        // TS guard
-        if (nextCogs === null || nextShipIn === null) return true;
-
-        computeAndRespondProfitability(quote, nextCogs, nextShipIn, nextOther ?? 0);
-        setFeesFlow({
-          status: "awaiting_profit_inputs",
-          asin: feesFlow.asin,
-          prefilledPrice: feesFlow.prefilledPrice,
-          quote,
-          cogs: nextCogs,
-          shipIn: nextShipIn,
-          otherCosts: nextOther ?? 0,
-        });
-        return true;
-      }
-
-      return false;
-    },
-    [
-      appendAssistantMessage,
-      computeAndRespondProfitability,
-      fetchFeesQuoteDetailed,
-      feesFlow,
-      getPrefilledPrice,
-      formatMoney,
-      selectedAsins,
-      runFeesQuote,
-    ]
-  );
-
   const sendMessage = useCallback(async (
     arg?: string | {
       message?: string;
@@ -1090,18 +567,6 @@ export default function ChatSidebar({
       hadEscalationThisResponseRef.current = false;
       setMessages((prev) => [...prev, userMessage]);
       setInput("");
-    }
-
-    // Local intercept: handle follow-up turns ONLY after the backend has initiated the intent.
-    // This avoids inventing a parallel intent system on the client.
-    if (feesFlow.status !== "idle") {
-      const handledByFeesFlow = await handleFeesFlowTurn(messageToSend);
-      if (handledByFeesFlow) {
-        setIsLoading(false);
-        setStreamingContent("");
-        inputRef.current?.focus();
-        return;
-      }
     }
 
     // Any new round-trip clears prior pending escalation confirmation (if present)
@@ -1139,6 +604,7 @@ export default function ChatSidebar({
       const decoder = new TextDecoder();
       let accumulatedContent = "";
       let citationsForFinal: Citation[] = [];
+      let cardsForFinal: Array<{ type: string; payload: unknown }> = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -1197,18 +663,6 @@ export default function ChatSidebar({
                   // Stop loading indicator (no assistant response will stream until confirmed)
                   setCopilotStatus("idle");
                   setIsLoading(false);
-                } else if (
-                  json.metadata.type === "copilot_intent" &&
-                  json.metadata.intent === "fba_profitability_lookup"
-                ) {
-                  // Backend has detected the intent; run the guided flow locally (chat-only).
-                  const asinFromMeta =
-                    typeof json.metadata.asin === "string" ? json.metadata.asin : null;
-                  const asinToUse = asinFromMeta || (selectedAsins?.[0] || null);
-                  if (asinToUse) {
-                    startFeesFlow(asinToUse);
-                  }
-                  // Do NOT stop loading here; the backend will still stream a normal assistant response.
                 } else if (json.metadata.type === "citations") {
                   // Store citations for the current message
                   const cits = (json.metadata.citations || []) as Citation[];
@@ -1228,6 +682,11 @@ export default function ChatSidebar({
                 accumulatedContent += json.content;
                 setStreamingContent(accumulatedContent);
               }
+
+              // Handle ui_card (e.g. fees_profit)
+              if (json.type === "ui_card" && json.cardType === "fees_profit" && json.payload != null) {
+                cardsForFinal.push({ type: "fees_profit", payload: json.payload });
+              }
             } catch {
               // Skip malformed chunks
             }
@@ -1235,15 +694,15 @@ export default function ChatSidebar({
         }
       }
 
-      // Add complete assistant message with citations
-      if (accumulatedContent.trim()) {
+      // Add complete assistant message with citations and cards
+      if (accumulatedContent.trim() || cardsForFinal.length > 0) {
         const assistantMessage: ChatMessage = {
           role: "assistant",
-          content: accumulatedContent,
+          content: accumulatedContent.trim() || " ",
           citations: citationsForFinal.length > 0 ? citationsForFinal : undefined,
+          cards: cardsForFinal.length > 0 ? cardsForFinal : undefined,
         };
         setMessages((prev) => [...prev, assistantMessage]);
-        // Clear citations for next message
         setCurrentCitations([]);
       }
     } catch (error) {
@@ -1263,17 +722,8 @@ export default function ChatSidebar({
       setCopilotStatus("idle"); // Clear Copilot status when done
       // Focus input after send
       inputRef.current?.focus();
-
-      // Flush any deferred assistant messages (e.g., fee results) now that streaming is done.
-      const queued = queuedAssistantMessagesRef.current.splice(0);
-      if (queued.length > 0) {
-        setMessages((prev) => [
-          ...prev,
-          ...queued.map((content) => ({ role: "assistant" as const, content })),
-        ]);
-      }
     }
-  }, [analysisRunId, feesFlow.status, handleFeesFlowTurn, input, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange, escalationState, escalationMessage, startFeesFlow]);
+  }, [analysisRunId, input, onMarginSnapshotUpdate, selectedListing, selectedAsins, onMessagesChange, escalationState, escalationMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Use effectiveId for UI enabling, but chat API still needs analysisRunId
@@ -1470,9 +920,11 @@ export default function ChatSidebar({
                       </div>
                       
                       {/* Message content */}
-                      <div className="text-sm whitespace-pre-wrap leading-relaxed text-gray-900">
-                        {messageContent}
-                      </div>
+                      {messageContent.trim() && (
+                        <div className="text-sm whitespace-pre-wrap leading-relaxed text-gray-900">
+                          {messageContent}
+                        </div>
+                      )}
                       
                       {/* ASIN Citation Chips - inline at end of message */}
                       {msg.role === "assistant" && msg.citations && msg.citations.length > 0 && (
@@ -1482,6 +934,33 @@ export default function ChatSidebar({
                           ))}
                         </div>
                       )}
+
+                      {/* Fees & Profit card */}
+                      {msg.role === "assistant" &&
+                        msg.cards?.map((card, cIdx) => {
+                          if (card.type !== "fees_profit") return null;
+                          const pl = card.payload as FeesProfitCardPayload;
+                          return (
+                            <FeesProfitChatCard
+                              key={cIdx}
+                              payload={pl}
+                              onFeesFetched={(data) => {
+                                setMessages((prev) => {
+                                  const n = [...prev];
+                                  const m = n[idx];
+                                  if (!m?.cards) return prev;
+                                  const cards = [...m.cards];
+                                  cards[cIdx] = {
+                                    type: "fees_profit",
+                                    payload: { ...pl, fees: data },
+                                  };
+                                  n[idx] = { ...m, cards };
+                                  return n;
+                                });
+                              }}
+                            />
+                          );
+                        })}
                       
                       {/* Trust indicator chips removed (UX requirement) */}
                     </div>
@@ -1668,282 +1147,6 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* INPUT AREA                                                          */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* Inline loading panel while fetching Seller API fee quote (5s timeout enforced in fetch) */}
-      {feesFlow.status === "quote_loading" && (
-        <div className="mx-6 mb-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm text-gray-900 font-medium">Fetching fee quote…</p>
-              <p className="text-xs text-gray-600 mt-1">
-                ASIN <span className="font-mono">{feesFlow.asin}</span> at{" "}
-                <span className="font-semibold">{formatMoney(feesFlow.price)}</span>
-              </p>
-              <p className="text-[11px] text-gray-500 mt-1">
-                If it takes longer than 5 seconds, you’ll see a retry option.
-              </p>
-            </div>
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700" />
-          </div>
-
-          <div className="mt-3 flex gap-2">
-            <button
-              type="button"
-              onClick={() => setFeesFlow({ status: "idle" })}
-              className="px-3 py-2 bg-white rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 border border-gray-300"
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
-      {/* Inline retry panel when Seller API fee quote is temporarily unavailable */}
-      {feesFlow.status === "quote_error" && (
-        <div className="mx-6 mb-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
-          <p className="text-sm text-gray-900 font-medium">Fee quote unavailable</p>
-          <p className="text-xs text-gray-600 mt-1">
-            ASIN <span className="font-mono">{feesFlow.asin}</span>
-          </p>
-          <p className="text-xs text-gray-700 mt-2 whitespace-pre-line">{feesFlow.message}</p>
-          {(feesFlow.reason ||
-            feesFlow.httpStatus ||
-            feesFlow.requestId ||
-            (feesFlow.missingEnv && feesFlow.missingEnv.length > 0)) && (
-            <div className="mt-2 text-[11px] text-gray-600 space-y-1">
-              {feesFlow.reason && (
-                <div>
-                  <span className="font-medium">Reason:</span> {feesFlow.reason}
-                </div>
-              )}
-              {typeof feesFlow.httpStatus === "number" && (
-                <div>
-                  <span className="font-medium">HTTP:</span> {feesFlow.httpStatus}
-                </div>
-              )}
-              {feesFlow.requestId && (
-                <div>
-                  <span className="font-medium">Request ID:</span>{" "}
-                  <span className="font-mono">{feesFlow.requestId}</span>
-                </div>
-              )}
-              {feesFlow.missingEnv && feesFlow.missingEnv.length > 0 && (
-                <div>
-                  <span className="font-medium">Missing env:</span>{" "}
-                  <span className="font-mono">{feesFlow.missingEnv.join(", ")}</span>
-                </div>
-              )}
-            </div>
-          )}
-          <div className="mt-3">
-            <label className="block text-xs font-medium text-gray-700 mb-1">Item price</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="0.01"
-              value={feesFlow.price}
-              onChange={(e) => {
-                const v = Number.parseFloat(e.target.value);
-                if (!Number.isFinite(v) || v <= 0) return;
-                setFeesFlow({ ...feesFlow, price: v });
-              }}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
-            />
-          </div>
-          <div className="mt-3 flex gap-2">
-            <button
-              type="button"
-              onClick={() => setFeesFlow({ status: "idle" })}
-              className="px-3 py-2 bg-white rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 border border-gray-300"
-            >
-              Dismiss
-            </button>
-            {feesFlow.fallbackQuote && (
-              <button
-                type="button"
-                onClick={() => {
-                  const q = feesFlow.fallbackQuote!;
-                appendAssistantMessageDeferred(
-                    `Using **estimated** Amazon fees at **${formatMoney(q.price)}** (confidence: **${q.confidence}**):\n- **Total Amazon fees: ${formatMoney(q.totalAmazonFees)}**\n  - Referral fee: ${formatMoney(q.referralFee)}\n  - FBA fulfillment fee: ${formatMoney(q.fulfillmentFee)}`
-                  );
-                  setFeesFlow({
-                    status: "awaiting_profit_inputs",
-                    asin: q.asin,
-                    prefilledPrice: q.price,
-                    quote: q,
-                    cogs: null,
-                    shipIn: null,
-                    otherCosts: 0,
-                  });
-                  setProfitForm({ cogs: "", shipIn: "", otherCosts: "0" });
-                }}
-                className="px-3 py-2 bg-white rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 border border-gray-300"
-              >
-                Use estimated fees
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                // Retry with the currently entered price
-                void handleFeesFlowTurn(`Price ${feesFlow.price}`, { silent: true });
-              }}
-              className="flex-1 px-3 py-2 bg-[#3B82F6] text-white rounded-lg text-sm font-medium hover:bg-[#2563EB]"
-            >
-              Retry quote
-            </button>
-          </div>
-        </div>
-      )}
-      {/* Inline profitability form (post-fee-quote; Amazon-style workflow) */}
-      {feesFlow.status === "awaiting_profit_inputs" && (
-        <div className="mx-6 mb-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-sm text-gray-900 font-medium">Amazon fees</p>
-              <p className="text-xs text-gray-600 mt-0.5">
-                ASIN <span className="font-mono">{feesFlow.asin}</span>
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Item price</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                min="0"
-                step="0.01"
-                value={feesFlow.quote.price}
-                onChange={(e) => {
-                  const v = Number.parseFloat(e.target.value);
-                  if (!Number.isFinite(v) || v <= 0) return;
-                  setFeesFlow({ ...feesFlow, quote: { ...feesFlow.quote, price: v } });
-                }}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  // Rerun fees quote at edited price (no extra chat bubble)
-                  void handleFeesFlowTurn(`Price ${feesFlow.quote.price}`, { silent: true });
-                }}
-                className="mt-2 w-full px-3 py-2 bg-white rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 border border-gray-300"
-              >
-                Update fees
-              </button>
-            </div>
-
-            <div className="text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-700">Total Amazon fees</span>
-                <span className="font-semibold text-gray-900">
-                  {formatMoney(feesFlow.quote.totalAmazonFees)}
-                </span>
-              </div>
-              {feesFlow.quote.source === "estimated" && (
-                <div className="mt-1 text-[11px] text-amber-700">
-                  Estimated ({feesFlow.quote.confidence} confidence)
-                </div>
-              )}
-              {feesFlow.quote.source === "sp_api" && (
-                <div className="mt-1 text-[11px] text-gray-500">
-                  {feesFlow.quote.cached
-                    ? feesFlow.quote.cacheAgeHours !== null && feesFlow.quote.cacheAgeHours !== undefined
-                      ? feesFlow.quote.cacheAgeHours < 24
-                        ? "Exact (cached)"
-                        : feesFlow.quote.cacheAgeHours < 24 * 7
-                          ? "Cached (estimated)"
-                          : "Cached (stale — refresh recommended)"
-                      : "Exact (cached)"
-                    : "Exact (Seller API)"}
-                </div>
-              )}
-              <div className="mt-2 flex items-center justify-between text-xs text-gray-600">
-                <span>Referral fee</span>
-                <span>{formatMoney(feesFlow.quote.referralFee)}</span>
-              </div>
-              <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
-                <span>FBA fulfillment fee</span>
-                <span>{formatMoney(feesFlow.quote.fulfillmentFee)}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <p className="text-sm text-gray-900 font-medium">Profitability</p>
-            <p className="text-xs text-gray-600 mt-0.5">
-              Enter your costs (per unit). COGS + inbound shipping are required.
-            </p>
-
-            <div className="mt-3 grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">COGS</label>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                  value={profitForm.cogs}
-                  onChange={(e) => setProfitForm((p) => ({ ...p, cogs: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
-                  placeholder="e.g. 8.00"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Inbound to Amazon</label>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                  value={profitForm.shipIn}
-                  onChange={(e) => setProfitForm((p) => ({ ...p, shipIn: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
-                  placeholder="e.g. 3.00"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Other costs</label>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                  value={profitForm.otherCosts}
-                  onChange={(e) => setProfitForm((p) => ({ ...p, otherCosts: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
-                  placeholder="0.00"
-                />
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                const cogs = Number.parseFloat(profitForm.cogs);
-                const shipIn = Number.parseFloat(profitForm.shipIn);
-                const other = Number.parseFloat(profitForm.otherCosts || "0");
-                if (!Number.isFinite(cogs) || cogs <= 0 || !Number.isFinite(shipIn) || shipIn < 0) {
-                  appendAssistantMessage(
-                    `To calculate profitability, I need **COGS** (> 0) and **Shipping to Amazon** (≥ 0).`
-                  );
-                  return;
-                }
-                computeAndRespondProfitability(
-                  feesFlow.quote,
-                  cogs,
-                  shipIn,
-                  Number.isFinite(other) && other >= 0 ? other : 0
-                );
-              }}
-              className="mt-3 w-full px-3 py-2 bg-[#3B82F6] text-white rounded-lg text-sm font-medium hover:bg-[#2563EB]"
-            >
-              Calculate profitability
-            </button>
-          </div>
-        </div>
-      )}
       {/* Escalation confirmation prompt (no credits consumed until confirmed) */}
       {pendingEscalationConfirmation && (
         <div className="mx-6 mb-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">

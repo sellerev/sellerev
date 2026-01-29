@@ -31,6 +31,7 @@ import {
   executeEscalation,
 } from "@/lib/ai/copilotEscalationHelpers";
 import { evaluateChatGuardrails } from "@/lib/ai/chatGuardrails";
+import { getOrFetchFeesEstimate } from "@/lib/spapi/feesEstimate";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -1450,36 +1451,27 @@ function detectCostOverrides(
 }
 
 /**
- * Detects user intent to run an exact FBA fees + profitability lookup (SP-API Fees).
- * This is handled WITHOUT calling the LLM or Rainforest, and is fulfilled via /api/fba-fees.
+ * Detects fees/profit intent for the Fees & Profit chat card (SP-API fees, no LLM).
+ * Keywords: run fees, fees, amazon fees, referral/fba/fulfillment fee, profit, margin,
+ * profitability, break-even, net profit, net margin.
  */
-function detectFbaProfitabilityIntent(message: string): boolean {
-  const t = message.toLowerCase();
-  // Tightened to avoid accidental triggers on generic "fees" or "margin" questions
-  const hasFeesOrProfitSignal =
-    t.includes("profit") ||
-    t.includes("profitability") ||
-    t.includes("is this profitable") ||
-    t.includes("margin") ||
-    t.includes("fee") ||
-    t.includes("fees");
-
-  const hasFbaOrAmazonFeesSignal =
-    t.includes("fba") ||
-    t.includes("fulfillment fee") ||
-    t.includes("referral fee") ||
-    t.includes("amazon fee") ||
-    t.includes("amazon fees") ||
-    t.includes("seller api");
-
-  const hasExplicitActionSignal =
-    t.includes("run fees") ||
-    t.includes("calculate fba") ||
-    t.includes("calculate fees") ||
-    t.includes("fee lookup");
-
-  // Require either explicit action, or an FBA/Amazon-fees anchor
-  return hasFeesOrProfitSignal && (hasExplicitActionSignal || hasFbaOrAmazonFeesSignal);
+function detectFeesProfitIntent(message: string): boolean {
+  const t = message.toLowerCase().trim();
+  const patterns = [
+    /\brun\s+fees\b/,
+    /\bfees\b/,
+    /\bamazon\s+fees?\b/,
+    /\breferral\s+fee\b/,
+    /\bfba\s+fee\b/,
+    /\bfulfillment\s+fee\b/,
+    /\bprofit\b/,
+    /\bmargin\b/,
+    /\bprofitability\b/,
+    /\bbreak[- ]?even\b/,
+    /\bnet\s+profit\b/,
+    /\bnet\s+margin\b/,
+  ];
+  return patterns.some((p) => p.test(t));
 }
 
 /**
@@ -2011,16 +2003,9 @@ export async function POST(req: NextRequest) {
     // For the valid (exactly 1 ASIN) case we:
     // - emit SSE metadata to trigger the inline fees UI
     // - still call the LLM and stream a helpful assistant response
-    const isFbaProfitabilityIntent = detectFbaProfitabilityIntent(body.message);
-    let copilotIntentMetadata: null | {
-      type: "copilot_intent";
-      intent: "fba_profitability_lookup";
-      asins: string[];
-      asin: string;
-    } = null;
-    if (isFbaProfitabilityIntent) {
-      console.log("[COPILOT_INTENT]", {
-        intent: "fba_profitability_lookup",
+    const isFeesProfitIntent = detectFeesProfitIntent(body.message);
+    if (isFeesProfitIntent) {
+      console.log("[FEES_PROFIT_INTENT]", {
         user_id: user.id,
         analysis_run_id: body.analysisRunId,
         selected_asins: selectedAsins,
@@ -2028,7 +2013,6 @@ export async function POST(req: NextRequest) {
         timestamp: new Date().toISOString(),
       });
 
-      // Hard rule: exactly 1 ASIN must be selected
       if (selectedAsins.length === 0) {
         const stream = new ReadableStream({
           start(controller) {
@@ -2079,15 +2063,67 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // Valid: exactly 1 ASIN selected → emit intent metadata AND continue to LLM.
-      copilotIntentMetadata = {
-        type: "copilot_intent",
-        intent: "fba_profitability_lookup",
-        asins: selectedAsins,
-        asin: selectedAsins[0],
-      };
+      const asin = selectedAsins[0];
+      const marketplaceId = "ATVPDKIKX0DER";
+      const products = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
+      const listing = products.find((p: any) => (p.asin ?? "").trim() === asin.trim());
+      const price = typeof listing?.price === "number" && listing.price > 0 ? listing.price : null;
+
+      let fees: Awaited<ReturnType<typeof getOrFetchFeesEstimate>> = null;
+      if (price != null) {
+        fees = await getOrFetchFeesEstimate(supabase, user.id, { asin, marketplaceId, price });
+      }
+
+      const content =
+        "Here's your **Fees & Profit** breakdown for this ASIN. Use the card below to fetch Amazon fees (if needed) and adjust costs.";
+      const payload = { asin, marketplaceId, price: price ?? null, fees };
+
+      const s2 = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ type: "ui_card", cardType: "fees_profit", payload })}\n\n`)
+          );
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+
+      void (async () => {
+        try {
+          await supabase.from("analysis_messages").insert([
+            {
+              analysis_run_id: body.analysisRunId,
+              user_id: user.id,
+              role: "user",
+              content: body.message,
+              source_asins: [asin],
+              credits_used: 0,
+            },
+            {
+              analysis_run_id: body.analysisRunId,
+              user_id: user.id,
+              role: "assistant",
+              content,
+              source_asins: [asin],
+              credits_used: 0,
+            },
+          ]);
+        } catch (e) {
+          console.error("Failed to save fees short-circuit messages:", e);
+        }
+      })();
+
+      return new NextResponse(s2, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
     }
-    
+
     // Guardrail input: explicit ASINs in user question (allows escalation only when explicitly referenced)
     // Get Page-1 ASINs for validation (optional but preferred)
     const page1ListingsForEscalation = (analysisResponse.page_one_listings as any[]) || (analysisResponse.products as any[]) || [];
@@ -2150,15 +2186,6 @@ export async function POST(req: NextRequest) {
       // Fallback to minimal context
       contextMessage = `Analysis for ${analysisRun.input_type}: ${analysisRun.input_value}`;
       marketSnapshotSummary = "";
-    }
-
-    // If fee intent is active, instruct the assistant to respond normally AND guide the inline fees workflow.
-    if (copilotIntentMetadata) {
-      const priceHint =
-        typeof body.selectedListing?.price === "number" && body.selectedListing.price > 0
-          ? `$${body.selectedListing.price.toFixed(2)}`
-          : "the current listing price";
-      contextMessage += `\n\nCOPILOT_INTENT: FBA_PROFITABILITY_LOOKUP\nUser asked to run Amazon fees/profitability for the selected ASIN (${copilotIntentMetadata.asin}).\nFrontend will attempt to fetch an exact Seller API fee quote at ${priceHint}.\nYou MUST still answer normally:\n- Briefly say you're attempting to fetch exact Amazon fees using Amazon's Seller API.\n- Tell the user what they'll see (fee breakdown first), and that they can retry or change price if it fails.\n- Ask for COGS and inbound shipping (and optional other costs) so profitability can be calculated after fees load.\n- Do not proceed silently.\n`;
     }
 
     // Determine analysis mode from input_type
@@ -4110,13 +4137,6 @@ CRITICAL RULES FOR ESCALATED DATA:
 
     const stream = new ReadableStream({
       async start(controller) {
-        // Send copilot intent metadata early (non-blocking) so the UI can start inline workflows
-        if (copilotIntentMetadata) {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ metadata: copilotIntentMetadata })}\n\n`)
-          );
-        }
-
         // CRITICAL: Send escalation message IMMEDIATELY when escalation is required
         // This must happen BEFORE the OpenAI API call so the user sees the message first
         if (shouldShowEscalationMessage && escalationMessage) {
