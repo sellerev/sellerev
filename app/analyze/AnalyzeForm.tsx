@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ChatSidebar, { ChatMessage } from "./ChatSidebar";
@@ -478,6 +478,7 @@ export default function AnalyzeForm({
   // ROUTER
   // ─────────────────────────────────────────────────────────────────────────
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
@@ -736,6 +737,74 @@ export default function AnalyzeForm({
       setAnalysisUIState("complete");
     }
   }, [initialAnalysis?.analysis_run_id, initialAnalysis?.input_value, clientRunId]); // Do NOT depend on analysis or analysisRunIdForChat
+
+  // Hydrate from URL when user selects a past run from dropdown (HistoryPanel): client-side
+  // navigation may not re-run the server component, so initialAnalysis can stay stale. Fetch
+  // the run from the history API and apply to state so product cards and snapshot show.
+  const urlRunId = searchParams.get("run") ?? null;
+  useEffect(() => {
+    if (!urlRunId || clientRunId) return;
+    if (analysis?.analysis_run_id === urlRunId) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/history/run?analysisRunId=${encodeURIComponent(urlRunId)}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (cancelled || data.error) return;
+
+        const ar = data.analysis_run || {};
+        const runId = ar.id || urlRunId;
+        const list = data.page_one_listings ?? data.products ?? [];
+        const listLen = list.length;
+        const keyword = ar.input_value ?? "";
+        const snapKeyword = data.market_snapshot?.keyword ?? data.snapshot?.keyword ?? "";
+        const hash = `${runId}:${listLen}:${keyword}:${snapKeyword}`;
+
+        lastSyncedRef.current = runId;
+        lastSyncedHashRef.current = hash;
+
+        const payloadAsAnalysis: AnalysisResponse = {
+          analysis_run_id: runId,
+          created_at: ar.created_at ?? new Date().toISOString(),
+          input_type: (ar.input_type as "asin" | "keyword") ?? "keyword",
+          input_value: keyword,
+          decision: data.decision ?? { verdict: "GO" as const, confidence: 0 },
+          executive_summary: data.executive_summary ?? "Market data loaded.",
+          reasoning: data.reasoning ?? { primary_factors: [], seller_context_impact: "" },
+          risks: data.risks ?? {
+            competition: { level: "Low", explanation: "" },
+            pricing: { level: "Low", explanation: "" },
+            differentiation: { level: "Low", explanation: "" },
+            operations: { level: "Low", explanation: "" },
+          },
+          recommended_actions: data.recommended_actions ?? { must_do: [], should_do: [], avoid: [] },
+          assumptions_and_limits: data.assumptions_and_limits ?? [],
+          market_data: data.market_data ?? undefined,
+          market_snapshot: data.market_snapshot ?? data.snapshot ?? undefined,
+          page_one_listings: list.length > 0 ? (list as AnalysisResponse["page_one_listings"]) : undefined,
+          products: list.length > 0 ? (list as AnalysisResponse["products"]) : undefined,
+          aggregates_derived_from_page_one: data.aggregates_derived_from_page_one ?? data.computed_metrics ?? undefined,
+        };
+
+        if (cancelled) return;
+        setAnalysis(normalizeAnalysis(payloadAsAnalysis));
+        setAnalysisRunIdForChat(runId);
+        setInputValue(keyword);
+        setChatMessages(Array.isArray(data.messages) ? data.messages.map((m: { role: string; content: string }) => ({ role: m.role as "user" | "assistant", content: m.content })) : []);
+        setAnalysisUIState("complete");
+        setSelectedAsins([]);
+        setSortBy("rank");
+        setSelectedBrands(new Set());
+        setSelectedFulfillment(new Set());
+        setSponsoredFilter(null);
+      } catch (e) {
+        if (!cancelled) console.error("FRONTEND_HYDRATE_FROM_URL_ERROR", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [urlRunId, clientRunId, analysis?.analysis_run_id]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
