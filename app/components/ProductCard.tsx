@@ -1,7 +1,53 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Star, Image as ImageIcon, Check, Copy, ExternalLink } from "lucide-react";
+import { Star, Image as ImageIcon, Check, Copy, ExternalLink, Info } from "lucide-react";
+
+function InfoTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent | TouchEvent) => {
+      const el = wrapRef.current;
+      if (!el || el.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("touchstart", onPointer, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("touchstart", onPointer);
+    };
+  }, [open]);
+
+  return (
+    <span
+      ref={wrapRef}
+      className="relative inline-flex align-baseline ml-1"
+    >
+      <button
+        type="button"
+        aria-label="More info"
+        onClick={() => setOpen((o) => !o)}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        className="inline-flex items-center justify-center text-[#9CA3AF] hover:text-[#6B7280] focus:outline-none focus:ring-2 focus:ring-[#3B82F6] focus:ring-offset-1 rounded-full p-0"
+      >
+        <Info className="w-4 h-4" strokeWidth={2.5} />
+      </button>
+      {open && (
+        <div
+          className="absolute left-0 bottom-full mb-1.5 z-50 w-[220px] max-w-[220px] px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-lg whitespace-normal"
+          role="tooltip"
+        >
+          {text}
+        </div>
+      )}
+    </span>
+  );
+}
 
 // #region agent log - Ingest URL helper
 const getIngestUrl = () => {
@@ -347,7 +393,11 @@ export function ProductCard({
         {/* Main Category */}
         {mainBsr !== null && mainBsr !== undefined && mainBsr > 0 ? (
           <div className="space-y-1">
-            <div>Main Category BSR: #{mainBsr.toLocaleString()}</div>
+            <div>
+              Main Category BSR
+              <InfoTooltip text="Overall rank in the main category (lower = better sales)." />
+              : #{mainBsr.toLocaleString()}
+            </div>
             <div className="text-xs text-[#9CA3AF]">
               {displayMainCategoryName ? displayMainCategoryName : '—'}
             </div>
@@ -357,14 +407,22 @@ export function ProductCard({
         {/* Subcategory */}
         {displaySubcategoryBsr !== null && displaySubcategoryBsr !== undefined && displaySubcategoryBsr > 0 ? (
           <div className="space-y-1">
-            <div>Subcategory Rank: #{displaySubcategoryBsr.toLocaleString()}</div>
+            <div>
+              Subcategory Rank
+              <InfoTooltip text="Rank within this specific subcategory (best for comparing similar products)." />
+              : #{displaySubcategoryBsr.toLocaleString()}
+            </div>
             <div className="text-xs text-[#9CA3AF]">
               {displaySubcategoryName ? displaySubcategoryName : '—'}
             </div>
           </div>
         ) : (
           <div className="space-y-1">
-            <div>Subcategory Rank: —</div>
+            <div>
+              Subcategory Rank
+              <InfoTooltip text="Rank within this specific subcategory (best for comparing similar products)." />
+              : —
+            </div>
             <div className="text-xs text-[#9CA3AF]">—</div>
           </div>
         )}
