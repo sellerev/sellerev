@@ -870,28 +870,30 @@ VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
     → NEVER say "not available" or "need credits" when enrichment exists in context
     → Always end with a helpful follow-up question
   
-  REVIEW INSIGHTS QUESTIONS (Rainforest Enrichment):
-  - Review insights are derived primarily from ai_context.rainforest_enrichment (product-level review signals) for selected ASIN(s), and only secondarily from ai_context.rainforest_reviews_enrichment when available
+  REVIEW INSIGHTS QUESTIONS (Product Dossiers + Review Insights):
+  - Review insights are derived primarily from ai_context.review_insights.by_asin[asin] (pre-computed themes) for selected ASIN(s), and secondarily from ai_context.product_dossiers.by_asin[asin].review_material when you need extra nuance
   - If 3+ ASINs are selected for review insights, instruct user to reduce selection to 1-2
   - Use seller-facing language, cite ASIN + title, and end with exactly one follow-up question
   
   SINGLE ASIN (1 selected):
   - "What do customers complain about most?" / "bad reviews" / "complaints" / "what customers say" / "most common complaints" / "negative feedback" / "issues"
-    → Check if rainforest_enrichment.by_asin[asin] exists
-    → ALWAYS answer using the best available product-level signals in this priority:
-      1) customers_say-derived themes
-      2) summarization_attributes (low-rated attributes = complaints; high-rated attributes = praise)
-      3) top_reviews (representative reviews: ratings <=3 as complaints, >=4 as praise)
-      4) rating_breakdown (e.g. "% of 1–2★ vs 4–5★") when no themes/snippets exist
-    → Use rainforest_enrichment.by_asin[asin].extracted.top_complaints and top_praise (these are pre-computed from the above signals)
-    → If reviews enrichment also exists, you MAY reference its snippets, but it is not required to answer
-    → If enrichment doesn't exist: "I couldn't pull customer review themes for this product right now. Try again or select a different ASIN."
-    → NEVER invent themes - only use extracted.top_complaints/top_praise from enrichment
+    → Check if ai_context.review_insights.by_asin[asin] exists
+    → ALWAYS answer using the compact review object there:
+      - top_complaints: array of { theme, evidence? }
+      - top_praise: array of { theme, evidence? }
+      - source_used: "customers_say" | "top_reviews" | "none"
+      - notes: array of helpful context strings
+    → Interpret source_used:
+      - "customers_say" = highest confidence (themes come from Amazon's Customers Say module)
+      - "top_reviews" = medium confidence (themes heuristically derived from representative top reviews)
+      - "none" = no reliable review signals; explain this clearly and pivot to any other useful guidance
+    → NEVER invent new themes beyond what appears in top_complaints/top_praise
+    → If source_used === "none": Say: "Amazon didn’t show a Customers Say module and the product page didn’t include usable top review text, so I can’t summarize review themes for this ASIN right now." (then give any other helpful advice)
     → Always end with exactly one follow-up question (e.g., "Want me to compare this against another Page-1 listing?")
   
   TWO ASINs (2 selected):
   - Same question triggers side-by-side comparison
-    → For each ASIN, use rainforest_enrichment.by_asin[asin].extracted.top_complaints and top_praise (themes already computed from product-level signals)
+    → For each ASIN, use ai_context.review_insights.by_asin[asin].top_complaints and top_praise (pre-computed themes)
     → If both missing: Note that review themes are not available for that ASIN
     → Format: "Most complained about: [ASIN 1: top 3 themes] | [ASIN 2: top 3 themes]"
     → Format: "Most praised: [ASIN 1: top 2-3 themes] | [ASIN 2: top 2-3 themes]"
@@ -900,26 +902,18 @@ VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
     → Always end with exactly one follow-up question (e.g., "Do you want to compare price/reviews next?")
   
   ZERO ASINs (0 selected):
-  - Do NOT call Rainforest
+  - Do NOT request new product dossiers or review insights
   - Say: "Select 1-2 products from Page-1 to see customer review insights."
   
   THREE+ ASINs (3+ selected):
-  - Do NOT call Rainforest
+  - Do NOT request new product dossiers or review insights
   - Say: "Select up to 2 products for review insights."
   
-  REVIEWS ENRICHMENT (last-resort, when product page has no review summary signals):
-  - If rainforest_reviews_enrichment exists in ai_context, you MAY use it to add detail (snippets) to your answer:
-    → Use rainforest_reviews_enrichment.by_asin[asin].extracted.top_complaints/top_praise as additional themes or supporting snippets
-    → Cite: "ASIN: [asin] - [title]"
-    → If reviews enrichment has errors containing "TEMPORARILY_UNAVAILABLE":
-      - Say: "Our review provider is temporarily unavailable right now (no charge). I'm using the review summary signals directly from the product page instead."
-      - STILL answer using rainforest_enrichment.by_asin[asin].extracted.top_complaints/top_praise or rating distribution
-    → NEVER say you "can't summarize" review themes solely because reviews enrichment failed
-    → Always end with exactly one follow-up question
-  
   GENERAL RULES:
-  - Use rainforest_enrichment.by_asin[asin].extracted.top_complaints and top_praise (do NOT re-interpret raw customers_say/summarization_attributes/top_reviews yourself)
-  - Use rainforest_enrichment.by_asin[asin].extracted.attribute_signals for attribute ratings
+  - Use ai_context.review_insights.by_asin[asin].top_complaints and top_praise as your primary source for review themes (do NOT re-interpret raw customers_say/summarization_attributes/top_reviews yourself)
+  - When you need to reference specific specs/weight/dimensions/features in review answers, use:
+    → ai_context.spapi_enrichment.by_asin[asin] as primary source
+    → ai_context.product_dossiers.by_asin[asin].product as fallback (weight, dimensions, specifications, attributes, feature_bullets)
   - CRITICAL: If enrichment exists (by_asin[asin] present) but extracted arrays are empty:
     → Treat this as "no clear review themes visible on the product page right now"
     → Use rating_breakdown (if present) to describe sentiment mix (e.g. share of low-star vs high-star reviews)

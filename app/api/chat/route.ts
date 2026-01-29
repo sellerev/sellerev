@@ -2234,13 +2234,16 @@ export async function POST(req: NextRequest) {
     const normalizedQuestion = body.message.toLowerCase();
     
     // GOAL 4A: Variants/attributes/bullets/description intent detection
-    const variantsAttributesIntent = /variant|variants|variation|variations|size|sizes|color|colors|colour|colours|version|versions|how many variants|which variant|attributes?|bullet points?|bullets?|description|title details?|material|dimensions?|specifications?/i.test(body.message);
+    const variantsAttributesIntent =
+      /variant|variants|variation|variations|size|sizes|color|colors|colour|colours|version|versions|how many variants|which variant|attributes?|bullet points?|bullets?|description|title details?|material|materials|dimensions?|dimension|specs?|specifications?|weight|weighs|heavy|light|thickness|height|width|length/i.test(
+        body.message
+      );
     
     // GOAL 4B: Review insights intent detection (complaints, praise, customer feedback)
     // Keywords: complain, complaints, bad reviews, negative reviews, common issues, pros and cons,
     // what do customers say, praise, good reviews, positive reviews, customer feedback
     const reviewInsightsIntent =
-      /complain|complaints|bad reviews?|negative reviews?|common issues?|pros and cons|what do customers (say|complain about)|praise|good reviews?|positive reviews?|customer feedback|issues?|problems?|review insights|review summary|review themes|get (me )?the reviews|fetch reviews|pull reviews/i.test(
+      /complain|complaints|bad reviews?|negative reviews?|what people hate|common issues?|pros and cons|from reviews|what do customers (say|complain about)|customers say|praise|good reviews?|positive reviews?|what people love|pros\b|customer feedback|issues?|problems?|review insights|review summary|review themes|get (me )?the reviews|fetch reviews|pull reviews/i.test(
         body.message
       );
     
@@ -2278,13 +2281,12 @@ export async function POST(req: NextRequest) {
       }
     }
     
-    const enrichmentTypes: Array<'spapi_catalog' | 'rainforest_product' | 'rainforest_reviews'> = [];
+    const enrichmentTypes: Array<'spapi_catalog' | 'rainforest_product'> = [];
     if (requiresEnrichment && enrichmentAsins.length > 0) {
       if (variantsAttributesIntent) enrichmentTypes.push('spapi_catalog');
       if (reviewInsightsIntent) {
-        // For review insights: try product endpoint first, fallback to reviews if needed
+        // For review insights: use a single Rainforest type=product call via ProductDossier
         enrichmentTypes.push('rainforest_product');
-        // Note: reviews endpoint will be called automatically if customers_say is missing
       }
     }
     
@@ -2785,31 +2787,22 @@ export async function POST(req: NextRequest) {
       errors: Array<{ asin: string; error: string }>;
     } | null = null;
     
-    // GOAL 4C: Rainforest reviews enrichment (for review snippets when customers_say is missing)
-    let rainforestReviewsEnrichment: {
-      executed: boolean;
+    // Unified product dossiers for selected ASINs (single Rainforest type=product call per ASIN)
+    let productDossiers: {
+      asins: string[];
+      by_asin: Record<string, any>;
+    } | null = null;
+    
+    // Aggregated, model-friendly review insights for this request (built from product dossiers only)
+    let reviewInsights: {
       asins: string[];
       by_asin: Record<string, {
         asin: string;
         title: string | null;
-        extracted: {
-          top_complaints: Array<{ theme: string; snippet?: string }>;
-          top_praise: Array<{ theme: string; snippet?: string }>;
-        };
-        errors: string[];
-      }>;
-      errors: Array<{ asin: string; error: string }>;
-    } | null = null;
-    
-    // Aggregated, model-friendly review insights for this request
-    let reviewInsights: {
-      asins: string[];
-      by_asin: Record<string, {
-        source: "customers_say" | "top_reviews" | "reviews" | "unavailable";
-        top_complaints: string[];
-        top_praise: string[];
-        evidence?: { praise_quotes?: string[]; complaint_quotes?: string[] };
-        note?: string;
+        source_used: "customers_say" | "top_reviews" | "none";
+        top_complaints: Array<{ theme: string; evidence?: string | null }>;
+        top_praise: Array<{ theme: string; evidence?: string | null }>;
+        notes: string[];
       }>;
       errors: Array<{ asin: string; error: string }>;
     } | null = null;
@@ -2895,345 +2888,84 @@ export async function POST(req: NextRequest) {
             errors,
           };
           
-          // FALLBACK: If SP-API returned empty or missing bullets/description, fetch from Rainforest
+          // FALLBACK: If SP-API returned empty or missing bullets/description, fetch from unified product dossier
           if (needsRainforestFallback) {
-            const { getRainforestProductEnrichment } = await import("@/lib/rainforest/productEnrichment");
-            
-            // Ensure rainforestEnrichment exists
-            if (!rainforestEnrichment) {
-              rainforestEnrichment = {
-                executed: true,
-                asins: [],
-                by_asin: {},
-                errors: [],
-              };
-            }
-            
-            if (!rainforestEnrichment.asins.includes(asin)) {
-              rainforestEnrichment.asins.push(asin);
-            }
-            
-            let rainforestData: any | null = null;
-            const rainforestErrors: string[] = [];
-            
-            // Check Rainforest cache first
-            const cachedRainforest = getCachedRainforest(asin, amazonDomain);
-            if (cachedRainforest) {
-              rainforestData = cachedRainforest;
-              console.log("RAINFOREST_ENRICHMENT_CACHE_HIT", { 
-                asin, 
-                endpoint: "product", 
-                cache_hit: true,
-                reason: "catalog_fallback"
+            const { getProductDossier } = await import("@/lib/rainforest/productDossier");
+
+            let dossier: any | null = null;
+            try {
+              dossier = await getProductDossier(asin, amazonDomain);
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              console.error("CATALOG_FALLBACK_DOSSIER_ERROR", {
+                asin,
+                reason: fallbackReason,
+                error: errorMessage,
               });
-            } else {
-              try {
-                rainforestData = await getRainforestProductEnrichment(asin, amazonDomain, user.id);
-                if (rainforestData) {
-                  setCachedRainforest(asin, amazonDomain, rainforestData);
-                  console.log("RAINFOREST_ENRICHMENT_CACHE_MISS", { 
-                    asin, 
-                    endpoint: "product", 
-                    cache_hit: false,
-                    reason: "catalog_fallback"
-                  });
-                } else {
-                  rainforestErrors.push("Rainforest product enrichment failed");
-                }
-              } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                rainforestErrors.push(`Rainforest product enrichment error: ${errorMessage}`);
-                rainforestEnrichment.errors.push({ asin, error: errorMessage });
-              }
             }
-            
-            // Extract bullets and description from Rainforest
-            if (rainforestData) {
-              // Get feature_bullets and description from extracted object (stored by getRainforestProductEnrichment)
-              const extracted = (rainforestData as any).extracted || {};
-              const featureBullets = extracted.feature_bullets || null;
-              const description = extracted.description || null;
-              const attributes = extracted.attributes || null;
-              
-              // Merge into existing rainforest_enrichment entry or create new one
-              if (rainforestEnrichment.by_asin[asin]) {
-                // Merge with existing entry (from review insights)
-                const existing = rainforestEnrichment.by_asin[asin];
-                rainforestEnrichment.by_asin[asin] = {
-                  ...existing,
-                  title: existing.title || rainforestData.title || null,
-                  // Merge extracted fields (preserve existing, add catalog fields)
-                  extracted: {
-                    ...existing.extracted,
-                    feature_bullets: featureBullets || existing.extracted.feature_bullets,
-                    description: description || existing.extracted.description,
-                    attributes: attributes || existing.extracted.attributes,
-                  },
-                };
-              } else {
-                // Create new entry for catalog fallback
-                rainforestEnrichment.by_asin[asin] = {
-                  asin: rainforestData.asin || asin,
-                  title: rainforestData.title || null,
-                  customers_say: null, // Not needed for catalog fallback
-                  summarization_attributes: null, // Not needed for catalog fallback
-                  extracted: {
-                    top_complaints: [],
-                    top_praise: [],
-                    attribute_signals: [],
-                    // Store catalog fields in extracted for copilot access
-                    feature_bullets: featureBullets,
-                    description: description,
-                    attributes: attributes,
-                  },
-                  errors: rainforestErrors,
-                };
-              }
-              
-              // Also update spapiEnrichment with Rainforest data if SP-API was empty or missing fields
+
+            if (dossier) {
+              const featureBullets = dossier.product?.feature_bullets || null;
+              const descriptionFromDossier = dossier.product?.description || null;
+              const attributesFromDossier = dossier.product?.attributes || null;
+
+              // Also update spapiEnrichment with dossier data if SP-API was empty or missing fields
               if (!catalogData || !hasBullets || !hasDescription) {
                 if (featureBullets && !spapiEnrichment.by_asin[asin].bullet_points) {
-                  spapiEnrichment.by_asin[asin].bullet_points = Array.isArray(featureBullets) 
-                    ? featureBullets 
-                    : (typeof featureBullets === 'string' ? [featureBullets] : null);
+                  spapiEnrichment.by_asin[asin].bullet_points = Array.isArray(featureBullets)
+                    ? featureBullets
+                    : (typeof featureBullets === "string" ? [featureBullets] : null);
                 }
-                if (description && !spapiEnrichment.by_asin[asin].description) {
-                  spapiEnrichment.by_asin[asin].description = description;
+                if (descriptionFromDossier && !spapiEnrichment.by_asin[asin].description) {
+                  spapiEnrichment.by_asin[asin].description = descriptionFromDossier;
                 }
-                if (attributes && !spapiEnrichment.by_asin[asin].attributes) {
-                  spapiEnrichment.by_asin[asin].attributes = attributes;
+                if (attributesFromDossier && !spapiEnrichment.by_asin[asin].attributes) {
+                  spapiEnrichment.by_asin[asin].attributes = attributesFromDossier;
                 }
-                if (rainforestData.title && !spapiEnrichment.by_asin[asin].title) {
-                  spapiEnrichment.by_asin[asin].title = rainforestData.title;
+                if (dossier.product?.title && !spapiEnrichment.by_asin[asin].title) {
+                  spapiEnrichment.by_asin[asin].title = dossier.product.title;
                 }
               }
-              
-              console.log("CATALOG_FALLBACK_TO_RAINFOREST_PRODUCT", {
+
+              console.log("CATALOG_FALLBACK_TO_PRODUCT_DOSSIER", {
                 asin,
                 reason: fallbackReason,
                 spapi_has_bullets: hasBullets,
                 spapi_has_description: hasDescription,
-                rainforest_has_bullets: !!featureBullets,
-                rainforest_has_description: !!description,
+                dossier_has_bullets: !!featureBullets,
+                dossier_has_description: !!descriptionFromDossier,
               });
             } else {
-              // Rainforest fallback also failed
-              console.log("CATALOG_FALLBACK_TO_RAINFOREST_PRODUCT", {
+              console.log("CATALOG_FALLBACK_TO_PRODUCT_DOSSIER", {
                 asin,
                 reason: fallbackReason,
                 fallback_failed: true,
-                errors: rainforestErrors,
               });
             }
           }
         }
       }
       
-      // GOAL 4B: Rainforest product enrichment for review insights
-      if (enrichmentTypes.includes('rainforest_product')) {
-        const { getRainforestProductEnrichment } = await import("@/lib/rainforest/productEnrichment");
-        
-        rainforestEnrichment = {
-          executed: true,
+      // GOAL 4B: Unified product dossiers for review insights & specs (single type=product call)
+      if (enrichmentTypes.includes("rainforest_product")) {
+        const { getProductDossier } = await import("@/lib/rainforest/productDossier");
+
+        productDossiers = {
           asins: enrichmentAsins,
           by_asin: {},
-          errors: [],
         };
-        
-        const cacheHits: Record<string, boolean> = {};
-        
+
         for (const asin of enrichmentAsins) {
-          const errors: string[] = [];
-          let productData: any | null = null;
-          let cacheHit = false;
-          
-          // Check cache first
-          const cached = getCachedRainforest(asin, amazonDomain);
-          if (cached) {
-            productData = cached;
-            cacheHit = true;
-            cacheHits[asin] = true;
-            console.log("RAINFOREST_ENRICHMENT_CACHE_HIT", { asin, endpoint: "product", cache_hit: true });
-          } else {
-            cacheHits[asin] = false;
-            try {
-              productData = await getRainforestProductEnrichment(asin, amazonDomain, user.id);
-              if (productData) {
-                setCachedRainforest(asin, amazonDomain, productData);
-                console.log("RAINFOREST_ENRICHMENT_CACHE_MISS", { asin, endpoint: "product", cache_hit: false });
-              } else {
-                errors.push("Rainforest product enrichment failed");
-              }
-            } catch (error) {
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              errors.push(`Rainforest product enrichment error: ${errorMessage}`);
-              rainforestEnrichment.errors.push({ asin, error: errorMessage });
-            }
-          }
-          
-          // Parse product data into required structure
-          if (productData) {
-            rainforestEnrichment.by_asin[asin] = {
-              asin: productData.asin || asin,
-              title: productData.title || null,
-              customers_say: productData.customers_say || null,
-              summarization_attributes: productData.summarization_attributes || null,
-              top_reviews: (productData as any).top_reviews || null,
-              rating_breakdown: (productData as any).rating_breakdown || null,
-              extracted: productData.extracted || {
-                top_complaints: [],
-                top_praise: [],
-                attribute_signals: [],
-              },
-              errors: productData.errors || [],
-            };
-          } else {
-            rainforestEnrichment.by_asin[asin] = {
+          try {
+            const dossier = await getProductDossier(asin, amazonDomain);
+            productDossiers.by_asin[asin] = dossier;
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error("PRODUCT_DOSSIER_ERROR", {
               asin,
-              title: null,
-              customers_say: null,
-              summarization_attributes: null,
-              extracted: {
-                top_complaints: [],
-                top_praise: [],
-                attribute_signals: [],
-              },
-              errors,
-            };
+              error: errorMessage,
+            });
           }
-        }
-        
-        // Log enrichment completion with cache hit info
-        console.log("RAINFOREST_ENRICHMENT_COMPLETE", {
-          analysisRunId: body.analysisRunId,
-          asins: enrichmentAsins,
-          cache_hits: cacheHits,
-          cache_hit_count: Object.values(cacheHits).filter(h => h).length,
-          cache_miss_count: Object.values(cacheHits).filter(h => !h).length,
-        });
-      }
-      
-      // GOAL 4C: Auto-fallback to Rainforest reviews ONLY when product page has no review signals
-      // After product enrichment, check if customers_say, summarization_attributes, top_reviews, and
-      // rating_breakdown are ALL missing/empty before calling type=reviews (last resort).
-      if (enrichmentTypes.includes('rainforest_product') && reviewInsightsIntent) {
-        const { getRainforestReviewsEnrichment } = await import("@/lib/rainforest/reviewsEnrichment");
-        const MAX_REVIEWS_PER_ASIN = 20;
-        
-        for (const asin of enrichmentAsins) {
-          const productData = rainforestEnrichment?.by_asin[asin];
-          const hasCustomersSay =
-            productData?.customers_say &&
-            typeof productData.customers_say === "object" &&
-            Object.keys(productData.customers_say).length > 0;
-
-          const hasSummarizationAttributes =
-            productData?.summarization_attributes &&
-            typeof productData.summarization_attributes === "object" &&
-            Object.keys(productData.summarization_attributes).length > 0;
-
-          const hasTopReviews =
-            Array.isArray((productData as any)?.top_reviews) &&
-            ((productData as any).top_reviews as any[]).length > 0;
-
-          const hasRatingBreakdown =
-            (productData as any)?.rating_breakdown &&
-            typeof (productData as any).rating_breakdown === "object" &&
-            Object.keys((productData as any).rating_breakdown).length > 0;
-          
-          const hasAnyReviewSignals =
-            hasCustomersSay ||
-            hasSummarizationAttributes ||
-            hasTopReviews ||
-            hasRatingBreakdown;
-          
-          // Only if the product page has NO review summary signals at all, fall back to reviews
-          if (!hasAnyReviewSignals && !productData?.errors?.length) {
-            if (!rainforestReviewsEnrichment) {
-              rainforestReviewsEnrichment = {
-                executed: true,
-                asins: [],
-                by_asin: {},
-                errors: [],
-              };
-            }
-            
-            if (!rainforestReviewsEnrichment.asins.includes(asin)) {
-              rainforestReviewsEnrichment.asins.push(asin);
-            }
-            
-            const errors: string[] = [];
-            let reviewsData: any | null = null;
-            
-            // Check cache first
-            const cached = getCachedReviews(asin, amazonDomain);
-            if (cached) {
-              reviewsData = cached;
-              console.log("RAINFOREST_REVIEWS_ENRICHMENT_CACHE_HIT", { 
-                asin, 
-                endpoint: "reviews", 
-                cache_hit: true,
-                reason: "customers_say_missing"
-              });
-            } else {
-              try {
-                reviewsData = await getRainforestReviewsEnrichment(asin, amazonDomain, MAX_REVIEWS_PER_ASIN);
-                if (reviewsData) {
-                  setCachedReviews(asin, amazonDomain, reviewsData);
-                  console.log("RAINFOREST_REVIEWS_ENRICHMENT_CACHE_MISS", { 
-                    asin, 
-                    endpoint: "reviews", 
-                    cache_hit: false,
-                    reason: "customers_say_missing"
-                  });
-                } else {
-                  errors.push("Rainforest reviews enrichment failed");
-                }
-              } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                // Handle 503 errors gracefully
-                if (errorMessage.includes('503') || errorMessage.includes('temporarily unavailable')) {
-                  errors.push("TEMPORARILY_UNAVAILABLE");
-                  console.log("RAINFOREST_REVIEWS_503_ERROR", { asin, error: errorMessage });
-                } else {
-                  errors.push(`Rainforest reviews enrichment error: ${errorMessage}`);
-                }
-                rainforestReviewsEnrichment.errors.push({ asin, error: errorMessage });
-              }
-            }
-            
-            // Parse reviews data
-            if (reviewsData) {
-              rainforestReviewsEnrichment.by_asin[asin] = {
-                asin: reviewsData.asin || asin,
-                title: reviewsData.title || null,
-                extracted: reviewsData.extracted || {
-                  top_complaints: [],
-                  top_praise: [],
-                },
-                errors: reviewsData.errors || [],
-              };
-            } else {
-              rainforestReviewsEnrichment.by_asin[asin] = {
-                asin,
-                title: null,
-                extracted: {
-                  top_complaints: [],
-                  top_praise: [],
-                },
-                errors,
-              };
-            }
-          }
-        }
-        
-        if (rainforestReviewsEnrichment && rainforestReviewsEnrichment.asins.length > 0) {
-          console.log("RAINFOREST_REVIEWS_ENRICHMENT_COMPLETE", {
-            analysisRunId: body.analysisRunId,
-            asins: rainforestReviewsEnrichment.asins,
-            success_count: Object.values(rainforestReviewsEnrichment.by_asin).filter(v => v.errors.length === 0).length,
-            reason: "auto_fallback_customers_say_missing"
-          });
         }
       }
       
@@ -3242,170 +2974,120 @@ export async function POST(req: NextRequest) {
         asins: enrichmentAsins,
         total_selected: selectedAsins.length,
         enrichment_types: enrichmentTypes,
-        spapi_success: spapiEnrichment ? Object.values(spapiEnrichment.by_asin).filter(v => !v.errors.length).length : 0,
-        rainforest_success: rainforestEnrichment ? Object.values(rainforestEnrichment.by_asin).filter(v => !v.errors.length).length : 0,
-        reviews_success: rainforestReviewsEnrichment ? Object.values(rainforestReviewsEnrichment.by_asin).filter(v => !v.errors.length).length : 0,
+        spapi_success: spapiEnrichment ? Object.values((spapiEnrichment as any).by_asin || {}).filter((v: any) => !v.errors?.length).length : 0,
+        rainforest_success: rainforestEnrichment ? Object.values((rainforestEnrichment as any).by_asin || {}).filter((v: any) => !v.errors?.length).length : 0,
+        reviews_success: 0,
         calls_used: enrichmentCallsUsed + 1,
         calls_remaining: MAX_ENRICHMENT_CALLS_PER_SESSION - (enrichmentCallsUsed + 1),
       });
     }
     
-    // Build per-request review_insights from enrichment for up to 2 selected ASINs
-    if (reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2) {
+    // Build per-request review_insights from unified product dossiers for up to 2 selected ASINs
+    if (reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2 && productDossiers) {
       const insightAsins = selectedAsins.slice(0, 2);
       reviewInsights = {
         asins: insightAsins,
         by_asin: {},
         errors: [],
       };
-      
-      // Helper: normalize themes (string | {theme,snippet/evidence}) → string[]
-      const normalizeThemeList = (items: any[] | undefined | null, max: number): string[] => {
-        if (!items || !Array.isArray(items)) return [];
-        const result: string[] = [];
-        for (const item of items) {
-          if (result.length >= max) break;
-          if (typeof item === "string") {
-            if (item.trim()) result.push(item.trim());
-            continue;
-          }
-          if (item && typeof item === "object") {
-            const rawTheme = (item.theme || item.label || "").toString().trim();
-            const rawSnippet =
-              (item.evidence || item.snippet || item.text || "").toString().trim();
-            const combined = rawSnippet
-              ? `${rawTheme || "Review theme"} — ${rawSnippet}`
-              : rawTheme || rawSnippet;
-            if (combined) result.push(combined);
-          }
-        }
-        return result;
-      };
-      
-      // Helper: extract short quotes from top_reviews
-      const extractQuotes = (topReviews: any[] | null | undefined, max: number): string[] => {
-        if (!Array.isArray(topReviews)) return [];
-        const quotes: string[] = [];
-        for (const r of topReviews) {
-          if (quotes.length >= max) break;
-          const body = (r?.text || r?.body || "").trim();
-          if (!body) continue;
-          const snippet =
-            body.length > 160 ? body.substring(0, 160).trim() + "…" : body;
-          quotes.push(snippet);
-        }
-        return quotes;
-      };
-      
+
       for (const asin of insightAsins) {
-        const product = rainforestEnrichment?.by_asin?.[asin];
-        const reviews = rainforestReviewsEnrichment?.by_asin?.[asin];
-        
-        // PRODUCT-FIRST: use pre-computed product themes (customers_say, attrs, top_reviews, rating_breakdown)
-        const extracted: any = product?.extracted || {};
-        const productComplaintsRaw = extracted.top_complaints || [];
-        const productPraiseRaw = extracted.top_praise || [];
-        const productComplaints = normalizeThemeList(productComplaintsRaw, 3);
-        const productPraise = normalizeThemeList(productPraiseRaw, 3);
-        
-        if ((productComplaints.length > 0 || productPraise.length > 0)) {
-          const praiseQuotes = extractQuotes((product as any)?.top_reviews, 3);
-          const complaintQuotes = extractQuotes(
-            (product as any)?.top_reviews?.filter((r: any) => r?.rating <= 3),
-            3
-          );
-          
-          const sourceTag =
-            typeof extracted.review_themes_source === "string"
-              ? extracted.review_themes_source
-              : "customers_say";
-          
-          reviewInsights.by_asin[asin] = {
-            source:
-              sourceTag === "top_reviews"
-                ? "top_reviews"
-                : "customers_say",
-            top_complaints: productComplaints,
-            top_praise: productPraise,
-            evidence:
-              praiseQuotes.length || complaintQuotes.length
-                ? {
-                    praise_quotes: praiseQuotes.length ? praiseQuotes : undefined,
-                    complaint_quotes: complaintQuotes.length ? complaintQuotes : undefined,
-                  }
-                : undefined,
-            note: "Based on review summary signals visible on the Amazon product page.",
-          };
-          reviewInsightsStats.used_type_product_count += 1;
+        const dossier: any = productDossiers.by_asin?.[asin];
+        if (!dossier) {
+          reviewInsights.errors.push({ asin, error: "NO_DOSSIER" });
           continue;
         }
-        
-        const reviewsErrors = reviews?.errors || [];
-        const is503 = reviewsErrors.some((e) => typeof e === "string" && e.includes("TEMPORARILY_UNAVAILABLE"));
-        if (is503) {
-          reviewInsightsStats.reviews_503_count += 1;
-        }
-        
-        if (reviews && reviews.extracted && (reviews.extracted.top_complaints.length > 0 || reviews.extracted.top_praise.length > 0) && !is503) {
-          // Use reviews snippets when product summary signals are missing
-          const reviewsComplaints = normalizeThemeList(
-            reviews.extracted.top_complaints,
-            3
+
+        const title: string | null = dossier.product?.title ?? null;
+        const customersSay = dossier.review_material?.customers_say as
+          | Array<{ name: string; value: string }>
+          | undefined;
+        const topReviews = dossier.review_material?.top_reviews as
+          | Array<{ rating?: number; title?: string; body?: string; verified_purchase?: boolean }>
+          | undefined;
+
+        let source_used: "customers_say" | "top_reviews" | "none" = "none";
+        const top_complaints: Array<{ theme: string; evidence?: string | null }> = [];
+        const top_praise: Array<{ theme: string; evidence?: string | null }> = [];
+        const notes: string[] = [];
+
+        // 1) customers_say-based themes
+        if (customersSay && customersSay.length > 0) {
+          const complaintEntries = customersSay.filter((c) =>
+            (c.value || "").toString().toLowerCase().includes("negative") ||
+            (c.value || "").toString().toLowerCase().includes("mixed")
           );
-          const reviewsPraise = normalizeThemeList(
-            reviews.extracted.top_praise,
-            3
+          const praiseEntries = customersSay.filter((c) =>
+            (c.value || "").toString().toLowerCase().includes("positive")
           );
-          
-          reviewInsights.by_asin[asin] = {
-            source: "reviews",
-            top_complaints: reviewsComplaints,
-            top_praise: reviewsPraise,
-            note: "Based on recent Amazon review snippets.",
-          };
-          reviewInsightsStats.used_type_reviews_count += 1;
-          continue;
-        }
-        
-        // Fallback when reviews are temporarily unavailable (503) and no product summary
-        if (is503) {
-          const spapi = spapiEnrichment?.by_asin?.[asin];
-          const productExtracted = product?.extracted;
-          
-          const hasSpapiCatalog =
-            !!spapi &&
-            ((Array.isArray(spapi.bullet_points) && spapi.bullet_points.length > 0) ||
-              !!spapi.description ||
-              (spapi.attributes && Object.keys(spapi.attributes).length > 0));
-          
-          const hasRainforestCatalog =
-            !!productExtracted &&
-            (productExtracted.feature_bullets ||
-              productExtracted.description ||
-              (productExtracted.attributes && Object.keys(productExtracted.attributes).length > 0));
-          
-          let detailSourceNote = "";
-          if (hasSpapiCatalog) {
-            detailSourceNote =
-              "Use SP-API bullet points, description, and attributes for any product-detail inferences.";
-          } else if (hasRainforestCatalog) {
-            detailSourceNote =
-              "Use Rainforest feature bullets, description, and attributes for any product-detail inferences.";
+
+          for (const item of complaintEntries.slice(0, 3)) {
+            top_complaints.push({ theme: item.name, evidence: null });
           }
-          
-          reviewInsights.by_asin[asin] = {
-            source: "unavailable",
-            top_complaints: [],
-            top_praise: [],
-            note: `Amazon doesn’t show a detailed review-summary module for this product right now, and our review provider is temporarily unavailable. Here’s what I can infer from the product details we pulled (bullets, attributes, variation themes). ${detailSourceNote}Try again in a minute and I’ll pull additional review snippets.`,
-          };
-          continue;
+          for (const item of praiseEntries.slice(0, 3)) {
+            top_praise.push({ theme: item.name, evidence: null });
+          }
+
+          if (top_complaints.length || top_praise.length) {
+            source_used = "customers_say";
+            notes.push(
+              "Themes derived from Amazon's Customers Say summary module on the product page."
+            );
+          }
         }
-        
-        // No usable review data available (non-503 errors or missing enrichment)
-        if (!product && !reviews) {
-          reviewInsights.errors.push({ asin, error: "NO_REVIEW_DATA" });
+
+        // 2) Fallback: derive themes from top_reviews when customers_say is missing
+        if (source_used === "none" && Array.isArray(topReviews) && topReviews.length > 0) {
+          const { themeFromTopReviews } = await import("@/lib/reviews/themeFromTopReviews");
+          const mapped = topReviews.map((r) => ({
+            rating: typeof r.rating === "number" ? r.rating : 0,
+            title: (r.title ?? null) as string | null,
+            text: (r.body ?? "").toString(),
+            verified_purchase:
+              r.verified_purchase === true
+                ? true
+                : r.verified_purchase === false
+                ? false
+                : null,
+            date: null,
+          }));
+
+          const themes = themeFromTopReviews(mapped);
+
+          themes.top_complaints.slice(0, 3).forEach((theme, idx) => {
+            const evidence = themes.complaint_quotes[idx] || null;
+            top_complaints.push({ theme, evidence });
+          });
+          themes.top_praise.slice(0, 3).forEach((theme, idx) => {
+            const evidence = themes.praise_quotes[idx] || null;
+            top_praise.push({ theme, evidence });
+          });
+
+          if (top_complaints.length || top_praise.length) {
+            source_used = "top_reviews";
+            notes.push(
+              "Themes derived from representative top review snippets on the product page."
+            );
+          }
         }
+
+        if (source_used === "none") {
+          notes.push(
+            "Amazon didn’t show a Customers Say module and the product page didn’t include usable top review text, so review themes could not be summarized for this ASIN."
+          );
+          reviewInsights.errors.push({ asin, error: "NO_REVIEW_SIGNALS" });
+        } else {
+          reviewInsightsStats.used_type_product_count += 1;
+        }
+
+        reviewInsights.by_asin[asin] = {
+          asin,
+          title,
+          source_used,
+          top_complaints,
+          top_praise,
+          notes,
+        };
       }
     }
     
@@ -3436,14 +3118,14 @@ export async function POST(req: NextRequest) {
           selected_asins: selectedAsinsArray,
           ...(spapiEnrichment ? { spapi_enrichment: spapiEnrichment } : {}),
           ...(rainforestEnrichment ? { rainforest_enrichment: rainforestEnrichment } : {}),
-          ...(rainforestReviewsEnrichment ? { rainforest_reviews_enrichment: rainforestReviewsEnrichment } : {}),
+          ...(productDossiers ? { product_dossiers: productDossiers } : {}),
           ...(reviewInsights ? { review_insights: reviewInsights } : {}),
         }
       : {
           selected_asins: selectedAsinsArray,
           ...(spapiEnrichment ? { spapi_enrichment: spapiEnrichment } : {}),
           ...(rainforestEnrichment ? { rainforest_enrichment: rainforestEnrichment } : {}),
-          ...(rainforestReviewsEnrichment ? { rainforest_reviews_enrichment: rainforestReviewsEnrichment } : {}),
+          ...(productDossiers ? { product_dossiers: productDossiers } : {}),
           ...(reviewInsights ? { review_insights: reviewInsights } : {}),
         };
     
@@ -3550,11 +3232,6 @@ export async function POST(req: NextRequest) {
       aiContextToUse = { ...(aiContextToUse || {}), rainforest_enrichment: rainforestEnrichment };
     }
     
-    if (rainforestReviewsEnrichment && aiContextToUse) {
-      aiContextToUse.rainforest_reviews_enrichment = rainforestReviewsEnrichment;
-    } else if (rainforestReviewsEnrichment && !aiContextToUse) {
-      aiContextToUse = { ...(aiContextToUse || {}), rainforest_reviews_enrichment: rainforestReviewsEnrichment };
-    }
     
     if (reviewInsights && aiContextToUse) {
       (aiContextToUse as any).review_insights = reviewInsights;
@@ -3565,7 +3242,7 @@ export async function POST(req: NextRequest) {
     // GOAL 7: Log enrichment objects in ai_context before OpenAI call
     const spapiEnrichmentInContext = (aiContextToUse as any)?.spapi_enrichment;
     const rainforestEnrichmentInContext = (aiContextToUse as any)?.rainforest_enrichment;
-    const rainforestReviewsEnrichmentInContext = (aiContextToUse as any)?.rainforest_reviews_enrichment;
+    const rainforestReviewsEnrichmentInContext: any = (aiContextToUse as any)?.rainforest_reviews_enrichment || null;
     const reviewInsightsInContext = (aiContextToUse as any)?.review_insights;
     
     // Log enrichment details for each selected ASIN
@@ -3620,7 +3297,7 @@ export async function POST(req: NextRequest) {
         ? Object.entries((reviewInsightsInContext as any).by_asin || {}).map(
             ([asin, value]: [string, any]) => ({
               asin,
-              source: value?.source,
+              source_used: value?.source_used,
             })
           )
         : [],
@@ -3695,7 +3372,8 @@ ${description}`;
     }
 
     // B) REVIEW INSIGHTS (complaints/praise) – 1–2 selected ASINs
-    if (reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2) {
+    // NOTE: Direct responses are disabled so that OpenAI always performs the final summarization.
+    if (false && reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2) {
       const MAX_THEMES = 3;
       
       const summaries: Array<{

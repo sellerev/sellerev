@@ -66,7 +66,7 @@ export async function getRainforestProductEnrichment(
   }
   
   try {
-    const endpoint: ReviewThemeSource | "product" = "product";
+    const endpoint: ReviewThemeSource | "product_enrichment" = "product_enrichment";
     const paramsHash = "type=product:include_summarization_attributes=true:v1";
     
     // Global 7-day cache lookup (shared across users)

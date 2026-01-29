@@ -42,7 +42,7 @@ export async function getRainforestReviewsEnrichment(
   }
   
   try {
-    const endpoint = "reviews";
+    const endpoint = "reviews_enrichment";
     const paramsHash = `limit=${limit}`;
     
     // Global 7-day cache lookup (shared across users)
