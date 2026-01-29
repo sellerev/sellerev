@@ -1479,9 +1479,40 @@ export default function AnalyzeForm({
                           : 0))
                       : 0;
                     
-                    // Use snapshot values for totals and BSR (computed in backend)
-                    const monthlyUnits = snapshot?.total_units ?? null;
-                    const monthlyRevenue = snapshot?.total_page1_revenue ?? null;
+                    // Totals and avgs match current view: same brand/fulfillment/sponsored filters as product grid.
+                    const getRawBrandForSnapshot = (listing: any): string | null => {
+                      const rawBrand = listing.brand_resolution?.raw_brand ?? listing.brand;
+                      if (rawBrand && typeof rawBrand === "string" && rawBrand.trim().length > 0) return rawBrand.trim();
+                      return null;
+                    };
+                    const snapshotFilteredListings = pageOneListings.filter((listing: any) => {
+                      if (selectedBrands.size > 0) {
+                        const brandKey = getRawBrandForSnapshot(listing) === null ? "Unknown" : getRawBrandForSnapshot(listing);
+                        if (!selectedBrands.has(brandKey)) return false;
+                      }
+                      if (selectedFulfillment.size > 0) {
+                        const fulfillmentStatus = listing.fulfillment_status ?? (listing.primeEligible === true || listing.is_prime === true ? "PRIME" : "NON_PRIME");
+                        if (!selectedFulfillment.has(fulfillmentStatus as "PRIME" | "NON_PRIME")) return false;
+                      }
+                      if (sponsoredFilter !== null) {
+                        const isSponsored = listing.is_sponsored;
+                        if (sponsoredFilter === "only" && isSponsored !== true) return false;
+                        if (sponsoredFilter === "exclude" && isSponsored === true) return false;
+                      }
+                      return true;
+                    });
+                    const snapshotCount = snapshotFilteredListings.length;
+                    const totalMonthlyUnits = snapshotCount > 0
+                      ? snapshotFilteredListings.reduce((sum: number, l: any) => sum + (Number(l.estimated_monthly_units ?? l.est_monthly_units ?? 0) || 0), 0)
+                      : null;
+                    const totalMonthlyRevenue = snapshotCount > 0
+                      ? snapshotFilteredListings.reduce((sum: number, l: any) => sum + (Number(l.estimated_monthly_revenue ?? l.est_monthly_revenue ?? 0) || 0), 0)
+                      : null;
+                    const avgMonthlyUnits = snapshotCount > 0 && totalMonthlyUnits !== null ? totalMonthlyUnits / snapshotCount : null;
+                    const avgMonthlyRevenue = snapshotCount > 0 && totalMonthlyRevenue !== null ? totalMonthlyRevenue / snapshotCount : null;
+                    // Fallback to backend snapshot when no filtered listings (e.g. filters exclude all)
+                    const monthlyUnits = totalMonthlyUnits ?? snapshot?.total_units ?? null;
+                    const monthlyRevenue = totalMonthlyRevenue ?? snapshot?.total_page1_revenue ?? null;
                     const medianBSR = snapshot?.median_bsr ?? null;
                     const medianBsrCategory = snapshot?.median_bsr_category ?? null;
                     const medianRootBsr = snapshot?.median_root_bsr ?? null;
@@ -1623,9 +1654,9 @@ export default function AnalyzeForm({
                             </div>
                           )}
                           
-                          {/* 6. Monthly Units */}
+                          {/* 6. Total Monthly Units (sum across current view; matches grid filters) */}
                           <div>
-                            <div className="text-xs text-gray-500 mb-1">Monthly Units</div>
+                            <div className="text-xs text-gray-500 mb-1">Total Monthly Units</div>
                             {monthlyUnits !== null && monthlyUnits !== undefined ? (
                               <motion.div
                                 initial={{ opacity: 0, y: 4 }}
@@ -1635,16 +1666,19 @@ export default function AnalyzeForm({
                               >
                                 {monthlyUnits === 0 ? "0" : monthlyUnits.toLocaleString()}
                               </motion.div>
-                            ) : analysisUIState !== 'complete' ? (
+                            ) : analysisUIState !== "complete" ? (
                               <MetricSkeleton />
                             ) : (
                               <div className="text-lg font-semibold text-gray-900">—</div>
                             )}
+                            {snapshotCount > 0 && (selectedBrands.size > 0 || sponsoredFilter !== null) && (
+                              <div className="text-xs text-gray-400 mt-0.5">Based on {snapshotCount} visible listing{snapshotCount === 1 ? "" : "s"}</div>
+                            )}
                           </div>
                           
-                          {/* 7. Monthly Revenue */}
+                          {/* 7. Total Monthly Revenue (sum across current view; matches grid filters) */}
                           <div>
-                            <div className="text-xs text-gray-500 mb-1">Monthly Revenue</div>
+                            <div className="text-xs text-gray-500 mb-1">Total Monthly Revenue</div>
                             {monthlyRevenue !== null && monthlyRevenue !== undefined ? (
                               <motion.div
                                 initial={{ opacity: 0, y: 4 }}
@@ -1654,14 +1688,52 @@ export default function AnalyzeForm({
                               >
                                 {monthlyRevenue === 0 ? "$0.00" : formatCurrency(monthlyRevenue)}
                               </motion.div>
-                            ) : analysisUIState !== 'complete' ? (
+                            ) : analysisUIState !== "complete" ? (
                               <MetricSkeleton />
                             ) : (
                               <div className="text-lg font-semibold text-gray-900">—</div>
                             )}
                           </div>
                           
-                          {/* 7. Average Rating */}
+                          {/* 8. Avg Monthly Units (per listing) */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Avg Monthly Units (per listing)</div>
+                            {avgMonthlyUnits !== null && avgMonthlyUnits !== undefined ? (
+                              <motion.div
+                                initial={{ opacity: 0, y: 4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ duration: 0.25, ease: "easeOut" }}
+                                className="text-lg font-semibold text-gray-900"
+                              >
+                                {avgMonthlyUnits === 0 ? "0" : avgMonthlyUnits.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                              </motion.div>
+                            ) : analysisUIState !== "complete" ? (
+                              <MetricSkeleton />
+                            ) : (
+                              <div className="text-lg font-semibold text-gray-900">—</div>
+                            )}
+                          </div>
+                          
+                          {/* 9. Avg Monthly Revenue (per listing) */}
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Avg Monthly Revenue (per listing)</div>
+                            {avgMonthlyRevenue !== null && avgMonthlyRevenue !== undefined ? (
+                              <motion.div
+                                initial={{ opacity: 0, y: 4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ duration: 0.25, ease: "easeOut" }}
+                                className="text-lg font-semibold text-gray-900"
+                              >
+                                {avgMonthlyRevenue === 0 ? "$0.00" : formatCurrency(avgMonthlyRevenue)}
+                              </motion.div>
+                            ) : analysisUIState !== "complete" ? (
+                              <MetricSkeleton />
+                            ) : (
+                              <div className="text-lg font-semibold text-gray-900">—</div>
+                            )}
+                          </div>
+                          
+                          {/* 10. Average Rating */}
                           <div>
                             <div className="text-xs text-gray-500 mb-1">Average Rating</div>
                             <div className="text-lg font-semibold text-gray-900">
