@@ -1360,7 +1360,7 @@ export default function AnalyzeForm({
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* LEFT COLUMN: MARKET DATA & PRODUCTS (SCROLLABLE)                 */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto bg-[#F7F9FC]" style={{ minHeight: 0 }}>
+        <div className="flex-1 overflow-y-auto bg-[#F7F9FC] min-w-0" style={{ minHeight: 0 }}>
           {/* ─────────────────────────────────────────────────────────────── */}
           {/* SEARCH BAR (IN MAIN CONTENT - SCROLLS WITH CONTENT)             */}
           {/* ─────────────────────────────────────────────────────────────── */}
@@ -1449,7 +1449,7 @@ export default function AnalyzeForm({
 
           {analysis ? (
             /* CRITICAL: ALWAYS render results when analysis exists - never block rendering */
-            <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6 relative">
+            <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6 relative min-w-0">
               {/* AI Thinking Message - shown when enriching (non-blocking) */}
               {analysisUIState === 'enriching' && (
                 <div className="mb-4">
@@ -2333,17 +2333,25 @@ export default function AnalyzeForm({
                     {loading && pageOneListings.length === 0 ? (
                       <ResultsLoadingState />
                     ) : viewMode === "brands" ? (
-                      /* Brand View: table with expandable rows */
-                      <div className="mt-4 border border-gray-200 rounded-lg overflow-hidden bg-white">
-                        <table className="w-full text-left text-sm">
+                      /* Brand View: table with expandable rows — fits viewport, no horizontal scroll */
+                      <div className="mt-4 border border-gray-200 rounded-lg overflow-hidden bg-white min-w-0">
+                        <table className="w-full table-fixed text-left text-xs sm:text-sm">
+                          <colgroup>
+                            <col style={{ width: "2%" }} />
+                            <col style={{ width: "24%" }} />
+                            <col style={{ width: "10%" }} />
+                            <col style={{ width: "18%" }} />
+                            <col style={{ width: "26%" }} />
+                            <col style={{ width: "10%" }} />
+                          </colgroup>
                           <thead className="bg-gray-50 border-b border-gray-200">
                             <tr>
-                              <th className="w-8 py-2 pl-3 text-gray-500 font-medium"> </th>
-                              <th className="py-2 px-2 text-gray-500 font-medium">Brand</th>
-                              <th className="py-2 px-2 text-gray-500 font-medium text-right"># Products</th>
-                              <th className="py-2 px-2 text-gray-500 font-medium text-right">Monthly Units</th>
-                              <th className="py-2 px-2 text-gray-500 font-medium text-right">Monthly Revenue</th>
-                              <th className="py-2 px-2 text-gray-500 font-medium text-right">Market Share %</th>
+                              <th className="py-2 pl-2 pr-1 text-gray-500 font-medium"> </th>
+                              <th className="py-2 px-1 text-gray-500 font-medium" title="Brand">Brand</th>
+                              <th className="py-2 px-1 text-gray-500 font-medium text-right" title="Number of products">#</th>
+                              <th className="py-2 px-1 text-gray-500 font-medium text-right" title="Total monthly units">Units</th>
+                              <th className="py-2 px-1 text-gray-500 font-medium text-right" title="Total monthly revenue">Revenue</th>
+                              <th className="py-2 px-1 pr-2 text-gray-500 font-medium text-right" title="Market share">Share %</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2359,7 +2367,7 @@ export default function AnalyzeForm({
                                   <tr
                                     className="border-b border-gray-100 hover:bg-gray-50"
                                   >
-                                    <td className="py-2 pl-2">
+                                    <td className="py-2 pl-2 pr-1 align-top">
                                       <button
                                         type="button"
                                         onClick={() => setExpandedBrandRow(isExpanded ? null : row.brand)}
@@ -2369,19 +2377,19 @@ export default function AnalyzeForm({
                                         {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                                       </button>
                                     </td>
-                                    <td className="py-2 px-2 font-medium text-gray-900">{row.brand}</td>
-                                    <td className="py-2 px-2 text-right text-gray-700">{row.product_count}</td>
-                                    <td className="py-2 px-2 text-right text-gray-700">
+                                    <td className="py-2 px-1 font-medium text-gray-900 truncate align-top" title={row.brand}>{row.brand}</td>
+                                    <td className="py-2 px-1 text-right text-gray-700 align-top">{row.product_count}</td>
+                                    <td className="py-2 px-1 text-right text-gray-700 align-top whitespace-nowrap">
                                       {totalUnitsForShare > 0 || row.total_units > 0
                                         ? row.total_units.toLocaleString()
                                         : "—"}
                                     </td>
-                                    <td className="py-2 px-2 text-right text-gray-700">
+                                    <td className="py-2 px-1 text-right text-gray-700 align-top whitespace-nowrap">
                                       {totalRevenueForShare > 0 || row.total_revenue > 0
                                         ? formatCurrency(row.total_revenue)
                                         : "—"}
                                     </td>
-                                    <td className="py-2 px-2 text-right text-gray-700">
+                                    <td className="py-2 px-1 pr-2 text-right text-gray-700 align-top whitespace-nowrap">
                                       {totalRevenueForShare > 0 ? `${row.market_share_pct.toFixed(1)}%` : "—"}
                                     </td>
                                   </tr>
@@ -2406,42 +2414,40 @@ export default function AnalyzeForm({
                                               return (
                                                 <div
                                                   key={asin || idx}
-                                                  className="flex items-center gap-3 py-2 px-3 bg-white border border-gray-100 rounded text-sm"
+                                                  className="py-2 px-3 bg-white border border-gray-100 rounded text-sm min-w-0"
                                                 >
-                                                  <span className="w-8 h-8 flex items-center justify-center rounded bg-gray-100 text-gray-600 font-medium text-xs shrink-0">
-                                                    #{rank}
-                                                  </span>
-                                                  {imageUrl ? (
-                                                    <img src={imageUrl} alt="" className="w-10 h-10 object-contain rounded shrink-0" />
-                                                  ) : (
-                                                    <div className="w-10 h-10 bg-gray-100 rounded shrink-0" />
-                                                  )}
-                                                  <div className="min-w-0 flex-1">
-                                                    <div className="font-medium text-gray-900 truncate">{title || "—"}</div>
-                                                    <div className="text-xs text-gray-500">ASIN: {asin || "—"}</div>
+                                                  <div className="flex items-center gap-2 min-w-0">
+                                                    <span className="w-7 h-7 flex items-center justify-center rounded bg-gray-100 text-gray-600 font-medium text-xs shrink-0">
+                                                      #{rank}
+                                                    </span>
+                                                    {imageUrl ? (
+                                                      <img src={imageUrl} alt="" className="w-9 h-9 object-contain rounded shrink-0" />
+                                                    ) : (
+                                                      <div className="w-9 h-9 bg-gray-100 rounded shrink-0" />
+                                                    )}
+                                                    <div className="min-w-0 flex-1">
+                                                      <div className="font-medium text-gray-900 truncate" title={title || undefined}>{title || "—"}</div>
+                                                      <div className="text-xs text-gray-500 truncate">ASIN: {asin || "—"}</div>
+                                                    </div>
+                                                    <a
+                                                      href={amazonUrl}
+                                                      target="_blank"
+                                                      rel="noopener noreferrer"
+                                                      className="text-gray-400 hover:text-gray-600 shrink-0"
+                                                      aria-label="Open on Amazon"
+                                                    >
+                                                      <ExternalLink className="w-4 h-4" />
+                                                    </a>
                                                   </div>
-                                                  <div className="text-gray-700 shrink-0">{price > 0 ? formatCurrency(price) : "—"}</div>
-                                                  <div className="text-gray-600 shrink-0 text-xs">
-                                                    {rating > 0 ? `${rating.toFixed(1)} ★` : "—"} {reviews > 0 ? `(${reviews.toLocaleString()} reviews)` : ""}
+                                                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 pl-9 text-xs text-gray-600">
+                                                    <span>{price > 0 ? formatCurrency(price) : "—"}</span>
+                                                    <span>{rating > 0 ? `${rating.toFixed(1)} ★` : "—"}{reviews > 0 ? ` (${reviews.toLocaleString()})` : ""}</span>
+                                                    <span>{units != null ? `${units.toLocaleString()} u` : "—"}</span>
+                                                    <span>{revenue != null ? formatCurrency(revenue) : "—"}</span>
+                                                    {isSponsored && (
+                                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">Sponsored</span>
+                                                    )}
                                                   </div>
-                                                  <div className="text-gray-700 shrink-0 text-xs w-20 text-right">
-                                                    {units != null ? units.toLocaleString() : "—"} u
-                                                  </div>
-                                                  <div className="text-gray-700 shrink-0 text-xs w-20 text-right">
-                                                    {revenue != null ? formatCurrency(revenue) : "—"}
-                                                  </div>
-                                                  {isSponsored && (
-                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 shrink-0">Sponsored</span>
-                                                  )}
-                                                  <a
-                                                    href={amazonUrl}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="text-gray-400 hover:text-gray-600 shrink-0"
-                                                    aria-label="Open on Amazon"
-                                                  >
-                                                    <ExternalLink className="w-4 h-4" />
-                                                  </a>
                                                 </div>
                                               );
                                             })}
