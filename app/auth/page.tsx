@@ -19,6 +19,8 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [signupSuccess, setSignupSuccess] = useState(false);
 
+  const oauthEnabled = process.env.NEXT_PUBLIC_ENABLE_AMAZON_OAUTH === "true";
+
   // Listen for auth state changes
   useEffect(() => {
     const {
@@ -26,9 +28,7 @@ export default function AuthPage() {
     } = supabase.auth.onAuthStateChange(
       (event: AuthChangeEvent, session: Session | null) => {
         if (event === "SIGNED_IN" && session) {
-          // User has signed in (e.g., after email confirmation)
-          // Redirect to Amazon connection step (before onboarding)
-          router.replace("/connect-amazon");
+          router.replace(oauthEnabled ? "/connect-amazon" : "/onboarding");
         }
       }
     );
@@ -36,7 +36,7 @@ export default function AuthPage() {
     return () => {
       subscription.unsubscribe();
     };
-  }, [router, supabase]);
+  }, [router, supabase, oauthEnabled]);
 
   const submit = async () => {
     setLoading(true);
@@ -65,8 +65,8 @@ export default function AuthPage() {
     } else {
       // Sign-in: Check if session exists
       if (result.data.session) {
-        // Session exists - redirect to Amazon connection step (before onboarding)
-        router.replace("/connect-amazon");
+        const oauthEnabled = process.env.NEXT_PUBLIC_ENABLE_AMAZON_OAUTH === "true";
+        router.replace(oauthEnabled ? "/connect-amazon" : "/onboarding");
       } else {
         setError("Sign in failed. Please try again.");
         setLoading(false);

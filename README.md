@@ -20,6 +20,10 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Feature flags
+
+- **`NEXT_PUBLIC_ENABLE_AMAZON_OAUTH`** — When `"true"`, post-login flow sends users to Amazon OAuth (`/connect-amazon`) then onboarding. When unset or `"false"`, users go straight to `/onboarding` → `/analyze` (no OAuth prompt). Default: disabled.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

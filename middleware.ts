@@ -41,7 +41,10 @@ export async function middleware(req: NextRequest) {
   const isAuth = path.startsWith("/auth");
   const isConnectAmazon = path.startsWith("/connect-amazon");
   const isOnboarding = path.startsWith("/onboarding");
-  
+
+  /** When false, skip Amazon OAuth flow; users go onboarding → analyze. */
+  const oauthEnabled = process.env.NEXT_PUBLIC_ENABLE_AMAZON_OAUTH === "true";
+
   // Public pages that don't require authentication
   const publicPages = ["/", "/terms", "/privacy", "/support"];
   const isPublicPage = publicPages.includes(path);
@@ -50,13 +53,13 @@ export async function middleware(req: NextRequest) {
   if (!user && !isAuth && !isPublicPage) {
     return NextResponse.redirect(new URL("/auth", req.url));
   }
-  
+
   // Public pages: allow access without auth
   if (isPublicPage) {
     return res;
   }
 
-  // Logged in → check onboarding flow
+  // Logged in → check onboarding / OAuth flow
   if (user) {
     const { data: profile } = await supabase
       .from("seller_profiles")
@@ -64,16 +67,27 @@ export async function middleware(req: NextRequest) {
       .eq("id", user.id)
       .single();
 
-    // No profile yet OR missing sourcing_model → allow connect-amazon or onboarding
+    if (!oauthEnabled) {
+      // OAuth disabled: never send users to connect-amazon. Onboarding → analyze.
+      if (isConnectAmazon) {
+        return NextResponse.redirect(new URL("/onboarding", req.url));
+      }
+      if (!profile && !isOnboarding && !isAuth) {
+        return NextResponse.redirect(new URL("/onboarding", req.url));
+      }
+      if (profile && (isAuth || isOnboarding)) {
+        return NextResponse.redirect(new URL("/analyze", req.url));
+      }
+      return res;
+    }
+
+    // OAuth enabled: original flow (connect-amazon when no profile or missing sourcing_model)
     if (!profile || !profile.sourcing_model) {
-      // Allow connect-amazon and onboarding steps
       if (!isConnectAmazon && !isOnboarding && !isAuth) {
-        // First time: redirect to connect-amazon
         return NextResponse.redirect(new URL("/connect-amazon", req.url));
       }
     } else {
-      // Profile exists with sourcing_model → block auth, connect-amazon, and onboarding
-      if (profile && profile.sourcing_model && (isAuth || isConnectAmazon || isOnboarding)) {
+      if (profile.sourcing_model && (isAuth || isConnectAmazon || isOnboarding)) {
         return NextResponse.redirect(new URL("/analyze", req.url));
       }
     }
