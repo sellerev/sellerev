@@ -510,6 +510,9 @@ export default function AnalyzeForm({
   const [clientRunId, setClientRunId] = useState<string | null>(null);
   // Ref to track active client_run_id for stale response detection (state updates are async)
   const activeClientRunIdRef = useRef<string | null>(null);
+  // Ref guards for sync-from-initial: only sync once per distinct payload (stops infinite loop on history hydration)
+  const lastSyncedRef = useRef<string | null>(null);
+  const lastSyncedHashRef = useRef<string | null>(null);
   
   // Unique run ID generated on each Analyze click - used to force component remounts
   const [currentAnalysisRunId, setCurrentAnalysisRunId] = useState<string | null>(null);
@@ -633,124 +636,20 @@ export default function AnalyzeForm({
     }
   }, [brandDropdownOpen]);
 
-  // Sync initialAnalysis prop to state when analysis_run_id changes
-  // This handles URL navigation between different analyses (browser back/forward, refresh, direct URL entry)
-  // Note: When creating new analysis via router.replace(), props won't change, so state is updated directly in analyze()
+  // Sync initialAnalysis prop to state when analysis_run_id changes (idempotent: once per payload).
+  // Handles URL navigation between analyses (browser back/forward, refresh, history click).
+  // Ref guards prevent infinite loop: we only sync once per runId+payload hash; do NOT depend on analysis state.
   useEffect(() => {
-    // CRITICAL: NEVER sync from initialAnalysis if this is a user-triggered Analyze action
-    // When user clicks Analyze, we set state directly in analyze() function
-    // The router.replace() causes a re-render with initialAnalysis, but we must NOT overwrite
-    // the fresh state we just set from the API response
     if (clientRunId) {
-      // This is a user-triggered action - don't sync from initialAnalysis
-      // The state was already set in analyze() function from the API response
       console.log("FRONTEND_SKIP_SYNC_USER_ACTION", {
         client_run_id: clientRunId,
         reason: "User-triggered Analyze action - preserving state from API response, not initialAnalysis prop",
       });
       return;
     }
-    
-    // SIMPLIFIED RULE: If incoming analysis has products, always overwrite state
-    // Run IDs are informational only - never block syncing based on them
-    if (initialAnalysis) {
-      const incomingProducts = initialAnalysis.page_one_listings || initialAnalysis.products || [];
-      const incomingHasProducts = incomingProducts.length > 0;
-      const incomingRunId = initialAnalysis.analysis_run_id;
-      
-      // Current state check
-      const currentProducts = analysis?.page_one_listings || analysis?.products || [];
-      const currentHasProducts = currentProducts.length > 0;
-      const currentRunId = analysis?.analysis_run_id;
-      // Also check analysisRunIdForChat as it's set earlier and more reliable
-      const chatRunId = analysisRunIdForChat;
-      const isSameRunId = (currentRunId === incomingRunId) || (chatRunId === incomingRunId);
-      
-      // GUARD: Only skip sync for background/polling updates (NOT user actions or history navigation)
-      // Skip sync ONLY if:
-      // 1. Same backend run ID
-      // 2. Current state has products
-      // 3. AND this is NOT a keyword change (different input_value)
-      // 4. AND this is NOT from history navigation (clientRunId is null when coming from history)
-      // NEVER skip sync for:
-      // - User clicking Analyze (client_run_id exists) - already handled above
-      // - Keyword change (different input_value)
-      // - History navigation (clientRunId is null) - always sync to ensure state is correct
-      const isKeywordChange = initialAnalysis.input_value !== (analysis?.input_value || '');
-      const isFromHistory = !clientRunId; // Coming from history/navigation, not user-triggered action
-      if (isSameRunId && currentHasProducts && !isKeywordChange && !isFromHistory) {
-        // This is a URL/prop-based sync (not a user-triggered action or history navigation) and keyword hasn't changed
-        // Only skip if we have current products and it's the same run AND not from history
-        console.log("FRONTEND_SKIP_SYNC_SAME_RUN", {
-          run_id: incomingRunId,
-          current_run_id: currentRunId,
-          chat_run_id: chatRunId,
-          current_products: currentProducts.length,
-          incoming_products: incomingProducts.length,
-          is_keyword_change: isKeywordChange,
-          is_from_history: isFromHistory,
-          reason: "Same backend run ID with current products - preserving client state (URL/prop sync only, not user action or history)",
-        });
-        return;
-      }
-      
-      // Different run IDs always sync
-      // OR keyword change always sync
-      // OR current state has no products - always sync
-      // OR when coming from history (clientRunId is null) - always sync regardless of products
-      
-      // Always sync if:
-      // 1. Incoming has products (different run ID or keyword change), OR
-      // 2. Coming from history/navigation (clientRunId is null) - initialAnalysis is source of truth
-      // The only time we DON'T sync is when incoming has no products AND it's a background update (same run, no keyword change, not from history)
-      // Note: isFromHistory is already calculated above in the skip check
-      const shouldSync = incomingHasProducts || isFromHistory || !isSameRunId || isKeywordChange || !currentHasProducts;
-      
-      if (shouldSync) {
-        // Sync from initialAnalysis - this is the source of truth when coming from history
-        console.log("FRONTEND_SYNC_FROM_INITIAL", {
-          prev_run_id: currentRunId,
-          new_run_id: incomingRunId,
-          has_prev_listings: currentHasProducts,
-          prev_listings_count: currentProducts.length,
-          has_incoming_listings: incomingHasProducts,
-          incoming_count: incomingProducts.length,
-          is_same_run: isSameRunId,
-          is_from_history: isFromHistory,
-          reason: isFromHistory ? "History navigation - always sync" : "Different run/keyword or no current products",
-        });
-        setAnalysis(normalizeAnalysis(initialAnalysis));
-        // CRITICAL: keep chat wired to the currently viewed analysis.
-        // Without this, navigating to a run from the in-chat History panel can leave ChatSidebar
-        // with analysisRunId=null (or a stale ID), causing sendMessage() to no-op.
-        setAnalysisRunIdForChat(initialAnalysis.analysis_run_id || null);
-        setInputValue(initialAnalysis.input_value || "");
-        setIsEstimated(false);
-        setSnapshotType("snapshot");
-        setChatMessages(initialMessages);
-        // Reset selection when switching runs to avoid applying prior selection to a different market
-        setSelectedAsins([]);
-        // Reset sort to default (Amazon rank) when new analysis loads
-        setSortBy("rank");
-        // Reset filters when new analysis loads
-        setSelectedBrands(new Set());
-        setSelectedFulfillment(new Set());
-        setSponsoredFilter(null);
-        setBrandDropdownOpen(false);
-        // CRITICAL: Set UI state to 'complete' when syncing from history
-        // This ensures results are displayed even if initialAnalysis didn't set it properly
-        if (isFromHistory) {
-          setAnalysisUIState('complete');
-        }
-      }
-      // Only skip sync if: incoming has no products AND same run ID AND no keyword change AND not from history
-      // This handles edge cases where server hasn't loaded data yet (background polling)
-    } else {
-      // No initialAnalysis means no run param - reset to blank state
-      // Only clear if we truly have no listings AND no run ID
-      const shouldClear = analysis !== null && !analysisRunIdForChat;
-      
-      if (shouldClear) {
+
+    if (!initialAnalysis) {
+      if (lastSyncedHashRef.current !== null) {
         console.log("FRONTEND_RESET_TO_BLANK", {
           reason: "No initialAnalysis, no analysisRunIdForChat, and no valid listings",
         });
@@ -764,15 +663,79 @@ export default function AnalyzeForm({
         setChatMessages([]);
         setSelectedAsins([]);
         setSortBy("rank");
-        // Reset filters when resetting to blank state
         setSelectedBrands(new Set());
         setSelectedFulfillment(new Set());
         setSponsoredFilter(null);
         setBrandDropdownOpen(false);
       }
+      lastSyncedRef.current = null;
+      lastSyncedHashRef.current = null;
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialAnalysis?.analysis_run_id, analysisRunIdForChat, clientRunId, analysis]); // Sync when analysis_run_id changes (different analysis loaded)
+
+    const incomingRunId = initialAnalysis.analysis_run_id;
+    const incomingProducts = initialAnalysis.page_one_listings || initialAnalysis.products || [];
+    const incomingListingsLength = incomingProducts.length;
+    const incomingKeyword = initialAnalysis.input_value ?? "";
+    const incomingSnapshotKeyword = initialAnalysis.market_snapshot && typeof initialAnalysis.market_snapshot === "object" && !Array.isArray(initialAnalysis.market_snapshot)
+      ? (initialAnalysis.market_snapshot as { keyword?: string }).keyword ?? ""
+      : "";
+    const incomingHash = `${incomingRunId}:${incomingListingsLength}:${incomingKeyword}:${incomingSnapshotKeyword}`;
+
+    if (!incomingRunId) return;
+
+    if (lastSyncedHashRef.current === incomingHash) {
+      console.log("FRONTEND_SYNC_FROM_INITIAL_SKIPPED", {
+        reason: "already_synced",
+        runId: incomingRunId,
+        incomingHash,
+      });
+      return;
+    }
+
+    const incomingHasProducts = incomingListingsLength > 0;
+    const isFromHistory = !clientRunId;
+
+    if (!incomingHasProducts && !isFromHistory) {
+      return;
+    }
+
+    lastSyncedRef.current = incomingRunId;
+    lastSyncedHashRef.current = incomingHash;
+
+    console.log("FRONTEND_SYNC_FROM_INITIAL", {
+      new_run_id: incomingRunId,
+      has_incoming_listings: incomingHasProducts,
+      incoming_count: incomingListingsLength,
+      is_from_history: isFromHistory,
+      reason: isFromHistory ? "History navigation - sync once" : "Different run/keyword or no current products",
+    });
+
+    const nextAnalysis = normalizeAnalysis(initialAnalysis);
+    setAnalysis((prev) => {
+      if (
+        prev?.analysis_run_id === incomingRunId &&
+        (prev?.page_one_listings?.length ?? prev?.products?.length ?? 0) === incomingListingsLength
+      ) {
+        return prev;
+      }
+      return nextAnalysis;
+    });
+    setAnalysisRunIdForChat(incomingRunId);
+    setInputValue(incomingKeyword);
+    setIsEstimated(false);
+    setSnapshotType("snapshot");
+    setChatMessages(initialMessages);
+    setSelectedAsins([]);
+    setSortBy("rank");
+    setSelectedBrands(new Set());
+    setSelectedFulfillment(new Set());
+    setSponsoredFilter(null);
+    setBrandDropdownOpen(false);
+    if (isFromHistory) {
+      setAnalysisUIState("complete");
+    }
+  }, [initialAnalysis?.analysis_run_id, initialAnalysis?.input_value, clientRunId]); // Do NOT depend on analysis or analysisRunIdForChat
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
