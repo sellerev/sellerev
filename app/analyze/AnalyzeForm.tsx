@@ -2353,8 +2353,8 @@ export default function AnalyzeForm({
                             <tr>
                               <th className="py-2 pl-2 pr-1 text-gray-500 font-medium"> </th>
                               <th className="py-2 px-1 text-gray-500 font-medium" title="Brand">Brand</th>
-                              <th className="py-2 px-1 text-gray-500 font-medium text-right" title="Number of products">#</th>
-                              <th className="py-2 px-1 text-gray-500 font-medium text-right" title="Total monthly units">Units</th>
+                              <th className="py-2 px-1 text-gray-500 font-medium text-right" title="Number of products"># of Products</th>
+                              <th className="py-2 px-1 text-gray-500 font-medium text-right" title="Total monthly units">Monthly Units</th>
                               <th className="py-2 px-1 text-gray-500 font-medium text-right" title="Total monthly revenue">Revenue</th>
                               <th className="py-2 px-1 pr-2 text-gray-500 font-medium text-right" title="Market share">Share %</th>
                             </tr>
