@@ -47,7 +47,7 @@ const CATEGORY_ORDER: QuestionCategory[] = [
   "workflow",
 ];
 
-const DEFAULT_OPEN_CATEGORIES: QuestionCategory[] = ["market", "reviews"];
+const DEFAULT_OPEN_CATEGORIES: QuestionCategory[] = [];
 
 const FEES_SUPPORTED = true;
 
@@ -205,6 +205,16 @@ export default function HelpDrawer({
     return () => clearTimeout(tid);
   }, [toast]);
 
+  // Reset to collapsed, library mode whenever drawer is opened
+  useEffect(() => {
+    if (isOpen) {
+      setOpenCategories(new Set(DEFAULT_OPEN_CATEGORIES));
+      setMode("library");
+      setPendingQuestion(null);
+      setPickerSelected([]);
+    }
+  }, [isOpen]);
+
   const handleQuestionClick = useCallback(
     (t: QuestionTemplate, category: QuestionCategory) => {
       const isFeesComingSoon = category === "fees" && !FEES_SUPPORTED;
@@ -223,6 +233,7 @@ export default function HelpDrawer({
         if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
           console.log("QUESTION_INSERTED", { id: t.id });
         }
+        onClose();
         return;
       }
 
@@ -232,6 +243,7 @@ export default function HelpDrawer({
         if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
           console.log("QUESTION_INSERTED", { id: t.id });
         }
+        onClose();
         return;
       }
 
@@ -241,6 +253,7 @@ export default function HelpDrawer({
         if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
           console.log("QUESTION_INSERTED", { id: t.id });
         }
+        onClose();
         return;
       }
 
@@ -249,7 +262,7 @@ export default function HelpDrawer({
       setPickerSelected([]);
       setMode("select");
     },
-    [selectedAsins, onSelectQuestion]
+    [selectedAsins, onSelectQuestion, onClose]
   );
 
   const handleConfirmSelection = useCallback(() => {
@@ -271,7 +284,8 @@ export default function HelpDrawer({
     setPendingQuestion(null);
     setPickerSelected([]);
     setMode("library");
-  }, [pendingQuestion, pickerSelected, onSelectedAsinsChange, onSelectQuestion]);
+    onClose();
+  }, [pendingQuestion, pickerSelected, onSelectedAsinsChange, onSelectQuestion, onClose]);
 
   const handleBackFromSelect = useCallback(() => {
     setPendingQuestion(null);
