@@ -3187,6 +3187,7 @@ export async function POST(req: NextRequest) {
     
     // Build review_insights: one type=product per ASIN; fallback to type=reviews only when insufficient signal.
     if (reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2 && productDossiers) {
+      const amazonDomain = "amazon.com";
       const { buildReviewInsightsFromProductDossier } = await import("@/lib/rainforest/reviewInsightsFromDossier");
       const { validateDisplayStrings } = await import("@/lib/reviewInsights/validateInsights");
       const insightAsins = selectedAsins.slice(0, 2);
