@@ -26,12 +26,15 @@ export interface RainforestReviewsEnrichment {
 }
 
 /**
- * Fetch Rainforest reviews data for enrichment (recent reviews, extract themes)
+ * Fetch Rainforest reviews data for enrichment.
+ * When lowStarFirst is true, request critical/low-star reviews first (provider-dependent param).
+ * On 503: return graceful result with TEMPORARILY_UNAVAILABLE, do not throw.
  */
 export async function getRainforestReviewsEnrichment(
   asin: string,
   amazonDomain: string = "amazon.com",
-  limit: number = 20
+  limit: number = 20,
+  lowStarFirst: boolean = false
 ): Promise<RainforestReviewsEnrichment | null> {
   const startTime = Date.now();
   const rainforestApiKey = process.env.RAINFOREST_API_KEY;
@@ -43,7 +46,7 @@ export async function getRainforestReviewsEnrichment(
   
   try {
     const endpoint = "reviews_enrichment";
-    const paramsHash = `limit=${limit}`;
+    const paramsHash = lowStarFirst ? `limit=${limit}:low_star_first` : `limit=${limit}`;
     
     // Global 7-day cache lookup (shared across users)
     const cached = await getCachedEnrichment<RainforestReviewsEnrichment>({
@@ -65,16 +68,19 @@ export async function getRainforestReviewsEnrichment(
       asin,
       endpoint,
       credits: 1,
+      low_star_first: lowStarFirst,
     });
-    // Build request URL with type=reviews
+    // Build request URL with type=reviews; request low-star/critical first when fallback for complaints
     const params = new URLSearchParams({
       api_key: rainforestApiKey,
       type: "reviews",
       amazon_domain: amazonDomain,
       asin: asin,
-      // Fetch up to limit reviews (Rainforest API may have its own max)
-      // Note: Rainforest API may not support limit parameter directly
     });
+    if (lowStarFirst) {
+      // Request critical reviews first (use provider's documented value if available)
+      params.set("review_star_rating", "1,2");
+    }
     
     const apiUrl = `https://api.rainforestapi.com/request?${params.toString()}`;
     

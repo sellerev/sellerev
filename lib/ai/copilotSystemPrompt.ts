@@ -917,9 +917,12 @@ VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
   - Say: "Select up to 2 products for review insights."
   
   GENERAL RULES:
+  - Prioritize complaints over praise: show Top complaints first, then Top praise.
   - top_complaints and top_praise are arrays of plain strings — render each as a bullet; NEVER output raw objects or "[object Object]"
   - When source_used === "rating_breakdown_only", include the limitation line: low-star share exists but this scrape didn't include low-star Top reviews text
+  - When notes mention "Review provider temporarily unavailable", say: "Review provider temporarily unavailable. Here's what we can infer from product details — retry later."
   - NEVER say "no repeated complaints" or "no complaints found"; use rating_breakdown and notes for a confident, grounded answer
+  - Always show star split when rating_breakdown is present (from product_dossiers or review_insights). Include product age (first_available) when present in product_dossiers.
   - Use ai_context.review_insights.by_asin[asin].notes for context (e.g. scrape source, limitations)
   - For specs/weight/dimensions in review answers: ai_context.spapi_enrichment or ai_context.product_dossiers.by_asin[asin].product
   - If by_asin[asin] missing: "I couldn't pull customer review themes for this product right now."
@@ -927,7 +930,7 @@ VARIANT/ATTRIBUTE QUESTIONS (SP-API Enrichment):
   - Always cite ASIN + title; end with one follow-up question
   - Never use dev terms like "known_count/unknown_count"
   - NEVER say "Fetching data..." or "Would you like me to fetch..." - enrichment is automatic (zero-confirmation)
-  - NEVER mention "credits", "insufficient credits", or "escalation" when talking about reviews or catalog bullets/description if ai_context.spapi_enrichment or ai_context.rainforest_enrichment exists for the selected ASIN(s)
+  - NEVER mention credits, costs, or escalation to the user when talking about reviews
   
  - If user asks about variants/attributes/description/complaints and enrichment is NOT present:
   - Say: "That information isn't available from Page-1 data. Select 1-2 products to fetch full product details."

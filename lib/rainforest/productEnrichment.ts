@@ -14,6 +14,44 @@ import {
   getCachedEnrichment,
   setCachedEnrichment,
 } from "./enrichmentCache";
+import { getCachedDossier, setCachedDossier } from "./productDossiersTable";
+import { getProductDossier } from "./productDossier";
+import type { ProductDossier } from "./productDossier";
+
+/** Per-request inflight lock so we never double-call the same ASIN+domain in one request. */
+const dossierInflight = new Map<string, Promise<ProductDossier>>();
+
+/**
+ * Get or fetch product dossier (one Rainforest type=product call per ASIN).
+ * Cache in product_dossiers table, TTL 7 days. Inflight lock prevents duplicate calls.
+ */
+export async function getOrFetchDossier(
+  asin: string,
+  amazonDomain: string = "amazon.com"
+): Promise<ProductDossier> {
+  const key = `${asin}:${amazonDomain}`;
+  const existing = dossierInflight.get(key);
+  if (existing) {
+    console.log("DOSSIER_INFLIGHT_DEDUPE_HIT", { asin });
+    return existing;
+  }
+  const promise = (async (): Promise<ProductDossier> => {
+    const cached = await getCachedDossier(asin, amazonDomain);
+    if (cached && typeof cached === "object" && "product" in cached && "review_material" in cached) {
+      console.log("DOSSIER_CACHE_HIT_PRODUCT_DOSSIERS", { asin });
+      return cached as ProductDossier;
+    }
+    const dossier = await getProductDossier(asin, amazonDomain);
+    await setCachedDossier(asin, amazonDomain, dossier);
+    return dossier;
+  })();
+  dossierInflight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    dossierInflight.delete(key);
+  }
+}
 
 export interface RainforestProductEnrichment {
   asin: string;

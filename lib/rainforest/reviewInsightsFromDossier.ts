@@ -220,8 +220,32 @@ export function buildReviewInsightsFromProductDossier(
           "mixed_top_reviews"
         );
       }
-    } else {
-      // No low-star top_reviews: use rating_breakdown + honest limitation
+    } else if (topReviews.length > 0) {
+      // No rating <= 3 in top_reviews: scan for negative language (broke, cheap, flimsy, etc.)
+      const negativeKeywords = [
+        "broke", "broken", "cheap", "flimsy", "poor quality", "defective", "damaged",
+        "doesn't work", "doesnt work", "stopped working", "waste", "disappointed",
+        "return", "refund", "too small", "too large", "uncomfortable", "unreliable",
+        "missing", "wrong", "not as described", "not worth", "horrible", "terrible",
+      ];
+      for (const r of topReviews) {
+        if (top_complaints.length >= 3) break;
+        const body = (r.body || "").toLowerCase();
+        const title = (r.title || "").toLowerCase();
+        const text = body + " " + title;
+        for (const kw of negativeKeywords) {
+          if (text.includes(kw)) {
+            const theme = themeFromReview(r) + " (from review text)";
+            const snip = r.body ? snippet(r.body) : undefined;
+            addComplaint({ theme, snippet: snip, stars: r.rating }, "negative_top_reviews");
+            break;
+          }
+        }
+      }
+      // If still no complaints after negative-language scan, fall through to rating_breakdown below.
+    }
+    if (top_complaints.length === 0) {
+      // No top_reviews or no signal: use rating_breakdown + honest limitation
       const p1 = getRatingBreakdownPct(ratingBreakdown, 1);
       const p2 = getRatingBreakdownPct(ratingBreakdown, 2);
       const p3 = getRatingBreakdownPct(ratingBreakdown, 3);

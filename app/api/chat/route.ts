@@ -1522,7 +1522,8 @@ const REVIEW_PHRASES = [
   "what do people dislike", "what do people like", "what do customers complain about",
   "what do customers praise", "customer feedback", "review summary", "common complaints",
   "common praise", "why is it bad", "why is it good", "tell me what customers are saying",
-  "poor quality", "quality issues", "doesn't work", "doesnt work", "dont work",
+  "what are people saying", "feedback", "sentiment", "pros and cons", "good reviews",
+  "bad reviews", "poor quality", "quality issues", "doesn't work", "doesnt work", "dont work",
 ];
 
 /** Token-based review intent: normalize (lowercase, strip punctuation), match synonyms. */
@@ -1663,6 +1664,15 @@ export async function POST(req: NextRequest) {
         { status: 400, headers: res.headers }
       );
     }
+
+    const selectedAsinsPayload = Array.isArray((body as any).selectedAsins)
+      ? (body as any).selectedAsins.filter((a: unknown) => typeof a === "string")
+      : [];
+    console.log("CHAT_PAYLOAD_SENT", {
+      selected_asins: selectedAsinsPayload,
+      selected_count: selectedAsinsPayload.length,
+      analysis_run_id: body.analysisRunId,
+    });
 
     // 3. Fetch the analysis run (CACHED DATA ONLY - no live API calls)
     // ────────────────────────────────────────────────────────────────
@@ -2379,7 +2389,7 @@ export async function POST(req: NextRequest) {
 
     // 0 ASINs + review intent → short-circuit: do NOT call Rainforest
     if (reviewIntentFromMessage && !uspIntent && selectedAsins.length === 0) {
-      const content = "Select 1–2 products to analyze reviews.";
+      const content = "Select 1 product to analyze reviews.";
       const stream = new ReadableStream({
         start(controller) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content })}\n\n`));
@@ -3124,7 +3134,7 @@ export async function POST(req: NextRequest) {
             strategy: "type_product_first",
           });
         }
-        const { getProductDossier } = await import("@/lib/rainforest/productDossier");
+        const { getOrFetchDossier } = await import("@/lib/rainforest/productEnrichment");
 
         productDossiers = {
           asins: enrichmentAsins,
@@ -3133,7 +3143,7 @@ export async function POST(req: NextRequest) {
 
         for (const asin of enrichmentAsins) {
           try {
-            const dossier = await getProductDossier(asin, amazonDomain);
+            const dossier = await getOrFetchDossier(asin, amazonDomain);
             productDossiers.by_asin[asin] = dossier;
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -3158,9 +3168,10 @@ export async function POST(req: NextRequest) {
       });
     }
     
-    // Build per-request review_insights from product dossiers only (one Rainforest type=product per ASIN; no type=reviews).
+    // Build review_insights: one type=product per ASIN; fallback to type=reviews only when insufficient signal.
     if (reviewInsightsIntent && selectedAsins.length > 0 && selectedAsins.length <= 2 && productDossiers) {
       const { buildReviewInsightsFromProductDossier } = await import("@/lib/rainforest/reviewInsightsFromDossier");
+      const { validateDisplayStrings } = await import("@/lib/reviewInsights/validateInsights");
       const insightAsins = selectedAsins.slice(0, 2);
       reviewInsights = {
         asins: insightAsins,
@@ -3178,13 +3189,11 @@ export async function POST(req: NextRequest) {
         const title: string | null = dossier.product?.title ?? null;
         const { top_complaints: rawComplaints, top_praise: rawPraise, meta } = buildReviewInsightsFromProductDossier(dossier);
 
-        // Normalize to strings so we never send raw objects (avoids "[object Object]" in responses).
-        const toDisplay = (item: string | { theme: string; snippet?: string; stars?: number }): string =>
-          typeof item === "string" ? item : (item.snippet ? `${item.theme} — ${item.snippet}` : item.theme);
-        const top_complaints: string[] = rawComplaints.map(toDisplay);
-        const top_praise: string[] = rawPraise.map(toDisplay);
+        // Hard-validate to primitives/strings only (prevent [object Object]).
+        const top_complaints: string[] = validateDisplayStrings(rawComplaints);
+        const top_praise: string[] = validateDisplayStrings(rawPraise);
 
-        const source_used =
+        let source_used =
           meta.complaint_source_used === "customers_say"
             ? "customers_say"
             : meta.complaint_source_used === "negative_top_reviews" || meta.complaint_source_used === "mixed_top_reviews"
@@ -3200,6 +3209,38 @@ export async function POST(req: NextRequest) {
           );
         }
         notes.push("Source: Rainforest product page scrape (rating_breakdown + on-page top reviews).");
+
+        // Fallback to type=reviews only when dossier has insufficient review signal.
+        const needsFallback =
+          meta.top_reviews_count === 0 ||
+          (meta.negative_reviews_count === 0 && !meta.rating_breakdown_present);
+        if (needsFallback) {
+          try {
+            const { getRainforestReviewsEnrichment } = await import("@/lib/rainforest/reviewsEnrichment");
+            const reviewsData = await getRainforestReviewsEnrichment(asin, amazonDomain, 15, true);
+            if (reviewsData?.errors?.includes("TEMPORARILY_UNAVAILABLE")) {
+              notes.push("Review provider temporarily unavailable. Here's what we can infer from product details — retry later.");
+            } else if (reviewsData?.extracted && (reviewsData.extracted.top_complaints?.length > 0 || reviewsData.extracted.top_praise?.length > 0)) {
+              const fallbackComplaints = (reviewsData.extracted.top_complaints || []).map((c: { theme: string; snippet?: string }) =>
+                c.snippet ? `${c.theme} — ${c.snippet}` : c.theme
+              );
+              const fallbackPraise = (reviewsData.extracted.top_praise || []).map((p: { theme: string; snippet?: string }) =>
+                p.snippet ? `${p.theme} — ${p.snippet}` : p.theme
+              );
+              if (fallbackComplaints.length > 0) {
+                top_complaints.push(...fallbackComplaints.slice(0, 3 - top_complaints.length));
+              }
+              if (fallbackPraise.length > 0) {
+                top_praise.push(...fallbackPraise.slice(0, 3 - top_praise.length));
+              }
+              source_used = top_complaints.length > 0 ? "top_reviews" : source_used;
+              notes.push("Fallback: themes from Rainforest type=reviews (low-star first).");
+              reviewInsightsStats.used_type_reviews_count += 1;
+            }
+          } catch (e) {
+            console.warn("REVIEW_FALLBACK_TYPE_REVIEWS_ERROR", { asin, error: String(e) });
+          }
+        }
 
         reviewInsightsStats.used_type_product_count += 1;
 
