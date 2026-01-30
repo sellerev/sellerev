@@ -3211,7 +3211,7 @@ export async function POST(req: NextRequest) {
         const top_complaints: string[] = validateDisplayStrings(rawComplaints);
         const top_praise: string[] = validateDisplayStrings(rawPraise);
 
-        let source_used =
+        let source_used: "none" | "customers_say" | "summarization_attributes" | "top_reviews" | "rating_breakdown_only" | "type_reviews" =
           meta.complaint_source_used === "customers_say"
             ? "customers_say"
             : meta.complaint_source_used === "negative_top_reviews" || meta.complaint_source_used === "mixed_top_reviews"
