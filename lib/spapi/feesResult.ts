@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasAmazonConnection } from "@/lib/amazon/getUserToken";
-import { getOrFetchFeesEstimate } from "./feesEstimate";
+import { getOrFetchFeesEstimate, type FeesUsageContext } from "./feesEstimate";
 import { estimateFees } from "./estimateFees";
 
 export interface FeesResultPayload {
@@ -22,6 +22,9 @@ export interface FeesResultPayload {
 
 const DEFAULT_MARKETPLACE = "ATVPDKIKX0DER";
 
+/** Optional usage context for idempotent usage logging (e.g. from chat route). */
+export type FeesResultUsageContext = FeesUsageContext;
+
 /**
  * Unified fees pipeline: never blocks. Returns SP-API result when connected,
  * otherwise estimated fees. On SP-API failure, falls back to estimate + warning.
@@ -29,7 +32,8 @@ const DEFAULT_MARKETPLACE = "ATVPDKIKX0DER";
 export async function getFeesResult(
   supabase: SupabaseClient,
   userId: string,
-  params: { asin: string; marketplaceId?: string; price: number; category?: string | null }
+  params: { asin: string; marketplaceId?: string; price: number; category?: string | null },
+  usageContext?: FeesResultUsageContext | null
 ): Promise<FeesResultPayload> {
   const asin = params.asin.trim();
   const marketplaceId = params.marketplaceId?.trim() || DEFAULT_MARKETPLACE;
@@ -56,7 +60,7 @@ export async function getFeesResult(
     };
   }
 
-  const sp = await getOrFetchFeesEstimate(supabase, userId, { asin, marketplaceId, price });
+  const sp = await getOrFetchFeesEstimate(supabase, userId, { asin, marketplaceId, price }, usageContext);
   if (sp && sp.total_fees != null) {
     return {
       type: "fees_result",

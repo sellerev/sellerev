@@ -1,4 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
+import {
+  type UsageContext,
+  buildUsageIdempotencyKey,
+  logUsageEvent,
+} from "@/lib/usage/logUsageEvent";
 
 type Endpoint = "product" | "reviews" | string;
 
@@ -44,7 +49,8 @@ function getSupabaseServiceClient() {
 }
 
 export async function getCachedEnrichment<TPayload = any, TExtracted = any>(
-  key: CacheKey
+  key: CacheKey,
+  usageContext?: UsageContext | null
 ): Promise<CachePayload<TPayload, TExtracted> | null> {
   const client = getSupabaseServiceClient();
   if (!client) return null;
@@ -78,6 +84,31 @@ export async function getCachedEnrichment<TPayload = any, TExtracted = any>(
         params_hash: key.paramsHash,
       });
       return null;
+    }
+
+    // Per-user usage: log cache hit when context provided (idempotent)
+    if (usageContext?.userId && usageContext?.messageId) {
+      const idempotencyKey = buildUsageIdempotencyKey({
+        analysisRunId: usageContext.analysisRunId ?? null,
+        messageId: usageContext.messageId,
+        provider: "cache",
+        operation: "cache.asin_enrichment",
+        asin: key.asin,
+        endpoint: key.endpoint,
+        cache_status: "hit",
+      });
+      await logUsageEvent({
+        userId: usageContext.userId,
+        provider: "cache",
+        operation: "cache.asin_enrichment",
+        endpoint: key.endpoint,
+        cache_status: "hit",
+        credits_used: 0,
+        asin: key.asin,
+        amazon_domain: key.amazonDomain,
+        meta: { table: "asin_enrichment_cache", params_hash: key.paramsHash },
+        idempotency_key: idempotencyKey,
+      });
     }
 
     // Best-effort last_accessed_at update (non-blocking for callers)

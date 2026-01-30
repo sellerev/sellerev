@@ -13,6 +13,11 @@
  */
 
 import { KeywordMarketData } from "./keywordMarket";
+import {
+  type UsageContext,
+  buildUsageIdempotencyKey,
+  logUsageEvent,
+} from "@/lib/usage/logUsageEvent";
 
 export interface CachedKeywordAnalysis {
   keyword: string;
@@ -118,46 +123,93 @@ export async function cacheKeywordAnalysis(
 /**
  * Retrieve cached keyword analysis (Task 2 & 3: Add logging and stale-while-revalidate)
  * Returns: { data: KeywordMarketData | null, status: 'HIT' | 'MISS' | 'STALE', age_seconds: number }
+ * Optional usageContext enables per-user usage logging (idempotent).
  */
 export async function getCachedKeywordAnalysis(
   supabase: any,
   keyword: string,
   marketplace: string = "US",
   inputType: string = "keyword",
-  page: number = 1
+  page: number = 1,
+  usageContext?: UsageContext | null
 ): Promise<{
   data: KeywordMarketData | null;
   status: 'HIT' | 'MISS' | 'STALE';
   age_seconds: number;
 }> {
   const cacheKey = getCacheKey(keyword, marketplace, inputType, page);
-  
+  const endpoint = `keyword_analysis:${marketplace}:${inputType}:${page}`;
+
   // Task 2: Log CACHE_LOOKUP
   console.log("CACHE_LOOKUP", { key: cacheKey });
-  
+
   try {
     const { data: cacheRow, error } = await supabase
       .from("keyword_analysis_cache")
       .select("data, expires_at, created_at")
       .eq("cache_key", cacheKey)
       .single();
-    
+
     if (error || !cacheRow) {
-      // Task 2: Log CACHE_MISS
+      if (usageContext?.userId && usageContext?.messageId) {
+        const missKey = buildUsageIdempotencyKey({
+          analysisRunId: usageContext.analysisRunId ?? null,
+          messageId: usageContext.messageId,
+          provider: "cache",
+          operation: "cache.keyword_analysis",
+          asin: null,
+          endpoint,
+          cache_status: "miss",
+        });
+        await logUsageEvent({
+          userId: usageContext.userId,
+          provider: "cache",
+          operation: "cache.keyword_analysis",
+          endpoint,
+          cache_status: "miss",
+          credits_used: 0,
+          keyword: keyword.trim(),
+          marketplace_id: marketplace,
+          meta: { table: "keyword_analysis_cache", cache_key: cacheKey },
+          idempotency_key: missKey,
+        });
+      }
       console.log("CACHE_MISS", { key: cacheKey });
       return { data: null, status: 'MISS', age_seconds: 0 };
     }
-    
+
     const cached = cacheRow.data as CachedKeywordAnalysis;
     const createdAt = new Date(cacheRow.created_at || cached.cached_at);
     const now = new Date();
     const ageMs = now.getTime() - createdAt.getTime();
     const ageSeconds = Math.floor(ageMs / 1000);
     const ttlSeconds = CACHE_TTL_SECONDS;
-    
+
     // Task 3: Enforce TTL with stale-while-revalidate
     if (ageSeconds < ttlSeconds) {
-      // Fresh cache - return immediately
+      if (usageContext?.userId && usageContext?.messageId) {
+        const hitKey = buildUsageIdempotencyKey({
+          analysisRunId: usageContext.analysisRunId ?? null,
+          messageId: usageContext.messageId,
+          provider: "cache",
+          operation: "cache.keyword_analysis",
+          asin: null,
+          endpoint,
+          cache_status: "hit",
+        });
+        await logUsageEvent({
+          userId: usageContext.userId,
+          provider: "cache",
+          operation: "cache.keyword_analysis",
+          endpoint,
+          cache_status: "hit",
+          credits_used: 0,
+          keyword: keyword.trim(),
+          marketplace_id: marketplace,
+          meta: { table: "keyword_analysis_cache", cache_key: cacheKey },
+          idempotency_key: hitKey,
+        });
+      }
       console.log("CACHE_HIT", { key: cacheKey, age_seconds: ageSeconds });
       return {
         data: {
@@ -168,9 +220,31 @@ export async function getCachedKeywordAnalysis(
         age_seconds: ageSeconds,
       };
     } else if (ageSeconds < ttlSeconds * 2) {
-      // Stale but usable - return cached AND trigger async refresh (Task 3)
-      console.log("CACHE_STALE", { 
-        key: cacheKey, 
+      if (usageContext?.userId && usageContext?.messageId) {
+        const hitKey = buildUsageIdempotencyKey({
+          analysisRunId: usageContext.analysisRunId ?? null,
+          messageId: usageContext.messageId,
+          provider: "cache",
+          operation: "cache.keyword_analysis",
+          asin: null,
+          endpoint,
+          cache_status: "hit",
+        });
+        await logUsageEvent({
+          userId: usageContext.userId,
+          provider: "cache",
+          operation: "cache.keyword_analysis",
+          endpoint,
+          cache_status: "hit",
+          credits_used: 0,
+          keyword: keyword.trim(),
+          marketplace_id: marketplace,
+          meta: { table: "keyword_analysis_cache", cache_key: cacheKey, stale: true },
+          idempotency_key: hitKey,
+        });
+      }
+      console.log("CACHE_STALE", {
+        key: cacheKey,
         age_seconds: ageSeconds,
         message: "Returning stale cache, triggering async refresh",
       });
@@ -183,13 +257,35 @@ export async function getCachedKeywordAnalysis(
         age_seconds: ageSeconds,
       };
     } else {
-      // Too stale - delete and treat as miss
+      if (usageContext?.userId && usageContext?.messageId) {
+        const missKey = buildUsageIdempotencyKey({
+          analysisRunId: usageContext.analysisRunId ?? null,
+          messageId: usageContext.messageId,
+          provider: "cache",
+          operation: "cache.keyword_analysis",
+          asin: null,
+          endpoint,
+          cache_status: "miss",
+        });
+        await logUsageEvent({
+          userId: usageContext.userId,
+          provider: "cache",
+          operation: "cache.keyword_analysis",
+          endpoint,
+          cache_status: "miss",
+          credits_used: 0,
+          keyword: keyword.trim(),
+          marketplace_id: marketplace,
+          meta: { table: "keyword_analysis_cache", cache_key: cacheKey, reason: "expired" },
+          idempotency_key: missKey,
+        });
+      }
       await supabase
         .from("keyword_analysis_cache")
         .delete()
         .eq("cache_key", cacheKey);
-      console.log("CACHE_MISS", { 
-        key: cacheKey, 
+      console.log("CACHE_MISS", {
+        key: cacheKey,
         reason: "expired",
         age_seconds: ageSeconds,
       });

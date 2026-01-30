@@ -1,4 +1,9 @@
 import { getCachedEnrichment, setCachedEnrichment } from "./enrichmentCache";
+import {
+  type UsageContext,
+  buildUsageIdempotencyKey,
+  logUsageEvent,
+} from "@/lib/usage/logUsageEvent";
 
 export type ProductDossier = {
   asin: string;
@@ -45,7 +50,8 @@ function buildCacheKey(asin: string, amazonDomain: string) {
 
 export async function getProductDossier(
   asin: string,
-  amazonDomain: string = "amazon.com"
+  amazonDomain: string = "amazon.com",
+  usageContext?: UsageContext | null
 ): Promise<ProductDossier> {
   const key = buildCacheKey(asin, amazonDomain);
   console.log("DOSSIER_CACHE_KEY", { asin, key });
@@ -58,15 +64,43 @@ export async function getProductDossier(
 
   const promise = (async () => {
     // 1) Global 7-day cache (DB) - shared across all users
-    const cached = await getCachedEnrichment<ProductDossier>({
-      asin,
-      amazonDomain,
-      endpoint: RAINFOREST_ENDPOINT,
-      paramsHash: PARAMS_HASH,
-    });
+    const cached = await getCachedEnrichment<ProductDossier>(
+      {
+        asin,
+        amazonDomain,
+        endpoint: RAINFOREST_ENDPOINT,
+        paramsHash: PARAMS_HASH,
+      },
+      usageContext
+    );
     if (cached && cached.payload) {
       console.log("DOSSIER_CACHE_HIT", { asin });
       return cached.payload;
+    }
+
+    // Per-user usage: log cache miss once (idempotent), then log Rainforest call after fetch
+    if (usageContext?.userId && usageContext?.messageId) {
+      const missKey = buildUsageIdempotencyKey({
+        analysisRunId: usageContext.analysisRunId ?? null,
+        messageId: usageContext.messageId,
+        provider: "cache",
+        operation: "cache.asin_enrichment",
+        asin,
+        endpoint: RAINFOREST_ENDPOINT,
+        cache_status: "miss",
+      });
+      await logUsageEvent({
+        userId: usageContext.userId,
+        provider: "cache",
+        operation: "cache.asin_enrichment",
+        endpoint: RAINFOREST_ENDPOINT,
+        cache_status: "miss",
+        credits_used: 0,
+        asin,
+        amazon_domain: amazonDomain,
+        meta: { table: "asin_enrichment_cache", params_hash: PARAMS_HASH },
+        idempotency_key: missKey,
+      });
     }
 
     console.log("DOSSIER_CACHE_MISS", { asin });
@@ -96,6 +130,37 @@ export async function getProductDossier(
       headers: { Accept: "application/json" },
     });
     const duration = Date.now() - startTime;
+
+    // Per-user usage: log Rainforest call (idempotent)
+    if (usageContext?.userId && usageContext?.messageId) {
+      const rfKey = buildUsageIdempotencyKey({
+        analysisRunId: usageContext.analysisRunId ?? null,
+        messageId: usageContext.messageId,
+        provider: "rainforest",
+        operation: "rainforest.product",
+        asin,
+        endpoint: RAINFOREST_ENDPOINT,
+        cache_status: "none",
+      });
+      await logUsageEvent({
+        userId: usageContext.userId,
+        provider: "rainforest",
+        operation: "rainforest.product",
+        endpoint: RAINFOREST_ENDPOINT,
+        cache_status: "none",
+        credits_used: 1,
+        http_status: resp.status,
+        duration_ms: duration,
+        asin,
+        amazon_domain: amazonDomain,
+        meta: {
+          endpoint: "product",
+          params_hash: PARAMS_HASH,
+          include_summarization_attributes: true,
+        },
+        idempotency_key: rfKey,
+      });
+    }
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => "Unknown error");

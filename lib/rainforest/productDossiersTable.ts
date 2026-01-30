@@ -4,6 +4,11 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import {
+  type UsageContext,
+  buildUsageIdempotencyKey,
+  logUsageEvent,
+} from "@/lib/usage/logUsageEvent";
 
 const TTL_DAYS = 7;
 
@@ -22,7 +27,8 @@ function getClient() {
 
 export async function getCachedDossier(
   asin: string,
-  amazonDomain: string
+  amazonDomain: string,
+  usageContext?: UsageContext | null
 ): Promise<unknown | null> {
   const client = getClient();
   if (!client) return null;
@@ -37,6 +43,29 @@ export async function getCachedDossier(
   if (error) {
     console.error("PRODUCT_DOSSIERS_GET_ERROR", { asin, amazon_domain: amazonDomain, error });
     return null;
+  }
+  if (data?.payload != null && usageContext?.userId && usageContext?.messageId) {
+    const idempotencyKey = buildUsageIdempotencyKey({
+      analysisRunId: usageContext.analysisRunId ?? null,
+      messageId: usageContext.messageId,
+      provider: "cache",
+      operation: "cache.product_dossiers",
+      asin,
+      endpoint: "product_dossiers",
+      cache_status: "hit",
+    });
+    await logUsageEvent({
+      userId: usageContext.userId,
+      provider: "cache",
+      operation: "cache.product_dossiers",
+      endpoint: "product_dossiers",
+      cache_status: "hit",
+      credits_used: 0,
+      asin,
+      amazon_domain: amazonDomain,
+      meta: { table: "product_dossiers" },
+      idempotency_key: idempotencyKey,
+    });
   }
   return data?.payload ?? null;
 }

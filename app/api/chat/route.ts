@@ -1668,10 +1668,12 @@ export async function POST(req: NextRequest) {
     const selectedAsinsPayload = Array.isArray((body as any).selectedAsins)
       ? (body as any).selectedAsins.filter((a: unknown) => typeof a === "string")
       : [];
+    const messageId = crypto.randomUUID();
     console.log("CHAT_PAYLOAD_SENT", {
       selected_asins: selectedAsinsPayload,
       selected_count: selectedAsinsPayload.length,
       analysis_run_id: body.analysisRunId,
+      message_id: messageId,
     });
 
     // 3. Fetch the analysis run (CACHED DATA ONLY - no live API calls)
@@ -2162,7 +2164,12 @@ export async function POST(req: NextRequest) {
 
       let feesResult: FeesResultPayload;
       if (price != null && price > 0) {
-        feesResult = await getFeesResult(supabase, user.id, { asin, marketplaceId, price, category });
+        feesResult = await getFeesResult(
+          supabase,
+          user.id,
+          { asin, marketplaceId, price, category },
+          { messageId, analysisRunId: body.analysisRunId }
+        );
       } else {
         feesResult = {
           type: "fees_result",
@@ -3072,9 +3079,14 @@ export async function POST(req: NextRequest) {
           if (needsRainforestFallback) {
             const { getProductDossier } = await import("@/lib/rainforest/productDossier");
 
+            const fallbackUsageContext = {
+              userId: user.id,
+              messageId,
+              analysisRunId: body.analysisRunId,
+            };
             let dossier: any | null = null;
             try {
-              dossier = await getProductDossier(asin, amazonDomain);
+              dossier = await getProductDossier(asin, amazonDomain, fallbackUsageContext);
             } catch (error) {
               const errorMessage = error instanceof Error ? error.message : String(error);
               console.error("CATALOG_FALLBACK_DOSSIER_ERROR", {
@@ -3141,9 +3153,14 @@ export async function POST(req: NextRequest) {
           by_asin: {},
         };
 
+        const dossierUsageContext = {
+          userId: user.id,
+          messageId,
+          analysisRunId: body.analysisRunId,
+        };
         for (const asin of enrichmentAsins) {
           try {
-            const dossier = await getOrFetchDossier(asin, amazonDomain);
+            const dossier = await getOrFetchDossier(asin, amazonDomain, dossierUsageContext);
             productDossiers.by_asin[asin] = dossier;
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);

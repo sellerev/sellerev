@@ -53,12 +53,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const payload = await getFeesResult(supabase, user.id, {
-    asin,
-    marketplaceId,
-    price,
-    category,
-  });
+  const messageId = crypto.randomUUID();
+  const payload = await getFeesResult(
+    supabase,
+    user.id,
+    { asin, marketplaceId, price, category },
+    { messageId }
+  );
 
   return NextResponse.json(payload, {
     status: 200,

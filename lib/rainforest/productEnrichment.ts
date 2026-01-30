@@ -21,13 +21,21 @@ import type { ProductDossier } from "./productDossier";
 /** Per-request inflight lock so we never double-call the same ASIN+domain in one request. */
 const dossierInflight = new Map<string, Promise<ProductDossier>>();
 
+/** Per-request usage context for idempotent usage logging (optional). */
+export type DossierUsageContext = {
+  userId: string;
+  messageId: string;
+  analysisRunId?: string | null;
+};
+
 /**
  * Get or fetch product dossier (one Rainforest type=product call per ASIN).
  * Cache in product_dossiers table, TTL 7 days. Inflight lock prevents duplicate calls.
  */
 export async function getOrFetchDossier(
   asin: string,
-  amazonDomain: string = "amazon.com"
+  amazonDomain: string = "amazon.com",
+  usageContext?: DossierUsageContext | null
 ): Promise<ProductDossier> {
   const key = `${asin}:${amazonDomain}`;
   const existing = dossierInflight.get(key);
@@ -36,12 +44,12 @@ export async function getOrFetchDossier(
     return existing;
   }
   const promise = (async (): Promise<ProductDossier> => {
-    const cached = await getCachedDossier(asin, amazonDomain);
+    const cached = await getCachedDossier(asin, amazonDomain, usageContext);
     if (cached && typeof cached === "object" && "product" in cached && "review_material" in cached) {
       console.log("DOSSIER_CACHE_HIT_PRODUCT_DOSSIERS", { asin });
       return cached as ProductDossier;
     }
-    const dossier = await getProductDossier(asin, amazonDomain);
+    const dossier = await getProductDossier(asin, amazonDomain, usageContext);
     await setCachedDossier(asin, amazonDomain, dossier);
     return dossier;
   })();

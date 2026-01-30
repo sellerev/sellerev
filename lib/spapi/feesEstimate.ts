@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasAmazonConnection } from "@/lib/amazon/getUserToken";
 import { getFbaFees } from "./getFbaFees";
+import {
+  buildUsageIdempotencyKey,
+  logUsageEvent,
+} from "@/lib/usage/logUsageEvent";
 
 export interface FeesEstimatePayload {
   asin: string;
@@ -16,11 +20,18 @@ export interface FeesEstimatePayload {
 const TTL_DAYS = 7;
 const DEFAULT_MARKETPLACE = "ATVPDKIKX0DER";
 const DIMS_HASH_EMPTY = "";
+const FEES_ENDPOINT = "POST /products/fees/v0/items/{asin}/feesEstimate";
+
+export type FeesUsageContext = {
+  messageId: string;
+  analysisRunId?: string | null;
+};
 
 export async function getOrFetchFeesEstimate(
   supabase: SupabaseClient,
   userId: string,
-  params: { asin: string; marketplaceId?: string; price: number }
+  params: { asin: string; marketplaceId?: string; price: number },
+  usageContext?: FeesUsageContext | null
 ): Promise<FeesEstimatePayload | null> {
   const asin = params.asin.trim();
   const marketplaceId = params.marketplaceId?.trim() || DEFAULT_MARKETPLACE;
@@ -47,6 +58,29 @@ export async function getOrFetchFeesEstimate(
     .single();
 
   if (!cacheErr && cached?.fees_json) {
+    if (usageContext?.messageId) {
+      const hitKey = buildUsageIdempotencyKey({
+        analysisRunId: usageContext.analysisRunId ?? null,
+        messageId: usageContext.messageId,
+        provider: "cache",
+        operation: "cache.spapi_fee_estimates",
+        asin,
+        endpoint: "spapi_fee_estimates",
+        cache_status: "hit",
+      });
+      await logUsageEvent({
+        userId,
+        provider: "cache",
+        operation: "cache.spapi_fee_estimates",
+        endpoint: FEES_ENDPOINT,
+        cache_status: "hit",
+        credits_used: 0,
+        asin,
+        marketplace_id: marketplaceId,
+        meta: { table: "asin_fees_cache" },
+        idempotency_key: hitKey,
+      });
+    }
     const j = cached.fees_json as Record<string, unknown>;
     return {
       asin: (j.asin as string) ?? asin,
@@ -60,9 +94,61 @@ export async function getOrFetchFeesEstimate(
     };
   }
 
+  if (usageContext?.messageId) {
+    const missKey = buildUsageIdempotencyKey({
+      analysisRunId: usageContext.analysisRunId ?? null,
+      messageId: usageContext.messageId,
+      provider: "cache",
+      operation: "cache.spapi_fee_estimates",
+      asin,
+      endpoint: "spapi_fee_estimates",
+      cache_status: "miss",
+    });
+    await logUsageEvent({
+      userId,
+      provider: "cache",
+      operation: "cache.spapi_fee_estimates",
+      endpoint: FEES_ENDPOINT,
+      cache_status: "miss",
+      credits_used: 0,
+      asin,
+      marketplace_id: marketplaceId,
+      meta: { table: "asin_fees_cache" },
+      idempotency_key: missKey,
+    });
+  }
+
+  const startMs = Date.now();
   const fba = await getFbaFees({ asin, price, marketplaceId, userId });
+  const durationMs = Date.now() - startMs;
   const totalFees = fba.total_fba_fees ?? null;
   const feeLines = fba.fee_lines ?? [];
+
+  if (usageContext?.messageId) {
+    const spapiKey = buildUsageIdempotencyKey({
+      analysisRunId: usageContext.analysisRunId ?? null,
+      messageId: usageContext.messageId,
+      provider: "spapi",
+      operation: "spapi.fees_estimate",
+      asin,
+      endpoint: FEES_ENDPOINT,
+      cache_status: "none",
+    });
+    await logUsageEvent({
+      userId,
+      provider: "spapi",
+      operation: "spapi.fees_estimate",
+      endpoint: FEES_ENDPOINT,
+      cache_status: "none",
+      credits_used: 0,
+      http_status: fba.debug?.http_status ?? null,
+      duration_ms: durationMs,
+      asin,
+      marketplace_id: marketplaceId,
+      meta: {},
+      idempotency_key: spapiKey,
+    });
+  }
 
   if (totalFees == null && feeLines.length === 0) return null;
 
