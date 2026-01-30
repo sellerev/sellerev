@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Sellerev - Designed for thinking",
-  description: "Sellerev is a generative AI platform that helps Amazon sellers understand markets, ask better questions, and make confident decisions.",
+  description: "Sellerev is a generative analytics platform for Amazon sellers that helps them understand markets, ask better questions, and make confident decisions using structured market data.",
 };
 
 import ConditionalNavigation from "./components/ConditionalNavigation";
