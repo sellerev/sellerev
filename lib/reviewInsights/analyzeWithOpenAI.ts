@@ -36,15 +36,16 @@ export async function getCachedAnalyzedInsights(
   const client = getClient();
   if (!client) return null;
   const now = new Date().toISOString();
-  const { data, error } = await client
+  const { data, error } = await (client as any)
     .from("review_insights_analyzed")
     .select("payload")
     .eq("asin", asin)
     .eq("amazon_domain", amazonDomain)
     .gt("expires_at", now)
     .maybeSingle();
-  if (error || !data?.payload) return null;
-  return validateInsightsPayload(data.payload);
+  const row = data as { payload?: unknown } | null;
+  if (error || !row?.payload) return null;
+  return validateInsightsPayload(row.payload);
 }
 
 export async function setCachedAnalyzedInsights(
@@ -56,7 +57,7 @@ export async function setCachedAnalyzedInsights(
   if (!client) return;
   const now = new Date();
   const expires = new Date(now.getTime() + TTL_DAYS * 24 * 60 * 60 * 1000);
-  await client
+  await (client as any)
     .from("review_insights_analyzed")
     .upsert(
       {
@@ -160,7 +161,7 @@ export async function analyzeReviewInsightsWithOpenAI(
         analyzed_reviews_count: neg.length + pos.length,
       };
     }
-    const parsed = JSON.parse(content) as unknown;
+    const parsed = JSON.parse(content) as Record<string, unknown>;
     const validated = validateInsightsPayload({
       ...parsed,
       source: input.source,
