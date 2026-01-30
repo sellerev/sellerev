@@ -29,7 +29,7 @@ export default function HomePage() {
               Designed for thinking.
             </h1>
             <p className="text-xl md:text-2xl text-muted-foreground mb-8 max-w-3xl mx-auto leading-relaxed">
-              Sellerev is a generative analytics platform for Amazon sellers that helps them understand markets, ask better questions, and make confident decisions using structured market data.
+              Sellerev is an analytics platform for Amazon sellers that helps them understand markets, ask better questions, and make confident decisions using structured marketplace data.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-6">
               <Link
@@ -122,6 +122,33 @@ export default function HomePage() {
               </p>
             </motion.div>
           </div>
+        </section>
+
+        {/* Built for Amazon Selling Partners — SP-API compliance */}
+        <section className="max-w-7xl mx-auto px-6 py-20 md:py-32">
+          <motion.div
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+            className="max-w-3xl mx-auto"
+          >
+            <h2 className="text-4xl md:text-5xl font-bold text-foreground mb-8">
+              Built for Amazon Selling Partners
+            </h2>
+            <div className="space-y-4 text-muted-foreground leading-relaxed">
+              <p>
+                Sellerev is designed specifically for Amazon Selling Partners evaluating new product opportunities.
+              </p>
+              <p>
+                The platform provides market-level analytics such as brand presence, pricing structure, review distribution, sponsored density, competitive pressure, and relative market dominance.
+                Data is sourced from the Amazon Selling Partner API and modeled public marketplace signals to help sellers assess category viability before launching.
+              </p>
+              <p>
+                Sellerev does not generate listings, reviews, or manipulate customer-facing Amazon content. The platform is strictly used for market analysis and decision support.
+              </p>
+            </div>
+          </motion.div>
         </section>
 
         {/* How Sellerev Thinks Section */}
@@ -282,32 +309,6 @@ export default function HomePage() {
               </ul>
             </motion.div>
           </div>
-        </section>
-
-        {/* Built for Amazon Selling Partners — SP-API compliance */}
-        <section className="max-w-7xl mx-auto px-6 py-20 md:py-32">
-          <motion.div
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-            className="max-w-3xl mx-auto"
-          >
-            <h2 className="text-4xl md:text-5xl font-bold text-foreground mb-8">
-              Built for Amazon Selling Partners
-            </h2>
-            <div className="space-y-4 text-muted-foreground leading-relaxed">
-              <p>
-                Sellerev is an analytics platform designed specifically for Amazon Selling Partners.
-              </p>
-              <p>
-                We provide market-level insights such as brand presence, pricing structure, review distribution, sponsored density, and competitive pressure using data sourced from the Amazon Selling Partner API and modeled public marketplace signals.
-              </p>
-              <p>
-                Sellerev does not generate listings, reviews, or manipulate customer-facing Amazon content. The platform is strictly used to help sellers evaluate market opportunities before entering a category.
-              </p>
-            </div>
-          </motion.div>
         </section>
 
         {/* Pricing Section */}
