@@ -3444,6 +3444,10 @@ export async function POST(req: NextRequest) {
     }
     
     // If listings exist, continue to return them (with warnings if data quality is low)
+    // When we have final listings from any source (Rainforest baseListings OR snapshot canonicalProducts), market is renderable
+    if (finalListings.length > 0 && !hasRenderableMarket) {
+      hasRenderableMarket = true;
+    }
 
     // Build response with required shape - always include listings and snapshot
     // AI decision data is disabled - all decision fields will be null
@@ -3974,10 +3978,19 @@ export async function POST(req: NextRequest) {
     // FINAL RESPONSE DIAGNOSTICS (BEFORE RETURNING TO FRONTEND)
     // ═══════════════════════════════════════════════════════════════════════════
     // Build the response object first to inspect it
+    // Ensure frontend always gets a run ID when we have listings (fallback if analysis_runs insert failed)
+    const responseAnalysisRunId = insertedRun?.id ?? crypto.randomUUID();
+    if (insertError && !insertedRun?.id) {
+      console.warn("ANALYZE_RUN_INSERT_FAILED_FALLBACK", {
+        keyword: body.input_value,
+        fallback_run_id: responseAnalysisRunId,
+      });
+    }
+
     const finalResponse = {
       success: true,
       status: "complete", // Data-only processing complete (no AI)
-      analysisRunId: insertedRun?.id,
+      analysisRunId: responseAnalysisRunId,
       data_quality: dataQuality,
       dataSource: dataSource,
       snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
