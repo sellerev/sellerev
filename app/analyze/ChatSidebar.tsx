@@ -2,11 +2,13 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Copy, Check, ChevronRight, History, Sparkles } from "lucide-react";
+import { ChevronRight, History, Sparkles } from "lucide-react";
 import HistoryPanel from "./components/HistoryPanel";
 import FeesProfitChatCard, {
   type FeesResultCardPayload,
 } from "./components/FeesProfitChatCard";
+import ChatTranscript from "./components/ChatTranscript";
+import { preprocessAssistantContent } from "./components/ChatMessageBubble";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
 /**
@@ -45,6 +47,8 @@ export interface ChatMessage {
   citations?: Citation[];
   /** Inline UI cards (e.g. fees_profit) */
   cards?: Array<{ type: string; payload: unknown }>;
+  /** ISO timestamp for date separators (e.g. "Today", "Jan 31, 2026") */
+  createdAt?: string;
 }
 
 interface MarketSnapshot {
@@ -578,6 +582,7 @@ export default function ChatSidebar({
       const userMessage: ChatMessage = {
         role: "user",
         content: messageToSend,
+        createdAt: new Date().toISOString(),
       };
       
       hadEscalationThisResponseRef.current = false;
@@ -745,6 +750,7 @@ export default function ChatSidebar({
           content: accumulatedContent.trim() || " ",
           citations: citationsForFinal.length > 0 ? citationsForFinal : undefined,
           cards: cardsForFinal.length > 0 ? cardsForFinal : undefined,
+          createdAt: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, assistantMessage]);
         setCurrentCitations([]);
@@ -757,6 +763,7 @@ export default function ChatSidebar({
         {
           role: "assistant",
           content: `Error: ${errorMessage}. Please try again.`,
+          createdAt: new Date().toISOString(),
         },
       ]);
     } finally {
@@ -856,7 +863,7 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 min-w-0 overflow-y-auto px-4 py-4 space-y-2.5 relative bg-gray-50"
+        className="flex-1 min-w-0 overflow-y-auto px-4 py-4 relative bg-white"
         style={{ minHeight: 0, scrollbarGutter: "stable" }}
       >
         {isDisabled ? (
@@ -905,189 +912,67 @@ export default function ChatSidebar({
             ))}
           </div>
         ) : (
-          /* Chat messages */
+          /* Chat messages - Lovable-style transcript with date separators and bubbles */
           <>
-            {messages.map((msg, idx) => {
-              const messageContent = msg.role === "assistant" ? sanitizeVerdictLanguage(msg.content) : msg.content;
-              const isCopied = copiedIndex === idx;
-              const isLastMessage = idx === messages.length - 1;
-              
-              const handleCopy = async (e: React.MouseEvent | React.KeyboardEvent) => {
-                e.stopPropagation();
-                try {
-                  await navigator.clipboard.writeText(messageContent);
-                  setCopiedIndex(idx);
-                  setTimeout(() => setCopiedIndex(null), 2000);
-                } catch (err) {
-                  console.error("Failed to copy message:", err);
-                }
-              };
+            <div className="max-w-[720px] mx-auto w-full">
+              <ChatTranscript
+                messages={messages}
+                copiedIndex={copiedIndex}
+                onCopy={(idx) => async (e: React.MouseEvent | React.KeyboardEvent) => {
+                  e.stopPropagation();
+                  const msg = messages[idx];
+                  const content = msg.role === "assistant" ? sanitizeVerdictLanguage(msg.content) : msg.content;
+                  try {
+                    await navigator.clipboard.writeText(content);
+                    setCopiedIndex(idx);
+                    setTimeout(() => setCopiedIndex(null), 2000);
+                  } catch (err) {
+                    console.error("Failed to copy message:", err);
+                  }
+                }}
+                setMessages={setMessages}
+              />
+            </div>
 
-              return (
-                <div key={idx}>
-                  <div
-                    className={`group relative w-full flex ${
-                      msg.role === "user" ? "justify-start" : "justify-start"
-                    }`}
-                  >
-                    <div
-                      className={`group relative max-w-[85%] px-4 py-3 rounded-lg border shadow-sm ${
-                        msg.role === "user"
-                          ? "bg-white border-gray-200 text-gray-900"
-                          : "bg-white border-gray-200 text-gray-900"
-                      }`}
-                    >
-                      {/* Hover-reveal actions - Cursor-style: hidden by default, fade in on hover/focus */}
-                      <div className="absolute right-2 top-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 has-[:focus]:opacity-100 transition-all duration-150 ease-out translate-y-[-2px] group-hover:translate-y-0 has-[:focus]:translate-y-0">
-                        <button
-                          onClick={handleCopy}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              handleCopy(e);
-                            }
-                          }}
-                          className="p-1.5 rounded-md transition-all focus:outline-none focus:ring-1 hover:bg-gray-100 focus:ring-gray-300 focus:bg-gray-100 text-gray-500 hover:text-gray-700"
-                          aria-label="Copy message"
-                          title="Copy message"
-                          tabIndex={0}
-                        >
-                          {isCopied ? (
-                            <Check className="w-3.5 h-3.5 text-gray-700" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      </div>
-
-                      {/* Message header with role label */}
-                      <div className="text-[11px] font-medium mb-2 text-gray-500">
-                        {msg.role === "user" ? "You" : "Sellerev"}
-                      </div>
-                      
-                      {/* Message content */}
-                      {messageContent.trim() && (
-                        <div className="text-sm whitespace-pre-wrap leading-relaxed text-gray-900">
-                          {messageContent}
-                        </div>
-                      )}
-                      
-                      {/* ASIN Citation Chips - inline at end of message */}
-                      {msg.role === "assistant" && msg.citations && msg.citations.length > 0 && (
-                        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                          {msg.citations.map((citation, citationIdx) => (
-                            <AsinCitationChip key={citationIdx} citation={citation} />
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Fees & Profit / Connect Amazon cards */}
-                      {msg.role === "assistant" &&
-                        msg.cards?.map((card, cIdx) => {
-                          if (card.type === "connect_amazon") {
-                            const pl = card.payload as { message?: string; ctaUrl?: string };
-                            return (
-                              <div key={cIdx} className="mt-2">
-                                <Link
-                                  href={pl?.ctaUrl ?? "/connect-amazon"}
-                                  className="inline-block rounded bg-amber-600 px-3 py-1.5 text-white text-xs font-medium hover:bg-amber-700"
-                                >
-                                  Connect Amazon
-                                </Link>
-                              </div>
-                            );
-                          }
-                          if (card.type !== "fees_result" && card.type !== "fees_profit") return null;
-                          const raw = card.payload as Record<string, unknown>;
-                          const pl: FeesResultCardPayload =
-                            card.type === "fees_result"
-                              ? (raw as unknown as FeesResultCardPayload)
-                              : {
-                                  type: "fees_result",
-                                  source: raw?.fees ? "sp_api" : "estimate",
-                                  asin: (raw?.asin as string) ?? "",
-                                  marketplace_id: (raw?.marketplaceId as string) ?? "",
-                                  marketplaceId: (raw?.marketplaceId as string) ?? undefined,
-                                  price_used: (raw?.price as number) ?? null,
-                                  currency: "USD",
-                                  total_fees: (raw?.fees as any)?.total_fees ?? 0,
-                                  fee_lines: (raw?.fees as any)?.fee_lines ?? [],
-                                  fetched_at: (raw?.fees as any)?.fetched_at ?? new Date().toISOString(),
-                                  cta_connect: !raw?.fees,
-                                  assumptions: !raw?.fees ? ["Enter selling price to calculate fees."] : undefined,
-                                };
-                          return (
-                            <FeesProfitChatCard
-                              key={cIdx}
-                              payload={pl}
-                              onFeesFetched={(data) => {
-                                setMessages((prev) => {
-                                  const n = [...prev];
-                                  const m = n[idx];
-                                  if (!m?.cards) return prev;
-                                  const cards = [...m.cards];
-                                  cards[cIdx] = { type: "fees_result", payload: data };
-                                  n[idx] = { ...m, cards };
-                                  return n;
-                                });
-                              }}
-                            />
-                          );
-                        })}
-                      
-                      {/* Trust indicator chips removed (UX requirement) */}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-
-            {/* Streaming message indicator */}
+            {/* Streaming message indicator - same Lovable assistant bubble style */}
             {isLoading && streamingContent && (
-              <div className="w-full flex justify-start">
-                <div className="max-w-[85%]">
-                  <div className="group relative bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
-                  {/* Message header */}
-                  <div className="text-[11px] font-medium mb-2 text-gray-500">
-                    Sellerev
-                  </div>
-                  
-                  {/* Streaming content with blinking cursor */}
-                  <div className="text-sm whitespace-pre-wrap leading-relaxed text-gray-900">
-                    {sanitizeVerdictLanguage(streamingContent)}
-                    <span className="inline-block w-0.5 h-4 bg-gray-900 ml-0.5 align-middle cursor-blink" />
-                  </div>
-                  
-                  {/* ASIN Citation Chips - show while streaming if available */}
-                  {currentCitations.length > 0 && (
-                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                      {currentCitations.map((citation, citationIdx) => (
-                        <AsinCitationChip key={citationIdx} citation={citation} />
-                      ))}
+              <div className="max-w-[720px] mx-auto w-full mt-3">
+                <div className="flex justify-start">
+                  <div className="group relative bg-white border border-neutral-200 rounded-[18px] px-3.5 py-3 max-w-[80%]">
+                    <div className="text-[11px] font-medium text-neutral-400 mb-1.5">Sellerev</div>
+                    <div className="text-sm leading-6 text-gray-900 whitespace-pre-wrap">
+                      {preprocessAssistantContent(sanitizeVerdictLanguage(streamingContent))}
+                      <span className="inline-block w-0.5 h-4 bg-gray-900 ml-0.5 align-middle cursor-blink" />
                     </div>
-                  )}
-                  
-                  {/* Trust indicator chips removed (UX requirement) */}
+                    {currentCitations.length > 0 && (
+                      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                        {currentCitations.map((citation, citationIdx) => (
+                          <AsinCitationChip key={citationIdx} citation={citation} />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Escalation loading state (when escalation is happening) */}
+            {/* Escalation loading state */}
             {escalationMessage && !streamingContent && (
-              <div className="w-full flex justify-start">
-                <div className="max-w-[85%] bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5">
-                  <div className="text-xs text-gray-500">
-                    {escalationMessage}
+              <div className="max-w-[720px] mx-auto w-full mt-3">
+                <div className="flex justify-start">
+                  <div className="max-w-[80%] bg-neutral-50 border border-neutral-200 rounded-[18px] px-3.5 py-2.5">
+                    <div className="text-xs text-neutral-500">{escalationMessage}</div>
                   </div>
                 </div>
               </div>
             )}
             {escalationState && !escalationMessage && !streamingContent && (
-              <div className="w-full flex justify-start">
-                <div className="max-w-[85%] bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5">
-                  <div className="text-xs text-gray-500 italic">
-                    Searching for {escalationState.question}…
+              <div className="max-w-[720px] mx-auto w-full mt-3">
+                <div className="flex justify-start">
+                  <div className="max-w-[80%] bg-neutral-50 border border-neutral-200 rounded-[18px] px-3.5 py-2.5">
+                    <div className="text-xs text-neutral-500 italic">
+                      Searching for {escalationState.question}…
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1095,29 +980,20 @@ export default function ChatSidebar({
 
             {/* Loading indicator (before streaming starts, no escalation) */}
             {isLoading && !streamingContent && !escalationState && (
-              <div className="w-full flex justify-start">
-                <div className="max-w-[85%]">
-                  <div className="bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3">
-                    <div className="text-[11px] font-medium mb-2 text-gray-500">
-                      Sellerev
-                    </div>
+              <div className="max-w-[720px] mx-auto w-full mt-3">
+                <div className="flex justify-start">
+                  <div className="bg-white border border-neutral-200 rounded-[18px] px-3.5 py-3 max-w-[80%]">
+                    <div className="text-[11px] font-medium text-neutral-400 mb-1.5">Sellerev</div>
                     <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                      <span
-                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                        style={{ animationDelay: "0.1s" }}
-                      />
-                      <span
-                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                        style={{ animationDelay: "0.2s" }}
-                      />
+                      <span className="w-2 h-2 bg-neutral-400 rounded-full animate-bounce" />
+                      <span className="w-2 h-2 bg-neutral-400 rounded-full animate-bounce" style={{ animationDelay: "0.1s" }} />
+                      <span className="w-2 h-2 bg-neutral-400 rounded-full animate-bounce" style={{ animationDelay: "0.2s" }} />
                     </div>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Scroll anchor */}
             <div ref={messagesEndRef} />
           </>
         )}
