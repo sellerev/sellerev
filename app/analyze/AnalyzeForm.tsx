@@ -553,8 +553,6 @@ export default function AnalyzeForm({
   
   // Keep loading state for backward compatibility with SearchBar component
   const [loading, setLoading] = useState(false);
-  /** When true, next analyze will purge Supabase cache and rebuild (fixes poisoned cache e.g. "food warming mat"). */
-  const [forceRefresh, setForceRefresh] = useState(false);
   
   // Client-side run ID generated BEFORE API call - tracks current search lifecycle
   // This is separate from backend run_id which may be reused for cached results
@@ -976,7 +974,6 @@ export default function AnalyzeForm({
         body: JSON.stringify({
           input_type: "keyword",
           input_value: inputValue.trim(),
-          force_refresh: forceRefresh,
         }),
       });
 
@@ -1282,7 +1279,6 @@ export default function AnalyzeForm({
         return newAnalysis;
       });
       setError(null);
-      setForceRefresh(false); // Reset so next run uses cache unless user checks again
       setLoading(false); // Hide animation after products are committed
       
       // Update UI state: transition to 'enriching' if we have listings but incomplete data
@@ -1446,18 +1442,6 @@ export default function AnalyzeForm({
               inputError={inputError}
               hasResults={!!(analysis && ((analysis.page_one_listings?.length ?? 0) > 0 || (analysis.products?.length ?? 0) > 0))}
             />
-
-            {!readOnly && (
-              <label className="mt-3 flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={forceRefresh}
-                  onChange={(e) => setForceRefresh(e.target.checked)}
-                  className="rounded border-gray-300 text-[#3B82F6] focus:ring-[#3B82F6]"
-                />
-                <span>Bypass cache (use if a keyword doesn&apos;t load)</span>
-              </label>
-            )}
 
             {/* Global Error */}
             {error && (
