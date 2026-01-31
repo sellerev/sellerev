@@ -93,10 +93,7 @@ const markdownComponents: ComponentProps<typeof ReactMarkdown>["components"] = {
     const isBlock = className?.includes("language-");
     if (isBlock) {
       return (
-        <pre
-          className="bg-neutral-50 border border-neutral-200 rounded-xl p-3 text-xs overflow-auto my-2 text-gray-900"
-          {...props}
-        >
+        <pre className="bg-neutral-50 border border-neutral-200 rounded-xl p-3 text-xs overflow-auto my-2 text-gray-900">
           <code>{children}</code>
         </pre>
       );
