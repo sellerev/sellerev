@@ -2313,15 +2313,8 @@ export async function POST(req: NextRequest) {
                 fallbackImageCount++;
               }
             }
-            
-            // If still no image, use ASIN-based fallback URL
-            if (!listing.image_url || (typeof listing.image_url === 'string' && listing.image_url.trim().length === 0)) {
-              const asin = listing.asin;
-              if (asin && typeof asin === 'string' && asin.trim().length > 0) {
-                listing.image_url = `https://m.media-amazon.com/images/I/${asin}.jpg`;
-                fallbackImageCount++;
-              }
-            }
+            // Do NOT set ASIN-based fallback URL (e.g. .../I/B0XXXXXXXXX.jpg) — Amazon returns 400.
+            // Leave image_url empty so UI shows placeholder or uses other candidates.
           }
         }
         
