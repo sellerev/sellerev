@@ -31,6 +31,18 @@ export default function SearchBar({
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const loadingRef = useRef(loading);
+  const suppressSuggestionsUntilRef = useRef<number>(0);
+  const inputValueWhenSuppressSetRef = useRef<string>("");
+
+  // When analyze finishes: suppress suggestions for same keyword for 2s to avoid re-trigger loop
+  if (loadingRef.current && !loading) {
+    loadingRef.current = false;
+    suppressSuggestionsUntilRef.current = Date.now() + 2000;
+    inputValueWhenSuppressSetRef.current = inputValue.trim();
+  } else {
+    loadingRef.current = loading;
+  }
 
   // On submit or when results appear: close dropdown and clear suggestions (next typing will re-fetch)
   useEffect(() => {
@@ -46,7 +58,7 @@ export default function SearchBar({
     }
   }, [loading, hasResults]);
 
-  // Debounced fetch: trigger on input change (not gated by hasResults so suggestions work after first search)
+  // Debounced fetch: trigger on input change; skip for 2s after analyze completes for same keyword
   useEffect(() => {
     if (readOnly || loading) {
       return;
@@ -56,15 +68,14 @@ export default function SearchBar({
     if (query.length < 2) {
       setSuggestions([]);
       setShowDropdown(false);
-      if (typeof window !== "undefined") {
-        console.log("SUGGESTIONS_TRIGGER", { input: query, len: query.length });
-        console.log("SUGGESTIONS_CLEARED", { reason: "empty_input" });
-      }
       return;
     }
 
-    if (typeof window !== "undefined") {
-      console.log("SUGGESTIONS_TRIGGER", { input: query, len: query.length });
+    if (
+      Date.now() < suppressSuggestionsUntilRef.current &&
+      query === inputValueWhenSuppressSetRef.current
+    ) {
+      return;
     }
 
     abortRef.current?.abort();

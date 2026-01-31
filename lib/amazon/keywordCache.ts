@@ -289,6 +289,8 @@ export async function getCachedKeywordAnalysis(
         data: {
           snapshot: cached.snapshot,
           listings: cached.listings,
+          cached_at: cached.cached_at,
+          expires_at: cached.expires_at,
         },
         status: 'HIT',
         age_seconds: ageSeconds,
@@ -326,6 +328,8 @@ export async function getCachedKeywordAnalysis(
         data: {
           snapshot: cached.snapshot,
           listings: cached.listings,
+          cached_at: cached.cached_at,
+          expires_at: cached.expires_at,
         },
         status: 'STALE',
         age_seconds: ageSeconds,
