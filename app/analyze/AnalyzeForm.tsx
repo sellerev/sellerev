@@ -905,6 +905,31 @@ export default function AnalyzeForm({
     });
   };
 
+  /** Safe parse /api/analyze response: never blind res.json(); log and throw on empty/invalid JSON. */
+  const parseAnalyzeResponse = async (res: Response): Promise<Record<string, unknown>> => {
+    const contentType = res.headers.get("content-type") || "";
+    const text = await res.text();
+    console.log("ANALYZE_HTTP", {
+      ok: res.ok,
+      status: res.status,
+      contentType,
+      textLen: text.length,
+      preview: text.slice(0, 200),
+    });
+    if (!res.ok) {
+      throw new Error(`Analyze failed (${res.status}). ${text.slice(0, 200)}`);
+    }
+    if (text.trim().length === 0) {
+      throw new Error("Analyze returned empty body (no JSON).");
+    }
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch (e) {
+      console.error("ANALYZE_JSON_PARSE_FAILED", { textLen: text.length, preview: text.slice(0, 300) });
+      throw new Error("Analyze returned invalid JSON (truncated).");
+    }
+  };
+
   const analyze = async (options?: { isRetry?: boolean }) => {
     if (!validateInput()) return;
 
@@ -952,7 +977,7 @@ export default function AnalyzeForm({
         }),
       });
 
-      const data = await res.json();
+      const data = await parseAnalyzeResponse(res) as any;
       console.log("ANALYZE_RESPONSE", { 
         status: res.status, 
         ok: res.ok, 
@@ -1329,9 +1354,9 @@ export default function AnalyzeForm({
           force_refresh: true,
         }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.analysisRunId) {
-        setError(data.error || "Live search failed");
+      const data = await parseAnalyzeResponse(res) as { analysisRunId?: string; error?: string };
+      if (!data.analysisRunId) {
+        setError((data as any).error || "Live search failed");
         setLoading(false);
         return;
       }

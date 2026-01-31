@@ -68,6 +68,19 @@ export function getCacheKey(
 }
 
 /**
+ * Validate cached payload has usable listings (detect poisoned/partial cache).
+ * CachedKeywordAnalysis stores { listings, snapshot }; API response shape uses page_one_listings/products/listings.
+ */
+export function isValidKeywordCachePayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const listings =
+    (payload as any).listings ??
+    (payload as any).page_one_listings ??
+    (payload as any).products;
+  return Array.isArray(listings) && listings.length > 0;
+}
+
+/**
  * Check if cached data is still valid
  * Returns: { valid: boolean, age_seconds: number, stale: boolean }
  * stale = true if age >= TTL but < TTL*2 (for stale-while-revalidate)
@@ -180,7 +193,7 @@ export async function getCachedKeywordAnalysis(
   try {
     const { data: cacheRow, error } = await supabase
       .from("keyword_analysis_cache")
-      .select("data, expires_at, created_at")
+      .select("id, data, expires_at, created_at")
       .eq("cache_key", cacheKey)
       .single();
 
@@ -214,6 +227,14 @@ export async function getCachedKeywordAnalysis(
     }
 
     const cached = cacheRow.data as CachedKeywordAnalysis;
+    if (!isValidKeywordCachePayload(cached)) {
+      console.warn("KEYWORD_CACHE_POISONED", { cache_key: cacheKey, keyword });
+      await supabase
+        .from("keyword_analysis_cache")
+        .delete()
+        .eq("cache_key", cacheKey);
+      return { data: null, status: "MISS", age_seconds: 0 };
+    }
     const schemaVersion = cached.schema_version;
     if (schemaVersion !== KEYWORD_CACHE_SCHEMA_VERSION) {
       console.log("KEYWORD_CACHE_MISS", {

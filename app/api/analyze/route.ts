@@ -875,6 +875,7 @@ export async function POST(req: NextRequest) {
   // Create a response object that can be modified for cookie handling
   let res = new NextResponse();
   const supabase = createApiClient(req, res);
+  let requestKeyword: string | null = null;
 
   try {
     // 1. Check authentication
@@ -1079,6 +1080,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    requestKeyword = body.input_value ?? null;
     console.log("INPUT", body.input_type, body.input_value);
 
     const forceRefresh = body.force_refresh === true;
@@ -1134,6 +1136,7 @@ export async function POST(req: NextRequest) {
           })
           .select("id")
           .single();
+        res.headers.set("x-sellerev-cache", "hit");
         return NextResponse.json(
           {
             ...responsePayload,
@@ -1193,6 +1196,7 @@ export async function POST(req: NextRequest) {
             })
             .select("id")
             .single();
+          res.headers.set("x-sellerev-cache", "hit");
           return NextResponse.json(
             { ...payload, analysisRunId: run?.id ?? null },
             { headers: res.headers }
@@ -1210,6 +1214,7 @@ export async function POST(req: NextRequest) {
         const sanitized = (c.listings || []).map((l: any) =>
           normalizeListingForResponse(l)
         );
+        res.headers.set("x-sellerev-cache", "stale_refreshing");
         return NextResponse.json(
           {
             success: true,
@@ -1226,6 +1231,7 @@ export async function POST(req: NextRequest) {
           { headers: res.headers }
         );
       }
+      res.headers.set("x-sellerev-cache", "refreshing");
       return NextResponse.json(
         {
           success: true,
@@ -3999,6 +4005,19 @@ export async function POST(req: NextRequest) {
       top_level_keys: Object.keys(finalResponse),
       keyword: normalizedKeyword,
     });
+
+    // Sanity check: never return non-array listings (prevents empty/invalid JSON shape)
+    if (!Array.isArray(sanitizedListings)) {
+      console.error("ANALYZE_BAD_SHAPE", {
+        keyword: body.input_value,
+        type: typeof sanitizedListings,
+      });
+      res.headers.set("x-sellerev-cache", "error");
+      return NextResponse.json(
+        { ok: false, success: false, error: "Bad analyze shape" },
+        { status: 500, headers: res.headers }
+      );
+    }
     
     // Log listings array structure (check all possible paths)
     const listingsFromPageOne = finalResponse.page_one_listings;
@@ -4140,6 +4159,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    res.headers.set("x-sellerev-cache", "rebuilt");
     return NextResponse.json(
       finalResponse,
       { 
@@ -4150,6 +4170,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     // TIMING: End total analyze time (error case)
     console.timeEnd("ANALYZE_TOTAL");
+    console.error("ANALYZE_FATAL", { keyword: requestKeyword, err: String(err) });
     
     // TASK 2: Classify error - processing_error vs other errors
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -4163,12 +4184,13 @@ export async function POST(req: NextRequest) {
       error_type: isProcessingError ? "processing_error" : "internal_error",
     });
     
-    // TASK 2: Return proper error classification
+    res.headers.set("x-sellerev-cache", "error");
     return NextResponse.json(
       {
         success: false,
         status: "error",
-        error: "Internal analyze error",
+        error: "Analyze failed",
+        keyword: requestKeyword,
         details: errorMessage,
         data_quality: {
           rainforest: isProcessingError ? "processing_error" : "error",
