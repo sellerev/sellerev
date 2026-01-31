@@ -961,6 +961,10 @@ export default function AnalyzeForm({
     setLoading(true);
     setAnalysisUIState('initial');
     setError(null);
+    // Clear listings so loading skeleton shows (otherwise old results stay visible and skeleton never appears)
+    setAnalysis((prev) =>
+      prev ? { ...prev, page_one_listings: [], products: [] } : prev
+    );
 
     try {
       console.log("ANALYZE_REQUEST_START", { 
@@ -1512,7 +1516,12 @@ export default function AnalyzeForm({
             )}
           </div>
 
-          {analysis ? (
+          {loading && !analysis?.page_one_listings?.length && !analysis?.products?.length ? (
+            /* Show skeleton while fetching (first search or new search after clearing listings) */
+            <div className="px-6 py-6 space-y-6 relative min-w-0">
+              <ResultsLoadingState />
+            </div>
+          ) : analysis ? (
             /* CRITICAL: ALWAYS render results when analysis exists - never block rendering */
             <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6 relative min-w-0">
               {/* AI Thinking Message - shown when enriching (non-blocking) */}
