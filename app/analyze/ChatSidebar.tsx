@@ -299,7 +299,7 @@ export default function ChatSidebar({
   onToggleHelpDrawer,
   currentKeyword = null,
   asinDetails = {},
-  showMaxTwoWarning = false,
+  maxSelectableHint = 2,
 }: ChatSidebarProps) {
   // Use snapshotId as primary identifier if analysisRunId is not available (Tier-1/Tier-2 model)
   // For chat API, we still need analysisRunId, but UI unlocking uses snapshotId

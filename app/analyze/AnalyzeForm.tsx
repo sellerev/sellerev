@@ -805,9 +805,10 @@ export default function AnalyzeForm({
   // Hydrate from URL when user selects a past run from dropdown (HistoryPanel): client-side
   // navigation may not re-run the server component, so initialAnalysis can stay stale. Fetch
   // the run from the history API and apply to state so product cards and snapshot show.
+  // Do NOT skip when clientRunId is set — history click should always load the selected run.
   const urlRunId = searchParams.get("run") ?? null;
   useEffect(() => {
-    if (!urlRunId || clientRunId) return;
+    if (!urlRunId) return;
     if (analysis?.analysis_run_id === urlRunId) return;
 
     let cancelled = false;
@@ -853,6 +854,7 @@ export default function AnalyzeForm({
         };
 
         if (cancelled) return;
+        setClientRunId(null); // History view — no longer "pending" client run
         setAnalysis(normalizeAnalysis(payloadAsAnalysis));
         setAnalysisRunIdForChat(runId);
         setInputValue(keyword);
@@ -868,7 +870,7 @@ export default function AnalyzeForm({
       }
     })();
     return () => { cancelled = true; };
-  }, [urlRunId, clientRunId, analysis?.analysis_run_id, updateSelectedAsins]);
+  }, [urlRunId, analysis?.analysis_run_id, updateSelectedAsins]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
