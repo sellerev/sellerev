@@ -45,6 +45,11 @@ import { buildTier1Snapshot } from "@/lib/analyze/tier1Snapshot";
 import { refineTier2Estimates, Tier2RefinementContext } from "@/lib/estimators/tier2Refinement";
 import { TieredAnalyzeResponse } from "@/types/tierContracts";
 import { batchEnrichCatalogItems } from "@/lib/spapi/catalogItems";
+import {
+  getCacheKey,
+  getCachedKeywordAnalysis,
+  cacheKeywordAnalysis,
+} from "@/lib/amazon/keywordCache";
 
 // TODO: AI PROMPTS DISABLED - Re-enable when AI processing is needed
 // PASS 1: Decision Brain - Plain text verdict and reasoning
@@ -1076,6 +1081,161 @@ export async function POST(req: NextRequest) {
 
     console.log("INPUT", body.input_type, body.input_value);
 
+    const forceRefresh = body.force_refresh === true;
+    const marketplace = "amazon.com";
+    const globalCacheKey = getCacheKey(body.input_value, marketplace, "keyword", 1);
+
+    // Global cache-first: return immediately if fresh cache exists and not force_refresh
+    if (!forceRefresh) {
+      const cached = await getCachedKeywordAnalysis(
+        supabase,
+        body.input_value,
+        marketplace,
+        "keyword",
+        1
+      );
+      if (cached.status === "HIT" && cached.data) {
+        const sanitized = (cached.data.listings || []).map((l: any) =>
+          normalizeListingForResponse(l)
+        );
+        const responsePayload = {
+          success: true,
+          status: "complete",
+          analysisRunId: null as string | null,
+          dataSource: "market",
+          snapshotType: "market",
+          page_one_listings: sanitized,
+          products: sanitized,
+          listings: sanitized,
+          snapshot: cached.data.snapshot || null,
+          message: "Market data loaded from cache.",
+          cache_status: "hit",
+          cached_at: cached.data.cached_at,
+          expires_at: cached.data.expires_at,
+        };
+        const { data: insertedRun } = await supabase
+          .from("analysis_runs")
+          .insert({
+            user_id: user.id,
+            input_type: "keyword",
+            input_value: body.input_value,
+            ai_verdict: null,
+            ai_confidence: null,
+            seller_stage: sellerProfile.stage,
+            seller_experience_months: sellerProfile.experience_months,
+            seller_monthly_revenue_range: sellerProfile.monthly_revenue_range,
+            response: {
+              ...responsePayload,
+              analysisRunId: undefined,
+              cache_status: undefined,
+              cached_at: undefined,
+              expires_at: undefined,
+            },
+          })
+          .select("id")
+          .single();
+        return NextResponse.json(
+          {
+            ...responsePayload,
+            analysisRunId: insertedRun?.id ?? null,
+          },
+          { headers: res.headers }
+        );
+      }
+    }
+
+    // Cache miss or force_refresh: try advisory lock (stampede protection)
+    const { data: lockAcquired, error: lockError } = await supabase.rpc(
+      "try_lock_keyword_cache",
+      { p_cache_key: globalCacheKey }
+    );
+    const hadAdvisoryLock = lockAcquired === true && !lockError;
+
+    if (!hadAdvisoryLock) {
+      // Another request is building cache: poll for up to 4s at 250ms
+      for (let poll = 0; poll < 16; poll++) {
+        await new Promise((r) => setTimeout(r, 250));
+        const polled = await getCachedKeywordAnalysis(
+          supabase,
+          body.input_value,
+          marketplace,
+          "keyword",
+          1
+        );
+        if (polled.status === "HIT" && polled.data) {
+          const sanitized = (polled.data.listings || []).map((l: any) =>
+            normalizeListingForResponse(l)
+          );
+          const payload = {
+            success: true,
+            status: "complete",
+            page_one_listings: sanitized,
+            products: sanitized,
+            listings: sanitized,
+            snapshot: polled.data.snapshot,
+            message: "Market data loaded.",
+            cache_status: "hit",
+            cached_at: polled.data.cached_at,
+            expires_at: polled.data.expires_at,
+          };
+          const { data: run } = await supabase
+            .from("analysis_runs")
+            .insert({
+              user_id: user.id,
+              input_type: "keyword",
+              input_value: body.input_value,
+              ai_verdict: null,
+              ai_confidence: null,
+              seller_stage: sellerProfile.stage,
+              seller_experience_months: sellerProfile.experience_months,
+              seller_monthly_revenue_range: sellerProfile.monthly_revenue_range,
+              response: payload,
+            })
+            .select("id")
+            .single();
+          return NextResponse.json(
+            { ...payload, analysisRunId: run?.id ?? null },
+            { headers: res.headers }
+          );
+        }
+      }
+      // Still no cache: return stale row if any
+      const { data: staleRow } = await supabase
+        .from("keyword_analysis_cache")
+        .select("data, expires_at")
+        .eq("cache_key", globalCacheKey)
+        .single();
+      if (staleRow?.data) {
+        const c = staleRow.data as any;
+        const sanitized = (c.listings || []).map((l: any) =>
+          normalizeListingForResponse(l)
+        );
+        return NextResponse.json(
+          {
+            success: true,
+            status: "complete",
+            page_one_listings: sanitized,
+            products: sanitized,
+            listings: sanitized,
+            snapshot: c.snapshot,
+            message: "Results are being updated. Showing previous data.",
+            cache_status: "stale_refreshing",
+            cached_at: c.cached_at,
+            expires_at: staleRow.expires_at,
+          },
+          { headers: res.headers }
+        );
+      }
+      return NextResponse.json(
+        {
+          success: true,
+          status: "refreshing",
+          message: "Search is updating. Please retry in a moment.",
+        },
+        { status: 202, headers: res.headers }
+      );
+    }
+
     // 6. Structure seller context
     const sellerContext = {
       stage: sellerProfile.stage,
@@ -1096,7 +1256,6 @@ export async function POST(req: NextRequest) {
     // ═══════════════════════════════════════════════════════════════════════════
     // CRITICAL: If real Rainforest listings exist, NEVER use snapshot-based Page-1
     // ═══════════════════════════════════════════════════════════════════════════
-    const marketplace = "amazon.com"; // Amazon marketplace
     let keywordMarketData: KeywordMarketData | null = null;
     let snapshotStatus = 'miss';
     let dataSource: "market" | "snapshot" = "snapshot"; // Default to snapshot, switch to market if real listings exist
@@ -3966,7 +4125,21 @@ export async function POST(req: NextRequest) {
       try { fs.appendFileSync(logPath, logEntry); } catch(e) {}
     }
     // #endregion
-    
+
+    // Global cache write + unlock when we held the advisory lock (stampede protection)
+    if (hadAdvisoryLock) {
+      try {
+        await cacheKeywordAnalysis(supabase, body.input_value, marketplace, {
+          listings: canonicalProducts,
+          snapshot: marketSnapshot,
+        });
+      } catch (cacheErr) {
+        console.warn("GLOBAL_CACHE_WRITE_FAILED", { keyword: body.input_value, error: cacheErr });
+      } finally {
+        await supabase.rpc("unlock_keyword_cache", { p_cache_key: globalCacheKey });
+      }
+    }
+
     return NextResponse.json(
       finalResponse,
       { 

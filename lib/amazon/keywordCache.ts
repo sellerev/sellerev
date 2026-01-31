@@ -35,18 +35,36 @@ const CACHE_TTL_SECONDS = CACHE_TTL_HOURS * 60 * 60;
 export const KEYWORD_CACHE_SCHEMA_VERSION = "v3";
 const DATA_CONTRACT_VERSION = KEYWORD_CACHE_SCHEMA_VERSION;
 
+/** Marketplace ID for US (used in global cache key). */
+export const MARKETPLACE_ID_US = "ATVPDKIKX0DER";
+/** Amazon domain for US. */
+export const AMAZON_DOMAIN_US = "amazon.com";
+
 /**
- * Generate cache key for keyword analysis (Task 1)
- * Format: analyze:${marketplace}:${input_type}:${normalized_query}:${page}:${DATA_CONTRACT_VERSION}
+ * Normalize keyword for cache key: trim → lowercase → collapse multiple spaces to one.
+ */
+export function normalizeKeywordForCacheKey(keyword: string): string {
+  return (keyword || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Generate global cache key (shared across all users, 24h TTL).
+ * Format: kw:v3:amazon.com:ATVPDKIKX0DER:keyword:page1:normalized_keyword
  */
 export function getCacheKey(
-  keyword: string, 
-  marketplace: string = "US",
+  keyword: string,
+  marketplace: string = AMAZON_DOMAIN_US,
   inputType: string = "keyword",
   page: number = 1
 ): string {
-  const normalizedKeyword = keyword.toLowerCase().trim();
-  return `analyze:${marketplace}:${inputType}:${normalizedKeyword}:${page}:${DATA_CONTRACT_VERSION}`;
+  const normalizedKeyword = normalizeKeywordForCacheKey(keyword);
+  const domain = marketplace === "US" || marketplace === "us" ? AMAZON_DOMAIN_US : (marketplace || AMAZON_DOMAIN_US);
+  const marketplaceId = domain === AMAZON_DOMAIN_US ? MARKETPLACE_ID_US : MARKETPLACE_ID_US;
+  const pagePart = page === 1 ? "page1" : `page${page}`;
+  return `kw:${DATA_CONTRACT_VERSION}:${domain}:${marketplaceId}:${inputType}:${pagePart}:${normalizedKeyword}`;
 }
 
 /**
@@ -101,7 +119,7 @@ export async function cacheKeywordAnalysis(
   const expiresAt = new Date(now.getTime() + CACHE_TTL_HOURS * 60 * 60 * 1000);
 
   const cached: CachedKeywordAnalysis = {
-    keyword: keyword.toLowerCase().trim(),
+    keyword: normalizeKeywordForCacheKey(keyword),
     marketplace,
     listings: data.listings,
     snapshot: data.snapshot,

@@ -578,9 +578,9 @@ export default function AnalyzeForm({
   // Track Tier-2 refinement status (from ui_hints)
   const [showRefiningBadge, setShowRefiningBadge] = useState(false);
   const [nextUpdateExpectedSec, setNextUpdateExpectedSec] = useState<number | null>(null);
-  // Stale run banner (runs older than 7 days): dismissible, show Re-run option
+  // Stale run banner (runs older than 24h): prompt for live refresh
   const [staleBannerDismissed, setStaleBannerDismissed] = useState(false);
-  const STALE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  const STALE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
   const isStale =
     readOnly &&
     !!analysis?.created_at &&
@@ -905,37 +905,37 @@ export default function AnalyzeForm({
     });
   };
 
-  const analyze = async () => {
+  const analyze = async (options?: { isRetry?: boolean }) => {
     if (!validateInput()) return;
 
+    const isRetry = options?.isRetry === true;
+
     // ═══════════════════════════════════════════════════════════════════════════
-    // HARD RESET: Generate client_run_id BEFORE API call and clear ALL state
+    // HARD RESET: Generate client_run_id BEFORE API call and clear ALL state (skip on retry)
     // ═══════════════════════════════════════════════════════════════════════════
-    const newClientRunId = generateUUID();
-    const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    
-    // Set client_run_id FIRST - this tracks the current search lifecycle
-    setClientRunId(newClientRunId);
-    activeClientRunIdRef.current = newClientRunId; // Update ref immediately (synchronous)
-    setCurrentAnalysisRunId(newRunId);
-    
-    // Hard reset all run-scoped UI state BEFORE API call
+    const newClientRunId = isRetry ? activeClientRunIdRef.current : generateUUID();
+    if (!isRetry) {
+      const newRunId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      setClientRunId(newClientRunId);
+      activeClientRunIdRef.current = newClientRunId;
+      setCurrentAnalysisRunId(newRunId);
+      setAnalysis(null);
+      setAnalysisRunIdForChat(null);
+      setChatMessages([]);
+      setIsEstimated(false);
+      setSnapshotType("snapshot");
+      setShowRefiningBadge(false);
+      setNextUpdateExpectedSec(null);
+      setSortBy("rank");
+      setSelectedBrands(new Set());
+      setSelectedFulfillment(new Set());
+      setSponsoredFilter(null);
+      setBrandDropdownOpen(false);
+    }
+
     setLoading(true);
-    setAnalysisUIState('initial'); // Start with initial state - cards will render with skeletons
+    setAnalysisUIState('initial');
     setError(null);
-    setAnalysis(null); // Clear previous results
-    setAnalysisRunIdForChat(null); // Clear analysisRunId for chat (will be set from response)
-    setChatMessages([]); // Clear previous chat
-    setIsEstimated(false); // Reset estimated flag
-    setSnapshotType("snapshot"); // Reset snapshot type
-    setShowRefiningBadge(false); // Reset refinement badge
-    setNextUpdateExpectedSec(null); // Reset update timer
-    setSortBy("rank"); // Reset sort to default (Amazon rank)
-    // Reset filters when new analysis starts
-    setSelectedBrands(new Set());
-    setSelectedFulfillment(new Set());
-    setSponsoredFilter(null);
-    setBrandDropdownOpen(false);
 
     try {
       console.log("ANALYZE_REQUEST_START", { 
@@ -967,9 +967,21 @@ export default function AnalyzeForm({
         error: data.error 
       });
 
+      // Handle 202 "refreshing" (stampede protection): auto-retry once after 2s
+      if (res.status === 202 && data.status === "refreshing") {
+        if (!isRetry) {
+          setError("Updating… Retrying in 2 seconds.");
+          setLoading(false);
+          setTimeout(() => {
+            setError(null);
+            analyze({ isRetry: true });
+          }, 2000);
+          return;
+        }
+      }
+
       // Handle queued response (status: "queued") - keyword is being processed
-      // CHECK THIS FIRST before error checks, since 202 is a valid success response
-      if (data.status === "queued" || res.status === 202) {
+      if (data.status === "queued" || (res.status === 202 && data.status !== "refreshing")) {
         console.log("ANALYZE_QUEUED", {
           status: data.status,
           message: data.message,
@@ -1302,7 +1314,7 @@ export default function AnalyzeForm({
     }
   };
 
-  // Re-run search from history (same keyword + marketplace) and navigate to new run
+  // Run live search from history (force_refresh so cache is bypassed and fresh results returned)
   const handleRerunSearch = useCallback(async () => {
     if (!analysis?.input_value || readOnly !== true) return;
     setLoading(true);
@@ -1314,17 +1326,18 @@ export default function AnalyzeForm({
         body: JSON.stringify({
           input_type: "keyword",
           input_value: analysis.input_value.trim(),
+          force_refresh: true,
         }),
       });
       const data = await res.json();
       if (!res.ok || !data.analysisRunId) {
-        setError(data.error || "Re-run failed");
+        setError(data.error || "Live search failed");
         setLoading(false);
         return;
       }
       router.replace(`/analyze?run=${data.analysisRunId}`, { scroll: false });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Re-run failed");
+      setError(e instanceof Error ? e.message : "Live search failed");
       setLoading(false);
     }
   }, [analysis?.input_value, readOnly, router]);
@@ -1445,12 +1458,12 @@ export default function AnalyzeForm({
               </div>
             )}
 
-            {/* Stale run banner: run older than 7 days, dismissible, with Re-run */}
+            {/* Stale run banner: run older than 24h, prompt for live search */}
             {readOnly && isStale && !staleBannerDismissed && (
               <div className="mt-4">
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex flex-wrap items-center justify-between gap-2">
                   <p className="text-amber-800 text-sm">
-                    Search results may have changed since this run. Re-run for updated market data?
+                    Search results may have changed. Run a new live search?
                   </p>
                   <div className="flex items-center gap-2 shrink-0">
                     <button
@@ -1459,14 +1472,14 @@ export default function AnalyzeForm({
                       disabled={loading}
                       className="px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 disabled:opacity-50"
                     >
-                      {loading ? "Re-running…" : "Re-run search"}
+                      {loading ? "Running…" : "Run live search"}
                     </button>
                     <button
                       type="button"
                       onClick={() => setStaleBannerDismissed(true)}
                       className="px-3 py-1.5 border border-amber-300 text-amber-800 text-sm font-medium rounded-md hover:bg-amber-100"
                     >
-                      Dismiss
+                      Keep old results
                     </button>
                   </div>
                 </div>
