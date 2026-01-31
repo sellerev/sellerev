@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { Star, Image as ImageIcon, Check, Copy, ExternalLink, Info } from "lucide-react";
+import { sanitizeImageUrl } from "@/lib/images/sanitizeImageUrl";
 
 const TOOLTIP_W = 220;
 
@@ -295,9 +296,36 @@ export function ProductCard({
     bsrContext?.chosen_category_name ??
     null;
 
-  // Ensure imageUrl is only used as string (object with .link would break img src)
-  const safeImageUrl =
-    typeof imageUrl === "string" && imageUrl.trim().length > 0 ? imageUrl.trim() : null;
+  // Image fallback: primary + alternates from listing (sanitized); rotate on error
+  const candidates = useMemo(() => {
+    const raw = rawListing as any;
+    const urls = [
+      sanitizeImageUrl(imageUrl),
+      sanitizeImageUrl(raw?.image_url),
+      sanitizeImageUrl(raw?.image?.link),
+      sanitizeImageUrl(raw?.images?.[0]?.link),
+      typeof raw?.image === "string" ? sanitizeImageUrl(raw.image) : null,
+      sanitizeImageUrl(raw?.rainforest_image_url),
+      sanitizeImageUrl(raw?.raw_image_url),
+    ].filter(Boolean) as string[];
+    return [...new Set(urls)];
+  }, [imageUrl, rawListing]);
+
+  const [imgIndex, setImgIndex] = useState(0);
+  const currentUrl = candidates[imgIndex] ?? null;
+
+  useEffect(() => {
+    setImgIndex(0);
+  }, [asin]);
+
+  const handleImgError = () => {
+    console.warn("IMG_LOAD_ERROR", { asin, url: currentUrl, fallbackIndex: imgIndex });
+    if (imgIndex < candidates.length - 1) {
+      setImgIndex(imgIndex + 1);
+    } else {
+      setImgIndex(candidates.length);
+    }
+  };
 
   return (
     <div
@@ -359,22 +387,18 @@ export function ProductCard({
         {isSelected && <Check className="w-4 h-4 text-white" />}
       </div>
 
-      {/* Product Image - Larger size for visibility; placeholder when missing */}
+      {/* Product Image - Larger size for visibility; fallback on error, placeholder when missing */}
       <div className="w-full max-w-[160px] h-[160px] bg-[#F3F4F6] rounded-lg mb-3 flex items-center justify-center overflow-hidden mx-auto">
-        {safeImageUrl ? (
-          <img 
-            src={safeImageUrl} 
-            alt={title || "Product image"} 
+        {currentUrl ? (
+          <img
+            key={currentUrl}
+            src={currentUrl}
+            alt={title || "Product image"}
             className="w-full h-full object-contain p-2"
-            onError={(e) => {
-              const img = e.target as HTMLImageElement;
-              img.style.display = 'none';
-              const placeholder = img.parentElement?.querySelector('.img-placeholder');
-              if (placeholder) (placeholder as HTMLElement).style.display = 'flex';
-            }}
+            onError={handleImgError}
           />
         ) : null}
-        <div className="img-placeholder w-full h-full flex items-center justify-center" style={{ display: safeImageUrl ? 'none' : 'flex' }}>
+        <div className="img-placeholder w-full h-full flex items-center justify-center" style={{ display: currentUrl ? "none" : "flex" }}>
           <ImageIcon className="w-16 h-16 text-[#9CA3AF]" />
         </div>
       </div>
