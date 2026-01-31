@@ -558,6 +558,7 @@ export default function AnalyzeForm({
   const progress = useAnalyzeProgress();
   const [renderReady, setRenderReady] = useState(false);
   const progressFinishedRef = useRef(false);
+  const progressHeartbeatRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // Client-side run ID generated BEFORE API call - tracks current search lifecycle
   // This is separate from backend run_id which may be reused for cached results
@@ -1017,7 +1018,14 @@ export default function AnalyzeForm({
     );
 
     try {
+      progressHeartbeatRef.current.forEach((t) => clearTimeout(t));
+      progressHeartbeatRef.current = [];
       progress.mark("fetching_page1");
+      progressHeartbeatRef.current = [
+        setTimeout(() => progress.mark("enriching_products"), 500),
+        setTimeout(() => progress.mark("computing_metrics"), 1200),
+        setTimeout(() => progress.mark("finalizing"), 2000),
+      ];
       console.log("ANALYZE_REQUEST_START", { 
         inputValue: inputValue.trim(),
         client_run_id: newClientRunId,
@@ -1399,6 +1407,9 @@ export default function AnalyzeForm({
       setError(errorMessage);
       setLoading(false);
       setAnalysisUIState('initial');
+    } finally {
+      progressHeartbeatRef.current.forEach((t) => clearTimeout(t));
+      progressHeartbeatRef.current = [];
     }
   };
 

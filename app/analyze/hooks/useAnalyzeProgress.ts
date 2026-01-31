@@ -3,8 +3,8 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 
 const MIN_STAGE_MS = 400;
-const TICK_MS = 50;
-const EASE_FACTOR = 0.2; // current += (target - current) * EASE_FACTOR per tick
+const TICK_MS = 32; // ~31fps so bar visibly animates
+const EASE_FACTOR = 0.25; // faster ease so bar catches up to target
 
 export type AnalyzeProgressStage =
   | "starting"
@@ -79,7 +79,9 @@ export function useAnalyzeProgress(): UseAnalyzeProgressReturn {
       if (cancelledRef.current) return;
       const target = targetPercentRef.current;
       let current = currentPercentRef.current;
-      const next = Math.min(100, Math.max(current, current + (target - current) * EASE_FACTOR));
+      const delta = (target - current) * EASE_FACTOR;
+      const step = Math.abs(target - current) < 1 ? target - current : delta;
+      const next = Math.min(100, Math.max(current, current + step));
       currentPercentRef.current = next;
       setPercent(Math.round(next));
 
