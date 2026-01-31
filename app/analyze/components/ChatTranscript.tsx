@@ -45,7 +45,7 @@ export default function ChatTranscript({
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     const createdAt = (msg as ChatMessage & { createdAt?: string }).createdAt;
-    const dateLabel = createdAt ? getDateLabel(createdAt) : (lastDateLabel ?? "Today");
+    const dateLabel: string = createdAt ? getDateLabel(createdAt) : (lastDateLabel ?? "Today");
 
     if (dateLabel !== lastDateLabel) {
       items.push({ type: "date", label: dateLabel });
