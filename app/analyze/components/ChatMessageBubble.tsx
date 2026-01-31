@@ -111,6 +111,27 @@ const markdownComponents: ComponentProps<typeof ReactMarkdown>["components"] = {
   ),
 };
 
+/**
+ * Renders assistant content as Markdown (bold, lists, code, etc.).
+ * Use this for both final messages and streaming so **bold** appears bold while typing.
+ */
+export function AssistantMarkdownContent({
+  content,
+  className,
+}: {
+  content: string;
+  className?: string;
+}) {
+  const processed = preprocessAssistantContent(content);
+  return (
+    <div className={className}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {processed}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -177,9 +198,7 @@ export default function ChatMessageBubble({
         {content.trim() && (
           <div className="text-sm leading-6 text-gray-900 break-words">
             {message.role === "assistant" ? (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                {content}
-              </ReactMarkdown>
+              <AssistantMarkdownContent content={content} />
             ) : (
               <div className="whitespace-pre-wrap">{content}</div>
             )}

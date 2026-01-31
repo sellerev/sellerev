@@ -8,7 +8,7 @@ import FeesProfitChatCard, {
   type FeesResultCardPayload,
 } from "./components/FeesProfitChatCard";
 import ChatTranscript from "./components/ChatTranscript";
-import { preprocessAssistantContent } from "./components/ChatMessageBubble";
+import { AssistantMarkdownContent } from "./components/ChatMessageBubble";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
 /**
@@ -940,8 +940,8 @@ export default function ChatSidebar({
                 <div className="flex justify-start">
                   <div className="group relative bg-white border border-neutral-200 rounded-[18px] px-3.5 py-3 max-w-[80%]">
                     <div className="text-[11px] font-medium text-neutral-400 mb-1.5">Sellerev</div>
-                    <div className="text-sm leading-6 text-gray-900 whitespace-pre-wrap">
-                      {preprocessAssistantContent(sanitizeVerdictLanguage(streamingContent))}
+                    <div className="text-sm leading-6 text-gray-900">
+                      <AssistantMarkdownContent content={sanitizeVerdictLanguage(streamingContent)} />
                       <span className="inline-block w-0.5 h-4 bg-gray-900 ml-0.5 align-middle cursor-blink" />
                     </div>
                     {currentCitations.length > 0 && (
