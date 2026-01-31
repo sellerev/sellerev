@@ -2826,6 +2826,7 @@ export default function AnalyzeForm({
             onInsertConsumed={() => setQuestionToInsert(null)}
             helpDrawerOpen={helpDrawerOpen}
             onToggleHelpDrawer={() => setHelpDrawerOpen((o) => !o)}
+            currentKeyword={analysis?.input_value ?? null}
           />
         </div>
       </div>

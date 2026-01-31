@@ -106,6 +106,8 @@ interface ChatSidebarProps {
   helpDrawerOpen?: boolean;
   /** Toggle the Question Library drawer. */
   onToggleHelpDrawer?: () => void;
+  /** Current keyword being analyzed (for header). Empty when no search has been run. */
+  currentKeyword?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -286,6 +288,7 @@ export default function ChatSidebar({
   onInsertConsumed,
   helpDrawerOpen = false,
   onToggleHelpDrawer,
+  currentKeyword = null,
 }: ChatSidebarProps) {
   // Use snapshotId as primary identifier if analysisRunId is not available (Tier-1/Tier-2 model)
   // For chat API, we still need analysisRunId, but UI unlocking uses snapshotId
@@ -800,7 +803,9 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div className="px-6 py-4 shrink-0 flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <h2 className="font-semibold text-gray-900 text-sm">AI Assistant</h2>
+          <h2 className="font-semibold text-gray-900 text-sm">
+            {currentKeyword?.trim() ? currentKeyword.trim() : "Search a keyword"}
+          </h2>
           <p className="text-xs text-gray-500 mt-0.5">
             {canChat
               ? "Explains the visible Page-1 data only"
