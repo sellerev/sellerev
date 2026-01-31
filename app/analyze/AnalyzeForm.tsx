@@ -13,6 +13,7 @@ import SearchBar from "@/app/components/SearchBar";
 import { MetricSkeleton, TextSkeleton } from "./components/MetricSkeleton";
 import AIThinkingMessage from "./components/AIThinkingMessage";
 import ResultsLoadingState from "./components/ResultsLoadingState";
+import { useAnalyzeProgress } from "./hooks/useAnalyzeProgress";
 import HelpDrawer from "./components/HelpDrawer";
 import { median } from "@/lib/ui/stats";
 
@@ -553,7 +554,11 @@ export default function AnalyzeForm({
   
   // Keep loading state for backward compatibility with SearchBar component
   const [loading, setLoading] = useState(false);
-  
+  // Progress bar: single source of truth (monotonic %, stage message)
+  const progress = useAnalyzeProgress();
+  const [renderReady, setRenderReady] = useState(false);
+  const progressFinishedRef = useRef(false);
+
   // Client-side run ID generated BEFORE API call - tracks current search lifecycle
   // This is separate from backend run_id which may be reused for cached results
   const [clientRunId, setClientRunId] = useState<string | null>(null);
@@ -869,12 +874,42 @@ export default function AnalyzeForm({
         setSelectedBrands(new Set());
         setSelectedFulfillment(new Set());
         setSponsoredFilter(null);
+        setLoading(false); // Hide loader when history run is applied
       } catch (e) {
         if (!cancelled) console.error("FRONTEND_HYDRATE_FROM_URL_ERROR", e);
       }
     })();
     return () => { cancelled = true; };
   }, [urlRunId, analysis?.analysis_run_id, updateSelectedAsins]);
+
+  // When renderReady and analysis has listings + snapshot, animate progress to 100% then hide loader
+  useEffect(() => {
+    if (
+      !renderReady ||
+      !analysis?.page_one_listings?.length ||
+      !analysis?.market_snapshot ||
+      progressFinishedRef.current
+    )
+      return;
+    progressFinishedRef.current = true;
+    progress
+      .finish()
+      .then(() => {
+        setLoading(false);
+        setRenderReady(false);
+        progressFinishedRef.current = false;
+      })
+      .catch(() => {
+        setLoading(false);
+        setRenderReady(false);
+        progressFinishedRef.current = false;
+      });
+  }, [
+    renderReady,
+    analysis?.page_one_listings?.length,
+    analysis?.market_snapshot,
+    progress,
+  ]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // HANDLERS
@@ -965,6 +1000,9 @@ export default function AnalyzeForm({
     }
 
     setLoading(true);
+    setRenderReady(false);
+    progressFinishedRef.current = false;
+    progress.start();
     setAnalysisUIState('initial');
     setError(null);
     // Clear listings so loading skeleton shows (otherwise old results stay visible and skeleton never appears)
@@ -973,6 +1011,7 @@ export default function AnalyzeForm({
     );
 
     try {
+      progress.mark("fetching_page1");
       console.log("ANALYZE_REQUEST_START", { 
         inputValue: inputValue.trim(),
         client_run_id: newClientRunId,
@@ -986,8 +1025,10 @@ export default function AnalyzeForm({
           input_value: inputValue.trim(),
         }),
       });
+      progress.mark("enriching_products");
 
       const data = await parseAnalyzeResponse(res) as any;
+      progress.mark("computing_metrics");
       console.log("ANALYZE_RESPONSE", { 
         status: res.status, 
         ok: res.ok, 
@@ -1290,8 +1331,10 @@ export default function AnalyzeForm({
         return newAnalysis;
       });
       setError(null);
-      setLoading(false); // Hide animation after products are committed
-      
+      progress.mark("finalizing");
+      setRenderReady(true);
+      // loading is cleared when progress.finish() resolves (see useEffect below)
+
       // Update UI state: transition to 'enriching' if we have listings but incomplete data
       // Transition to 'complete' when we have full data
       const hasListings = pageOneListings.length > 0;
@@ -1355,6 +1398,8 @@ export default function AnalyzeForm({
     if (!analysis?.input_value || readOnly !== true) return;
     setLoading(true);
     setError(null);
+    progress.start();
+    progress.mark("fetching_page1");
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
@@ -1376,7 +1421,7 @@ export default function AnalyzeForm({
       setError(e instanceof Error ? e.message : "Live search failed");
       setLoading(false);
     }
-  }, [analysis?.input_value, readOnly, router]);
+  }, [analysis?.input_value, readOnly, router, progress]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // SIDEBAR RESIZE HANDLERS
@@ -1526,7 +1571,7 @@ export default function AnalyzeForm({
           {loading && !analysis?.page_one_listings?.length && !analysis?.products?.length ? (
             /* Show skeleton while fetching (first search or new search after clearing listings) */
             <div className="px-6 py-6 space-y-6 relative min-w-0">
-              <ResultsLoadingState />
+              <ResultsLoadingState percent={progress.percent} stageMessage={progress.stageMessage} />
             </div>
           ) : analysis ? (
             /* CRITICAL: ALWAYS render results when analysis exists - never block rendering */
@@ -2412,7 +2457,7 @@ export default function AnalyzeForm({
                       </div>
                     )}
                     {loading && pageOneListings.length === 0 ? (
-                      <ResultsLoadingState />
+                      <ResultsLoadingState percent={progress.percent} stageMessage={progress.stageMessage} />
                     ) : viewMode === "brands" ? (
                       /* Brand View: table with expandable rows — fits viewport, no horizontal scroll */
                       <div className="mt-4 border border-gray-200 rounded-lg overflow-hidden bg-white min-w-0">
