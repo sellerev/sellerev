@@ -24,13 +24,16 @@ export interface CachedKeywordAnalysis {
   marketplace: string;
   listings: KeywordMarketData['listings'];
   snapshot: KeywordMarketData['snapshot'];
-  cached_at: string; // ISO timestamp
-  expires_at: string; // ISO timestamp (cached_at + 24h)
+  cached_at: string;
+  expires_at: string;
+  schema_version?: string; // If missing or !== KEYWORD_CACHE_SCHEMA_VERSION, treat as miss
 }
 
 const CACHE_TTL_HOURS = 24;
 const CACHE_TTL_SECONDS = CACHE_TTL_HOURS * 60 * 60;
-const DATA_CONTRACT_VERSION = "v1.0"; // Increment when data contract changes
+/** Bump when schema changes; old cache rows are treated as miss. */
+export const KEYWORD_CACHE_SCHEMA_VERSION = "v3";
+const DATA_CONTRACT_VERSION = KEYWORD_CACHE_SCHEMA_VERSION;
 
 /**
  * Generate cache key for keyword analysis (Task 1)
@@ -70,7 +73,9 @@ export function getCacheStatus(cached: CachedKeywordAnalysis): {
 }
 
 /**
- * Store keyword analysis in cache (Task 2: Add CACHE_WRITE log)
+ * Store keyword analysis in cache (Task 2: Add CACHE_WRITE log).
+ * Only writes when data.listings has length > 0 so we never cache an empty payload as a "valid hit"
+ * (avoids instant blank UI after cache-key version bump when recompute returns no products).
  */
 export async function cacheKeywordAnalysis(
   supabase: any,
@@ -80,10 +85,21 @@ export async function cacheKeywordAnalysis(
   inputType: string = "keyword",
   page: number = 1
 ): Promise<void> {
+  const listings = data?.listings;
+  const hasListings = Array.isArray(listings) && listings.length > 0;
+  if (!hasListings) {
+    console.log("KEYWORD_CACHE_SKIP_EMPTY", {
+      key: getCacheKey(keyword, marketplace, inputType, page),
+      keyword,
+      reason: "listings empty or missing — not caching to avoid blank UI on next hit",
+    });
+    return;
+  }
+
   const cacheKey = getCacheKey(keyword, marketplace, inputType, page);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + CACHE_TTL_HOURS * 60 * 60 * 1000);
-  
+
   const cached: CachedKeywordAnalysis = {
     keyword: keyword.toLowerCase().trim(),
     marketplace,
@@ -91,11 +107,11 @@ export async function cacheKeywordAnalysis(
     snapshot: data.snapshot,
     cached_at: now.toISOString(),
     expires_at: expiresAt.toISOString(),
+    schema_version: KEYWORD_CACHE_SCHEMA_VERSION,
   };
-  
-  // Calculate payload size
+
   const payloadBytes = JSON.stringify(cached).length;
-  
+
   try {
     await supabase
       .from("keyword_analysis_cache")
@@ -151,6 +167,7 @@ export async function getCachedKeywordAnalysis(
       .single();
 
     if (error || !cacheRow) {
+      console.log("KEYWORD_CACHE_MISS", { cache_key: cacheKey, reason: error ? "error" : "no_row" });
       if (usageContext?.userId && usageContext?.messageId) {
         const missKey = buildUsageIdempotencyKey({
           analysisRunId: usageContext.analysisRunId ?? null,
@@ -179,11 +196,29 @@ export async function getCachedKeywordAnalysis(
     }
 
     const cached = cacheRow.data as CachedKeywordAnalysis;
+    const schemaVersion = cached.schema_version;
+    if (schemaVersion !== KEYWORD_CACHE_SCHEMA_VERSION) {
+      console.log("KEYWORD_CACHE_MISS", {
+        cache_key: cacheKey,
+        reason: "schema_version_mismatch",
+        cached_version: schemaVersion,
+        current_version: KEYWORD_CACHE_SCHEMA_VERSION,
+      });
+      return { data: null, status: "MISS", age_seconds: 0 };
+    }
+
     const createdAt = new Date(cacheRow.created_at || cached.cached_at);
     const now = new Date();
     const ageMs = now.getTime() - createdAt.getTime();
     const ageSeconds = Math.floor(ageMs / 1000);
     const ttlSeconds = CACHE_TTL_SECONDS;
+
+    console.log("KEYWORD_CACHE_HIT", {
+      cache_key: cacheKey,
+      created_at: cacheRow.created_at,
+      expires_at: cacheRow.expires_at,
+      schema_version: KEYWORD_CACHE_SCHEMA_VERSION,
+    });
 
     // Task 3: Enforce TTL with stale-while-revalidate
     if (ageSeconds < ttlSeconds) {
@@ -296,4 +331,29 @@ export async function getCachedKeywordAnalysis(
     console.log("CACHE_MISS", { key: cacheKey, reason: "error" });
     return { data: null, status: 'MISS', age_seconds: 0 };
   }
+}
+
+/**
+ * Invalidate (delete) keyword analysis cache row for a keyword/marketplace.
+ * Use to clear poisoned or stale cache (e.g. "food warming mat").
+ * Server-only; requires Supabase client with service role or delete policy.
+ */
+export async function invalidateKeywordCache(
+  supabase: any,
+  keyword: string,
+  marketplace: string = "US",
+  inputType: string = "keyword",
+  page: number = 1
+): Promise<{ deleted: boolean; cache_key: string }> {
+  const cacheKey = getCacheKey(keyword, marketplace, inputType, page);
+  const { error } = await supabase
+    .from("keyword_analysis_cache")
+    .delete()
+    .eq("cache_key", cacheKey);
+  if (error) {
+    console.error("KEYWORD_CACHE_INVALIDATE_ERROR", { cache_key: cacheKey, error: error.message });
+    return { deleted: false, cache_key: cacheKey };
+  }
+  console.log("KEYWORD_CACHE_INVALIDATED", { cache_key: cacheKey, keyword, marketplace });
+  return { deleted: true, cache_key: cacheKey };
 }

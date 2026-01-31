@@ -4,6 +4,34 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createApiClient } from "@/lib/supabase/server-api";
 import { fetchKeywordMarketSnapshot, KeywordMarketData, KeywordMarketSnapshot, ParsedListing } from "@/lib/amazon/keywordMarket";
+
+/** Sanitize one listing so one bad item cannot crash the UI (null-safe, image_url string only). */
+function normalizeListingForResponse(raw: any): Record<string, unknown> {
+  const img = raw?.image_url ?? raw?.image ?? null;
+  let image_url: string | null = null;
+  if (typeof img === "string" && img.trim().length > 0) image_url = img.trim();
+  else if (img && typeof img === "object" && typeof (img as any).link === "string") {
+    const link = (img as any).link.trim();
+    if (link.length > 0) image_url = link;
+  }
+  return {
+    ...raw,
+    asin: typeof raw?.asin === "string" ? raw.asin : (raw?.asin ?? ""),
+    title: raw?.title != null && String(raw.title).trim() ? String(raw.title).trim() : "Untitled",
+    image_url,
+    brand: raw?.brand ?? (raw?.brand_resolution?.raw_brand ?? null),
+    price: Number.isFinite(Number(raw?.price)) ? Number(raw.price) : null,
+    bsr: Number.isFinite(Number(raw?.bsr)) ? Number(raw.bsr) : null,
+    subcategory_rank: Number.isFinite(Number(raw?.subcategory_rank)) ? Number(raw.subcategory_rank) : null,
+    subcategory_name: raw?.subcategory_name ?? null,
+    root_rank: Number.isFinite(Number(raw?.root_rank)) ? Number(raw.root_rank) : null,
+    root_display_group: raw?.root_display_group ?? null,
+    rating: Number.isFinite(Number(raw?.rating)) ? Number(raw.rating) : null,
+    review_count: Number.isFinite(Number(raw?.review_count)) ? Number(raw.review_count) : (Number.isFinite(Number(raw?.reviews)) ? Number(raw.reviews) : null),
+    estimated_monthly_units: Number.isFinite(Number(raw?.estimated_monthly_units)) ? Number(raw.estimated_monthly_units) : null,
+    estimated_monthly_revenue: Number.isFinite(Number(raw?.estimated_monthly_revenue)) ? Number(raw.estimated_monthly_revenue) : null,
+  };
+}
 import { pickRepresentativeAsin } from "@/lib/amazon/representativeAsin";
 import { calculateCPI } from "@/lib/amazon/competitivePressureIndex";
 import { checkUsageLimit, shouldIncrementUsage } from "@/lib/usage";
@@ -3745,6 +3773,23 @@ export async function POST(req: NextRequest) {
       };
     });
     
+    // Sanitize listings so one bad item (missing image, null field) cannot crash the UI
+    const sanitizedListings = (listingsWithMergedFields || []).map((l: any) => normalizeListingForResponse(l));
+
+    // Poison-pill: payload has products but snapshot totals are zeros/nulls
+    const productCount = sanitizedListings.length;
+    const hasSnapshotTotals = (totalRevenue != null && totalRevenue > 0) || (totalUnits != null && totalUnits > 0) || (medianBsr != null && medianBsr > 0);
+    if (productCount > 0 && !hasSnapshotTotals) {
+      console.warn("ANALYZE_INCONSISTENT_STATE", {
+        keyword: normalizedKeyword,
+        products_count: productCount,
+        total_revenue: totalRevenue,
+        total_units: totalUnits,
+        median_bsr: medianBsr,
+        message: "Payload has products but computed snapshot shows zeros/nulls",
+      });
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // FINAL RESPONSE DIAGNOSTICS (BEFORE RETURNING TO FRONTEND)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -3757,11 +3802,11 @@ export async function POST(req: NextRequest) {
       dataSource: dataSource,
       snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),
       snapshot_last_updated: snapshotLastUpdated,
-      // CRITICAL: Always include listings - never drop them (required for UI rendering)
-      // Use listingsWithMergedFields (includes merged BSR fields from SP-API)
-      page_one_listings: listingsWithMergedFields,
-      products: listingsWithMergedFields,
-      listings: listingsWithMergedFields, // Ensure listings field is always present
+      // CRITICAL: Always include listings - never drop them (required for UI rendering).
+      // All three keys set to same array so frontend can read any of them (page_one_listings | products | listings).
+      page_one_listings: sanitizedListings,
+      products: sanitizedListings,
+      listings: sanitizedListings,
       aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
       // Enrichment status indicating pending background tasks
       enrichment_status: enrichmentStatus,

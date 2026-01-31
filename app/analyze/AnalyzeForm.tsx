@@ -8,6 +8,7 @@ import ChatSidebar, { ChatMessage } from "./ChatSidebar";
 import { normalizeListing } from "@/lib/amazon/normalizeListing";
 import BrandMoatBlock from "./BrandMoatBlock";
 import { ProductCard } from "@/app/components/ProductCard";
+import { ListingsErrorBoundary } from "@/app/components/ListingsErrorBoundary";
 import SearchBar from "@/app/components/SearchBar";
 import { MetricSkeleton, TextSkeleton } from "./components/MetricSkeleton";
 import AIThinkingMessage from "./components/AIThinkingMessage";
@@ -1042,7 +1043,22 @@ export default function AnalyzeForm({
       const pageOneListings = (data as any).page_one_listings || (data as any).products || (data as any).listings || [];
       const snapshot = (data as any).snapshot || (data as any).market_snapshot;
       const aggregates = (data as any).aggregates_derived_from_page_one;
-      
+
+      const products = Array.isArray(pageOneListings) ? pageOneListings : [];
+      const withImages = products.filter((p: any) => {
+        const u = p?.image_url ?? p?.image;
+        return typeof u === "string" && u.trim().length > 0;
+      }).length;
+      const withBrand = products.filter((p: any) => (p?.brand ?? p?.brand_resolution?.raw_brand) != null).length;
+      const withBSR = products.filter((p: any) => p?.bsr != null && Number.isFinite(Number(p.bsr))).length;
+      console.log("ANALYZE_PAYLOAD_SHAPE", {
+        keyword: inputValue?.trim?.(),
+        products: products.length,
+        withImages,
+        withBrand,
+        withBSR,
+      });
+
       // CRITICAL: Only check if listings exist - price/revenue are optional
       // Partial BSR coverage (e.g. 40/68 ASINs) is valid and should render
       console.log("ANALYZE_RESPONSE_CHECK", {
@@ -2420,7 +2436,12 @@ export default function AnalyzeForm({
                                               const units = (listing as any).estimated_monthly_units ?? (listing as any).est_monthly_units ?? null;
                                               const revenue = (listing as any).estimated_monthly_revenue ?? (listing as any).est_monthly_revenue ?? null;
                                               const isSponsored = listing.is_sponsored === true || listing.isSponsored === true;
-                                              const imageUrl = listing.image_url ?? listing.image ?? null;
+                                              const imageUrl = (() => {
+                                                const r = listing.image_url ?? listing.image;
+                                                if (typeof r === "string" && r.trim()) return r.trim();
+                                                if (r && typeof r === "object" && "link" in r && typeof (r as any).link === "string") return (r as any).link.trim() || null;
+                                                return null;
+                                              })();
                                               const amazonUrl = asin ? `https://www.amazon.com/dp/${asin}` : "#";
                                               return (
                                                 <div
@@ -2474,10 +2495,11 @@ export default function AnalyzeForm({
                         </table>
                       </div>
                     ) : (
-                      /* Products View: card grid (unchanged) */
+                      /* Products View: card grid — error boundary so one bad listing doesn't wipe the page */
+                      <ListingsErrorBoundary>
                       <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
                         <AnimatePresence mode="popLayout">
-                          {filteredListings.map((listing: any, idx: number) => {
+                          {(Array.isArray(filteredListings) ? filteredListings : []).map((listing: any, idx: number) => {
                             // Extract ASIN FIRST - this is the single source of truth for this listing
                             const asin = listing.asin || normalizeListing(listing).asin || null;
                             
@@ -2488,8 +2510,13 @@ export default function AnalyzeForm({
                             // CRITICAL: Use the extracted asin for selection check (must match what we store)
                             const isSelected = asin !== null && selectedAsins.includes(asin);
                             
-                            // Extract image URL with fallback - preserve from stable source
-                            const imageUrl = listing.image_url ?? listing.image ?? null;
+                            // Extract image URL with fallback - coerce to string | null (object with .link → string)
+                            const imageUrl = (() => {
+                              const r = listing.image_url ?? listing.image;
+                              if (typeof r === "string" && r.trim()) return r.trim();
+                              if (r && typeof r === "object" && "link" in r && typeof (r as any).link === "string") return (r as any).link.trim() || null;
+                              return null;
+                            })();
                             // Rank = Page-1 position (use page_position if available, else use array index + 1 for display)
                             // Note: When sorted, we still show the original page_position for rank display
                             const rank = listing.page_position ?? listing.organic_rank ?? (idx + 1);
@@ -2659,6 +2686,7 @@ export default function AnalyzeForm({
                           })}
                         </AnimatePresence>
                       </div>
+                      </ListingsErrorBoundary>
                     )}
                   </div>
                   );

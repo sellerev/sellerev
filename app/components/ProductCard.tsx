@@ -295,6 +295,10 @@ export function ProductCard({
     bsrContext?.chosen_category_name ??
     null;
 
+  // Ensure imageUrl is only used as string (object with .link would break img src)
+  const safeImageUrl =
+    typeof imageUrl === "string" && imageUrl.trim().length > 0 ? imageUrl.trim() : null;
+
   return (
     <div
       onClick={(e) => onSelect?.(e)}
@@ -355,11 +359,11 @@ export function ProductCard({
         {isSelected && <Check className="w-4 h-4 text-white" />}
       </div>
 
-      {/* Product Image - Larger size for visibility */}
+      {/* Product Image - Larger size for visibility; placeholder when missing */}
       <div className="w-full max-w-[160px] h-[160px] bg-[#F3F4F6] rounded-lg mb-3 flex items-center justify-center overflow-hidden mx-auto">
-        {imageUrl ? (
+        {safeImageUrl ? (
           <img 
-            src={imageUrl} 
+            src={safeImageUrl} 
             alt={title || "Product image"} 
             className="w-full h-full object-contain p-2"
             onError={(e) => {
@@ -370,7 +374,7 @@ export function ProductCard({
             }}
           />
         ) : null}
-        <div className="img-placeholder w-full h-full flex items-center justify-center" style={{ display: imageUrl ? 'none' : 'flex' }}>
+        <div className="img-placeholder w-full h-full flex items-center justify-center" style={{ display: safeImageUrl ? 'none' : 'flex' }}>
           <ImageIcon className="w-16 h-16 text-[#9CA3AF]" />
         </div>
       </div>
@@ -431,25 +435,23 @@ export function ProductCard({
         </div>
       ) : null}
 
-      {/* BSR Display */}
+      {/* BSR Display — show — when missing so one bad item doesn't break layout */}
       <div className="text-sm text-[#6B7280] mb-3 space-y-3">
         {/* Main Category */}
-        {mainBsr !== null && mainBsr !== undefined && mainBsr > 0 ? (
-          <div className="space-y-1">
-            <div className="flex items-center flex-wrap gap-x-1">
-              <span>Main Category BSR: #{mainBsr.toLocaleString()}</span>
-              <span className="inline-flex items-center">
-                <InfoTooltip text="Overall rank in the main category (lower = better sales)." />
-              </span>
-            </div>
-            <div className="text-xs text-[#9CA3AF]">
-              {displayMainCategoryName ? displayMainCategoryName : '—'}
-            </div>
+        <div className="space-y-1">
+          <div className="flex items-center flex-wrap gap-x-1">
+            <span>Main Category BSR: {mainBsr != null && mainBsr > 0 ? `#${mainBsr.toLocaleString()}` : "—"}</span>
+            <span className="inline-flex items-center">
+              <InfoTooltip text="Overall rank in the main category (lower = better sales)." />
+            </span>
           </div>
-        ) : null}
+          <div className="text-xs text-[#9CA3AF]">
+            {displayMainCategoryName ? displayMainCategoryName : "—"}
+          </div>
+        </div>
 
         {/* Subcategory */}
-        {displaySubcategoryBsr !== null && displaySubcategoryBsr !== undefined && displaySubcategoryBsr > 0 ? (
+        {displaySubcategoryBsr != null && displaySubcategoryBsr > 0 ? (
           <div className="space-y-1">
             <div className="flex items-center flex-wrap gap-x-1">
               <span>Subcategory Rank: #{displaySubcategoryBsr.toLocaleString()}</span>

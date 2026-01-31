@@ -227,8 +227,15 @@ export function normalizeListing(raw: any): ParsedListing {
   // Extract position (required field)
   const position = raw.position ?? raw.organic_rank ?? raw.Position ?? 0;
   
-  // Extract image_url (required field, not image)
-  const image_url = raw.image_url ?? raw.image ?? raw.Image ?? raw.images?.[0] ?? null;
+  // Extract image_url (required field): always string | null; coerce object with .link
+  let image_url: string | null = null;
+  const rawImage = raw.image_url ?? raw.image ?? raw.Image ?? raw.images?.[0] ?? null;
+  if (typeof rawImage === "string" && rawImage.trim().length > 0) {
+    image_url = rawImage.trim();
+  } else if (rawImage && typeof rawImage === "object" && "link" in rawImage && typeof (rawImage as any).link === "string") {
+    const link = (rawImage as any).link.trim();
+    if (link.length > 0) image_url = link;
+  }
   
   // ═══════════════════════════════════════════════════════════════════════════
   // PRIME ELIGIBILITY MAPPING (PRESERVE FROM RAW OR INFER FROM is_prime)
