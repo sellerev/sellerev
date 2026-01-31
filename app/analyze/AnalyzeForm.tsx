@@ -882,15 +882,13 @@ export default function AnalyzeForm({
     return () => { cancelled = true; };
   }, [urlRunId, analysis?.analysis_run_id, updateSelectedAsins]);
 
-  // When renderReady and analysis has listings + snapshot, animate progress to 100% then hide loader
+  // When renderReady and analysis has listings (renderable), animate progress to 100% then hide loader.
+  // Do not require market_snapshot — API may return snapshot in different shape; listings are enough.
   useEffect(() => {
-    if (
-      !renderReady ||
-      !analysis?.page_one_listings?.length ||
-      !analysis?.market_snapshot ||
-      progressFinishedRef.current
-    )
-      return;
+    const hasListings =
+      (analysis?.page_one_listings?.length ?? 0) > 0 ||
+      (analysis?.products?.length ?? 0) > 0;
+    if (!renderReady || !hasListings || progressFinishedRef.current) return;
     progressFinishedRef.current = true;
     progress
       .finish()
@@ -907,7 +905,7 @@ export default function AnalyzeForm({
   }, [
     renderReady,
     analysis?.page_one_listings?.length,
-    analysis?.market_snapshot,
+    analysis?.products?.length,
     progress,
   ]);
 
