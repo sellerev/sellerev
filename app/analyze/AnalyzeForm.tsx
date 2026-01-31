@@ -2827,6 +2827,16 @@ export default function AnalyzeForm({
             helpDrawerOpen={helpDrawerOpen}
             onToggleHelpDrawer={() => setHelpDrawerOpen((o) => !o)}
             currentKeyword={analysis?.input_value ?? null}
+            asinDetails={
+              analysis?.page_one_listings?.length
+                ? Object.fromEntries(
+                    (analysis.page_one_listings as Array<{ asin?: string; brand?: string | null; title?: string | null }>)
+                      .filter((p) => p?.asin)
+                      .map((p) => [p.asin!, { brand: p.brand ?? null, title: p.title ?? null }])
+                  )
+                : undefined
+            }
+            showMaxTwoWarning={selectedAsins.length > 2}
           />
         </div>
       </div>

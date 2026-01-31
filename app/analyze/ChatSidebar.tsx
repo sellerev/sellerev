@@ -9,6 +9,7 @@ import FeesProfitChatCard, {
 } from "./components/FeesProfitChatCard";
 import ChatTranscript from "./components/ChatTranscript";
 import { AssistantMarkdownContent } from "./components/ChatMessageBubble";
+import ChatComposer from "./components/ChatComposer";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
 /**
@@ -112,6 +113,10 @@ interface ChatSidebarProps {
   onToggleHelpDrawer?: () => void;
   /** Current keyword being analyzed (for header). Empty when no search has been run. */
   currentKeyword?: string | null;
+  /** Optional ASIN → { brand, title } for selection bar chip labels and tooltips */
+  asinDetails?: Record<string, { brand?: string | null; title?: string | null }>;
+  /** When true, show inline warning in selection bar that some questions require 1–2 products */
+  showMaxTwoWarning?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -293,6 +298,8 @@ export default function ChatSidebar({
   helpDrawerOpen = false,
   onToggleHelpDrawer,
   currentKeyword = null,
+  asinDetails = {},
+  showMaxTwoWarning = false,
 }: ChatSidebarProps) {
   // Use snapshotId as primary identifier if analysisRunId is not available (Tier-1/Tier-2 model)
   // For chat API, we still need analysisRunId, but UI unlocking uses snapshotId
@@ -776,25 +783,7 @@ export default function ChatSidebar({
     }
   }, [analysisRunId, input, messages, isFeesFollowUp, onMarginSnapshotUpdate, selectedListing, selectedAsins, selectedAsinsRef, onMessagesChange, escalationState, escalationMessage]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Use effectiveId for UI enabling, but chat API still needs analysisRunId
-    if (e.key === "Enter" && !e.shiftKey && !isLoading && input.trim() && effectiveId) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-
-  // Auto-resize textarea as user types (like Cursor chat)
-  useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.style.height = 'auto';
-      const scrollHeight = inputRef.current.scrollHeight;
-      // Max height of ~6 lines (24px line height * 6 = 144px)
-      const maxHeight = 144;
-      const newHeight = Math.min(scrollHeight, maxHeight);
-      inputRef.current.style.height = `${newHeight}px`;
-    }
-  }, [input]);
+  // Enter sends, Shift+Enter new line — handled inside ChatComposer
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -1153,84 +1142,20 @@ export default function ChatSidebar({
             <div className="text-[11px] text-gray-500">{historicalHintText}</div>
           </div>
         )}
-        <div className="flex flex-wrap gap-2 items-end w-full min-w-0 bg-white border border-gray-300 rounded-xl px-3 py-2 shadow-sm hover:border-gray-400 focus-within:ring-2 focus-within:ring-[#3B82F6] focus-within:border-transparent transition-all box-border">
-          {/* Selected ASIN chips (chat context) */}
-          {selectedAsins.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 items-center">
-              {selectedAsins.map((asin) => (
-                <button
-                  key={asin}
-                  type="button"
-                  onClick={() => {
-                    if (!onSelectedAsinsChange) return;
-                    onSelectedAsinsChange(selectedAsins.filter((a) => a !== asin));
-                  }}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-gray-300 bg-white text-[11px] text-gray-800 hover:bg-gray-50"
-                  title="Remove from chat context"
-                >
-                  <span className="font-mono">ASIN {asin}</span>
-                  <span className="text-gray-500">×</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <textarea
-            ref={inputRef}
-            className="flex-1 min-w-0 bg-transparent border-0 rounded-lg px-2 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none overflow-y-auto placeholder:text-gray-400"
-            style={{
-              minHeight: "36px",
-              maxHeight: "144px",
-              lineHeight: "24px"
-            }}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={isDisabled ? "Open a saved analysis run to chat" : "Ask about the analysis..."}
-            disabled={isDisabled || isLoading}
-            rows={1}
-          />
-          <button
-            className="w-9 h-9 bg-[#3B82F6] text-white rounded-lg flex items-center justify-center hover:bg-[#2563EB] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-            onClick={() => sendMessage()}
-            disabled={isDisabled || !input.trim() || isLoading}
-          >
-            {isLoading ? (
-              <svg
-                className="animate-spin h-4 w-4"
-                viewBox="0 0 24 24"
-                fill="none"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                />
-              </svg>
-            ) : (
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                />
-              </svg>
-            )}
-          </button>
-        </div>
+        <ChatComposer
+          value={input}
+          onChange={setInput}
+          onSend={() => sendMessage()}
+          inputRef={inputRef}
+          placeholder={isDisabled ? "Open a saved analysis run to chat" : "Ask about the analysis..."}
+          disabled={isDisabled || isLoading}
+          sendDisabled={!input.trim()}
+          loading={isLoading}
+          selectedAsins={selectedAsins}
+          onSelectedAsinsChange={onSelectedAsinsChange ?? (() => {})}
+          asinDetails={asinDetails}
+          showMaxTwoWarning={showMaxTwoWarning}
+        />
       </div>
 
       {/* History Panel - Floating overlay */}
