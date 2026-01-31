@@ -49,6 +49,7 @@ import {
   getCacheKey,
   getCachedKeywordAnalysis,
   cacheKeywordAnalysis,
+  purgeKeywordCache,
 } from "@/lib/amazon/keywordCache";
 
 // TODO: AI PROMPTS DISABLED - Re-enable when AI processing is needed
@@ -1086,6 +1087,11 @@ export async function POST(req: NextRequest) {
     const forceRefresh = body.force_refresh === true;
     const marketplace = "amazon.com";
     const globalCacheKey = getCacheKey(body.input_value, marketplace, "keyword", 1);
+
+    // When force_refresh: purge Supabase cache row first so any poisoned/partial data is removed
+    if (forceRefresh) {
+      await purgeKeywordCache(supabase, body.input_value, marketplace, "keyword", 1);
+    }
 
     // Global cache-first: return immediately if fresh cache exists and not force_refresh
     if (!forceRefresh) {

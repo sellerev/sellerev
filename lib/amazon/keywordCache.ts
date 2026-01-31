@@ -168,10 +168,37 @@ export async function cacheKeywordAnalysis(
 }
 
 /**
+ * Delete the cache row for a keyword (e.g. to fix poisoned/partial data in Supabase).
+ * Call when force_refresh is true so the next run rebuilds a clean row.
+ */
+export async function purgeKeywordCache(
+  supabase: any,
+  keyword: string,
+  marketplace: string = AMAZON_DOMAIN_US,
+  inputType: string = "keyword",
+  page: number = 1
+): Promise<void> {
+  const cacheKey = getCacheKey(keyword, marketplace, inputType, page);
+  const { error } = await supabase
+    .from("keyword_analysis_cache")
+    .delete()
+    .eq("cache_key", cacheKey);
+
+  if (error) {
+    console.warn("KEYWORD_CACHE_PURGE_FAILED", { cache_key: cacheKey, keyword: keyword.trim(), error: error.message });
+    return;
+  }
+  console.log("KEYWORD_CACHE_PURGED", { cache_key: cacheKey, keyword: keyword.trim() });
+}
+
+/**
  * Retrieve cached keyword analysis (Task 2 & 3: Add logging and stale-while-revalidate)
  * Returns: { data: KeywordMarketData | null, status: 'HIT' | 'MISS' | 'STALE', age_seconds: number }
  * Optional usageContext enables per-user usage logging (idempotent).
  */
+/** Cache return shape: KeywordMarketData plus optional cache metadata for API response. */
+export type CachedKeywordAnalysisData = KeywordMarketData & { cached_at?: string; expires_at?: string };
+
 export async function getCachedKeywordAnalysis(
   supabase: any,
   keyword: string,
@@ -180,7 +207,7 @@ export async function getCachedKeywordAnalysis(
   page: number = 1,
   usageContext?: UsageContext | null
 ): Promise<{
-  data: KeywordMarketData | null;
+  data: CachedKeywordAnalysisData | null;
   status: 'HIT' | 'MISS' | 'STALE';
   age_seconds: number;
 }> {
