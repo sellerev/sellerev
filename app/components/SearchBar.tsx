@@ -3,6 +3,8 @@
 import { Search, Loader2 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 
+const DEBOUNCE_MS = 250;
+
 interface SearchBarProps {
   inputValue: string;
   onInputChange: (value: string) => void;
@@ -10,7 +12,7 @@ interface SearchBarProps {
   loading?: boolean;
   readOnly?: boolean;
   inputError?: string | null;
-  /** When true, page already has search results (e.g. from history or completed search). Hide dropdown and do not show suggestions. */
+  /** When true, page is showing analysis results. Dropdown is closed on submit; refetch still runs when user types again. */
   hasResults?: boolean;
 }
 
@@ -28,75 +30,93 @@ export default function SearchBar({
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-  // Close dropdown when search is submitted (loading) or when page already has results
+  // On submit or when results appear: close dropdown and clear suggestions (next typing will re-fetch)
   useEffect(() => {
     if (loading || hasResults) {
       setShowDropdown(false);
       setSuggestions([]);
       setSelectedIndex(-1);
+      if (loading) {
+        if (typeof window !== "undefined") {
+          console.log("SUGGESTIONS_CLEARED", { reason: "search_submitted" });
+        }
+      }
     }
   }, [loading, hasResults]);
 
-  // Fetch autocomplete suggestions
-  const fetchSuggestions = useCallback(async (query: string) => {
+  // Debounced fetch: trigger on input change (not gated by hasResults so suggestions work after first search)
+  useEffect(() => {
+    if (readOnly || loading) {
+      return;
+    }
+
+    const query = inputValue.trim();
     if (query.length < 2) {
       setSuggestions([]);
       setShowDropdown(false);
+      if (typeof window !== "undefined") {
+        console.log("SUGGESTIONS_TRIGGER", { input: query, len: query.length });
+        console.log("SUGGESTIONS_CLEARED", { reason: "empty_input" });
+      }
       return;
     }
 
-    try {
-      const response = await fetch(`/api/amazon/autocomplete?q=${encodeURIComponent(query)}`);
-      if (response.ok) {
-        const data = await response.json();
-        if (Array.isArray(data)) {
-          const limited = data.slice(0, 6);
+    if (typeof window !== "undefined") {
+      console.log("SUGGESTIONS_TRIGGER", { input: query, len: query.length });
+    }
+
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    const timer = setTimeout(async () => {
+      if (ctrl.signal.aborted) return;
+      if (typeof window !== "undefined") {
+        console.log("SUGGESTIONS_FETCH_START", { input: query });
+      }
+
+      try {
+        const response = await fetch(`/api/amazon/autocomplete?q=${encodeURIComponent(query)}`, {
+          signal: ctrl.signal,
+        });
+        if (ctrl.signal.aborted) {
+          if (typeof window !== "undefined") console.log("SUGGESTIONS_FETCH_ABORTED");
+          return;
+        }
+        if (response.ok) {
+          const data = await response.json();
+          const list = Array.isArray(data) ? data : (data?.suggestions ?? []);
+          const limited = list.slice(0, 6);
           setSuggestions(limited);
           setShowDropdown(limited.length > 0);
           setSelectedIndex(-1);
+          if (typeof window !== "undefined") {
+            console.log("SUGGESTIONS_FETCH_DONE", { count: limited.length });
+          }
         } else {
           setSuggestions([]);
           setShowDropdown(false);
+          if (typeof window !== "undefined") console.log("SUGGESTIONS_FETCH_DONE", { count: 0 });
         }
-      } else {
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          if (typeof window !== "undefined") console.log("SUGGESTIONS_FETCH_ABORTED");
+          return;
+        }
         setSuggestions([]);
         setShowDropdown(false);
+        if (typeof window !== "undefined") console.log("SUGGESTIONS_FETCH_DONE", { count: 0 });
       }
-    } catch (error) {
-      // Fail silently - autocomplete is non-blocking
-      setSuggestions([]);
-      setShowDropdown(false);
-    }
-  }, []);
-
-  // Debounced effect for autocomplete — do not fetch when page already has results
-  useEffect(() => {
-    if (readOnly || loading || hasResults) {
-      if (hasResults) {
-        setSuggestions([]);
-        setShowDropdown(false);
-      }
-      return;
-    }
-
-    // Clear existing timer
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
-
-    // Set new timer
-    debounceTimerRef.current = setTimeout(() => {
-      fetchSuggestions(inputValue);
-    }, 300);
+    }, DEBOUNCE_MS);
 
     return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
+      clearTimeout(timer);
+      ctrl.abort();
+      abortRef.current = null;
     };
-  }, [inputValue, fetchSuggestions, readOnly, loading, hasResults]);
+  }, [inputValue, readOnly, loading]);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -213,7 +233,7 @@ export default function SearchBar({
                 }}
                 onKeyDown={handleKeyDown}
                 onFocus={() => {
-                  if (!readOnly && !hasResults && suggestions.length > 0) {
+                  if (!readOnly && !loading && suggestions.length > 0) {
                     setShowDropdown(true);
                   }
                 }}
@@ -222,7 +242,7 @@ export default function SearchBar({
                 readOnly={readOnly}
               />
               {/* Autocomplete Dropdown */}
-              {showDropdown && suggestions.length > 0 && !readOnly && !hasResults && (
+              {showDropdown && suggestions.length > 0 && !readOnly && !loading && (
                 <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg z-50 max-h-[240px] overflow-y-auto">
                   {suggestions.map((suggestion, index) => (
                     <button
