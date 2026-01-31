@@ -50,6 +50,7 @@ import {
   getCachedKeywordAnalysis,
   cacheKeywordAnalysis,
   purgeKeywordCache,
+  normalizeKeywordForCacheKey,
 } from "@/lib/amazon/keywordCache";
 
 // TODO: AI PROMPTS DISABLED - Re-enable when AI processing is needed
@@ -1102,7 +1103,14 @@ export async function POST(req: NextRequest) {
         "keyword",
         1
       );
-      if (cached.status === "HIT" && cached.data) {
+      // Bypass cache for known-problem keyword so we always rebuild (avoids bad cached payload)
+      const normalizedKw = normalizeKeywordForCacheKey(body.input_value);
+      if (normalizedKw === "food warming mat") {
+        await purgeKeywordCache(supabase, body.input_value, marketplace, "keyword", 1);
+        console.log("KEYWORD_CACHE_BYPASS", { keyword: body.input_value, reason: "known_problem_keyword" });
+      }
+
+      if (cached.status === "HIT" && cached.data && normalizedKw !== "food warming mat") {
         const sanitized = (cached.data.listings || []).map((l: any) =>
           normalizeListingForResponse(l)
         );
