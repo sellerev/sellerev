@@ -1121,7 +1121,7 @@ export async function POST(req: NextRequest) {
           cached_at: cached.data.cached_at,
           expires_at: cached.data.expires_at,
         };
-        const { data: insertedRun } = await supabase
+        const { data: insertedRun, error: insertError } = await supabase
           .from("analysis_runs")
           .insert({
             user_id: user.id,
@@ -1142,11 +1142,19 @@ export async function POST(req: NextRequest) {
           })
           .select("id")
           .single();
+        let analysisRunId: string | null = insertedRun?.id ?? null;
+        if (!analysisRunId && (insertError || !insertedRun)) {
+          console.warn("ANALYZE_CACHE_HIT_INSERT_FAILED", {
+            keyword: body.input_value,
+            error: insertError?.message ?? "no row returned",
+          });
+          analysisRunId = crypto.randomUUID();
+        }
         res.headers.set("x-sellerev-cache", "hit");
         return NextResponse.json(
           {
             ...responsePayload,
-            analysisRunId: insertedRun?.id ?? null,
+            analysisRunId,
           },
           { headers: res.headers }
         );
