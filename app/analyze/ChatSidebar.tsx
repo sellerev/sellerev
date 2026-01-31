@@ -763,13 +763,16 @@ export default function ChatSidebar({
         setCurrentCitations([]);
       }
     } catch (error) {
-      // Add error message
       const errorMessage = error instanceof Error ? error.message : "Chat failed";
+      const displayMessage =
+        errorMessage === "Chat request failed" || errorMessage === "Chat failed"
+          ? `Error: ${errorMessage}. Please try again.`
+          : errorMessage;
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          content: `Error: ${errorMessage}. Please try again.`,
+          content: displayMessage,
           createdAt: new Date().toISOString(),
         },
       ]);

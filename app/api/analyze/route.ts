@@ -3987,10 +3987,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const chatAvailable = !!insertedRun?.id;
     const finalResponse = {
       success: true,
       status: "complete", // Data-only processing complete (no AI)
       analysisRunId: responseAnalysisRunId,
+      /** When false, analysis_runs insert failed so this run is not in DB — chat will 404 if used */
+      chatAvailable,
       data_quality: dataQuality,
       dataSource: dataSource,
       snapshotType: dataSource === "market" ? "market" : (isEstimated ? "estimated" : "snapshot"),

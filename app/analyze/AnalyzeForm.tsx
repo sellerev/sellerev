@@ -571,6 +571,8 @@ export default function AnalyzeForm({
   const [analysisRunIdForChat, setAnalysisRunIdForChat] = useState<string | null>(
     initialAnalysis?.analysis_run_id || null
   );
+  // When false, analysis_runs insert failed so this run is not in DB — chat would 404; disable chat UI
+  const [chatAvailable, setChatAvailable] = useState<boolean>(true);
   // Track if current analysis is estimated (Tier-1) vs snapshot (Tier-2)
   const [isEstimated, setIsEstimated] = useState(false);
   const [snapshotType, setSnapshotType] = useState<"estimated" | "snapshot">("snapshot");
@@ -787,6 +789,7 @@ export default function AnalyzeForm({
       return nextAnalysis;
     });
     setAnalysisRunIdForChat(incomingRunId);
+    setChatAvailable(true); // initial/URL runs are always from DB
     setInputValue(incomingKeyword);
     setIsEstimated(false);
     setSnapshotType("snapshot");
@@ -857,6 +860,7 @@ export default function AnalyzeForm({
         setClientRunId(null); // History view — no longer "pending" client run
         setAnalysis(normalizeAnalysis(payloadAsAnalysis));
         setAnalysisRunIdForChat(runId);
+        setChatAvailable(true); // history runs are from DB
         setInputValue(keyword);
         setChatMessages(Array.isArray(data.messages) ? data.messages.map((m: { role: string; content: string }) => ({ role: m.role as "user" | "assistant", content: m.content })) : []);
         setAnalysisUIState("complete");
@@ -1238,6 +1242,7 @@ export default function AnalyzeForm({
       if (data.analysisRunId) {
         setAnalysisRunIdForChat(data.analysisRunId);
       }
+      setChatAvailable(data.chatAvailable !== false); // false when analysis_runs insert failed
 
       // Store estimated flag and snapshot type for UI badges
       setIsEstimated(data.estimated === true || data.dataSource === 'estimated');
@@ -2811,7 +2816,7 @@ export default function AnalyzeForm({
             </div>
           )}
           <ChatSidebar
-            analysisRunId={analysisRunIdForChat}
+            analysisRunId={chatAvailable ? analysisRunIdForChat : null}
             snapshotId={analysis?.analysis_run_id || null}
             analysisCreatedAt={analysis?.created_at || null}
             isHistoryContext={!!initialAnalysis}
