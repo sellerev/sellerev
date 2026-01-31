@@ -93,7 +93,10 @@ export function useAnalyzeProgress(): UseAnalyzeProgressReturn {
         lastStageChangeAtRef.current = now;
       }
 
-      if (next >= 100 && finishResolveRef.current) {
+      // Resolve when close to 100% (easing asymptotically never hits exactly 100)
+      if (next >= 99.5 && finishResolveRef.current) {
+        currentPercentRef.current = 100;
+        setPercent(100);
         stopLoop();
         finishResolveRef.current();
         finishResolveRef.current = null;

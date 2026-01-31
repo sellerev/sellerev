@@ -890,18 +890,26 @@ export default function AnalyzeForm({
       (analysis?.products?.length ?? 0) > 0;
     if (!renderReady || !hasListings || progressFinishedRef.current) return;
     progressFinishedRef.current = true;
+    const timeoutId = setTimeout(() => {
+      setLoading(false);
+      setRenderReady(false);
+      progressFinishedRef.current = false;
+    }, 2500);
     progress
       .finish()
       .then(() => {
+        clearTimeout(timeoutId);
         setLoading(false);
         setRenderReady(false);
         progressFinishedRef.current = false;
       })
       .catch(() => {
+        clearTimeout(timeoutId);
         setLoading(false);
         setRenderReady(false);
         progressFinishedRef.current = false;
       });
+    return () => clearTimeout(timeoutId);
   }, [
     renderReady,
     analysis?.page_one_listings?.length,
@@ -1331,7 +1339,10 @@ export default function AnalyzeForm({
       setError(null);
       progress.mark("finalizing");
       setRenderReady(true);
-      // loading is cleared when progress.finish() resolves (see useEffect below)
+      // Clear loading when progress hits 100% (useEffect), or after 500ms fallback so UI never stays stuck
+      setTimeout(() => {
+        setLoading((prev) => (prev ? false : prev));
+      }, 500);
 
       // Update UI state: transition to 'enriching' if we have listings but incomplete data
       // Transition to 'complete' when we have full data
