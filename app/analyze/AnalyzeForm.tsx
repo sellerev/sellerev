@@ -2845,7 +2845,7 @@ export default function AnalyzeForm({
                   )
                 : undefined
             }
-            showMaxTwoWarning={selectedAsins.length > 2}
+            maxSelectableHint={2}
           />
         </div>
       </div>

@@ -115,8 +115,8 @@ interface ChatSidebarProps {
   currentKeyword?: string | null;
   /** Optional ASIN → { brand, title } for selection bar chip labels and tooltips */
   asinDetails?: Record<string, { brand?: string | null; title?: string | null }>;
-  /** When true, show inline warning in selection bar that some questions require 1–2 products */
-  showMaxTwoWarning?: boolean;
+  /** When > 0, show hint in selection bar when selected count exceeds this (e.g. 2) */
+  maxSelectableHint?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1154,7 +1154,7 @@ export default function ChatSidebar({
           selectedAsins={selectedAsins}
           onSelectedAsinsChange={onSelectedAsinsChange ?? (() => {})}
           asinDetails={asinDetails}
-          showMaxTwoWarning={showMaxTwoWarning}
+          maxSelectableHint={maxSelectableHint}
         />
       </div>
 

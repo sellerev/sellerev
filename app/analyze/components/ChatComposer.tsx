@@ -25,8 +25,8 @@ export interface ChatComposerProps {
   onSelectedAsinsChange: (asins: string[]) => void;
   /** Optional lookup for chip labels (brand/title) */
   asinDetails?: Record<string, AsinDetail>;
-  /** Show warning when > 2 selected (some intents require 1–2) */
-  showMaxTwoWarning?: boolean;
+  /** When > 0, show hint "Some questions work best with 1–2 selected" when count exceeds this (e.g. 2) */
+  maxSelectableHint?: number;
 }
 
 export default function ChatComposer({
@@ -41,7 +41,7 @@ export default function ChatComposer({
   selectedAsins,
   onSelectedAsinsChange,
   asinDetails = {},
-  showMaxTwoWarning = false,
+  maxSelectableHint = 2,
 }: ChatComposerProps) {
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = (externalRef ?? internalRef) as React.RefObject<HTMLTextAreaElement | null>;
@@ -74,6 +74,11 @@ export default function ChatComposer({
     onSelectedAsinsChange(selectedAsins.filter((a) => a !== asin));
   };
 
+  const handleRemoveMany = (asins: string[]) => {
+    const set = new Set(asins);
+    onSelectedAsinsChange(selectedAsins.filter((a) => !set.has(a)));
+  };
+
   return (
     <div className="w-full min-w-0 shrink-0 flex flex-col bg-white border-t border-neutral-200">
       {/* Selection bar: only when there are selected ASINs. Adds space above textarea, doesn't squeeze it. */}
@@ -82,8 +87,9 @@ export default function ChatComposer({
           selectedAsins={selectedAsins}
           onClear={handleClearSelection}
           onRemove={handleRemoveAsin}
+          onRemoveMany={handleRemoveMany}
           asinDetails={asinDetails}
-          showMaxTwoWarning={showMaxTwoWarning}
+          maxSelectableHint={maxSelectableHint}
         />
       )}
 
