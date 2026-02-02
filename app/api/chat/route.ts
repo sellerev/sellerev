@@ -32,6 +32,17 @@ import {
 } from "@/lib/ai/copilotEscalationHelpers";
 import { evaluateChatGuardrails } from "@/lib/ai/chatGuardrails";
 import { getFeesResult, type FeesResultPayload } from "@/lib/spapi/feesResult";
+import {
+  buildFactsAllowed,
+  getAnswerPlan,
+  validateCopilotJson,
+  type FactsAllowed,
+  type CopilotStructuredResponse,
+} from "@/lib/ai/copilotFacts";
+import {
+  buildGroundedSystemInstructions,
+  COPILOT_JSON_SCHEMA,
+} from "@/lib/ai/copilotGroundedPrompt";
 
 /**
  * Sellerev Chat API Route (Streaming)
@@ -2304,6 +2315,31 @@ export async function POST(req: NextRequest) {
       marketSnapshotSummary = "";
     }
 
+    // ─── Grounded Copilot: FactsAllowed + Answer plan (Page-1 first, enrich only if required)
+    const keywordForFacts = (analysisRun.input_value as string) || (analysisResponse.market_snapshot as any)?.keyword || "";
+    const factsAllowed: FactsAllowed = buildFactsAllowed(
+      analysisResponse,
+      {
+        stage: sellerProfile.stage ?? null,
+        experience_months: sellerProfile.experience_months ?? null,
+        monthly_revenue_range: sellerProfile.monthly_revenue_range ?? null,
+        sourcing_model: sellerProfile.sourcing_model ?? null,
+        goals: sellerProfile.goals ?? null,
+        risk_tolerance: sellerProfile.risk_tolerance ?? null,
+        margin_target: sellerProfile.margin_target ?? null,
+        max_fee_pct: sellerProfile.max_fee_pct ?? null,
+      },
+      selectedAsins,
+      "ATVPDKIKX0DER",
+      "amazon.com"
+    );
+    const answerPlan = getAnswerPlan(body.message, selectedAsins.length);
+    console.log("COPILOT_SOURCE_DECISION", {
+      mode: answerPlan.mode,
+      selected_asins_count: selectedAsins.length,
+      keyword: keywordForFacts,
+    });
+
     // Determine analysis mode from input_type
     const analysisMode: 'KEYWORD' = 'KEYWORD'; // All analyses are keyword-only
     
@@ -2420,9 +2456,45 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Dossier needed but 0 ASINs selected → return structured JSON asking to select ASINs
+    if (answerPlan.mode === "dossier_needed" && answerPlan.requiresAsins && selectedAsins.length === 0) {
+      const structuredSelect: CopilotStructuredResponse = {
+        headline: "Select 1–2 products to analyze",
+        observations: [
+          {
+            claim: "This question needs product-level data (reviews, specs, or features).",
+            evidence: ["Page-1 data alone does not include review text or full product details."],
+          },
+        ],
+        constraints: ["Select exactly 1 or 2 ASINs from Page-1 to run this analysis."],
+        followup_question: "Which product(s) would you like me to analyze?",
+        confidence: "high",
+        used_sources: { page1: true, rainforest: false, spapi: false },
+      };
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ structured: structuredSelect })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new NextResponse(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
+    }
+
     // If selectedAsins exists AND any intent is true, enrichment MUST execute (zero-confirmation)
     // For review insights: max 2 ASINs (hard cap)
-    const requiresEnrichment = (variantsAttributesIntent || reviewInsightsIntent) && selectedAsins.length > 0;
+    let requiresEnrichment = (variantsAttributesIntent || reviewInsightsIntent) && selectedAsins.length > 0;
+    // Page-1 only: never call Rainforest/SP-API for this question
+    if (answerPlan.mode === "page1_only") {
+      requiresEnrichment = false;
+    }
 
     // Special handling: block enrichment if 3+ ASINs selected (for both variants and review insights)
     let enrichmentAsins: string[] = [];
@@ -4267,7 +4339,99 @@ CRITICAL RULES FOR ESCALATED DATA:
         });
       }
     }
-    
+
+    // ─── Grounded JSON path: strict JSON response, no hallucinated numbers
+    const hasPage1Data = factsAllowed.page1.keyword !== "" || Object.keys(factsAllowed.page1.asin_metrics).length > 0;
+    const useGroundedJson = hasPage1Data;
+    if (useGroundedJson) {
+      const groundedBlock = buildGroundedSystemInstructions(factsAllowed, answerPlan.mode);
+      const schemaInstruction = `\n\nOutput ONLY valid JSON with this exact schema (no markdown, no extra keys):\n${COPILOT_JSON_SCHEMA}`;
+      let groundedSystemContent = systemPrompt + "\n\n" + groundedBlock + schemaInstruction;
+      // Summary mode default: first message in conversation — frame as summary of last search
+      const isFirstTurn = messages.filter((m) => m.role !== "system").length <= 1;
+      if (isFirstTurn && factsAllowed.page1.keyword) {
+        groundedSystemContent += `\n\nIf this is the first message in the conversation, frame your headline as a summary based on the user's last search results for "${factsAllowed.page1.keyword}". No new API calls.`;
+      }
+      const groundedMessages: { role: "system" | "user" | "assistant"; content: string }[] = [
+        { role: "system", content: groundedSystemContent },
+        ...messages.filter((m) => m.role !== "system"),
+      ];
+      const factsSerialized = JSON.stringify(factsAllowed);
+      let parsed: unknown = null;
+      let validated: { valid: boolean; parsed?: CopilotStructuredResponse; error?: string } = { valid: false };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const openaiJsonRes = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${openaiApiKey}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: attempt === 0
+              ? groundedMessages
+              : [
+                  ...groundedMessages.slice(0, -1),
+                  {
+                    role: "user" as const,
+                    content: groundedMessages[groundedMessages.length - 1].content + "\n\nYou included numbers not present in FACTS_ALLOWED. Remove them or replace with 'Not available.' Output ONLY valid JSON.",
+                  },
+                ],
+            temperature: 0.3,
+            max_tokens: 600,
+            response_format: { type: "json_object" as const },
+          }),
+        });
+        if (!openaiJsonRes.ok) {
+          const errText = await openaiJsonRes.text();
+          return NextResponse.json(
+            { ok: false, error: `OpenAI API error: ${openaiJsonRes.statusText}`, details: errText },
+            { status: 500, headers: res.headers }
+          );
+        }
+        const jsonBody = await openaiJsonRes.json();
+        const rawContent = jsonBody.choices?.[0]?.message?.content;
+        if (typeof rawContent !== "string") {
+          return NextResponse.json(
+            { ok: false, error: "OpenAI returned no content" },
+            { status: 500, headers: res.headers }
+          );
+        }
+        try {
+          parsed = JSON.parse(rawContent);
+        } catch {
+          return NextResponse.json(
+            { ok: false, error: "OpenAI response was not valid JSON" },
+            { status: 500, headers: res.headers }
+          );
+        }
+        validated = validateCopilotJson(parsed, factsSerialized);
+        if (validated.valid) break;
+      }
+      if (!validated.valid || !validated.parsed) {
+        return NextResponse.json(
+          { ok: false, error: validated.error ?? "Copilot response validation failed" },
+          { status: 500, headers: res.headers }
+        );
+      }
+      const structuredPayload = validated.parsed;
+      const groundedStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ structured: structuredPayload })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new NextResponse(groundedStream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          ...Object.fromEntries(res.headers.entries()),
+        },
+      });
+    }
+
     const openaiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",
       {

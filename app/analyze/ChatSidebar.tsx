@@ -39,6 +39,16 @@ export interface Citation {
   source: "page1_estimate" | "rainforest_product";
 }
 
+/** Grounded Copilot strict JSON response (rendered as headline, observations, constraints, follow-up) */
+export interface CopilotStructuredResponse {
+  headline: string;
+  observations: Array<{ claim: string; evidence: string[] }>;
+  constraints: string[];
+  followup_question: string;
+  confidence: "high" | "medium" | "low";
+  used_sources: { page1: boolean; rainforest: boolean; spapi: boolean };
+}
+
 type SellerStage = "new" | "existing" | "scaling" | null;
 
 export interface ChatMessage {
@@ -48,6 +58,8 @@ export interface ChatMessage {
   citations?: Citation[];
   /** Inline UI cards (e.g. fees_profit) */
   cards?: Array<{ type: string; payload: unknown }>;
+  /** Grounded JSON response (headline, observations, constraints, sources) */
+  structured?: CopilotStructuredResponse;
   /** ISO timestamp for date separators (e.g. "Today", "Jan 31, 2026") */
   createdAt?: string;
 }
@@ -660,6 +672,7 @@ export default function ChatSidebar({
       let accumulatedContent = "";
       let citationsForFinal: Citation[] = [];
       let cardsForFinal: Array<{ type: string; payload: unknown }> = [];
+      let structuredForFinal: CopilotStructuredResponse | undefined;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -743,6 +756,24 @@ export default function ChatSidebar({
                 else if (json.cardType === "fees_profit") cardsForFinal.push({ type: "fees_profit", payload: json.payload });
                 else if (json.cardType === "connect_amazon") cardsForFinal.push({ type: "connect_amazon", payload: json.payload });
               }
+              // Grounded Copilot: strict JSON response (headline, observations, constraints, sources)
+              if (json.structured && typeof json.structured === "object" && json.structured !== null) {
+                const s = json.structured as Record<string, unknown>;
+                if (typeof s.headline === "string" && Array.isArray(s.observations) && Array.isArray(s.constraints) && typeof s.followup_question === "string" && s.used_sources && typeof s.used_sources === "object") {
+                  structuredForFinal = {
+                    headline: s.headline,
+                    observations: Array.isArray(s.observations) ? (s.observations as Array<{ claim: string; evidence: string[] }>) : [],
+                    constraints: Array.isArray(s.constraints) ? (s.constraints as string[]) : [],
+                    followup_question: String(s.followup_question),
+                    confidence: (s.confidence === "high" || s.confidence === "medium" || s.confidence === "low") ? s.confidence : "medium",
+                    used_sources: {
+                      page1: Boolean((s.used_sources as Record<string, unknown>)?.page1),
+                      rainforest: Boolean((s.used_sources as Record<string, unknown>)?.rainforest),
+                      spapi: Boolean((s.used_sources as Record<string, unknown>)?.spapi),
+                    },
+                  };
+                }
+              }
             } catch {
               // Skip malformed chunks
             }
@@ -750,13 +781,17 @@ export default function ChatSidebar({
         }
       }
 
-      // Add complete assistant message with citations and cards
-      if (accumulatedContent.trim() || cardsForFinal.length > 0) {
+      // Add complete assistant message with citations, cards, and/or structured
+      if (accumulatedContent.trim() || cardsForFinal.length > 0 || structuredForFinal) {
+        const fallbackContent = structuredForFinal
+          ? `${structuredForFinal.headline}\n\n${structuredForFinal.observations.map((o) => `• ${o.claim}`).join("\n")}\n\nQuestion: ${structuredForFinal.followup_question}`
+          : accumulatedContent.trim() || " ";
         const assistantMessage: ChatMessage = {
           role: "assistant",
-          content: accumulatedContent.trim() || " ",
+          content: fallbackContent,
           citations: citationsForFinal.length > 0 ? citationsForFinal : undefined,
           cards: cardsForFinal.length > 0 ? cardsForFinal : undefined,
+          structured: structuredForFinal,
           createdAt: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, assistantMessage]);

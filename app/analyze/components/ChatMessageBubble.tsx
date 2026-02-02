@@ -4,7 +4,7 @@ import { Copy, Check } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ComponentProps } from "react";
-import type { ChatMessage } from "../ChatSidebar";
+import type { ChatMessage, CopilotStructuredResponse } from "../ChatSidebar";
 import FeesProfitChatCard, {
   type FeesResultCardPayload,
 } from "./FeesProfitChatCard";
@@ -133,6 +133,57 @@ export function AssistantMarkdownContent({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// STRUCTURED COPILOT (grounded JSON: headline, observations, constraints, sources)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function sourceTagLabel(used: CopilotStructuredResponse["used_sources"]): string {
+  const parts: string[] = [];
+  if (used.page1) parts.push("Page-1");
+  if (used.rainforest) parts.push("Rainforest");
+  if (used.spapi) parts.push("SP-API");
+  return parts.length > 0 ? `Sources: ${parts.join(" + ")}` : "Sources: —";
+}
+
+function StructuredCopilotContent({ structured }: { structured: CopilotStructuredResponse }) {
+  return (
+    <div className="text-sm leading-6 text-gray-900 break-words space-y-2">
+      <p className="font-semibold text-gray-900">{structured.headline}</p>
+      {structured.observations.length > 0 && (
+        <ul className="pl-5 my-2 space-y-1.5 list-disc">
+          {structured.observations.map((obs, i) => (
+            <li key={i}>
+              <span>{obs.claim}</span>
+              {obs.evidence && obs.evidence.length > 0 && (
+                <div className="text-xs text-gray-500 mt-0.5 pl-1">
+                  Evidence: {obs.evidence.join(" ")}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {structured.constraints.length > 0 && (
+        <>
+          <p className="font-medium text-gray-800 mt-2">Constraints</p>
+          <ul className="pl-5 my-1 space-y-0.5 list-disc text-gray-700">
+            {structured.constraints.map((c, i) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className="mt-2 text-gray-800">
+        <span className="font-medium">Question: </span>
+        {structured.followup_question}
+      </p>
+      <p className="text-[10px] text-gray-400 mt-1.5">
+        {sourceTagLabel(structured.used_sources)}
+      </p>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -194,8 +245,10 @@ export default function ChatMessageBubble({
           {isUser ? "You" : "Sellerev"}
         </div>
 
-        {/* Content: Markdown for assistant, plain for user */}
-        {content.trim() && (
+        {/* Content: Structured (grounded JSON) or Markdown for assistant, plain for user */}
+        {message.role === "assistant" && message.structured ? (
+          <StructuredCopilotContent structured={message.structured} />
+        ) : content.trim() ? (
           <div className="text-sm leading-6 text-gray-900 break-words">
             {message.role === "assistant" ? (
               <AssistantMarkdownContent content={content} />
@@ -203,7 +256,7 @@ export default function ChatMessageBubble({
               <div className="whitespace-pre-wrap">{content}</div>
             )}
           </div>
-        )}
+        ) : null}
 
         {/* ASIN Citation Chips */}
         {message.role === "assistant" && message.citations && message.citations.length > 0 && (
