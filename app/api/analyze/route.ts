@@ -4238,6 +4238,15 @@ export async function POST(req: NextRequest) {
               controller.enqueue(encoder.encode(JSON.stringify({ type: e, ...d }) + "\n"));
             try {
               await runRestOfRoute();
+            } catch (streamErr) {
+              const msg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+              try {
+                controller.enqueue(
+                  encoder.encode(JSON.stringify({ type: "error", error: msg }) + "\n")
+                );
+              } catch (_) {
+                // controller may be closed
+              }
             } finally {
               controller.close();
             }

@@ -1009,7 +1009,9 @@ export default function AnalyzeForm({
         // ignore trailing partial line
       }
     }
-    if (!finalData) throw new Error("Analyze stream did not receive complete payload");
+    if (!finalData) {
+      throw new Error("Request failed or was interrupted. Please try again.");
+    }
     return finalData;
   };
 
@@ -1601,31 +1603,68 @@ export default function AnalyzeForm({
               hasResults={!!(analysis && ((analysis.page_one_listings?.length ?? 0) > 0 || (analysis.products?.length ?? 0) > 0))}
             />
 
-            {/* Global Error */}
-            {error && (
-              <div className="mt-4">
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                  <div className="flex items-start gap-2">
-                    <svg className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <div className="flex-1">
-                      <p className="text-red-700 text-sm font-medium">Analysis Error</p>
-                      <p className="text-red-600 text-sm mt-1">{error}</p>
+            {/* Global Error – Retry popup */}
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  key="error-popup"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="error-popup-title"
+                  aria-describedby="error-popup-message"
+                >
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.96 }}
+                    transition={{ duration: 0.2 }}
+                    className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100">
+                        <svg className="h-5 w-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h2 id="error-popup-title" className="text-base font-semibold text-gray-900">
+                          Analysis failed
+                        </h2>
+                        <p id="error-popup-message" className="mt-1 text-sm text-gray-600">
+                          {error}
+                        </p>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => setError(null)}
-                      className="text-red-400 hover:text-red-600 flex-shrink-0"
-                      aria-label="Dismiss error"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+                    <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setError(null)}
+                        className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+                      >
+                        Dismiss
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setError(null);
+                          analyze({ isRetry: true });
+                        }}
+                        disabled={loading}
+                        className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-gray-800 disabled:opacity-50"
+                      >
+                        {loading ? "Retrying…" : "Retry"}
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Read-only banner */}
             {readOnly && (

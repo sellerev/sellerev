@@ -2287,13 +2287,22 @@ export async function fetchKeywordMarketSnapshot(
       max_page: 1,
     });
     
-    // Fetch Amazon search results via Rainforest API
-    const response = await fetch(apiUrl, {
+    // Fetch Amazon search results via Rainforest API (retry once on 500 — Rainforest often succeeds on second try)
+    let response = await fetch(apiUrl, {
       method: "GET",
       headers: {
         "Accept": "application/json",
       },
     });
+
+    if (!response.ok && response.status === 500) {
+      console.warn("Rainforest API 500, retrying once in 1.5s", { keyword });
+      await new Promise((r) => setTimeout(r, 1500));
+      response = await fetch(apiUrl, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
