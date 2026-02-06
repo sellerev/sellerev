@@ -96,6 +96,8 @@ export async function GET(req: NextRequest) {
     const assumptions_and_limits = Array.isArray(response.assumptions_and_limits) ? response.assumptions_and_limits : [];
     const executive_summary = typeof response.executive_summary === "string" ? response.executive_summary : "Market data loaded.";
 
+    const pageTwoListings = Array.isArray(response.page_two_listings) ? response.page_two_listings : [];
+
     const payload = {
       analysis_run: {
         id: analysisRun.id,
@@ -108,6 +110,7 @@ export async function GET(req: NextRequest) {
       snapshot,
       products,
       page_one_listings: pageOneListings,
+      page_two_listings: pageTwoListings,
       computed_metrics,
       page1_market_summary: snapshot,
       market_structure: response.market_structure ?? null,

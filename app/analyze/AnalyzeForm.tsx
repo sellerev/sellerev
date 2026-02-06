@@ -139,6 +139,19 @@ interface AnalysisResponse {
     page1_product_count: number;
   };
   
+  // Page 2 results (display only; same search, page 2) when Rainforest max_page=2 was used
+  page_two_listings?: Array<{
+    asin: string;
+    title: string | null;
+    image_url: string | null;
+    price: number | null;
+    rating: number | null;
+    review_count: number | null;
+    position: number;
+    page: number;
+    is_sponsored?: boolean;
+  }>;
+
   // Products array (same as page_one_listings, kept for backward compatibility)
   products?: Array<{
     rank: number | null; // null for sponsored listings
@@ -645,6 +658,7 @@ export default function AnalyzeForm({
 
   // View: Products (default) | Brands (table + expand)
   const [viewMode, setViewMode] = useState<"products" | "brands">("products");
+  const [showPageTwoResults, setShowPageTwoResults] = useState(false);
   type BrandSortOption = "revenue-desc" | "revenue-asc" | "units-desc" | "units-asc" | "products-desc" | "products-asc" | "brand-az" | "market-share-desc" | "market-share-asc";
   const [brandSortBy, setBrandSortBy] = useState<BrandSortOption>("revenue-desc");
   const [expandedBrandRow, setExpandedBrandRow] = useState<string | null>(null);
@@ -806,6 +820,7 @@ export default function AnalyzeForm({
     setSelectedFulfillment(new Set());
     setSponsoredFilter(null);
     setBrandDropdownOpen(false);
+    setShowPageTwoResults(false);
     if (isFromHistory) {
       setAnalysisUIState("complete");
     }
@@ -859,11 +874,13 @@ export default function AnalyzeForm({
           market_snapshot: data.market_snapshot ?? data.snapshot ?? undefined,
           page_one_listings: list.length > 0 ? (list as AnalysisResponse["page_one_listings"]) : undefined,
           products: list.length > 0 ? (list as AnalysisResponse["products"]) : undefined,
+          page_two_listings: Array.isArray(data.page_two_listings) && data.page_two_listings.length > 0 ? data.page_two_listings : undefined,
           aggregates_derived_from_page_one: data.aggregates_derived_from_page_one ?? data.computed_metrics ?? undefined,
         };
 
         if (cancelled) return;
         setClientRunId(null); // History view — no longer "pending" client run
+        setShowPageTwoResults(false);
         setAnalysis(normalizeAnalysis(payloadAsAnalysis));
         setAnalysisRunIdForChat(runId);
         setChatAvailable(true); // history runs are from DB
@@ -1263,6 +1280,7 @@ export default function AnalyzeForm({
         // Extract canonical Page-1 products from data (may be at top level or in decision)
         page_one_listings: pageOneListings.length > 0 ? pageOneListings : (data.decision?.page_one_listings ?? []),
         products: pageOneListings.length > 0 ? pageOneListings : (data.decision?.products ?? []),
+        page_two_listings: Array.isArray((data as any).page_two_listings) ? (data as any).page_two_listings : undefined,
         aggregates_derived_from_page_one: aggregates || data.decision?.aggregates_derived_from_page_one,
       };
       
@@ -1344,6 +1362,7 @@ export default function AnalyzeForm({
         // Backend response is the source of truth
         return newAnalysis;
       });
+      setShowPageTwoResults(false);
       setError(null);
       progress.mark("finalizing");
       setRenderReady(true);
@@ -2030,6 +2049,9 @@ export default function AnalyzeForm({
                     }
                     // CRITICAL: Do NOT assign empty array if pageOneListings already has data (prevent data loss on re-render)
                     // If none of the above match, pageOneListings remains empty [] (intentional)
+
+                    // Page 2 results (display only; from same search, max_page=2)
+                    const pageTwoListings = Array.isArray((analysis as any)?.page_two_listings) ? (analysis as any).page_two_listings : [];
                     
                     // CRITICAL: NO BLOCKING GUARDS - always render results when they exist
                     // Animation does NOT block rendering - it's shown as overlay if needed
@@ -2805,6 +2827,87 @@ export default function AnalyzeForm({
                           })}
                         </AnimatePresence>
                       </div>
+                      {/* Page two results: button and grid (same look as page 1) */}
+                      {pageTwoListings.length > 0 && viewMode === "products" && (
+                        <div className="mt-6">
+                          <button
+                            type="button"
+                            onClick={() => setShowPageTwoResults((v) => !v)}
+                            className="flex items-center justify-center gap-2 w-full py-3 px-4 rounded-xl border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors text-sm font-medium"
+                          >
+                            Page two results
+                            <ChevronDown
+                              className={`w-4 h-4 shrink-0 transition-transform ${showPageTwoResults ? "rotate-180" : ""}`}
+                              aria-hidden
+                            />
+                          </button>
+                          {showPageTwoResults && (
+                            <div className="grid gap-3 mt-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
+                              <AnimatePresence mode="popLayout">
+                                {pageTwoListings.map((listing: any, idx: number) => {
+                                  const asin = listing.asin || null;
+                                  const stableKey = asin ? `page2-${asin}` : `page2-${idx}`;
+                                  const isSelected = asin !== null && selectedAsins.includes(asin);
+                                  const imageUrl = typeof listing.image_url === "string" && listing.image_url.trim() ? listing.image_url.trim() : null;
+                                  const rank = listing.position ?? idx + 1;
+                                  const price = listing.price ?? 0;
+                                  const rating = listing.rating ?? 0;
+                                  const reviews = listing.review_count ?? 0;
+                                  const isSponsored = listing.is_sponsored === true;
+                                  return (
+                                    <motion.div
+                                      key={stableKey}
+                                      initial={{ opacity: 0, y: 8 }}
+                                      animate={{ opacity: 1, y: 0 }}
+                                      exit={{ opacity: 0, y: -8 }}
+                                      transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1], delay: idx * 0.04 }}
+                                      layout
+                                    >
+                                      <ProductCard
+                                        rank={rank}
+                                        title={listing.title || null}
+                                        price={price}
+                                        rating={rating}
+                                        reviews={reviews}
+                                        monthlyRevenue={null}
+                                        monthlyUnits={null}
+                                        bsrSource={null}
+                                        bsr={null}
+                                        bsrContext={null}
+                                        subcategoryRank={null}
+                                        subcategoryBsr={null}
+                                        subcategoryName={null}
+                                        mainCategoryBsr={null}
+                                        mainCategoryName={null}
+                                        rootRank={null}
+                                        rootDisplayGroup={null}
+                                        bsrRoot={null}
+                                        bsrRootCategory={null}
+                                        fulfillment="FBM"
+                                        isSponsored={isSponsored}
+                                        appearsSponsored={isSponsored}
+                                        sponsoredPositions={[]}
+                                        imageUrl={imageUrl}
+                                        asin={asin}
+                                        isSelected={isSelected}
+                                        primeEligible={false}
+                                        fulfillment_status="NON_PRIME"
+                                        listing={listing}
+                                        onSelect={(e) => {
+                                          if (!asin) return;
+                                          const next = isSelected ? selectedAsins.filter((a) => a !== asin) : [...selectedAsins, asin];
+                                          updateSelectedAsins(next);
+                                          if ("currentTarget" in e) (e.currentTarget as HTMLElement).blur?.();
+                                        }}
+                                      />
+                                    </motion.div>
+                                  );
+                                })}
+                              </AnimatePresence>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       </ListingsErrorBoundary>
                     )}
                   </div>

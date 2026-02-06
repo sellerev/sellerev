@@ -270,9 +270,24 @@ export interface KeywordMarketSnapshot {
   } | null;
 }
 
+/** Minimal listing shape for Page 2 (display only; no SP-API/BSR enrichment). */
+export interface PageTwoListing {
+  asin: string;
+  title: string | null;
+  image_url: string | null;
+  price: number | null;
+  rating: number | null;
+  review_count: number | null;
+  position: number;
+  page: number;
+  is_sponsored?: boolean;
+}
+
 export interface KeywordMarketData {
   snapshot: KeywordMarketSnapshot;
   listings: ParsedListing[];
+  /** Page 2 results when requested with max_page=2 (display only; analyze flow uses only page 1). */
+  page_two_listings?: PageTwoListing[];
 }
 
 /**
@@ -2225,7 +2240,8 @@ export async function fetchKeywordMarketSnapshot(
 
   try {
     // ═══════════════════════════════════════════════════════════════════════════
-    // PAGE-1 ONLY: Hard-coded page=1 parameter ensures Page-1 results only
+    // PAGE-1 + PAGE-2: max_page=2 fetches pages 1 and 2 (2 credits). Analyze flow
+    // uses only page 1; page 2 is attached as page_two_listings for display.
     // ═══════════════════════════════════════════════════════════════════════════
     
     // 🚨 RAINFOREST API HARD CAP: Check before search call (MAX = 7)
@@ -2248,14 +2264,15 @@ export async function fetchKeywordMarketSnapshot(
     // ═══════════════════════════════════════════════════════════════════════════
     // PART 1: UPDATE RAINFOREST SEARCH REQUEST - INCLUDE ADS
     // ═══════════════════════════════════════════════════════════════════════════
-    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&page=1&include_ads=true&include_sponsored=true`;
-    console.log("RAINFOREST_API_REQUEST", { 
-      keyword, 
+    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&max_page=2&include_ads=true&include_sponsored=true`;
+    console.log("RAINFOREST_API_REQUEST", {
+      keyword,
       url: apiUrl.replace(rainforestApiKey, "***"),
       api_call_count: apiCallCounter?.count || 0,
       api_calls_remaining: apiCallCounter ? apiCallCounter.max - apiCallCounter.count : "unlimited",
       include_ads: true,
       include_sponsored: true,
+      max_page: 2,
     });
     
     // Fetch Amazon search results via Rainforest API
@@ -2374,11 +2391,20 @@ export async function fetchKeywordMarketSnapshot(
       return null;
     }
 
+    // Split by page when using max_page=2 (Rainforest adds item.page = 1 or 2)
+    const allSearchResults: any[] = Array.isArray(raw.search_results) ? raw.search_results : (Array.isArray(raw.results) ? raw.results : []);
+    const page1Results = allSearchResults.filter((r: any) => r.page !== 2);
+    const page2Results = allSearchResults.filter((r: any) => r.page === 2);
+    const rawForPage1 = { ...raw, search_results: page1Results };
+    if (page2Results.length > 0) {
+      console.log("RAINFOREST_PAGE2_RECEIVED", { keyword, page1_count: page1Results.length, page2_count: page2Results.length });
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
-    // PHASE 1 - COLLECT: Parse Raw Market Truth
+    // PHASE 1 - COLLECT: Parse Raw Market Truth (Page 1 only for analyze flow)
     // ═══════════════════════════════════════════════════════════════════════════
     // Use parseRainforestSearchResults() to extract raw data without judgment
-    const rawSnapshot = parseRainforestSearchResults(raw, keyword, marketplace);
+    const rawSnapshot = parseRainforestSearchResults(rawForPage1, keyword, marketplace);
     
     // Track for error classification
     extractedAsinCount = rawSnapshot.listings.length;
@@ -4827,20 +4853,40 @@ export async function fetchKeywordMarketSnapshot(
       pricing_used: pricingApiUsed,
     });
     
+    // Page 2 (display only): parse and attach when we requested max_page=2
+    let pageTwoListings: PageTwoListing[] | undefined;
+    if (page2Results.length > 0) {
+      const rawForPage2 = { ...raw, search_results: page2Results };
+      const page2Snapshot = parseRainforestSearchResults(rawForPage2, keyword, marketplace);
+      pageTwoListings = page2Snapshot.listings.map((r, idx) => ({
+        asin: r.asin,
+        title: r.title || null,
+        image_url: r.image || null,
+        price: r.price,
+        rating: r.rating,
+        review_count: r.reviews,
+        position: idx + 1,
+        page: 2,
+        is_sponsored: r.isSponsored,
+      }));
+    }
+
     // TASK 3: Always populate market_snapshot.listings[] if listings exist
     console.log("RETURNING_KEYWORD_MARKET_DATA", {
       keyword,
       total_listings: listingsWithEstimates.length,
       snapshot_total_page1_listings: snapshotWithEstimates.total_page1_listings,
+      page_two_listings_count: pageTwoListings?.length ?? 0,
       has_avg_price: snapshotWithEstimates.avg_price !== null,
       has_avg_reviews: snapshotWithEstimates.avg_reviews > 0,
       has_avg_rating: snapshotWithEstimates.avg_rating !== null,
       has_revenue_estimate: !!(snapshotWithEstimates.est_total_monthly_revenue_min || snapshotWithEstimates.est_total_monthly_revenue_max),
     });
-    
+
     return {
       snapshot: snapshotWithEstimates,
       listings: listingsWithEstimates, // TASK 3: Always populated if listings exist
+      ...(pageTwoListings && pageTwoListings.length > 0 && { page_two_listings: pageTwoListings }),
     };
   } catch (error) {
     // TASK 2: Classify error - don't treat processing errors as "zero ASINs"

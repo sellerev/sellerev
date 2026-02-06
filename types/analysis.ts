@@ -86,6 +86,19 @@ export interface AnalysisResponse {
     [key: string]: unknown; // Allow additional fields
   }>;
   
+  // Page 2 results (display only; same search, page 2) when Rainforest max_page=2 was used
+  page_two_listings?: Array<{
+    asin: string;
+    title: string | null;
+    image_url: string | null;
+    price: number | null;
+    rating: number | null;
+    review_count: number | null;
+    position: number;
+    page: number;
+    is_sponsored?: boolean;
+  }>;
+
   // Products array (same as page_one_listings, kept for backward compatibility)
   products?: Array<{
     rank: number | null; // null for sponsored listings (legacy field, equals organic_rank for organic, null for sponsored)

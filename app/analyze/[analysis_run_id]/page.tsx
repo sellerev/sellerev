@@ -148,6 +148,10 @@ export default async function AnalysisDetailPage({ params }: AnalysisDetailPageP
     page_one_listings:
       pageOneListings.length > 0 ? (pageOneListings as AnalysisResponse["page_one_listings"]) : undefined,
     products: products.length > 0 ? (products as AnalysisResponse["products"]) : undefined,
+    page_two_listings:
+      Array.isArray(response.page_two_listings) && response.page_two_listings.length > 0
+        ? (response.page_two_listings as AnalysisResponse["page_two_listings"])
+        : undefined,
     aggregates_derived_from_page_one: aggregates,
   };
 

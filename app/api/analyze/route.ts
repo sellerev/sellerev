@@ -3301,6 +3301,9 @@ export async function POST(req: NextRequest) {
       // Persist market_snapshot for history view (same shape UI expects)
       market_snapshot: marketSnapshot && typeof marketSnapshot === "object" && !Array.isArray(marketSnapshot)
         ? { ...marketSnapshot } : null,
+      ...(keywordMarketData?.page_two_listings && keywordMarketData.page_two_listings.length > 0 && {
+        page_two_listings: keywordMarketData.page_two_listings,
+      }),
       ...(contractResponse ? contractResponse : {}),
     };
 
@@ -4003,6 +4006,10 @@ export async function POST(req: NextRequest) {
       page_one_listings: sanitizedListings,
       products: sanitizedListings,
       listings: sanitizedListings,
+      // Page 2 results (display only) when Rainforest max_page=2 was used; analyze flow uses only page 1
+      ...(keywordMarketData?.page_two_listings && keywordMarketData.page_two_listings.length > 0 && {
+        page_two_listings: keywordMarketData.page_two_listings,
+      }),
       aggregates_derived_from_page_one: contractResponse?.aggregates_derived_from_page_one || null,
       // Enrichment status indicating pending background tasks
       enrichment_status: enrichmentStatus,
