@@ -2240,8 +2240,7 @@ export async function fetchKeywordMarketSnapshot(
 
   try {
     // ═══════════════════════════════════════════════════════════════════════════
-    // PAGE-1 + PAGE-2: max_page=2 fetches pages 1 and 2 (2 credits). Analyze flow
-    // uses only page 1; page 2 is attached as page_two_listings for display.
+    // PAGE-1 ONLY: max_page=1 (1 credit). Page 2 not needed for current flow.
     // ═══════════════════════════════════════════════════════════════════════════
     
     // 🚨 RAINFOREST API HARD CAP: Check before search call (MAX = 7)
@@ -2264,7 +2263,7 @@ export async function fetchKeywordMarketSnapshot(
     // ═══════════════════════════════════════════════════════════════════════════
     // PART 1: UPDATE RAINFOREST SEARCH REQUEST - INCLUDE ADS
     // ═══════════════════════════════════════════════════════════════════════════
-    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&max_page=2&include_ads=true&include_sponsored=true`;
+    const apiUrl = `https://api.rainforestapi.com/request?api_key=${rainforestApiKey}&type=search&amazon_domain=amazon.com&search_term=${encodeURIComponent(keyword)}&max_page=1&include_ads=true&include_sponsored=true`;
     console.log("RAINFOREST_API_REQUEST", {
       keyword,
       url: apiUrl.replace(rainforestApiKey, "***"),
@@ -2272,7 +2271,7 @@ export async function fetchKeywordMarketSnapshot(
       api_calls_remaining: apiCallCounter ? apiCallCounter.max - apiCallCounter.count : "unlimited",
       include_ads: true,
       include_sponsored: true,
-      max_page: 2,
+      max_page: 1,
     });
     
     // Fetch Amazon search results via Rainforest API
