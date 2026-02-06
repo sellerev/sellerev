@@ -54,8 +54,8 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(new URL("/auth", req.url));
   }
 
-  // Public pages: allow access without auth
-  if (isPublicPage) {
+  // Public pages: allow access without auth when NOT logged in
+  if (!user && isPublicPage) {
     return res;
   }
 
@@ -73,10 +73,16 @@ export async function middleware(req: NextRequest) {
         return NextResponse.redirect(new URL("/onboarding", req.url));
       }
       if (!profile && !isOnboarding && !isAuth) {
+        // No profile yet → always send to onboarding (even from "/")
         return NextResponse.redirect(new URL("/onboarding", req.url));
       }
-      if (profile && (isAuth || isOnboarding)) {
-        return NextResponse.redirect(new URL("/analyze", req.url));
+      if (profile) {
+        // Has profile:
+        // - Block auth/onboarding
+        // - Visiting root ("/") should always land in the app
+        if (isAuth || isOnboarding || path === "/") {
+          return NextResponse.redirect(new URL("/analyze", req.url));
+        }
       }
       return res;
     }
@@ -84,10 +90,12 @@ export async function middleware(req: NextRequest) {
     // OAuth enabled: original flow (connect-amazon when no profile or missing sourcing_model)
     if (!profile || !profile.sourcing_model) {
       if (!isConnectAmazon && !isOnboarding && !isAuth) {
+        // No profile/sourcing_model yet → send to connect-amazon (even from "/")
         return NextResponse.redirect(new URL("/connect-amazon", req.url));
       }
     } else {
-      if (profile.sourcing_model && (isAuth || isConnectAmazon || isOnboarding)) {
+      // Has sourcing_model: treat "/" as an app entrypoint just like /auth/onboarding/connect-amazon
+      if (profile.sourcing_model && (isAuth || isConnectAmazon || isOnboarding || path === "/")) {
         return NextResponse.redirect(new URL("/analyze", req.url));
       }
     }
