@@ -2,38 +2,39 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Home } from "lucide-react";
 import ProfileDropdown from "./ProfileDropdown";
 
 export default function Navigation() {
   const pathname = usePathname();
+  const isAnalyze = pathname?.startsWith("/analyze");
 
   return (
     <nav className="border-b border-gray-200 bg-white flex-shrink-0 z-50 shadow-sm h-16">
       <div className="w-full h-full px-6">
         <div className="flex items-center justify-between h-full">
-          {/* Left-aligned: Brand + Navigation */}
-          <div className="flex items-center gap-8">
+          <div className="flex items-center gap-3">
             <Link
-              href="/analyze"
+              href="/dashboard"
+              className="flex items-center justify-center w-9 h-9 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+              aria-label="Home"
+              title="Home"
+            >
+              <Home className="w-5 h-5" />
+            </Link>
+            <Link
+              href="/dashboard"
               className="text-lg font-bold text-gray-900 hover:text-gray-700 transition-colors"
             >
               Sellerev
             </Link>
-            <div className="flex items-center gap-6">
-              <Link
-                href="/analyze"
-                className={`text-sm font-medium transition-colors ${
-                  pathname?.startsWith("/analyze")
-                    ? "text-primary font-semibold border-b-2 border-primary pb-1 -mb-1"
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
+            {isAnalyze && (
+              <span className="text-sm font-medium text-primary border-b-2 border-primary pb-1 -mb-1 ml-2">
                 Analyze
-              </Link>
-            </div>
+              </span>
+            )}
           </div>
-          
-          {/* Right-aligned: Profile Dropdown */}
+
           <div className="flex items-center">
             <ProfileDropdown />
           </div>

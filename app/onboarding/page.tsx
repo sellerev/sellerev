@@ -95,7 +95,7 @@ export default function OnboardingPage() {
           setLoading(false);
           return;
         }
-        router.replace("/analyze");
+        router.replace("/dashboard");
         return;
       }
 
@@ -129,7 +129,7 @@ export default function OnboardingPage() {
         setLoading(false);
         return;
       }
-      router.replace("/analyze");
+      router.replace("/dashboard");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
       setLoading(false);

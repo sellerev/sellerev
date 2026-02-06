@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
+import { Plus } from "lucide-react";
 import SelectedAsinsBar, { type AsinDetail } from "./SelectedAsinsBar";
 
 const TEXTAREA_MIN_HEIGHT = 44;
@@ -27,6 +28,8 @@ export interface ChatComposerProps {
   asinDetails?: Record<string, AsinDetail>;
   /** When > 0, show hint "Some questions work best with 1–2 selected" when count exceeds this (e.g. 2) */
   maxSelectableHint?: number;
+  /** "dark" = Lovable-style dark input bar (charcoal, plus icon, Analyze label, circular send) */
+  variant?: "light" | "dark";
 }
 
 export default function ChatComposer({
@@ -42,7 +45,9 @@ export default function ChatComposer({
   onSelectedAsinsChange,
   asinDetails = {},
   maxSelectableHint = 2,
+  variant = "light",
 }: ChatComposerProps) {
+  const isDark = variant === "dark";
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = (externalRef ?? internalRef) as React.RefObject<HTMLTextAreaElement | null>;
 
@@ -80,8 +85,7 @@ export default function ChatComposer({
   };
 
   return (
-    <div className="w-full min-w-0 shrink-0 flex flex-col bg-white border-t border-neutral-200">
-      {/* Selection bar: only when there are selected ASINs. Adds space above textarea, doesn't squeeze it. */}
+    <div className={`w-full min-w-0 shrink-0 flex flex-col ${isDark ? "" : "bg-white border-t border-neutral-200"}`}>
       {selectedAsins.length > 0 && (
         <SelectedAsinsBar
           selectedAsins={selectedAsins}
@@ -93,11 +97,25 @@ export default function ChatComposer({
         />
       )}
 
-      {/* Input row: textarea + send. No overflow-hidden so textarea can scroll internally. */}
-      <div className="flex flex-wrap gap-2 items-end w-full min-w-0 px-4 py-3 bg-white border border-neutral-300 rounded-xl shadow-sm hover:border-neutral-400 focus-within:ring-2 focus-within:ring-primary focus-within:border-transparent transition-all box-border">
+      <div
+        className={`flex flex-wrap gap-2 items-end w-full min-w-0 rounded-2xl transition-all box-border ${
+          isDark
+            ? "px-4 py-3 bg-gray-900/95 border border-gray-700/80 focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/30"
+            : "px-4 py-3 bg-white border border-neutral-300 rounded-xl shadow-sm hover:border-neutral-400 focus-within:ring-2 focus-within:ring-primary focus-within:border-transparent"
+        }`}
+      >
+        {isDark && (
+          <button
+            type="button"
+            className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-700/50 transition-colors"
+            aria-label="Add"
+          >
+            <Plus className="w-5 h-5" />
+          </button>
+        )}
         <textarea
           ref={textareaRef}
-          className="flex-1 min-w-[120px] bg-transparent border-0 rounded-lg px-2 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none placeholder:text-neutral-400"
+          className={`flex-1 min-w-[120px] bg-transparent border-0 rounded-lg px-2 py-2 text-sm focus:outline-none disabled:cursor-not-allowed resize-none ${isDark ? "text-white placeholder-gray-500" : "text-gray-900 placeholder:text-neutral-400"}`}
           style={{
             minHeight: TEXTAREA_MIN_HEIGHT,
             maxHeight: TEXTAREA_MAX_HEIGHT,
@@ -112,11 +130,18 @@ export default function ChatComposer({
           rows={1}
           aria-label="Message"
         />
+        {isDark && (
+          <span className="flex-shrink-0 text-xs text-gray-500 font-medium">Analyze</span>
+        )}
         <button
           type="button"
           onClick={onSend}
           disabled={disabled || sendDisabled}
-          className="w-9 h-9 flex-shrink-0 bg-gradient-to-r from-primary to-primary-glow text-primary-foreground rounded-lg flex items-center justify-center hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className={`flex-shrink-0 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
+            isDark
+              ? "w-10 h-10 rounded-full bg-gray-700 hover:bg-primary text-white shadow-lg"
+              : "w-9 h-9 rounded-lg bg-gradient-to-r from-primary to-primary-glow text-primary-foreground hover:opacity-90"
+          }`}
           aria-label="Send message"
         >
           {loading ? (

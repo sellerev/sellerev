@@ -5,7 +5,7 @@ import type { AnalysisResponse, RiskLevel } from "@/types/analysis";
 import AnalyzeForm from "./AnalyzeForm";
 
 interface AnalyzePageProps {
-  searchParams: Promise<{ run?: string }>;
+  searchParams: Promise<{ run?: string; keyword?: string }>;
 }
 
 /**
@@ -191,10 +191,13 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
     }
   }
 
+  const initialKeyword = typeof params.keyword === "string" ? params.keyword.trim() : undefined;
+
   return (
     <AnalyzeForm
       initialAnalysis={initialAnalysis}
       initialMessages={initialMessages}
+      initialKeyword={initialKeyword}
     />
   );
 }

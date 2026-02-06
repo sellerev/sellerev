@@ -489,6 +489,8 @@ interface AnalyzeFormProps {
   initialAnalysis?: AnalysisResponse | null;
   // Initial chat messages (when loading from history)
   initialMessages?: ChatMessage[];
+  // When set (e.g. from /dashboard → /analyze?keyword=...), pre-fill and run analyze on mount
+  initialKeyword?: string;
   // Read-only mode: disables input bar and analyze button
   // Used when viewing historical analyses
   readOnly?: boolean;
@@ -534,6 +536,7 @@ function normalizeAnalysis(analysisData: AnalysisResponse | null): AnalysisRespo
 export default function AnalyzeForm({
   initialAnalysis = null,
   initialMessages = [],
+  initialKeyword,
   readOnly = false,
 }: AnalyzeFormProps) {
   // ─────────────────────────────────────────────────────────────────────────
@@ -546,9 +549,9 @@ export default function AnalyzeForm({
   // STATE
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Input state - pre-populate if loading from history (keyword-only)
+  // Input state - pre-populate from history or from dashboard ?keyword=
   const [inputValue, setInputValue] = useState(
-    initialAnalysis?.input_value || ""
+    initialAnalysis?.input_value || initialKeyword || ""
   );
   const [inputError, setInputError] = useState<string | null>(null);
 
@@ -581,6 +584,8 @@ export default function AnalyzeForm({
   // Ref guards for sync-from-initial: only sync once per distinct payload (stops infinite loop on history hydration)
   const lastSyncedRef = useRef<string | null>(null);
   const lastSyncedHashRef = useRef<string | null>(null);
+  // When landing from dashboard with ?keyword=, run analyze once
+  const initialKeywordRunRef = useRef(false);
   
   // Unique run ID generated on each Analyze click - used to force component remounts
   const [currentAnalysisRunId, setCurrentAnalysisRunId] = useState<string | null>(null);
@@ -1527,6 +1532,14 @@ export default function AnalyzeForm({
     }
   }, [analysis?.input_value, readOnly, router, progress]);
 
+  // When landing from dashboard with ?keyword=, run analyze once after mount
+  useEffect(() => {
+    if (!initialKeyword?.trim() || initialKeywordRunRef.current || readOnly || initialAnalysis) return;
+    initialKeywordRunRef.current = true;
+    analyze();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- run once when initialKeyword is set
+  }, []);
+
   // ─────────────────────────────────────────────────────────────────────────
   // SIDEBAR RESIZE HANDLERS
   // ─────────────────────────────────────────────────────────────────────────
@@ -1539,8 +1552,8 @@ export default function AnalyzeForm({
     const startWidth = sidebarWidth;
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
-      // When dragging left (negative diff), increase width. When dragging right (positive diff), decrease width.
-      const diff = startX - moveEvent.clientX;
+      // Sidebar is on the left: dragging handle right increases width, left decreases it.
+      const diff = moveEvent.clientX - startX;
       const newWidth = Math.max(360, Math.min(620, startWidth + diff));
       setSidebarWidth(newWidth);
     };
@@ -1581,14 +1594,79 @@ export default function AnalyzeForm({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* MAIN CONTENT: TWO-COLUMN FLEXBOX LAYOUT                             */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="flex-1 relative overflow-hidden bg-[#F7F9FC] flex" style={{ minHeight: 0 }}>
+      <div className="flex-1 relative overflow-hidden bg-[#F7F9FC] flex flex-row" style={{ minHeight: 0 }}>
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* LEFT COLUMN: MARKET DATA & PRODUCTS (SCROLLABLE)                 */}
+        {/* LEFT COLUMN: CHAT SIDEBAR (Lovable-style)                         */}
+        {/* ─────────────────────────────────────────────────────────────── */}
+        <div
+          className={`relative flex flex-col transition-all duration-[250ms] ease-in-out ${
+            isSidebarCollapsed ? "pointer-events-none overflow-hidden" : "overflow-hidden"
+          }`}
+          style={{
+            minHeight: 0,
+            width: isSidebarCollapsed ? 0 : sidebarWidth,
+            minWidth: isSidebarCollapsed ? 0 : sidebarWidth,
+            maxWidth: isSidebarCollapsed ? 0 : sidebarWidth,
+            opacity: isSidebarCollapsed ? 0 : 1,
+          }}
+        >
+          <ChatSidebar
+            analysisRunId={chatAvailable ? analysisRunIdForChat : null}
+            snapshotId={analysis?.analysis_run_id || null}
+            analysisCreatedAt={analysis?.created_at || null}
+            isHistoryContext={!!initialAnalysis}
+            analyzeInProgress={!readOnly && loading && !analysisRunIdForChat}
+            initialMessages={chatMessages}
+            onMessagesChange={setChatMessages}
+            marketSnapshot={analysis?.market_snapshot || null}
+            analysisMode={analysisMode}
+            selectedListing={selectedListing ? {
+              ...selectedListing,
+              reviews: (selectedListing as any).reviews ?? (selectedListing as any).review_count ?? null,
+              estimated_monthly_units: (selectedListing as any).estimated_monthly_units ?? null,
+              estimated_monthly_revenue: (selectedListing as any).estimated_monthly_revenue ?? null,
+            } : null}
+            selectedAsins={selectedAsins}
+            selectedAsinsRef={selectedAsinsRef}
+            onSelectedAsinsChange={updateSelectedAsins}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapse={handleToggleCollapse}
+            insertIntoChatText={questionToInsert}
+            onInsertConsumed={() => setQuestionToInsert(null)}
+            helpDrawerOpen={helpDrawerOpen}
+            onToggleHelpDrawer={() => setHelpDrawerOpen((o) => !o)}
+            currentKeyword={analysis?.input_value ?? null}
+            asinDetails={
+              analysis?.page_one_listings?.length
+                ? Object.fromEntries(
+                    (analysis.page_one_listings as Array<{ asin?: string; brand?: string | null; title?: string | null }>)
+                      .filter((p) => p?.asin)
+                      .map((p) => [p.asin!, { brand: p.brand ?? null, title: p.title ?? null }])
+                  )
+                : undefined
+            }
+            maxSelectableHint={2}
+          />
+          {!isSidebarCollapsed && (
+            <div
+              ref={sidebarResizeRef}
+              onMouseDown={handleResizeStart}
+              className={`absolute right-0 top-0 bottom-0 cursor-col-resize transition-all z-10 group w-2 -mr-1 ${
+                isResizing ? "bg-primary" : "bg-transparent hover:bg-gray-400/50"
+              }`}
+              title="Drag to resize"
+            >
+              {!isResizing && (
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-8 bg-gray-500 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ─────────────────────────────────────────────────────────────── */}
+        {/* RIGHT COLUMN: MARKET DATA & PRODUCTS (SCROLLABLE)                */}
         {/* ─────────────────────────────────────────────────────────────── */}
         <div className="flex-1 overflow-y-auto bg-[#F7F9FC] min-w-0" style={{ minHeight: 0 }}>
-          {/* ─────────────────────────────────────────────────────────────── */}
-          {/* SEARCH BAR (IN MAIN CONTENT - SCROLLS WITH CONTENT)             */}
-          {/* ─────────────────────────────────────────────────────────────── */}
           <div className="bg-white px-6 py-6 border-b border-gray-200">
             <SearchBar
               inputValue={inputValue}
@@ -3049,83 +3127,6 @@ export default function AnalyzeForm({
             </div>
           )}
         </div>
-        {/* ─────────────────────────────────────────────────────────────── */}
-        {/* RIGHT COLUMN: AI CHAT SIDEBAR (RESIZABLE, SCROLLS INTERNALLY)   */}
-        {/* AI Copilot is always available - fixed within app shell        */}
-        {/* ─────────────────────────────────────────────────────────────── */}
-        <div 
-          className={`relative border-l border-gray-200 bg-white flex flex-col transition-all duration-[250ms] ease-in-out ${
-            isSidebarCollapsed ? 'pointer-events-none overflow-hidden' : 'overflow-hidden'
-          }`}
-          style={{ 
-            minHeight: 0,
-            width: isSidebarCollapsed ? 0 : sidebarWidth,
-            minWidth: isSidebarCollapsed ? 0 : sidebarWidth,
-            maxWidth: isSidebarCollapsed ? 0 : sidebarWidth,
-            opacity: isSidebarCollapsed ? 0 : 1,
-          }}
-        >
-          {/* Resize handle - only visible when not collapsed */}
-          {!isSidebarCollapsed && (
-            <div
-              ref={sidebarResizeRef}
-              onMouseDown={handleResizeStart}
-              className={`absolute left-0 top-0 bottom-0 cursor-col-resize transition-all z-10 group ${
-                isResizing ? 'bg-primary' : 'bg-transparent hover:bg-gray-300'
-              }`}
-              style={{
-                marginLeft: '-4px',
-                width: '8px',
-              }}
-              title="Drag to resize"
-            >
-              {/* Hover indicator dot */}
-              {!isResizing && (
-                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-8 bg-gray-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
-              )}
-            </div>
-          )}
-          <ChatSidebar
-            analysisRunId={chatAvailable ? analysisRunIdForChat : null}
-            snapshotId={analysis?.analysis_run_id || null}
-            analysisCreatedAt={analysis?.created_at || null}
-            isHistoryContext={!!initialAnalysis}
-            analyzeInProgress={!readOnly && loading && !analysisRunIdForChat}
-            initialMessages={chatMessages}
-            onMessagesChange={setChatMessages}
-            marketSnapshot={analysis?.market_snapshot || null}
-            analysisMode={analysisMode}
-            selectedListing={selectedListing ? {
-              ...selectedListing,
-              // Normalize fields expected by chat backend (legacy compatibility)
-              // Chat backend expects `reviews`, but our canonical listings use `review_count`.
-              reviews: (selectedListing as any).reviews ?? (selectedListing as any).review_count ?? null,
-              // Ensure page-1 estimate fields are present for immediate answers without escalation
-              estimated_monthly_units: (selectedListing as any).estimated_monthly_units ?? null,
-              estimated_monthly_revenue: (selectedListing as any).estimated_monthly_revenue ?? null,
-            } : null}
-            selectedAsins={selectedAsins}
-            selectedAsinsRef={selectedAsinsRef}
-            onSelectedAsinsChange={updateSelectedAsins}
-            isCollapsed={isSidebarCollapsed}
-            onToggleCollapse={handleToggleCollapse}
-            insertIntoChatText={questionToInsert}
-            onInsertConsumed={() => setQuestionToInsert(null)}
-            helpDrawerOpen={helpDrawerOpen}
-            onToggleHelpDrawer={() => setHelpDrawerOpen((o) => !o)}
-            currentKeyword={analysis?.input_value ?? null}
-            asinDetails={
-              analysis?.page_one_listings?.length
-                ? Object.fromEntries(
-                    (analysis.page_one_listings as Array<{ asin?: string; brand?: string | null; title?: string | null }>)
-                      .filter((p) => p?.asin)
-                      .map((p) => [p.asin!, { brand: p.brand ?? null, title: p.title ?? null }])
-                  )
-                : undefined
-            }
-            maxSelectableHint={2}
-          />
-        </div>
       </div>
       
       <HelpDrawer
@@ -3137,15 +3138,15 @@ export default function AnalyzeForm({
         products={analysis?.page_one_listings ?? analysis?.products ?? []}
       />
 
-      {/* Collapsed Chat Chevron - small icon in top-right edge when collapsed */}
+      {/* Collapsed Chat Chevron - left edge when chat is collapsed (sidebar is on the left) */}
       {isSidebarCollapsed && (
         <button
           onClick={handleToggleCollapse}
-          className="fixed right-0 top-16 z-50 bg-white border-l border-t border-b border-gray-200 rounded-l-lg px-2 py-2 shadow-sm hover:shadow-md transition-all duration-200 hover:bg-gray-50"
+          className="fixed left-0 top-16 z-50 bg-white border-r border-gray-200 rounded-r-lg px-2 py-2 shadow-md hover:bg-gray-50 transition-colors text-gray-600"
           aria-label="Expand chat sidebar"
           title="Expand chat"
         >
-          <ChevronLeft className="w-4 h-4 text-gray-600" />
+          <ChevronRight className="w-4 h-4" />
         </button>
       )}
     </div>

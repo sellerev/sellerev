@@ -131,6 +131,8 @@ interface ChatSidebarProps {
   maxSelectableHint?: number;
   /** True while analyze is running and chat is not yet available (run not persisted). Shows "Chat available when complete" messaging. */
   analyzeInProgress?: boolean;
+  /** When "dark", use Lovable-style dark panel (charcoal bg, dark bubbles, dark input bar). */
+  variant?: "light" | "dark";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,7 +317,9 @@ export default function ChatSidebar({
   asinDetails = {},
   maxSelectableHint = 2,
   analyzeInProgress = false,
+  variant = "light",
 }: ChatSidebarProps) {
+  const isDark = variant === "dark";
   // Use snapshotId as primary identifier if analysisRunId is not available (Tier-1/Tier-2 model)
   // For chat API, we still need analysisRunId, but UI unlocking uses snapshotId
   const effectiveId = analysisRunId || snapshotId;
@@ -803,16 +807,19 @@ export default function ChatSidebar({
   const isDisabled = !effectiveId || !canChat;
 
   return (
-    <div className="h-full bg-white flex flex-col overflow-hidden border-l border-[#E5E7EB]" style={{ minHeight: 0 }}>
+    <div
+      className={`h-full flex flex-col overflow-hidden ${isDark ? "bg-[#1a1a1f] border-r border-gray-700/50" : "bg-white border-l border-[#E5E7EB]"}`}
+      style={{ minHeight: 0 }}
+    >
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* HEADER                                                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="px-6 py-4 shrink-0 flex items-start justify-between gap-2">
+      <div className={`px-6 py-4 shrink-0 flex items-start justify-between gap-2 ${isDark ? "border-b border-gray-700/50" : ""}`}>
         <div className="flex-1 min-w-0">
-          <h2 className="font-semibold text-gray-900 text-sm">
+          <h2 className={`font-semibold text-sm ${isDark ? "text-white" : "text-gray-900"}`}>
             {currentKeyword?.trim() ? currentKeyword.trim() : "Search a keyword"}
           </h2>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className={`text-xs mt-0.5 ${isDark ? "text-gray-400" : "text-gray-500"}`}>
             {canChat
               ? "Explains the visible Page-1 data only"
               : showAnalyzeLoadingCopy
@@ -827,7 +834,7 @@ export default function ChatSidebar({
               type="button"
               onClick={onToggleHelpDrawer}
               className={`flex-shrink-0 p-1.5 rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-gray-300 ${
-                helpDrawerOpen ? "bg-primary text-primary-foreground hover:opacity-90" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"
+                helpDrawerOpen ? "bg-primary text-primary-foreground hover:opacity-90" : isDark ? "hover:bg-gray-700/50 text-gray-400 hover:text-white" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"
               }`}
               aria-label="Question Library"
               title="Question Library"
@@ -840,7 +847,7 @@ export default function ChatSidebar({
           <button
             ref={historyButtonRef}
             onClick={() => setIsHistoryPanelOpen(!isHistoryPanelOpen)}
-            className="flex-shrink-0 p-1.5 rounded-md hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300"
+            className={`flex-shrink-0 p-1.5 rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-gray-300 ${isDark ? "hover:bg-gray-700/50 text-gray-400 hover:text-white" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`}
             aria-label="View analysis history"
             title="View history"
           >
@@ -849,7 +856,7 @@ export default function ChatSidebar({
           {onToggleCollapse && (
             <button
               onClick={onToggleCollapse}
-              className="flex-shrink-0 p-1.5 rounded-md hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-300"
+              className={`flex-shrink-0 p-1.5 rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-gray-300 ${isDark ? "hover:bg-gray-700/50 text-gray-400 hover:text-white" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"}`}
               aria-label="Collapse chat sidebar"
               title="Collapse sidebar"
             >
@@ -864,15 +871,15 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 min-w-0 overflow-y-auto px-4 py-4 relative bg-white"
+        className={`flex-1 min-w-0 overflow-y-auto px-4 py-4 relative ${isDark ? "bg-[#1a1a1f]" : "bg-white"}`}
         style={{ minHeight: 0, scrollbarGutter: "stable" }}
       >
         {isDisabled ? (
           /* Pre-analysis or analysis loading: show capabilities or "complete to chat" */
           <div className="text-center py-12">
-            <div className="w-14 h-14 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
+            <div className={`w-14 h-14 mx-auto mb-4 rounded-full flex items-center justify-center ${isDark ? "bg-gray-700/50" : "bg-gray-100"}`}>
               <svg
-                className="w-7 h-7 text-gray-400"
+                className={`w-7 h-7 ${isDark ? "text-gray-500" : "text-gray-400"}`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -886,15 +893,15 @@ export default function ChatSidebar({
               </svg>
             </div>
             {showAnalyzeLoadingCopy ? (
-              <p className="text-gray-600 text-sm max-w-[260px] mx-auto">
+              <p className={`text-sm max-w-[260px] mx-auto ${isDark ? "text-gray-400" : "text-gray-600"}`}>
                 Complete the analysis to start chatting. Product cards and metrics will fill in as data loads.
               </p>
             ) : (
               <>
-                <p className="text-gray-900 text-sm font-medium mb-3">
+                <p className={`text-sm font-medium mb-3 ${isDark ? "text-white" : "text-gray-900"}`}>
                   The AI assistant will help you:
                 </p>
-                <ul className="text-xs text-gray-600 space-y-1.5 max-w-[280px] mx-auto">
+                <ul className={`text-xs space-y-1.5 max-w-[280px] mx-auto ${isDark ? "text-gray-400" : "text-gray-600"}`}>
                   <li>• Understand market data</li>
                   <li>• Compare listings</li>
                   <li>• Explore different scenarios</li>
@@ -906,13 +913,13 @@ export default function ChatSidebar({
         ) : messages.length === 0 && !isLoading ? (
           /* Post-analysis, no messages yet: Show suggested question chips (quiet by default) */
           <div className="space-y-2.5">
-            <p className="text-xs text-gray-500 text-center mb-4">
+            <p className={`text-xs text-center mb-4 ${isDark ? "text-gray-500" : "text-gray-500"}`}>
               Suggested questions:
             </p>
             {getSuggestedQuestions(analysisMode, marketSnapshot, selectedListing).slice(0, 4).map((question, idx) => (
               <button
                 key={idx}
-                className="w-full text-left text-sm px-4 py-2.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition-colors text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                className={`w-full text-left text-sm px-4 py-2.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm ${isDark ? "bg-gray-800/80 border border-gray-600/50 text-gray-200 hover:bg-gray-700/80 hover:border-gray-500" : "bg-white border border-gray-200 text-gray-900 hover:bg-gray-50 hover:border-gray-300"}`}
                 onClick={() => sendMessage(question)}
                 disabled={isLoading}
               >
@@ -940,6 +947,7 @@ export default function ChatSidebar({
                   }
                 }}
                 setMessages={setMessages}
+                variant={isDark ? "dark" : "light"}
               />
             </div>
 
@@ -947,11 +955,11 @@ export default function ChatSidebar({
             {isLoading && streamingContent && (
               <div className="max-w-[720px] mx-auto w-full mt-3">
                 <div className="flex justify-start">
-                  <div className="group relative bg-white border border-neutral-200 rounded-[18px] px-3.5 py-3 max-w-[80%]">
-                    <div className="text-[11px] font-medium text-neutral-400 mb-1.5">Sellerev</div>
-                    <div className="text-sm leading-6 text-gray-900">
+                  <div className={`group relative rounded-[18px] px-3.5 py-3 max-w-[80%] ${isDark ? "bg-gray-800/90 border border-gray-600/50" : "bg-white border border-neutral-200"}`}>
+                    <div className={`text-[11px] font-medium mb-1.5 ${isDark ? "text-gray-500" : "text-neutral-400"}`}>Sellerev</div>
+                    <div className={`text-sm leading-6 ${isDark ? "text-gray-100" : "text-gray-900"}`}>
                       <AssistantMarkdownContent content={sanitizeVerdictLanguage(streamingContent)} />
-                      <span className="inline-block w-0.5 h-4 bg-gray-900 ml-0.5 align-middle cursor-blink" />
+                      <span className={`inline-block w-0.5 h-4 ml-0.5 align-middle cursor-blink ${isDark ? "bg-gray-300" : "bg-gray-900"}`} />
                     </div>
                     {currentCitations.length > 0 && (
                       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
@@ -969,8 +977,8 @@ export default function ChatSidebar({
             {escalationMessage && !streamingContent && (
               <div className="max-w-[720px] mx-auto w-full mt-3">
                 <div className="flex justify-start">
-                  <div className="max-w-[80%] bg-neutral-50 border border-neutral-200 rounded-[18px] px-3.5 py-2.5">
-                    <div className="text-xs text-neutral-500">{escalationMessage}</div>
+                  <div className={`max-w-[80%] rounded-[18px] px-3.5 py-2.5 ${isDark ? "bg-gray-800/70 border border-gray-600/50" : "bg-neutral-50 border border-neutral-200"}`}>
+                    <div className={`text-xs ${isDark ? "text-gray-400" : "text-neutral-500"}`}>{escalationMessage}</div>
                   </div>
                 </div>
               </div>
@@ -978,8 +986,8 @@ export default function ChatSidebar({
             {escalationState && !escalationMessage && !streamingContent && (
               <div className="max-w-[720px] mx-auto w-full mt-3">
                 <div className="flex justify-start">
-                  <div className="max-w-[80%] bg-neutral-50 border border-neutral-200 rounded-[18px] px-3.5 py-2.5">
-                    <div className="text-xs text-neutral-500 italic">
+                  <div className={`max-w-[80%] rounded-[18px] px-3.5 py-2.5 ${isDark ? "bg-gray-800/70 border border-gray-600/50" : "bg-neutral-50 border border-neutral-200"}`}>
+                    <div className={`text-xs italic ${isDark ? "text-gray-400" : "text-neutral-500"}`}>
                       Searching for {escalationState.question}…
                     </div>
                   </div>
@@ -991,12 +999,12 @@ export default function ChatSidebar({
             {isLoading && !streamingContent && !escalationState && (
               <div className="max-w-[720px] mx-auto w-full mt-3">
                 <div className="flex justify-start">
-                  <div className="bg-white border border-neutral-200 rounded-[18px] px-3.5 py-3 max-w-[80%]">
-                    <div className="text-[11px] font-medium text-neutral-400 mb-1.5">Sellerev</div>
+                  <div className={`rounded-[18px] px-3.5 py-3 max-w-[80%] ${isDark ? "bg-gray-800/90 border border-gray-600/50" : "bg-white border border-neutral-200"}`}>
+                    <div className={`text-[11px] font-medium mb-1.5 ${isDark ? "text-gray-500" : "text-neutral-400"}`}>Sellerev</div>
                     <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 bg-neutral-400 rounded-full animate-bounce" />
-                      <span className="w-2 h-2 bg-neutral-400 rounded-full animate-bounce" style={{ animationDelay: "0.1s" }} />
-                      <span className="w-2 h-2 bg-neutral-400 rounded-full animate-bounce" style={{ animationDelay: "0.2s" }} />
+                      <span className={`w-2 h-2 rounded-full animate-bounce ${isDark ? "bg-gray-500" : "bg-neutral-400"}`} />
+                      <span className={`w-2 h-2 rounded-full animate-bounce ${isDark ? "bg-gray-500" : "bg-neutral-400"}`} style={{ animationDelay: "0.1s" }} />
+                      <span className={`w-2 h-2 rounded-full animate-bounce ${isDark ? "bg-gray-500" : "bg-neutral-400"}`} style={{ animationDelay: "0.2s" }} />
                     </div>
                   </div>
                 </div>
@@ -1132,10 +1140,10 @@ export default function ChatSidebar({
           </div>
         </div>
       )}
-      <div className="w-full min-w-0 shrink-0 px-6 py-4 bg-white border-t border-[#E5E7EB]">
+      <div className={`w-full min-w-0 shrink-0 px-6 py-4 border-t ${isDark ? "bg-[#1a1a1f] border-gray-700/50" : "bg-white border-[#E5E7EB]"}`}>
         {showHistoricalSnapshotHint && historicalHintText && (
           <div className="mb-2 px-1">
-            <div className="text-[11px] text-gray-500">{historicalHintText}</div>
+            <div className={`text-[11px] ${isDark ? "text-gray-500" : "text-gray-500"}`}>{historicalHintText}</div>
           </div>
         )}
         <ChatComposer
@@ -1143,7 +1151,7 @@ export default function ChatSidebar({
           onChange={setInput}
           onSend={() => sendMessage()}
           inputRef={inputRef}
-          placeholder={isDisabled ? "Open a saved analysis run to chat" : "Ask about the analysis..."}
+          placeholder={isDisabled ? "Open a saved analysis run to chat" : "Ask Sellerev..."}
           disabled={isDisabled || isLoading}
           sendDisabled={!input.trim()}
           loading={isLoading}
@@ -1151,6 +1159,7 @@ export default function ChatSidebar({
           onSelectedAsinsChange={onSelectedAsinsChange ?? (() => {})}
           asinDetails={asinDetails}
           maxSelectableHint={maxSelectableHint}
+          variant={isDark ? "dark" : "light"}
         />
       </div>
 

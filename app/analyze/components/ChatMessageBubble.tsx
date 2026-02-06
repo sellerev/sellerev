@@ -192,11 +192,10 @@ export interface ChatMessageBubbleProps {
   index: number;
   isCopied: boolean;
   onCopy: (e: React.MouseEvent | React.KeyboardEvent) => void;
-  /** Optional small time under bubble (e.g. last in group) */
   showTime?: boolean;
-  /** Render cards (e.g. FeesProfitChatCard) - requires setMessages for fees update */
   renderCards?: boolean;
   setMessages?: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  variant?: "light" | "dark";
 }
 
 export default function ChatMessageBubble({
@@ -207,15 +206,21 @@ export default function ChatMessageBubble({
   showTime = false,
   renderCards = true,
   setMessages,
+  variant = "light",
 }: ChatMessageBubbleProps) {
+  const isDark = variant === "dark";
   const isUser = message.role === "user";
   const content = message.role === "assistant"
     ? preprocessAssistantContent(message.content)
     : message.content;
 
   const bubbleClasses = isUser
-    ? "bg-neutral-100 text-gray-900 rounded-[18px] px-3.5 py-2.5 max-w-[80%] ml-auto"
-    : "bg-white border border-neutral-200 text-gray-900 rounded-[18px] px-3.5 py-3 max-w-[80%]";
+    ? isDark
+      ? "bg-gray-700/80 text-gray-100 rounded-[18px] px-3.5 py-2.5 max-w-[80%] ml-auto"
+      : "bg-neutral-100 text-gray-900 rounded-[18px] px-3.5 py-2.5 max-w-[80%] ml-auto"
+    : isDark
+      ? "bg-gray-800/90 border border-gray-600/50 text-gray-100 rounded-[18px] px-3.5 py-3 max-w-[80%]"
+      : "bg-white border border-neutral-200 text-gray-900 rounded-[18px] px-3.5 py-3 max-w-[80%]";
 
   return (
     <div className={`flex w-full ${isUser ? "justify-end" : "justify-start"}`}>

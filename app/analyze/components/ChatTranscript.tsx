@@ -27,6 +27,7 @@ export interface ChatTranscriptProps {
   copiedIndex: number | null;
   onCopy: (index: number) => (e: React.MouseEvent | React.KeyboardEvent) => void;
   setMessages?: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  variant?: "light" | "dark";
 }
 
 /**
@@ -38,6 +39,7 @@ export default function ChatTranscript({
   copiedIndex,
   onCopy,
   setMessages,
+  variant = "light",
 }: ChatTranscriptProps) {
   const items: Array<{ type: "date"; label: string } | { type: "message"; message: ChatMessage; index: number }> = [];
   let lastDateLabel: string | null = null;
@@ -69,6 +71,7 @@ export default function ChatTranscript({
             showTime={item.index === messages.length - 1}
             renderCards
             setMessages={setMessages}
+            variant={variant}
           />
         )
       )}

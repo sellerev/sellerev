@@ -79,9 +79,9 @@ export async function middleware(req: NextRequest) {
       if (profile) {
         // Has profile:
         // - Block auth/onboarding
-        // - Visiting root ("/") should always land in the app
+        // - Visiting root ("/") should land on dashboard
         if (isAuth || isOnboarding || path === "/") {
-          return NextResponse.redirect(new URL("/analyze", req.url));
+          return NextResponse.redirect(new URL("/dashboard", req.url));
         }
       }
       return res;
@@ -94,9 +94,9 @@ export async function middleware(req: NextRequest) {
         return NextResponse.redirect(new URL("/connect-amazon", req.url));
       }
     } else {
-      // Has sourcing_model: treat "/" as an app entrypoint just like /auth/onboarding/connect-amazon
+      // Has sourcing_model: treat "/" as app entrypoint → dashboard
       if (profile.sourcing_model && (isAuth || isConnectAmazon || isOnboarding || path === "/")) {
-        return NextResponse.redirect(new URL("/analyze", req.url));
+        return NextResponse.redirect(new URL("/dashboard", req.url));
       }
     }
   }
