@@ -165,12 +165,12 @@ export default function AnalysesList() {
                 key={analysis.id}
                 onClick={() => handleAnalysisClick(analysis.id)}
                 className={`w-full px-5 py-1.5 text-left hover:bg-gray-50/50 transition-colors relative rounded-md mx-1 my-0.5 ${
-                  isActive ? "bg-blue-50/70" : ""
+                  isActive ? "bg-primary/10" : ""
                 }`}
               >
                 {/* Left accent for active state */}
                 {isActive && (
-                  <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-blue-500 rounded-r" />
+                  <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-r" />
                 )}
                 <div className="flex items-start justify-between gap-2 pl-0.5">
                   <div className="flex-1 min-w-0">

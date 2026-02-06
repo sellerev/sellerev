@@ -192,7 +192,7 @@ export default function OnboardingPage() {
                 value={stage}
                 onChange={(e) => setStage(e.target.value)}
                 disabled={loading}
-                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400/50 disabled:opacity-50"
+                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 disabled:opacity-50"
               >
                 <option value="">Select stage</option>
                 {STAGE_OPTIONS.map((o) => (
@@ -209,7 +209,7 @@ export default function OnboardingPage() {
                 value={monthlyRevenueRange}
                 onChange={(e) => setMonthlyRevenueRange(e.target.value)}
                 disabled={loading}
-                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400/50 disabled:opacity-50"
+                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 disabled:opacity-50"
               >
                 <option value="">Select range</option>
                 {REVENUE_OPTIONS.map((o) => (
@@ -226,7 +226,7 @@ export default function OnboardingPage() {
                 value={sourcingModel}
                 onChange={(e) => setSourcingModel(e.target.value)}
                 disabled={loading}
-                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400/50 disabled:opacity-50"
+                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 disabled:opacity-50"
               >
                 <option value="">Select sourcing model</option>
                 {SOURCING_OPTIONS.map((o) => (
@@ -246,7 +246,7 @@ export default function OnboardingPage() {
                 value={experienceMonths}
                 onChange={(e) => setExperienceMonths(e.target.value)}
                 disabled={loading}
-                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400/50 disabled:opacity-50"
+                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 disabled:opacity-50"
               />
             </div>
 
@@ -258,7 +258,7 @@ export default function OnboardingPage() {
                 value={riskTolerance}
                 onChange={(e) => setRiskTolerance(e.target.value)}
                 disabled={loading}
-                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400/50 disabled:opacity-50"
+                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 disabled:opacity-50"
               >
                 <option value="">Select</option>
                 {RISK_OPTIONS.map((o) => (
@@ -281,7 +281,7 @@ export default function OnboardingPage() {
                   value={marginTarget}
                   onChange={(e) => setMarginTarget(e.target.value)}
                   disabled={loading}
-                  className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400/50 disabled:opacity-50"
+                  className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 disabled:opacity-50"
                 />
               </div>
               <div>
@@ -297,7 +297,7 @@ export default function OnboardingPage() {
                   value={maxFeePct}
                   onChange={(e) => setMaxFeePct(e.target.value)}
                   disabled={loading}
-                  className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400/50 disabled:opacity-50"
+                  className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 disabled:opacity-50"
                 />
               </div>
             </div>
@@ -312,7 +312,7 @@ export default function OnboardingPage() {
                 value={goals}
                 onChange={(e) => setGoals(e.target.value)}
                 disabled={loading}
-                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400/50 disabled:opacity-50 resize-none"
+                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 disabled:opacity-50 resize-none"
               />
             </div>
 
@@ -320,7 +320,7 @@ export default function OnboardingPage() {
               <button
                 type="submit"
                 disabled={loading || !requiredOk}
-                className="w-full rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-medium py-3 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-transparent"
+                className="w-full rounded-xl bg-gradient-to-r from-primary to-primary-glow text-primary-foreground font-medium py-3 text-sm transition-colors hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-transparent"
               >
                 {loading ? "Saving…" : "Continue to Analyze"}
               </button>

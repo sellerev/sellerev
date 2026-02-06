@@ -24,7 +24,7 @@ export default function Navigation() {
                 href="/analyze"
                 className={`text-sm font-medium transition-colors ${
                   pathname?.startsWith("/analyze")
-                    ? "text-[#111827] font-semibold border-b-2 border-[#111827] pb-1 -mb-1"
+                    ? "text-primary font-semibold border-b-2 border-primary pb-1 -mb-1"
                     : "text-gray-600 hover:text-gray-900"
                 }`}
               >

@@ -95,10 +95,10 @@ export default function SettingsPage() {
 
         {/* Pending Memory Banner */}
         {pendingCount > 0 && (
-          <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center justify-between">
+          <div className="mb-6 bg-primary/10 border border-primary/30 rounded-lg p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                <span className="text-blue-600 font-semibold">{pendingCount}</span>
+              <div className="w-8 h-8 bg-primary/20 rounded-full flex items-center justify-center">
+                <span className="text-primary font-semibold">{pendingCount}</span>
               </div>
               <div>
                 <p className="font-medium text-gray-900">
@@ -111,7 +111,7 @@ export default function SettingsPage() {
             </div>
             <button
               onClick={() => setShowPendingReview(true)}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+              className="px-4 py-2 bg-gradient-to-r from-primary to-primary-glow text-primary-foreground rounded-lg font-medium hover:opacity-90 transition-colors"
             >
               Review now
             </button>

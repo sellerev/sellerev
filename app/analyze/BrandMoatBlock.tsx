@@ -130,7 +130,7 @@ export default function BrandMoatBlock({
           <div>
             <span className="font-medium">Top brand </span>
             <span
-              className="font-semibold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors"
+              className="font-semibold text-gray-900 cursor-pointer hover:text-primary transition-colors"
               onMouseEnter={() => handleBrandHover(topBrand.brand)}
               onMouseLeave={handleBrandLeave}
             >
@@ -190,8 +190,8 @@ export default function BrandMoatBlock({
                     key={item.brand}
                     className={`
                       ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
-                      ${isTopBrand ? "bg-blue-50 border-l-4 border-l-blue-500" : ""}
-                      ${isHovered ? "bg-blue-100" : ""}
+                      ${isTopBrand ? "bg-primary/10 border-l-4 border-l-primary" : ""}
+                      ${isHovered ? "bg-primary/15" : ""}
                       transition-colors
                       ${onBrandHover ? "cursor-pointer" : ""}
                     `}
@@ -200,11 +200,11 @@ export default function BrandMoatBlock({
                   >
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center">
-                        <span className={`text-sm font-medium ${isTopBrand ? "text-blue-900" : "text-gray-900"}`}>
+                        <span className={`text-sm font-medium ${isTopBrand ? "text-primary" : "text-gray-900"}`}>
                           {item.brand}
                         </span>
                         {isTopBrand && (
-                          <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-200 text-blue-800">
+                          <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary/20 text-primary">
                             Top
                           </span>
                         )}

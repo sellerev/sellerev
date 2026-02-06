@@ -827,7 +827,7 @@ export default function ChatSidebar({
               type="button"
               onClick={onToggleHelpDrawer}
               className={`flex-shrink-0 p-1.5 rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-gray-300 ${
-                helpDrawerOpen ? "bg-gray-900 text-white hover:bg-gray-800" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"
+                helpDrawerOpen ? "bg-primary text-primary-foreground hover:opacity-90" : "hover:bg-gray-100 text-gray-400 hover:text-gray-600"
               }`}
               aria-label="Question Library"
               title="Question Library"

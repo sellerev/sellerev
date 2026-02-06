@@ -105,7 +105,7 @@ const markdownComponents: ComponentProps<typeof ReactMarkdown>["components"] = {
     );
   },
   a: ({ href, children }) => (
-    <a href={href} className="text-blue-600 underline hover:text-blue-800" target="_blank" rel="noopener noreferrer">
+    <a href={href} className="text-primary underline hover:opacity-90" target="_blank" rel="noopener noreferrer">
       {children}
     </a>
   ),

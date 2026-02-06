@@ -208,12 +208,12 @@ export default function SelectedAsinsBar({
                     title={title}
                     className={`inline-flex items-center gap-2 h-9 min-h-[36px] px-3 rounded-lg border text-xs font-mono text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1 flex-shrink-0 ${
                       isSelected
-                        ? "border-blue-500 bg-blue-50 text-blue-800"
+                        ? "border-primary bg-primary/10 text-primary"
                         : "border-neutral-300 bg-white hover:bg-neutral-50"
                     }`}
                   >
                     <span className="flex-shrink-0 w-4 h-4 rounded border-2 flex items-center justify-center bg-white">
-                      {isSelected && <Check className="w-2.5 h-2.5 text-blue-600" strokeWidth={3} />}
+                      {isSelected && <Check className="w-2.5 h-2.5 text-primary" strokeWidth={3} />}
                     </span>
                     <span className="truncate max-w-[120px]">{label}</span>
                   </button>

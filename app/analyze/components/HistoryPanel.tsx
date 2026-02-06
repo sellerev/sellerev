@@ -260,7 +260,7 @@ export default function HistoryPanel({ isOpen, onClose, anchorElement }: History
                       key={analysis.id}
                       onClick={(e) => handleAnalysisClick(analysis.id, e)}
                       className={`relative px-4 py-2.5 hover:bg-gray-100 cursor-pointer group transition-colors ${
-                        isActive ? "bg-blue-50 hover:bg-blue-50 border-l-2 border-[#3B82F6]" : ""
+                        isActive ? "bg-primary/10 hover:bg-primary/10 border-l-2 border-primary" : ""
                       }`}
                     >
                       <div className="flex items-start gap-3">

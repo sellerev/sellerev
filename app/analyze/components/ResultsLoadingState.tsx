@@ -36,7 +36,7 @@ export default function ResultsLoadingState({
             initial={false}
             animate={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
             transition={{ duration: 0.2, ease: "easeOut" }}
-            className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full relative"
+            className="h-full bg-gradient-to-r from-primary to-primary-glow rounded-full relative"
           >
             <motion.div
               className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent"

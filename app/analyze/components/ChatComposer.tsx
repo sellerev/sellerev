@@ -94,7 +94,7 @@ export default function ChatComposer({
       )}
 
       {/* Input row: textarea + send. No overflow-hidden so textarea can scroll internally. */}
-      <div className="flex flex-wrap gap-2 items-end w-full min-w-0 px-4 py-3 bg-white border border-neutral-300 rounded-xl shadow-sm hover:border-neutral-400 focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent transition-all box-border">
+      <div className="flex flex-wrap gap-2 items-end w-full min-w-0 px-4 py-3 bg-white border border-neutral-300 rounded-xl shadow-sm hover:border-neutral-400 focus-within:ring-2 focus-within:ring-primary focus-within:border-transparent transition-all box-border">
         <textarea
           ref={textareaRef}
           className="flex-1 min-w-[120px] bg-transparent border-0 rounded-lg px-2 py-2 text-sm text-gray-900 focus:outline-none disabled:cursor-not-allowed resize-none placeholder:text-neutral-400"
@@ -116,7 +116,7 @@ export default function ChatComposer({
           type="button"
           onClick={onSend}
           disabled={disabled || sendDisabled}
-          className="w-9 h-9 flex-shrink-0 bg-blue-600 text-white rounded-lg flex items-center justify-center hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="w-9 h-9 flex-shrink-0 bg-gradient-to-r from-primary to-primary-glow text-primary-foreground rounded-lg flex items-center justify-center hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           aria-label="Send message"
         >
           {loading ? (

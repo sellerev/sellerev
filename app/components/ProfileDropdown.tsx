@@ -260,7 +260,7 @@ export default function ProfileDropdown() {
         aria-label="Profile menu"
         aria-expanded={isOpen}
       >
-        <div className="w-8 h-8 rounded-full bg-[#3B82F6] text-white flex items-center justify-center text-sm font-semibold">
+        <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-semibold">
           {getInitials()}
         </div>
       </button>
@@ -308,7 +308,7 @@ export default function ProfileDropdown() {
                   {/* Progress bar */}
                   <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-[#3B82F6] transition-all duration-300"
+                      className="h-full bg-primary transition-all duration-300"
                       style={{
                         width: `${Math.min(100, (creditBalance.credits_remaining / (creditBalance.credits_remaining + creditBalance.credits_used)) * 100)}%`,
                       }}

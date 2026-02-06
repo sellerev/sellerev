@@ -341,7 +341,7 @@ export default function ProfileTab() {
         <button
           type="submit"
           disabled={saving}
-          className="bg-black text-white rounded-lg px-6 py-2 font-medium text-sm hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="bg-primary text-primary-foreground rounded-lg px-6 py-2 font-medium text-sm hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {saving ? "Saving..." : "Save Changes"}
         </button>
