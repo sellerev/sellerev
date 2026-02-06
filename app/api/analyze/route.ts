@@ -1568,7 +1568,10 @@ export async function POST(req: NextRequest) {
             "US",
             apiCallCounter, // Pass shared counter
             streamSinkRef.sink
-              ? (listings) => streamSinkRef.sink!.("page1", { page_one_listings: listings })
+              ? (listings) => {
+                  const s = streamSinkRef.sink;
+                  if (s) s("page1", { page_one_listings: listings });
+                }
               : undefined
           );
         }
