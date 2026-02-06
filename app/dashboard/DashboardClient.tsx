@@ -40,7 +40,7 @@ export default function DashboardClient({ userName }: DashboardClientProps) {
           className="text-center mb-12"
         >
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-4">
-            Welcome back, {userName} 👋
+            Welcome back, {userName}
           </h1>
           <p className="text-xl md:text-2xl text-white/90">
             What keyword should we dive into today?

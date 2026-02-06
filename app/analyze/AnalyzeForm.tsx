@@ -1552,8 +1552,8 @@ export default function AnalyzeForm({
     const startWidth = sidebarWidth;
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
-      // Sidebar is on the left: dragging handle right increases width, left decreases it.
-      const diff = moveEvent.clientX - startX;
+      // Sidebar is on the right: dragging handle left increases width, right decreases it.
+      const diff = startX - moveEvent.clientX;
       const newWidth = Math.max(360, Math.min(620, startWidth + diff));
       setSidebarWidth(newWidth);
     };
@@ -1596,78 +1596,12 @@ export default function AnalyzeForm({
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div className="flex-1 relative overflow-hidden bg-[#F7F9FC] flex flex-row" style={{ minHeight: 0 }}>
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* LEFT COLUMN: CHAT SIDEBAR (Lovable-style)                         */}
+        {/* LEFT COLUMN: PAGE 1 RESULTS (own bubble/panel)                   */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div
-          className={`relative flex flex-col transition-all duration-[250ms] ease-in-out ${
-            isSidebarCollapsed ? "pointer-events-none overflow-hidden" : "overflow-hidden"
-          }`}
-          style={{
-            minHeight: 0,
-            width: isSidebarCollapsed ? 0 : sidebarWidth,
-            minWidth: isSidebarCollapsed ? 0 : sidebarWidth,
-            maxWidth: isSidebarCollapsed ? 0 : sidebarWidth,
-            opacity: isSidebarCollapsed ? 0 : 1,
-          }}
-        >
-          <ChatSidebar
-            analysisRunId={chatAvailable ? analysisRunIdForChat : null}
-            snapshotId={analysis?.analysis_run_id || null}
-            analysisCreatedAt={analysis?.created_at || null}
-            isHistoryContext={!!initialAnalysis}
-            analyzeInProgress={!readOnly && loading && !analysisRunIdForChat}
-            initialMessages={chatMessages}
-            onMessagesChange={setChatMessages}
-            marketSnapshot={analysis?.market_snapshot || null}
-            analysisMode={analysisMode}
-            selectedListing={selectedListing ? {
-              ...selectedListing,
-              reviews: (selectedListing as any).reviews ?? (selectedListing as any).review_count ?? null,
-              estimated_monthly_units: (selectedListing as any).estimated_monthly_units ?? null,
-              estimated_monthly_revenue: (selectedListing as any).estimated_monthly_revenue ?? null,
-            } : null}
-            selectedAsins={selectedAsins}
-            selectedAsinsRef={selectedAsinsRef}
-            onSelectedAsinsChange={updateSelectedAsins}
-            isCollapsed={isSidebarCollapsed}
-            onToggleCollapse={handleToggleCollapse}
-            insertIntoChatText={questionToInsert}
-            onInsertConsumed={() => setQuestionToInsert(null)}
-            helpDrawerOpen={helpDrawerOpen}
-            onToggleHelpDrawer={() => setHelpDrawerOpen((o) => !o)}
-            currentKeyword={analysis?.input_value ?? null}
-            asinDetails={
-              analysis?.page_one_listings?.length
-                ? Object.fromEntries(
-                    (analysis.page_one_listings as Array<{ asin?: string; brand?: string | null; title?: string | null }>)
-                      .filter((p) => p?.asin)
-                      .map((p) => [p.asin!, { brand: p.brand ?? null, title: p.title ?? null }])
-                  )
-                : undefined
-            }
-            maxSelectableHint={2}
-          />
-          {!isSidebarCollapsed && (
-            <div
-              ref={sidebarResizeRef}
-              onMouseDown={handleResizeStart}
-              className={`absolute right-0 top-0 bottom-0 cursor-col-resize transition-all z-10 group w-2 -mr-1 ${
-                isResizing ? "bg-primary" : "bg-transparent hover:bg-gray-400/50"
-              }`}
-              title="Drag to resize"
-            >
-              {!isResizing && (
-                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-8 bg-gray-500 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* ─────────────────────────────────────────────────────────────── */}
-        {/* RIGHT COLUMN: MARKET DATA & PRODUCTS (SCROLLABLE)                */}
-        {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto bg-[#F7F9FC] min-w-0" style={{ minHeight: 0 }}>
-          <div className="bg-white px-6 py-6 border-b border-gray-200">
+        <div className="flex-1 min-w-0 overflow-y-auto flex flex-col p-4" style={{ minHeight: 0 }}>
+          {/* Page 1 results bubble - rounded card (grows with content; column scrolls) */}
+          <div className="flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm min-h-0">
+          <div className="flex-shrink-0 px-6 py-6 border-b border-gray-200">
             <SearchBar
               inputValue={inputValue}
               onInputChange={(value) => {
@@ -3127,6 +3061,78 @@ export default function AnalyzeForm({
             </div>
           )}
         </div>
+        </div>
+
+        {/* ─────────────────────────────────────────────────────────────── */}
+        {/* RIGHT COLUMN: CHAT SIDEBAR (own bubble; resize on left edge)     */}
+        {/* ─────────────────────────────────────────────────────────────── */}
+        <div
+          className={`relative flex flex-col transition-all duration-[250ms] ease-in-out ${
+            isSidebarCollapsed ? "pointer-events-none overflow-hidden" : "overflow-hidden"
+          }`}
+          style={{
+            minHeight: 0,
+            width: isSidebarCollapsed ? 0 : sidebarWidth,
+            minWidth: isSidebarCollapsed ? 0 : sidebarWidth,
+            maxWidth: isSidebarCollapsed ? 0 : sidebarWidth,
+            opacity: isSidebarCollapsed ? 0 : 1,
+          }}
+        >
+          {!isSidebarCollapsed && (
+            <div
+              ref={sidebarResizeRef}
+              onMouseDown={handleResizeStart}
+              className={`absolute left-0 top-0 bottom-0 cursor-col-resize transition-all z-10 group w-2 -ml-1 ${
+                isResizing ? "bg-primary" : "bg-transparent hover:bg-gray-400/50"
+              }`}
+              title="Drag to resize"
+            >
+              {!isResizing && (
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-8 bg-gray-500 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+              )}
+            </div>
+          )}
+          {/* Chat bubble - same card treatment as Page 1 results */}
+          <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm overflow-hidden m-4 mr-0">
+          <ChatSidebar
+            analysisRunId={chatAvailable ? analysisRunIdForChat : null}
+            snapshotId={analysis?.analysis_run_id || null}
+            analysisCreatedAt={analysis?.created_at || null}
+            isHistoryContext={!!initialAnalysis}
+            analyzeInProgress={!readOnly && loading && !analysisRunIdForChat}
+            initialMessages={chatMessages}
+            onMessagesChange={setChatMessages}
+            marketSnapshot={analysis?.market_snapshot || null}
+            analysisMode={analysisMode}
+            selectedListing={selectedListing ? {
+              ...selectedListing,
+              reviews: (selectedListing as any).reviews ?? (selectedListing as any).review_count ?? null,
+              estimated_monthly_units: (selectedListing as any).estimated_monthly_units ?? null,
+              estimated_monthly_revenue: (selectedListing as any).estimated_monthly_revenue ?? null,
+            } : null}
+            selectedAsins={selectedAsins}
+            selectedAsinsRef={selectedAsinsRef}
+            onSelectedAsinsChange={updateSelectedAsins}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapse={handleToggleCollapse}
+            insertIntoChatText={questionToInsert}
+            onInsertConsumed={() => setQuestionToInsert(null)}
+            helpDrawerOpen={helpDrawerOpen}
+            onToggleHelpDrawer={() => setHelpDrawerOpen((o) => !o)}
+            currentKeyword={analysis?.input_value ?? null}
+            asinDetails={
+              analysis?.page_one_listings?.length
+                ? Object.fromEntries(
+                    (analysis.page_one_listings as Array<{ asin?: string; brand?: string | null; title?: string | null }>)
+                      .filter((p) => p?.asin)
+                      .map((p) => [p.asin!, { brand: p.brand ?? null, title: p.title ?? null }])
+                  )
+                : undefined
+            }
+            maxSelectableHint={2}
+          />
+          </div>
+        </div>
       </div>
       
       <HelpDrawer
@@ -3138,15 +3144,15 @@ export default function AnalyzeForm({
         products={analysis?.page_one_listings ?? analysis?.products ?? []}
       />
 
-      {/* Collapsed Chat Chevron - left edge when chat is collapsed (sidebar is on the left) */}
+      {/* Collapsed Chat Chevron - right edge when chat is collapsed (sidebar is on the right) */}
       {isSidebarCollapsed && (
         <button
           onClick={handleToggleCollapse}
-          className="fixed left-0 top-16 z-50 bg-white border-r border-gray-200 rounded-r-lg px-2 py-2 shadow-md hover:bg-gray-50 transition-colors text-gray-600"
+          className="fixed right-0 top-16 z-50 bg-white border-l border-gray-200 rounded-l-lg px-2 py-2 shadow-md hover:bg-gray-50 transition-colors text-gray-600"
           aria-label="Expand chat sidebar"
           title="Expand chat"
         >
-          <ChevronRight className="w-4 h-4" />
+          <ChevronLeft className="w-4 h-4" />
         </button>
       )}
     </div>
