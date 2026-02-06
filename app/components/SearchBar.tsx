@@ -28,6 +28,10 @@ export default function SearchBar({
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  // Tracks whether the user has manually edited the query since the last time
+  // full results were shown. Used to suppress suggestion dropdown on
+  // programmatic keyword changes (history click, recent search, etc.).
+  const [userHasEditedSinceResults, setUserHasEditedSinceResults] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -50,6 +54,10 @@ export default function SearchBar({
       setShowDropdown(false);
       setSuggestions([]);
       setSelectedIndex(-1);
+      // New results: lock the current query until the user types again
+      if (hasResults) {
+        setUserHasEditedSinceResults(false);
+      }
       if (loading) {
         if (typeof window !== "undefined") {
           console.log("SUGGESTIONS_CLEARED", { reason: "search_submitted" });
@@ -68,6 +76,14 @@ export default function SearchBar({
     if (query.length < 2) {
       setSuggestions([]);
       setShowDropdown(false);
+      return;
+    }
+
+    // If we already have analysis results and the user hasn't edited the query
+    // since those results appeared, do NOT reopen or refetch suggestions.
+    // This prevents the dropdown from popping back open when a keyword is set
+    // via history click or recent-search selection.
+    if (hasResults && !userHasEditedSinceResults) {
       return;
     }
 
@@ -240,11 +256,14 @@ export default function SearchBar({
                 onChange={(e) => {
                   if (!readOnly) {
                     onInputChange(e.target.value);
+                    setUserHasEditedSinceResults(true);
                   }
                 }}
                 onKeyDown={handleKeyDown}
                 onFocus={() => {
-                  if (!readOnly && !loading && suggestions.length > 0) {
+                  // Only reopen dropdown when the user has actively edited the query
+                  // after results were shown; avoid reopening on programmatic changes.
+                  if (!readOnly && !loading && suggestions.length > 0 && userHasEditedSinceResults) {
                     setShowDropdown(true);
                   }
                 }}
