@@ -129,6 +129,8 @@ interface ChatSidebarProps {
   asinDetails?: Record<string, { brand?: string | null; title?: string | null }>;
   /** When > 0, show hint in selection bar when selected count exceeds this (e.g. 2) */
   maxSelectableHint?: number;
+  /** True while analyze is running and chat is not yet available (run not persisted). Shows "Chat available when complete" messaging. */
+  analyzeInProgress?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -312,12 +314,15 @@ export default function ChatSidebar({
   currentKeyword = null,
   asinDetails = {},
   maxSelectableHint = 2,
+  analyzeInProgress = false,
 }: ChatSidebarProps) {
   // Use snapshotId as primary identifier if analysisRunId is not available (Tier-1/Tier-2 model)
   // For chat API, we still need analysisRunId, but UI unlocking uses snapshotId
   const effectiveId = analysisRunId || snapshotId;
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const canChat = typeof analysisRunId === "string" && uuidRegex.test(analysisRunId);
+  // Show "analysis loading" copy when chat is disabled because analyze is still running (chat unlocks when run is fully loaded)
+  const showAnalyzeLoadingCopy = !canChat && analyzeInProgress;
   // ─────────────────────────────────────────────────────────────────────────
   // STATE
   // ─────────────────────────────────────────────────────────────────────────
@@ -810,7 +815,9 @@ export default function ChatSidebar({
           <p className="text-xs text-gray-500 mt-0.5">
             {canChat
               ? "Explains the visible Page-1 data only"
-              : "Chat is unavailable for this snapshot view. Open a saved run to continue chatting."}
+              : showAnalyzeLoadingCopy
+                ? "Analysis loading… Chat available when the run is complete."
+                : "Chat is unavailable for this snapshot view. Open a saved run to continue chatting."}
           </p>
         </div>
         <div className="flex items-center gap-1">
@@ -861,7 +868,7 @@ export default function ChatSidebar({
         style={{ minHeight: 0, scrollbarGutter: "stable" }}
       >
         {isDisabled ? (
-          /* Pre-analysis: Show capabilities */
+          /* Pre-analysis or analysis loading: show capabilities or "complete to chat" */
           <div className="text-center py-12">
             <div className="w-14 h-14 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
               <svg
@@ -878,15 +885,23 @@ export default function ChatSidebar({
                 />
               </svg>
             </div>
-            <p className="text-gray-900 text-sm font-medium mb-3">
-              The AI assistant will help you:
-            </p>
-            <ul className="text-xs text-gray-600 space-y-1.5 max-w-[280px] mx-auto">
-              <li>• Understand market data</li>
-              <li>• Compare listings</li>
-              <li>• Explore different scenarios</li>
-              <li>• Interpret what you're seeing</li>
-            </ul>
+            {showAnalyzeLoadingCopy ? (
+              <p className="text-gray-600 text-sm max-w-[260px] mx-auto">
+                Complete the analysis to start chatting. Product cards and metrics will fill in as data loads.
+              </p>
+            ) : (
+              <>
+                <p className="text-gray-900 text-sm font-medium mb-3">
+                  The AI assistant will help you:
+                </p>
+                <ul className="text-xs text-gray-600 space-y-1.5 max-w-[280px] mx-auto">
+                  <li>• Understand market data</li>
+                  <li>• Compare listings</li>
+                  <li>• Explore different scenarios</li>
+                  <li>• Interpret what you're seeing</li>
+                </ul>
+              </>
+            )}
           </div>
         ) : messages.length === 0 && !isLoading ? (
           /* Post-analysis, no messages yet: Show suggested question chips (quiet by default) */

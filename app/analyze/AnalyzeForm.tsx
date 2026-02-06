@@ -3090,6 +3090,7 @@ export default function AnalyzeForm({
             snapshotId={analysis?.analysis_run_id || null}
             analysisCreatedAt={analysis?.created_at || null}
             isHistoryContext={!!initialAnalysis}
+            analyzeInProgress={!readOnly && loading && !analysisRunIdForChat}
             initialMessages={chatMessages}
             onMessagesChange={setChatMessages}
             marketSnapshot={analysis?.market_snapshot || null}
