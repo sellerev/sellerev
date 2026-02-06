@@ -668,11 +668,10 @@ async function fetchBatch(
       });
     }
 
-    // Ingest raw SP-API data to new tables (asin_core, asin_attribute_kv, asin_classifications)
-    // CRITICAL: Ingestion success determined by actual data written, NOT items.length
-    // SP-API can return valid data (salesRanks, attributes) even if items.length === 0
+    // Ingest raw SP-API data to new tables (asin_core, asin_attribute_kv, asin_classifications).
+    // Run ingestion in background so the batch completes as soon as we have merged BSR/results
+    // into spApiCatalogResults — avoids 2s timeout per batch and saves ~6s total on 3 batches.
     if (supabase && items.length > 0) {
-      const { bulkIngestCatalogItems } = await import("./catalogIngest");
       const ingestItems = items
         .map((item: any) => {
           const asin = item?.asin || item?.identifiers?.marketplaceIdentifiers?.[0]?.identifier;
@@ -681,25 +680,16 @@ async function fetchBatch(
         .filter((item: { asin: string; item: any } | null): item is { asin: string; item: any } => item !== null);
 
       if (ingestItems.length > 0) {
-        // Await ingestion to collect metrics synchronously
-        try {
-          const ingestionResult = await bulkIngestCatalogItems(supabase, ingestItems, marketplaceId);
-          
-          // Track actual data written (determines enrichment success)
-          if (ingestionResult.total_attributes_written > 0) {
-            hasAttributes = true;
-            hasAnyEnrichment = true;
+        import("./catalogIngest").then(({ bulkIngestCatalogItems }) =>
+          bulkIngestCatalogItems(supabase, ingestItems, marketplaceId)
+        ).then((ingestionResult) => {
+          if (ingestionMetrics) {
+            ingestionMetrics.totalAttributesWritten.value += ingestionResult.total_attributes_written;
+            ingestionMetrics.totalClassificationsWritten.value += ingestionResult.total_classifications_written;
+            ingestionMetrics.totalImagesWritten.value += ingestionResult.total_images_written;
+            ingestionMetrics.totalRelationshipsWritten.value += ingestionResult.total_relationships_written;
+            ingestionMetrics.totalSkippedDueToCache.value += ingestionResult.total_skipped;
           }
-          if (ingestionResult.total_classifications_written > 0) {
-            hasAnyEnrichment = true;
-          }
-          if (ingestionResult.total_images_written > 0) {
-            hasImages = true;
-            hasAnyEnrichment = true;
-          }
-          
-          // Individual ASIN logs are already logged in ingestCatalogItem()
-          // Log batch summary (optional, for debugging)
           console.log("CATALOG_INGESTION_BATCH_SUMMARY", {
             keyword: keyword || 'unknown',
             batch_index: batchIndex,
@@ -709,25 +699,15 @@ async function fetchBatch(
             total_images_written: ingestionResult.total_images_written,
             total_relationships_written: ingestionResult.total_relationships_written,
             total_skipped: ingestionResult.total_skipped,
-            enrichment_success: hasAnyEnrichment, // Track actual enrichment success
           });
-          
-          // Aggregate metrics for keyword-level summary
-          if (ingestionMetrics) {
-            ingestionMetrics.totalAttributesWritten.value += ingestionResult.total_attributes_written;
-            ingestionMetrics.totalClassificationsWritten.value += ingestionResult.total_classifications_written;
-            ingestionMetrics.totalImagesWritten.value += ingestionResult.total_images_written;
-            ingestionMetrics.totalRelationshipsWritten.value += ingestionResult.total_relationships_written;
-            ingestionMetrics.totalSkippedDueToCache.value += ingestionResult.total_skipped;
-          }
-        } catch (error) {
+        }).catch((error) => {
           console.error("CATALOG_INGESTION_ERROR", {
             keyword: keyword || 'unknown',
             batch_index: batchIndex,
             error: error instanceof Error ? error.message : String(error),
             message: "Failed to ingest catalog items - continuing without ingestion",
           });
-        }
+        });
       }
     }
     
