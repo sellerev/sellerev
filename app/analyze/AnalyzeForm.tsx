@@ -1109,12 +1109,14 @@ export default function AnalyzeForm({
       if (isStream) {
         data = await consumeAnalyzeStream(res, (chunk) => {
           if (chunk.type === "page1" && Array.isArray(chunk.page_one_listings)) {
-            setAnalysis((prev) => ({
-              ...(prev || {}),
-              page_one_listings: chunk.page_one_listings,
-              products: chunk.page_one_listings,
-              listings: chunk.page_one_listings,
-            }));
+            setAnalysis((prev) =>
+              ({
+                ...(prev || {}),
+                page_one_listings: chunk.page_one_listings,
+                products: chunk.page_one_listings,
+                listings: chunk.page_one_listings,
+              }) as AnalysisResponse
+            );
           }
         });
       } else {
