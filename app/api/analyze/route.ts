@@ -4246,7 +4246,8 @@ export async function POST(req: NextRequest) {
         { headers: { "Content-Type": "application/x-ndjson" } }
       );
     }
-    return await runRestOfRoute();
+    const result = await runRestOfRoute();
+    return result ?? NextResponse.json({ success: false, error: "No response" }, { status: 500 });
   } catch (err) {
     // TIMING: End total analyze time (error case)
     console.timeEnd("ANALYZE_TOTAL");
