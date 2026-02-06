@@ -1169,6 +1169,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const wantStream = body.stream === true;
+    const streamSinkRef: { sink: ((e: string, d: any) => void) | null } = { sink: null };
+
+    async function runRestOfRoute(): Promise<NextResponse | null> {
     // Cache miss or force_refresh: try advisory lock (stampede protection)
     const { data: lockAcquired, error: lockError } = await supabase.rpc(
       "try_lock_keyword_cache",
@@ -1562,7 +1566,10 @@ export async function POST(req: NextRequest) {
             body.input_value,
             supabase,
             "US",
-            apiCallCounter // Pass shared counter
+            apiCallCounter, // Pass shared counter
+            streamSinkRef.sink
+              ? (listings) => streamSinkRef.sink!.("page1", { page_one_listings: listings })
+              : undefined
           );
         }
         // If confidence is HIGH but no cache, we'll fall through to snapshot lookup
@@ -4205,6 +4212,11 @@ export async function POST(req: NextRequest) {
     }
 
     res.headers.set("x-sellerev-cache", "rebuilt");
+
+    if (streamSinkRef.sink) {
+      streamSinkRef.sink("complete", finalResponse);
+      return null;
+    }
     return NextResponse.json(
       finalResponse,
       { 
@@ -4212,6 +4224,26 @@ export async function POST(req: NextRequest) {
         headers: res.headers,
       }
     );
+    }
+
+    if (wantStream) {
+      const encoder = new TextEncoder();
+      return new Response(
+        new ReadableStream({
+          async start(controller) {
+            streamSinkRef.sink = (e: string, d: any) =>
+              controller.enqueue(encoder.encode(JSON.stringify({ type: e, ...d }) + "\n"));
+            try {
+              await runRestOfRoute();
+            } finally {
+              controller.close();
+            }
+          },
+        }),
+        { headers: { "Content-Type": "application/x-ndjson" } }
+      );
+    }
+    return await runRestOfRoute();
   } catch (err) {
     // TIMING: End total analyze time (error case)
     console.timeEnd("ANALYZE_TOTAL");

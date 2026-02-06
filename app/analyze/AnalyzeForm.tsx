@@ -970,6 +970,49 @@ export default function AnalyzeForm({
     });
   };
 
+  /** Consume NDJSON stream from /api/analyze (stream: true); call onChunk for each line; return final 'complete' payload. */
+  const consumeAnalyzeStream = async (
+    res: Response,
+    onChunk: (chunk: { type: string; [k: string]: unknown }) => void
+  ): Promise<Record<string, unknown>> => {
+    if (!res.body) throw new Error("Analyze stream has no body");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalData: Record<string, unknown> | null = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed) as { type: string; [k: string]: unknown };
+          onChunk(parsed);
+          if (parsed.type === "complete") finalData = parsed as unknown as Record<string, unknown>;
+          if (parsed.type === "error") throw new Error(String(parsed.error ?? "Stream error"));
+        } catch (e) {
+          if (e instanceof SyntaxError) continue;
+          throw e;
+        }
+      }
+    }
+    if (buffer.trim()) {
+      try {
+        const parsed = JSON.parse(buffer.trim()) as { type: string; [k: string]: unknown };
+        onChunk(parsed);
+        if (parsed.type === "complete") finalData = parsed as unknown as Record<string, unknown>;
+      } catch {
+        // ignore trailing partial line
+      }
+    }
+    if (!finalData) throw new Error("Analyze stream did not receive complete payload");
+    return finalData;
+  };
+
   /** Safe parse /api/analyze response: never blind res.json(); log and throw on empty/invalid JSON. */
   const parseAnalyzeResponse = async (res: Response): Promise<Record<string, unknown>> => {
     const contentType = res.headers.get("content-type") || "";
@@ -1054,11 +1097,29 @@ export default function AnalyzeForm({
         body: JSON.stringify({
           input_type: "keyword",
           input_value: inputValue.trim(),
+          stream: true,
         }),
       });
       progress.mark("enriching_products");
 
-      const data = await parseAnalyzeResponse(res) as any;
+      const contentType = res.headers.get("content-type") ?? "";
+      const isStream = contentType.includes("application/x-ndjson") && res.body != null;
+
+      let data: any;
+      if (isStream) {
+        data = await consumeAnalyzeStream(res, (chunk) => {
+          if (chunk.type === "page1" && Array.isArray(chunk.page_one_listings)) {
+            setAnalysis((prev) => ({
+              ...(prev || {}),
+              page_one_listings: chunk.page_one_listings,
+              products: chunk.page_one_listings,
+              listings: chunk.page_one_listings,
+            }));
+          }
+        });
+      } else {
+        data = await parseAnalyzeResponse(res) as any;
+      }
       progress.mark("computing_metrics");
       console.log("ANALYZE_RESPONSE", { 
         status: res.status, 

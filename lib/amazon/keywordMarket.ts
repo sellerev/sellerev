@@ -2221,11 +2221,24 @@ export function buildMarketSnapshot(
  * @param keyword - The search keyword
  * @returns KeywordMarketData if valid data exists, null otherwise
  */
+/** Minimal listing shape for progressive UI (page 1 from Rainforest, before SP-API). */
+export type Page1EarlyListing = {
+  asin: string;
+  title: string | null;
+  image_url: string | null;
+  price: number | null;
+  rating: number | null;
+  review_count: number | null;
+  position: number;
+};
+
 export async function fetchKeywordMarketSnapshot(
   keyword: string,
   supabase?: any,
   marketplace: string = "US",
-  apiCallCounter?: { count: number; max: number }
+  apiCallCounter?: { count: number; max: number },
+  /** When provided, called as soon as page 1 is parsed (before SP-API) for progressive loading. */
+  onPage1Ready?: (listings: Page1EarlyListing[]) => void
 ): Promise<KeywordMarketData | null> {
   const rainforestApiKey = process.env.RAINFOREST_API_KEY;
   
@@ -2426,7 +2439,21 @@ export async function fetchKeywordMarketSnapshot(
       });
       return null;
     }
-    
+
+    // Progressive loading: notify caller with page-1-only data (before SP-API / BSR)
+    if (onPage1Ready) {
+      const earlyListings: Page1EarlyListing[] = rawSnapshot.listings.map((listing, idx) => ({
+        asin: listing.asin ?? "",
+        title: listing.title ?? null,
+        image_url: listing.image ?? null,
+        price: listing.price != null ? Number(listing.price) : null,
+        rating: listing.rating != null ? Number(listing.rating) : null,
+        review_count: listing.reviews != null ? Number(listing.reviews) : null,
+        position: idx + 1,
+      }));
+      onPage1Ready(earlyListings);
+    }
+
     // Convert RawSnapshot listings back to searchResults format for Phase 2/3 compatibility
     // This preserves backward compatibility while using Phase 1 structure.
     // CRITICAL: Preserve ratings and reviews from Rainforest so they are not lost
