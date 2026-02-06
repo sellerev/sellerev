@@ -384,9 +384,8 @@ export default function ChatSidebar({
   // Global Copilot activity status (Figma AI / Lovable AI style)
   const [copilotStatus, setCopilotStatus] = useState<"idle" | "thinking" | "analyzing" | "fetching">("idle");
   
-  // Smart scrolling state
+  // Smart scrolling state (auto-scroll when at bottom during streaming)
   const [isNearBottom, setIsNearBottom] = useState(true);
-  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const userHasScrolledRef = useRef(false);
   
   // History panel state
@@ -490,7 +489,6 @@ export default function ChatSidebar({
       setIsNearBottom(nearBottom);
       if (nearBottom) {
         userHasScrolledRef.current = false;
-        setShowJumpToBottom(false);
       }
     }
   }, [checkIfNearBottom]);
@@ -503,14 +501,9 @@ export default function ChatSidebar({
     const handleScroll = () => {
       const nearBottom = checkIfNearBottom();
       setIsNearBottom(nearBottom);
-      
-      // If user scrolls up, mark that they've manually scrolled
       if (!nearBottom) {
         userHasScrolledRef.current = true;
-        setShowJumpToBottom(true);
       } else {
-        // User scrolled back to bottom, reset flag and hide button
-        setShowJumpToBottom(false);
         userHasScrolledRef.current = false;
       }
     };
@@ -536,37 +529,11 @@ export default function ChatSidebar({
           if (currentlyNearBottom && !userHasScrolledRef.current) {
             container.scrollTop = container.scrollHeight;
             setIsNearBottom(true);
-            setShowJumpToBottom(false);
-          } else if (userHasScrolledRef.current) {
-            // User has scrolled up and new content arrived, show jump to bottom button
-            // Don't auto-scroll - let user control their view
-            if (!currentlyNearBottom) {
-              setShowJumpToBottom(true);
-            }
           }
         }
       });
     }
   }, [messages, streamingContent, isLoading, checkIfNearBottom]);
-
-  // Smooth scroll to bottom function
-  const scrollToBottom = useCallback((smooth = true) => {
-    if (!messagesContainerRef.current) return;
-    const container = messagesContainerRef.current;
-    
-    if (smooth) {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: 'smooth',
-      });
-    } else {
-      container.scrollTop = container.scrollHeight;
-    }
-    
-    setIsNearBottom(true);
-    setShowJumpToBottom(false);
-    userHasScrolledRef.current = false;
-  }, []);
 
   const isFeesFollowUp = useCallback((text: string) => {
     const t = text.toLowerCase().trim();
@@ -1023,30 +990,6 @@ export default function ChatSidebar({
 
             <div ref={messagesEndRef} />
           </>
-        )}
-        
-        {/* Jump to bottom button - appears when user scrolls up during streaming */}
-        {showJumpToBottom && (
-          <button
-            onClick={() => scrollToBottom(true)}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1.5 bg-white border border-gray-300 rounded-full shadow-sm hover:shadow-md transition-all duration-200 hover:bg-gray-50 flex items-center gap-1.5 text-xs font-medium text-gray-700 hover:text-gray-900"
-            aria-label="Jump to bottom"
-          >
-            <svg
-              className="w-3.5 h-3.5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M19 14l-7 7m0 0l-7-7m7 7V3"
-              />
-            </svg>
-            <span>Jump to bottom</span>
-          </button>
         )}
       </div>
 
