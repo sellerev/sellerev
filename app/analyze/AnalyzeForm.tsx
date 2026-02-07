@@ -1599,8 +1599,8 @@ export default function AnalyzeForm({
         {/* LEFT COLUMN: PAGE 1 RESULTS (own bubble/panel)                   */}
         {/* ─────────────────────────────────────────────────────────────── */}
         <div className="flex-1 min-w-0 overflow-y-auto flex flex-col p-4" style={{ minHeight: 0 }}>
-          {/* Page 1 results bubble - rounded card (grows with content so white extends to last product) */}
-          <div className="flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm">
+          {/* Page 1 results bubble - full height while loading, grows with content when loaded */}
+          <div className="flex flex-col min-h-full rounded-2xl bg-white border border-gray-200 shadow-sm">
           <div className="flex-shrink-0 px-6 py-6 border-b border-gray-200">
             <SearchBar
               inputValue={inputValue}
