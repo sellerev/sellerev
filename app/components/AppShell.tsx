@@ -60,8 +60,8 @@ function SidePanel({
 
   return (
     <aside
-      className={`flex flex-col h-full bg-gray-800 border-r border-gray-700 ${className}`}
-      style={{ width: SIDE_PANEL_WIDTH }}
+      className={`flex flex-col h-full border-r border-gray-700 ${className}`}
+      style={{ width: SIDE_PANEL_WIDTH, backgroundColor: "#1f2937" }}
     >
       {/* Top: workspace name + collapse */}
       <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-4 border-b border-gray-700">
@@ -134,18 +134,19 @@ export default function AppShell({
 
   return (
     <>
-      {/* Site background = grey; sidebar = same grey (Lovable-style); main = white */}
-      <div className="min-h-screen bg-gray-800">
+      {/* Site background = gray-800 (#1f2937); sidebar = same; main = white */}
+      <div className="min-h-screen" style={{ backgroundColor: "#1f2937" }}>
         <div className="flex h-full min-h-screen overflow-hidden">
-          {/* Desktop: collapsible side panel (site grey) */}
+          {/* Desktop: collapsible side panel (gray-800) */}
           <div
-            className="hidden lg:block flex-shrink-0 h-full transition-[width] duration-200 ease-out bg-gray-800"
+            className="hidden lg:block flex-shrink-0 h-full transition-[width] duration-200 ease-out"
             style={{
               width: desktopCollapsed ? SIDE_PANEL_COLLAPSED_WIDTH : SIDE_PANEL_WIDTH,
+              backgroundColor: "#1f2937",
             }}
           >
             {desktopCollapsed ? (
-              <aside className="flex flex-col h-full bg-gray-800 border-r border-gray-700">
+              <aside className="flex flex-col h-full border-r border-gray-700" style={{ backgroundColor: "#1f2937" }}>
                 <div className="flex-shrink-0 p-2 border-b border-gray-700">
                   <button
                     type="button"
