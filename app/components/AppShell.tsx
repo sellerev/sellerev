@@ -63,7 +63,7 @@ function SidePanel({
       className={`flex flex-col h-full bg-gray-800 border-r border-gray-700 ${className}`}
       style={{ width: SIDE_PANEL_WIDTH }}
     >
-      {/* Top: workspace name + collapse (Lovable-style) */}
+      {/* Top: workspace name + collapse */}
       <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-4 border-b border-gray-700">
         <Link
           href="/analyze"
@@ -75,21 +75,21 @@ function SidePanel({
         <button
           type="button"
           onClick={onCollapse}
-          className="flex-shrink-0 p-1.5 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-700 transition-colors"
+          className="flex-shrink-0 p-1.5 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-600 transition-colors"
           aria-label="Collapse sidebar"
         >
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      {/* Nav: highlight only on hover */}
+      {/* Nav: highlight only on hover — distinct gray */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 min-h-0" aria-label="Main">
         {navItems.map(({ href, label, icon: Icon }) => (
           <Link
             key={`${href}-${label}`}
             href={href}
             onClick={onNavigate}
-            className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+            className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
           >
             <Icon className="w-4 h-4 shrink-0" />
             {label}
@@ -102,7 +102,7 @@ function SidePanel({
         <button
           type="button"
           onClick={handleLogout}
-          className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+          className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
         >
           <LogOut className="w-4 h-4 shrink-0" />
           Log out
@@ -150,7 +150,7 @@ export default function AppShell({
                   <button
                     type="button"
                     onClick={() => setDesktopCollapsed(false)}
-                    className="w-full flex items-center justify-center p-2 rounded-md text-gray-400 hover:bg-gray-700 hover:text-gray-100"
+                    className="w-full flex items-center justify-center p-2 rounded-md text-gray-400 hover:bg-gray-600 hover:text-gray-100"
                     aria-label="Expand sidebar"
                   >
                     <Menu className="w-5 h-5" />
@@ -161,7 +161,7 @@ export default function AppShell({
                     <Link
                       key={`${href}-${label}-collapsed`}
                       href={href}
-                      className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                      className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
                       title={label}
                       aria-label={label}
                     >
@@ -176,7 +176,7 @@ export default function AppShell({
                       await supabaseBrowser.auth.signOut();
                       window.location.href = "/auth";
                     }}
-                    className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                    className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
                     title="Log out"
                     aria-label="Log out"
                   >
