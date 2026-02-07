@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
-import ProfileDropdown from "./ProfileDropdown";
 
 const PUBLIC_PATHS = ["/", "/auth", "/terms", "/privacy", "/support"];
 const SIDE_PANEL_WIDTH = 260;
@@ -36,7 +35,6 @@ function SidePanel({
   onCollapse?: () => void;
   className?: string;
 }) {
-  const pathname = usePathname();
   const router = useRouter();
   const [userName, setUserName] = useState<string>("Sellerev");
 
@@ -62,7 +60,7 @@ function SidePanel({
 
   return (
     <aside
-      className={`flex flex-col h-full min-h-screen bg-white border-r border-gray-200 shadow-[2px_0_8px_rgba(0,0,0,0.06)] ${className}`}
+      className={`flex flex-col h-full bg-white border-r border-gray-200 ${className}`}
       style={{ width: SIDE_PANEL_WIDTH }}
     >
       {/* Top: workspace name + collapse (like screenshot "Christina's" + X) */}
@@ -84,29 +82,19 @@ function SidePanel({
         </button>
       </div>
 
-      {/* Nav: full-height scrollable, spacious padding */}
+      {/* Nav: highlight only on hover (no active state) */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 min-h-0" aria-label="Main">
-        {navItems.map(({ href, label, icon: Icon }) => {
-          const isActive =
-            pathname === href ||
-            (href === "/analyze" && pathname?.startsWith("/analyze")) ||
-            (href !== "/analyze" && pathname?.startsWith(href));
-          return (
-            <Link
-              key={`${href}-${label}`}
-              href={href}
-              onClick={onNavigate}
-              className={`flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm transition-colors ${
-                isActive
-                  ? "bg-gray-100 text-gray-900 font-semibold"
-                  : "text-gray-500 hover:bg-gray-50 hover:text-gray-700 font-medium"
-              }`}
-            >
-              <Icon className="w-4 h-4 shrink-0" />
-              {label}
-            </Link>
-          );
-        })}
+        {navItems.map(({ href, label, icon: Icon }) => (
+          <Link
+            key={`${href}-${label}`}
+            href={href}
+            onClick={onNavigate}
+            className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
+          >
+            <Icon className="w-4 h-4 shrink-0" />
+            {label}
+          </Link>
+        ))}
       </nav>
 
       {/* Logout at the very bottom, with subtle divider above */}
@@ -145,79 +133,109 @@ export default function AppShell({
   }
 
   return (
-    <div className="flex h-full min-h-screen">
-      {/* Desktop: collapsible side panel */}
-      <div
-        className="hidden lg:block flex-shrink-0 h-full min-h-screen transition-[width] duration-200 ease-out"
-        style={{
-          width: desktopCollapsed ? SIDE_PANEL_COLLAPSED_WIDTH : SIDE_PANEL_WIDTH,
-        }}
-      >
-        {desktopCollapsed ? (
-          <aside className="flex flex-col h-full min-h-screen bg-white border-r border-gray-200 shadow-[2px_0_8px_rgba(0,0,0,0.06)]">
-            <div className="flex-shrink-0 p-3 border-b border-gray-100">
-              <button
-                type="button"
-                onClick={() => setDesktopCollapsed(false)}
-                className="w-full flex items-center justify-center p-2 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-                aria-label="Expand sidebar"
-              >
-                <Menu className="w-5 h-5" />
-              </button>
-            </div>
-          </aside>
-        ) : (
-          <SidePanel onCollapse={() => setDesktopCollapsed(true)} />
-        )}
-      </div>
-
-      {/* Mobile: hamburger + drawer */}
-      <div className="lg:hidden fixed top-0 left-0 right-0 z-40 flex items-center justify-between h-14 px-4 bg-white border-b border-gray-200 shadow-sm">
-        <button
-          type="button"
-          onClick={() => setMobileOpen(true)}
-          className="p-2 rounded-lg text-gray-600 hover:bg-gray-100"
-          aria-label="Open menu"
-        >
-          <Menu className="w-5 h-5" />
-        </button>
-        <Link href="/analyze" className="font-bold text-gray-900">
-          Sellerev
-        </Link>
-        <div className="w-10" />
-      </div>
-
-      {mobileOpen && (
-        <>
+    <>
+      {/* One bubble: rounded frame containing sidebar + main (Lovable-style) */}
+      <div className="min-h-screen bg-gray-200/80 p-4 lg:p-6">
+        <div className="flex h-full min-h-[calc(100vh-2rem)] lg:min-h-[calc(100vh-3rem)] rounded-2xl shadow-xl overflow-hidden bg-white">
+          {/* Desktop: collapsible side panel */}
           <div
-            className="lg:hidden fixed inset-0 bg-black/50 z-40"
-            aria-hidden
-            onClick={() => setMobileOpen(false)}
-          />
-          <div className="lg:hidden fixed inset-y-0 left-0 z-50 w-[280px] max-w-[85vw] shadow-xl">
-            <SidePanel
-              onNavigate={() => setMobileOpen(false)}
-              onCollapse={() => setMobileOpen(false)}
-            />
+            className="hidden lg:block flex-shrink-0 h-full transition-[width] duration-200 ease-out"
+            style={{
+              width: desktopCollapsed ? SIDE_PANEL_COLLAPSED_WIDTH : SIDE_PANEL_WIDTH,
+            }}
+          >
+            {desktopCollapsed ? (
+              <aside className="flex flex-col h-full bg-white border-r border-gray-200">
+                <div className="flex-shrink-0 p-2 border-b border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setDesktopCollapsed(false)}
+                    className="w-full flex items-center justify-center p-2 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                    aria-label="Expand sidebar"
+                  >
+                    <Menu className="w-5 h-5" />
+                  </button>
+                </div>
+                <nav className="flex-1 overflow-y-auto py-3 px-2 min-h-0 flex flex-col items-center gap-1" aria-label="Main">
+                  {navItems.map(({ href, label, icon: Icon }) => (
+                    <Link
+                      key={`${href}-${label}-collapsed`}
+                      href={href}
+                      className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                      title={label}
+                      aria-label={label}
+                    >
+                      <Icon className="w-5 h-5 shrink-0" />
+                    </Link>
+                  ))}
+                </nav>
+                <div className="flex-shrink-0 border-t border-gray-200 pt-2 pb-4 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await supabaseBrowser.auth.signOut();
+                      window.location.href = "/auth";
+                    }}
+                    className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                    title="Log out"
+                    aria-label="Log out"
+                  >
+                    <LogOut className="w-5 h-5 shrink-0" />
+                  </button>
+                </div>
+              </aside>
+            ) : (
+              <SidePanel onCollapse={() => setDesktopCollapsed(true)} />
+            )}
+          </div>
+
+          {/* Mobile: hamburger + drawer */}
+          <div className="lg:hidden fixed top-0 left-0 right-0 z-40 flex items-center justify-between h-14 px-4 bg-white border-b border-gray-200 shadow-sm rounded-t-2xl">
             <button
               type="button"
-              onClick={() => setMobileOpen(false)}
-              className="absolute top-3 right-3 p-2 rounded-lg text-gray-500 hover:bg-gray-100"
-              aria-label="Close menu"
+              onClick={() => setMobileOpen(true)}
+              className="p-2 rounded-lg text-gray-600 hover:bg-gray-100"
+              aria-label="Open menu"
             >
-              <X className="w-5 h-5" />
+              <Menu className="w-5 h-5" />
             </button>
+            <Link href="/analyze" className="font-bold text-gray-900">
+              Sellerev
+            </Link>
+            <div className="w-10" />
           </div>
-        </>
-      )}
 
-      <main className="flex-1 min-w-0 flex flex-col min-h-screen lg:min-h-0">
-        <div className="hidden lg:flex flex-shrink-0 h-14 items-center justify-end px-4 border-b border-gray-200 bg-white/95 backdrop-blur-sm">
-          <ProfileDropdown />
+          {mobileOpen && (
+            <>
+              <div
+                className="lg:hidden fixed inset-0 bg-black/50 z-40"
+                aria-hidden
+                onClick={() => setMobileOpen(false)}
+              />
+              <div className="lg:hidden fixed inset-y-0 left-0 z-50 w-[280px] max-w-[85vw] shadow-xl">
+                <SidePanel
+                  onNavigate={() => setMobileOpen(false)}
+                  onCollapse={() => setMobileOpen(false)}
+                />
+                <button
+                  type="button"
+                  onClick={() => setMobileOpen(false)}
+                  className="absolute top-3 right-3 p-2 rounded-lg text-gray-500 hover:bg-gray-100"
+                  aria-label="Close menu"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Main content — no top header bar */}
+          <main className="flex-1 min-w-0 flex flex-col min-h-full">
+            <div className="lg:hidden h-14 flex-shrink-0" />
+            <div className="flex-1 overflow-auto min-h-0">{children}</div>
+          </main>
         </div>
-        <div className="lg:hidden h-14 flex-shrink-0" />
-        <div className="flex-1 overflow-auto">{children}</div>
-      </main>
-    </div>
+      </div>
+    </>
   );
 }
