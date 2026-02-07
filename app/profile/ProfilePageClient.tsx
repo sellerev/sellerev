@@ -1,21 +1,23 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 interface ProfilePageClientProps {
   user: { id: string; email: string; user_metadata: Record<string, unknown> };
 }
 
+function stringOrEmpty(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
 export default function ProfilePageClient({ user }: ProfilePageClientProps) {
-  const router = useRouter();
-  const [name, setName] = useState(user.user_metadata?.full_name ?? "");
+  const [name, setName] = useState(() => stringOrEmpty(user.user_metadata?.full_name));
   const [email, setEmail] = useState(user.email ?? "");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
-    setName(user.user_metadata?.full_name ?? "");
+    setName(stringOrEmpty(user.user_metadata?.full_name));
     setEmail(user.email ?? "");
   }, [user]);
 
