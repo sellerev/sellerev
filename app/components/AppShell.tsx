@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import type { User } from "@supabase/supabase-js";
+import type { User as SupabaseUser } from "@supabase/supabase-js";
 import ProfileDropdown from "./ProfileDropdown";
 
 const PUBLIC_PATHS = ["/", "/auth", "/terms", "/privacy", "/support"];
@@ -41,7 +41,7 @@ function SidePanel({
   const [userName, setUserName] = useState<string>("Sellerev");
 
   useEffect(() => {
-    supabaseBrowser.auth.getUser().then(({ data: { user } }: { data: { user: User | null } }) => {
+    supabaseBrowser.auth.getUser().then(({ data: { user } }: { data: { user: SupabaseUser | null } }) => {
       if (user?.user_metadata?.full_name) {
         const name = String(user.user_metadata.full_name).split(" ")[0];
         if (name) setUserName(`${name}'s`);
