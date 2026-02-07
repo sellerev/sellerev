@@ -197,6 +197,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.redirect(new URL(errorRedirect, req.url));
     }
 
+    // Mirror connection status on seller_profiles for "Data used" and quick reads
+    await supabaseAdmin
+      .from("seller_profiles")
+      .update({
+        amazon_connected: true,
+        amazon_connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", user.id);
+
     // Production-safe logging: Always log computed URLs for verification
     console.log("Amazon OAuth connection successful", {
       user_id: user.id,
@@ -209,10 +219,10 @@ export async function GET(req: NextRequest) {
     // Clear return destination cookie (we already have returnTo from line 37)
     res.cookies.delete("amazon_oauth_return_to");
 
-    // If returning to onboarding flow, redirect to connect-amazon success page
+    // If returning from onboarding Step 4, go to Analyze with success param (toast + banner)
     if (returnTo === "onboarding") {
       return NextResponse.redirect(
-        new URL("/connect-amazon?connected=amazon", req.url),
+        new URL("/analyze?connected=1", req.url),
         { headers: res.headers }
       );
     }

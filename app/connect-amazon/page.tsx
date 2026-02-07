@@ -51,8 +51,8 @@ function ConnectAmazonContent() {
         .single();
 
       if (connection) {
-        // Already connected, skip to onboarding
-        router.push("/onboarding");
+        // Already connected → go to Analyze
+        router.push("/analyze");
         return;
       }
 
@@ -67,42 +67,43 @@ function ConnectAmazonContent() {
     setStep("connecting");
     // Redirect to OAuth connect endpoint
     window.location.href = "/api/amazon/connect?return_to=onboarding";
+    // Callback will redirect to /analyze?connected=1 on success
   };
 
   const handleSkip = () => {
-    router.push("/onboarding");
+    router.push("/analyze");
   };
 
   const handleContinue = () => {
-    router.push("/onboarding");
+    router.push("/analyze");
+  };
+
+  const glassCard =
+    "w-full max-w-lg rounded-2xl border border-white/10 bg-white/5 shadow-2xl backdrop-blur-xl p-6 sm:p-8";
+  const glassStyle = {
+    boxShadow: "0 25px 50px -12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05)",
   };
 
   if (checkingAuth) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-gray-500">Loading...</p>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
+        <p className="text-white/70 text-sm">Loading…</p>
       </div>
     );
   }
 
   if (step === "connecting") {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="w-full max-w-md space-y-6 text-center">
-          <div className="w-16 h-16 mx-auto bg-orange-100 rounded-full flex items-center justify-center">
-            <span className="text-orange-600 font-bold text-2xl">A</span>
+      <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-6">
+        <div className="absolute inset-0 bg-black/20 backdrop-blur-sm pointer-events-none" aria-hidden />
+        <div className={`relative ${glassCard}`} style={glassStyle}>
+          <div className="w-16 h-16 mx-auto bg-primary/20 rounded-full flex items-center justify-center mb-4">
+            <span className="text-primary font-bold text-2xl">A</span>
           </div>
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900 mb-2">
-              Redirecting to Amazon…
-            </h1>
-            <p className="text-gray-600">
-              You'll be asked to approve access to pricing & fee data.
-            </p>
-            <p className="text-sm text-gray-500 mt-2">
-              Amazon handles authentication — we never see your password.
-            </p>
-          </div>
+          <h1 className="text-xl font-semibold text-white mb-2 text-center">Redirecting to Amazon…</h1>
+          <p className="text-sm text-white/70 text-center">
+            You'll be asked to approve read-only access. Amazon handles authentication — we never see your password.
+          </p>
         </div>
       </div>
     );
@@ -110,164 +111,66 @@ function ConnectAmazonContent() {
 
   if (step === "success") {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="w-full max-w-md space-y-6">
+      <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-6">
+        <div className="absolute inset-0 bg-black/20 backdrop-blur-sm pointer-events-none" aria-hidden />
+        <div className={`relative ${glassCard} space-y-6`} style={glassStyle}>
           <div className="text-center">
-            <div className="w-16 h-16 mx-auto bg-green-100 rounded-full flex items-center justify-center mb-4">
-              <svg
-                className="w-8 h-8 text-green-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
+            <div className="w-16 h-16 mx-auto bg-green-500/20 rounded-full flex items-center justify-center mb-4">
+              <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h1 className="text-2xl font-semibold text-gray-900 mb-2">
-              Amazon Connected Successfully
-            </h1>
-            <p className="text-gray-600">
-              Your account is now linked.
-            </p>
-            <p className="text-sm text-gray-500 mt-2">
-              Sellerev will use this connection to provide exact fees and pricing insights.
-            </p>
+            <h1 className="text-xl font-semibold text-white mb-2">Amazon connected</h1>
+            <p className="text-sm text-white/70">Accuracy upgraded. You can continue to Analyze.</p>
           </div>
           <button
             onClick={handleContinue}
-            className="w-full bg-black text-white rounded-lg p-3 font-medium hover:bg-gray-800 transition-colors"
+            className="w-full rounded-xl bg-gradient-to-r from-primary to-primary-glow text-primary-foreground font-medium py-3 text-sm hover:opacity-90 transition-colors"
           >
-            Continue Setup
+            Continue to Analyze
           </button>
         </div>
       </div>
     );
   }
 
-  // Default: prompt step
+  // Default: prompt step — gradient + glass card (same language as onboarding)
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
-      <div className="w-full max-w-md space-y-6">
-        {/* Header */}
-        <div className="text-center">
-          <div className="w-16 h-16 mx-auto bg-orange-100 rounded-full flex items-center justify-center mb-4">
-            <span className="text-orange-600 font-bold text-2xl">A</span>
-          </div>
-          <h1 className="text-2xl font-semibold text-gray-900 mb-2">
-            Connect Amazon for Accurate Insights
-          </h1>
-          <p className="text-sm text-gray-500">
-            Optional — you can skip this and connect later
-          </p>
-        </div>
+    <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-6">
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-indigo-500/20 rounded-full blur-[120px] pointer-events-none" aria-hidden />
+      <div className="absolute inset-0 bg-black/20 backdrop-blur-sm pointer-events-none" aria-hidden />
+      <div className={`relative ${glassCard} space-y-6`} style={glassStyle}>
+        <h1 className="text-lg font-semibold text-white">Connect Amazon (Recommended)</h1>
+        <p className="text-sm text-white/60">Optional — Analyze works without connecting; accuracy is higher when connected.</p>
 
-        {/* Error Message */}
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+          <div className="rounded-xl bg-red-500/15 border border-red-400/30 text-red-200 px-4 py-3 text-sm">
             {error}
           </div>
         )}
 
-        {/* Main Explanation */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
-          <p className="text-gray-700">
-            Sellerev works without connecting Amazon.
-          </p>
-          <p className="text-gray-700">
-            Connecting your Seller Central account unlocks:
-          </p>
-          <ul className="space-y-2 text-gray-700">
-            <li className="flex items-start">
-              <span className="text-orange-600 mr-2">•</span>
-              <span>Exact FBA fee calculations (no estimates)</span>
-            </li>
-            <li className="flex items-start">
-              <span className="text-orange-600 mr-2">•</span>
-              <span>Buy Box ownership (Amazon vs 3P sellers)</span>
-            </li>
-            <li className="flex items-start">
-              <span className="text-orange-600 mr-2">•</span>
-              <span>More accurate pricing & fulfillment signals</span>
-            </li>
-          </ul>
-          <p className="text-sm text-gray-600 pt-2 border-t border-gray-100">
-            This is a one-time, secure connection using Amazon OAuth.
-            <br />
-            You can disconnect anytime.
-          </p>
-        </div>
+        <ul className="space-y-2 text-sm text-white/90">
+          <li>• More accurate fee + margin estimates (uses your real fee structures)</li>
+          <li>• Better market and revenue signals over time</li>
+          <li>• Read-only access. Disconnect anytime in Settings.</li>
+        </ul>
 
-        {/* Trust & Safety */}
-        <div className="bg-gray-50 rounded-lg border border-gray-200 p-6 space-y-4">
-          <p className="font-medium text-gray-900 text-sm">What we can access:</p>
-          <ul className="space-y-1 text-sm text-gray-700">
-            <li className="flex items-start">
-              <span className="text-gray-400 mr-2">•</span>
-              <span>Product pricing & fee data for your account</span>
-            </li>
-          </ul>
-          <p className="font-medium text-gray-900 text-sm pt-2 border-t border-gray-200">
-            What we never access:
-          </p>
-          <ul className="space-y-1 text-sm text-gray-700">
-            <li className="flex items-start">
-              <span className="text-gray-400 mr-2">•</span>
-              <span>Buyer data</span>
-            </li>
-            <li className="flex items-start">
-              <span className="text-gray-400 mr-2">•</span>
-              <span>Messages or customer info</span>
-            </li>
-            <li className="flex items-start">
-              <span className="text-gray-400 mr-2">•</span>
-              <span>Your password</span>
-            </li>
-            <li className="flex items-start">
-              <span className="text-gray-400 mr-2">•</span>
-              <span>Competitor seller data</span>
-            </li>
-          </ul>
-        </div>
-
-        {/* Actions */}
-        <div className="space-y-3">
-          <p className="text-sm text-gray-600">
-            Don't have an Amazon account yet? Fees will be close but estimated.{" "}
-            <button
-              type="button"
-              onClick={handleConnect}
-              disabled={connecting}
-              className="text-orange-600 font-medium hover:underline disabled:opacity-50"
-            >
-              Connect for exact fees.
-            </button>
-          </p>
+        <div className="flex flex-col gap-3">
           <button
             onClick={handleConnect}
             disabled={connecting}
-            className="w-full bg-orange-600 text-white rounded-lg p-3 font-medium hover:bg-orange-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full rounded-xl bg-gradient-to-r from-primary to-primary-glow text-primary-foreground font-medium py-3 text-sm hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {connecting ? "Connecting..." : "Connect Amazon"}
+            {connecting ? "Connecting…" : "Connect Amazon"}
           </button>
-          <p className="text-xs text-center text-gray-500">
-            Takes ~30 seconds
-          </p>
-
           <button
             onClick={handleSkip}
-            className="w-full text-gray-600 rounded-lg p-3 font-medium hover:bg-gray-100 transition-colors border border-gray-200"
+            className="w-full text-sm text-white/60 hover:text-white/90 transition-colors"
           >
             Skip for now
           </button>
-          <p className="text-xs text-center text-gray-500">
-            You can connect later in Settings
-          </p>
         </div>
+        <p className="text-xs text-center text-white/40">You can connect later in Settings.</p>
       </div>
     </div>
   );

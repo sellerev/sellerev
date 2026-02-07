@@ -5,7 +5,7 @@ import type { AnalysisResponse, RiskLevel } from "@/types/analysis";
 import AnalyzeForm from "./AnalyzeForm";
 
 interface AnalyzePageProps {
-  searchParams: Promise<{ run?: string; keyword?: string }>;
+  searchParams: Promise<{ run?: string; keyword?: string; asin?: string; connected?: string }>;
 }
 
 /**
@@ -32,10 +32,10 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
     redirect("/auth");
   }
 
-  // Check if seller profile exists
+  // Check if seller profile exists and get connection status for "Data used"
   const { data: profile } = await supabase
     .from("seller_profiles")
-    .select("id")
+    .select("id, amazon_connected")
     .eq("id", user.id)
     .single();
 
@@ -191,13 +191,18 @@ export default async function AnalyzePage({ searchParams }: AnalyzePageProps) {
     }
   }
 
-  const initialKeyword = typeof params.keyword === "string" ? params.keyword.trim() : undefined;
+  const initialKeyword = (typeof params.keyword === "string" ? params.keyword.trim() : undefined)
+    || (typeof params.asin === "string" ? params.asin.trim() : undefined);
+  const connectedParam = params.connected === "1";
+  const amazonConnected = !!profile?.amazon_connected;
 
   return (
     <AnalyzeForm
       initialAnalysis={initialAnalysis}
       initialMessages={initialMessages}
       initialKeyword={initialKeyword}
+      amazonConnected={amazonConnected}
+      showConnectedBanner={connectedParam}
     />
   );
 }

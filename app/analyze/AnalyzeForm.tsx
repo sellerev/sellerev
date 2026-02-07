@@ -492,8 +492,11 @@ interface AnalyzeFormProps {
   // When set (e.g. from /dashboard → /analyze?keyword=...), pre-fill and run analyze on mount
   initialKeyword?: string;
   // Read-only mode: disables input bar and analyze button
-  // Used when viewing historical analyses
   readOnly?: boolean;
+  // Amazon connected: drives "Data used" copy and optional connect banner
+  amazonConnected?: boolean;
+  // Show one-time "Accuracy upgraded" banner after OAuth (e.g. /analyze?connected=1)
+  showConnectedBanner?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -538,6 +541,8 @@ export default function AnalyzeForm({
   initialMessages = [],
   initialKeyword,
   readOnly = false,
+  amazonConnected = false,
+  showConnectedBanner = false,
 }: AnalyzeFormProps) {
   // ─────────────────────────────────────────────────────────────────────────
   // ROUTER
@@ -1941,7 +1946,21 @@ export default function AnalyzeForm({
                             </span>
                           </div>
                         )}
-                        
+                        {/* Data used — explicit based on Amazon connection */}
+                        <div className="mb-4">
+                          <span className="text-xs font-medium text-gray-500">Data used: </span>
+                          <span className="text-xs text-gray-600">
+                            {amazonConnected
+                              ? "Connected to Amazon — using your account context to improve accuracy."
+                              : "Not connected to Amazon — using public listing/page signals + your inputs."}
+                          </span>
+                        </div>
+                        {showConnectedBanner && (
+                          <div className="mb-4 rounded-lg bg-primary/10 border border-primary/30 px-4 py-3 flex items-center gap-2">
+                            <span className="text-sm font-medium text-primary">Accuracy upgraded</span>
+                            <span className="text-xs text-gray-600">Amazon connected. Fee and margin estimates use your account context.</span>
+                          </div>
+                        )}
                         <h2 className="text-xl font-semibold text-gray-900 mb-4">Market Snapshot</h2>
                         
                         {/* Canonical Metrics - Exact Order */}
