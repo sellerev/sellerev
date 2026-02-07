@@ -11,7 +11,7 @@ export default function Navigation() {
         <div className="flex items-center justify-between h-full">
           <div className="flex items-center gap-3">
             <Link
-              href="/dashboard"
+              href="/analyze"
               className="flex items-center justify-center w-9 h-9 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
               aria-label="Home"
               title="Home"
@@ -19,7 +19,7 @@ export default function Navigation() {
               <Home className="w-5 h-5" />
             </Link>
             <Link
-              href="/dashboard"
+              href="/analyze"
               className="text-lg font-bold text-gray-900 hover:text-gray-700 transition-colors"
             >
               Sellerev

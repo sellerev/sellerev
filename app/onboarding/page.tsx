@@ -265,7 +265,7 @@ export default function OnboardingPage() {
         >
           <div className="flex items-center justify-between mb-6">
             <span className="text-sm font-medium text-white/80">Step {step} of {TOTAL_STEPS}</span>
-            <Link href="/dashboard" className="text-white/60 hover:text-white/90 text-sm" aria-label="Close">×</Link>
+            <Link href="/analyze" className="text-white/60 hover:text-white/90 text-sm" aria-label="Close">×</Link>
           </div>
           <div className="w-full h-1.5 rounded-full bg-white/10 mb-6">
             <div
@@ -495,9 +495,6 @@ export default function OnboardingPage() {
                 <li>• Unlock upcoming features (PPC insights, true profitability, portfolio tracking)</li>
                 <li>• Read-only access. You control access. Disconnect anytime.</li>
               </ul>
-              <p className="text-xs text-white/50">
-                Connecting helps us learn fee/revenue/search-volume relationships over time so our estimates get closer to what tools like H10 show — without you manually entering everything.
-              </p>
               <div className="flex flex-col gap-3 pt-2">
                 <button
                   type="button"

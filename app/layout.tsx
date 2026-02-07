@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   description: "Sellerev is an analytics platform for Amazon sellers that helps them understand markets, ask better questions, and make confident decisions using structured marketplace data.",
 };
 
-import ConditionalNavigation from "./components/ConditionalNavigation";
+import AppShell from "./components/AppShell";
 
 export default function RootLayout({
   children,
@@ -30,10 +30,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased h-full`}
       >
         <div className="h-full flex flex-col">
-          <ConditionalNavigation />
-          <div className="flex-1 overflow-y-auto">
-            {children}
-          </div>
+          <AppShell>{children}</AppShell>
         </div>
       </body>
     </html>

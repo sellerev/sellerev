@@ -198,8 +198,7 @@ export default function ProfileDropdown() {
         alert("Failed to sign out. Please try again.");
         return;
       }
-      // Redirect to landing page
-      router.push("/");
+      router.replace("/auth");
     } catch (error) {
       console.error("Error during logout:", error);
       alert("An error occurred during logout.");
@@ -334,17 +333,17 @@ export default function ProfileDropdown() {
             </div>
             <button
               onClick={() => {
-                router.push("/account");
+                router.push("/profile");
                 setIsOpen(false);
               }}
               className="w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
             >
               <User className="w-4 h-4 text-gray-400" />
-              Profile & Account
+              Profile
             </button>
             <button
               onClick={() => {
-                router.push("/account?tab=billing");
+                router.push("/profile");
                 setIsOpen(false);
               }}
               className="w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
@@ -367,34 +366,24 @@ export default function ProfileDropdown() {
           {/* Divider */}
           <div className="border-t border-gray-200 my-1" />
 
-          {/* Product Section */}
+          {/* Business */}
           <div className="py-1">
             <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Product
+              Business
             </div>
             <button
               onClick={() => {
-                router.push("/settings#ai");
+                router.push("/business");
                 setIsOpen(false);
               }}
               className="w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
             >
               <Settings className="w-4 h-4 text-gray-400" />
-              AI Preferences
+              Business preferences
             </button>
             <button
               onClick={() => {
-                router.push("/settings#data");
-                setIsOpen(false);
-              }}
-              className="w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
-            >
-              <FileText className="w-4 h-4 text-gray-400" />
-              Data Sources
-            </button>
-            <button
-              onClick={() => {
-                router.push("/settings#integrations");
+                router.push("/business");
                 setIsOpen(false);
               }}
               className="w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
@@ -407,14 +396,14 @@ export default function ProfileDropdown() {
           {/* Divider */}
           <div className="border-t border-gray-200 my-1" />
 
-          {/* Security Section */}
+          {/* Security */}
           <div className="py-1">
             <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
               Security
             </div>
             <button
               onClick={() => {
-                router.push("/account?tab=security");
+                router.push("/profile");
                 setIsOpen(false);
               }}
               className="w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
