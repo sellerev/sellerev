@@ -61,7 +61,7 @@ function SidePanel({
   return (
     <aside
       className={`flex flex-col h-full border-r border-gray-700 ${className}`}
-      style={{ width: SIDE_PANEL_WIDTH, backgroundColor: "#1f2937" }}
+      style={{ width: SIDE_PANEL_WIDTH, backgroundColor: "#4b5563" }}
     >
       {/* Top: workspace name + collapse */}
       <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-4 border-b border-gray-700">
@@ -75,7 +75,7 @@ function SidePanel({
         <button
           type="button"
           onClick={onCollapse}
-          className="flex-shrink-0 p-1.5 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-600 transition-colors"
+          className="flex-shrink-0 p-1.5 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-500 transition-colors"
           aria-label="Collapse sidebar"
         >
           <X className="w-4 h-4" />
@@ -89,7 +89,7 @@ function SidePanel({
             key={`${href}-${label}`}
             href={href}
             onClick={onNavigate}
-            className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
+            className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors"
           >
             <Icon className="w-4 h-4 shrink-0" />
             {label}
@@ -102,7 +102,7 @@ function SidePanel({
         <button
           type="button"
           onClick={handleLogout}
-          className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
+          className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors"
         >
           <LogOut className="w-4 h-4 shrink-0" />
           Log out
@@ -134,24 +134,24 @@ export default function AppShell({
 
   return (
     <>
-      {/* Site background = gray-800 (#1f2937); sidebar = same; main = white */}
-      <div className="min-h-screen" style={{ backgroundColor: "#1f2937" }}>
+      {/* Site background = gray-600 (#4b5563); sidebar = same */}
+      <div className="min-h-screen" style={{ backgroundColor: "#4b5563" }}>
         <div className="flex h-full min-h-screen overflow-hidden">
-          {/* Desktop: collapsible side panel (gray-800) */}
+          {/* Desktop: collapsible side panel (gray-600) */}
           <div
             className="hidden lg:block flex-shrink-0 h-full transition-[width] duration-200 ease-out"
             style={{
               width: desktopCollapsed ? SIDE_PANEL_COLLAPSED_WIDTH : SIDE_PANEL_WIDTH,
-              backgroundColor: "#1f2937",
+              backgroundColor: "#4b5563",
             }}
           >
             {desktopCollapsed ? (
-              <aside className="flex flex-col h-full border-r border-gray-700" style={{ backgroundColor: "#1f2937" }}>
+              <aside className="flex flex-col h-full border-r border-gray-700" style={{ backgroundColor: "#4b5563" }}>
                 <div className="flex-shrink-0 p-2 border-b border-gray-700">
                   <button
                     type="button"
                     onClick={() => setDesktopCollapsed(false)}
-                    className="w-full flex items-center justify-center p-2 rounded-md text-gray-400 hover:bg-gray-600 hover:text-gray-100"
+                    className="w-full flex items-center justify-center p-2 rounded-md text-gray-400 hover:bg-gray-500 hover:text-gray-100"
                     aria-label="Expand sidebar"
                   >
                     <Menu className="w-5 h-5" />
@@ -162,7 +162,7 @@ export default function AppShell({
                     <Link
                       key={`${href}-${label}-collapsed`}
                       href={href}
-                      className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
+                      className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-500 hover:text-white transition-colors"
                       title={label}
                       aria-label={label}
                     >
@@ -177,7 +177,7 @@ export default function AppShell({
                       await supabaseBrowser.auth.signOut();
                       window.location.href = "/auth";
                     }}
-                    className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
+                    className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-500 hover:text-white transition-colors"
                     title="Log out"
                     aria-label="Log out"
                   >
@@ -230,8 +230,8 @@ export default function AppShell({
             </>
           )}
 
-          {/* Main content area (white surface on grey background) */}
-          <main className="flex-1 min-w-0 flex flex-col min-h-full bg-white">
+          {/* Main content area — same grey as sidebar so "back" matches */}
+          <main className="flex-1 min-w-0 flex flex-col min-h-full" style={{ backgroundColor: "#4b5563" }}>
             <div className="lg:hidden h-14 flex-shrink-0" />
             <div className="flex-1 overflow-auto min-h-0">{children}</div>
           </main>

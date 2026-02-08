@@ -1595,11 +1595,11 @@ export default function AnalyzeForm({
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-full bg-[#F7F9FC] flex flex-col">
+    <div className="h-full flex flex-col" style={{ backgroundColor: "#4b5563" }}>
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* MAIN CONTENT: TWO-COLUMN FLEXBOX LAYOUT                             */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="flex-1 relative overflow-hidden bg-[#F7F9FC] flex flex-row" style={{ minHeight: 0 }}>
+      <div className="flex-1 relative overflow-hidden flex flex-row" style={{ minHeight: 0, backgroundColor: "#4b5563" }}>
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* LEFT COLUMN: PAGE 1 RESULTS (own bubble/panel)                   */}
         {/* ─────────────────────────────────────────────────────────────── */}
