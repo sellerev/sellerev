@@ -1595,15 +1595,15 @@ export default function AnalyzeForm({
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-full flex flex-col" style={{ backgroundColor: "#4b5563" }}>
+    <div className="h-full flex flex-col" style={{ backgroundColor: "#f3f4f6" }}>
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* MAIN CONTENT: TWO-COLUMN FLEXBOX LAYOUT                             */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className="flex-1 relative overflow-hidden flex flex-row" style={{ minHeight: 0, backgroundColor: "#4b5563" }}>
+      <div className="flex-1 relative overflow-hidden flex flex-row" style={{ minHeight: 0, backgroundColor: "#f3f4f6" }}>
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* LEFT COLUMN: PAGE 1 RESULTS (own bubble/panel)                   */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="flex-1 min-w-0 overflow-y-auto flex flex-col p-4" style={{ minHeight: 0 }}>
+        <div className="flex-1 min-w-0 overflow-y-auto flex flex-col p-2" style={{ minHeight: 0 }}>
           {/* Page 1 results bubble - height follows content; no extra space below cards */}
           <div className="flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm w-full">
           <div className="flex-shrink-0 px-6 py-6 border-b border-gray-200">
@@ -3083,7 +3083,7 @@ export default function AnalyzeForm({
         </div>
 
         {/* ─────────────────────────────────────────────────────────────── */}
-        {/* RIGHT COLUMN: CHAT SIDEBAR (own bubble; resize on left edge)     */}
+        {/* RIGHT COLUMN: CHAT SIDEBAR (single curved shell; resize on left edge) */}
         {/* ─────────────────────────────────────────────────────────────── */}
         <div
           className={`relative flex flex-col transition-all duration-[250ms] ease-in-out ${
@@ -3097,8 +3097,8 @@ export default function AnalyzeForm({
             opacity: isSidebarCollapsed ? 0 : 1,
           }}
         >
-          {/* Chat bubble - same card treatment as Page 1 results; resize handle on its left edge */}
-          <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm overflow-visible m-4 mr-0 relative">
+          {/* Single curved shell: one rounded panel with resize handle */}
+          <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm overflow-hidden mt-2 mb-2 ml-2 mr-0 relative">
           {!isSidebarCollapsed && (
             <div
               ref={sidebarResizeRef}

@@ -61,7 +61,7 @@ function DesktopSidebar({
   return (
     <aside
       className="flex flex-col h-full overflow-hidden"
-      style={{ width: "100%", backgroundColor: "#4b5563" }}
+      style={{ width: "100%", backgroundColor: "#f3f4f6" }}
     >
       {/* Header: fixed 56px column (Menu when collapsed, else empty); then name + X when expanded */}
       <div className="flex flex-shrink-0 items-center h-14 min-h-[56px]">
@@ -73,7 +73,7 @@ function DesktopSidebar({
             <button
               type="button"
               onClick={onToggle}
-              className="p-2 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-500 transition-colors"
+              className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-200 transition-colors"
               aria-label="Expand sidebar"
             >
               <Menu className="w-5 h-5" />
@@ -84,14 +84,14 @@ function DesktopSidebar({
           <>
             <Link
               href="/analyze"
-              className="flex-1 min-w-0 truncate px-2 text-sm font-semibold text-gray-100"
+              className="flex-1 min-w-0 truncate px-2 text-sm font-semibold text-gray-900"
             >
               {userName}
             </Link>
             <button
               type="button"
               onClick={onToggle}
-              className="flex-shrink-0 p-2 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-500 transition-colors"
+              className="flex-shrink-0 p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-200 transition-colors"
               aria-label="Collapse sidebar"
             >
               <X className="w-4 h-4" />
@@ -106,7 +106,7 @@ function DesktopSidebar({
           <Link
             key={`${href}-${label}`}
             href={href}
-            className="flex items-center w-full rounded-l-lg py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors min-w-0"
+            className="flex items-center w-full rounded-l-lg py-3 text-sm font-medium text-gray-700 hover:bg-gray-200 hover:text-gray-900 transition-colors min-w-0"
           >
             <span
               className="flex-shrink-0 flex items-center justify-center"
@@ -124,7 +124,7 @@ function DesktopSidebar({
         <button
           type="button"
           onClick={handleLogout}
-          className="flex items-center w-full rounded-l-lg py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors min-w-0"
+          className="flex items-center w-full rounded-l-lg py-3 text-sm font-medium text-gray-700 hover:bg-gray-200 hover:text-gray-900 transition-colors min-w-0"
         >
           <span
             className="flex-shrink-0 flex items-center justify-center"
@@ -175,26 +175,26 @@ function SidePanel({
   return (
     <aside
       className={`flex flex-col h-full ${className}`}
-      style={{ width: SIDE_PANEL_WIDTH, backgroundColor: "#4b5563" }}
+      style={{ width: SIDE_PANEL_WIDTH, backgroundColor: "#f3f4f6" }}
     >
       <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-4">
-        <Link href="/analyze" onClick={onNavigate} className="font-semibold text-gray-100 truncate min-w-0">
+        <Link href="/analyze" onClick={onNavigate} className="font-semibold text-gray-900 truncate min-w-0">
           {userName}
         </Link>
-        <button type="button" onClick={onCollapse} className="flex-shrink-0 p-1.5 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-500 transition-colors" aria-label="Close">
+        <button type="button" onClick={onCollapse} className="flex-shrink-0 p-1.5 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-200 transition-colors" aria-label="Close">
           <X className="w-4 h-4" />
         </button>
       </div>
       <nav className="flex-1 overflow-y-auto py-3 px-2 min-h-0" aria-label="Main">
         {navItems.map(({ href, label, icon: Icon }) => (
-          <Link key={`${href}-${label}`} href={href} onClick={onNavigate} className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors">
+          <Link key={`${href}-${label}`} href={href} onClick={onNavigate} className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-700 hover:bg-gray-200 hover:text-gray-900 transition-colors">
             <Icon className="w-4 h-4 shrink-0" />
             {label}
           </Link>
         ))}
       </nav>
       <div className="flex-shrink-0 pt-3 pb-5 px-2">
-        <button type="button" onClick={handleLogout} className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors">
+        <button type="button" onClick={handleLogout} className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-700 hover:bg-gray-200 hover:text-gray-900 transition-colors">
           <LogOut className="w-4 h-4 shrink-0" />
           Log out
         </button>
@@ -225,15 +225,15 @@ export default function AppShell({
 
   return (
     <>
-      {/* Site background = gray-600 (#4b5563); sidebar = same */}
-      <div className="min-h-screen" style={{ backgroundColor: "#4b5563" }}>
+      {/* Site background = lighter gray behind app; sidebar stays gray-600 */}
+      <div className="min-h-screen" style={{ backgroundColor: "#f3f4f6" }}>
         <div className="flex h-full min-h-screen overflow-hidden">
           {/* Desktop: collapsible side panel (gray-600) */}
           <div
             className="hidden lg:block flex-shrink-0 h-full transition-[width] duration-200 ease-out overflow-hidden"
             style={{
               width: desktopCollapsed ? SIDE_PANEL_COLLAPSED_WIDTH : SIDE_PANEL_WIDTH,
-              backgroundColor: "#4b5563",
+              backgroundColor: "#f3f4f6",
             }}
           >
             <DesktopSidebar collapsed={desktopCollapsed} onToggle={() => setDesktopCollapsed((c) => !c)} />
@@ -279,8 +279,8 @@ export default function AppShell({
             </>
           )}
 
-          {/* Main content area — same grey as sidebar so "back" matches */}
-          <main className="flex-1 min-w-0 flex flex-col min-h-full" style={{ backgroundColor: "#4b5563" }}>
+          {/* Main content area — lighter gray for contrast behind panels */}
+          <main className="flex-1 min-w-0 flex flex-col min-h-full" style={{ backgroundColor: "#f3f4f6" }}>
             <div className="lg:hidden h-14 flex-shrink-0" />
             <div className="flex-1 overflow-auto min-h-0">{children}</div>
           </main>

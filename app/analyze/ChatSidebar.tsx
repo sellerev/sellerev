@@ -814,7 +814,7 @@ export default function ChatSidebar({
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* HEADER                                                              */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      <div className={`px-6 py-4 shrink-0 flex items-start justify-between gap-2 ${isDark ? "border-b border-gray-700/50" : ""}`}>
+      <div className={`px-6 py-4 shrink-0 flex items-start justify-between gap-2 ${isDark ? "border-b border-gray-700/50" : "border-b border-gray-100"}`}>
         <div className="flex-1 min-w-0">
           <h2 className={`font-semibold text-sm ${isDark ? "text-white" : "text-gray-900"}`}>
             {currentKeyword?.trim() ? currentKeyword.trim() : "Search a keyword"}
@@ -1140,7 +1140,7 @@ export default function ChatSidebar({
           </div>
         </div>
       )}
-      <div className={`w-full min-w-0 shrink-0 px-6 py-4 border-t ${isDark ? "bg-[#1a1a1f] border-gray-700/50" : "bg-white border-[#E5E7EB]"}`}>
+      <div className={`w-full min-w-0 shrink-0 px-6 py-4 ${isDark ? "bg-[#1a1a1f] border-t border-gray-700/50" : "bg-white border-t border-gray-100"}`}>
         {showHistoricalSnapshotHint && historicalHintText && (
           <div className="mb-2 px-1">
             <div className={`text-[11px] ${isDark ? "text-gray-500" : "text-gray-500"}`}>{historicalHintText}</div>

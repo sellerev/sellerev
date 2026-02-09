@@ -42,7 +42,7 @@ export default function ProfilePageClient({ user }: ProfilePageClientProps) {
   }
 
   return (
-    <div className="min-h-full" style={{ backgroundColor: "#4b5563" }}>
+    <div className="min-h-full" style={{ backgroundColor: "#f3f4f6" }}>
       <div className="max-w-2xl mx-auto px-4 py-8">
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Profile</h1>
         <p className="text-gray-600 mb-8">
