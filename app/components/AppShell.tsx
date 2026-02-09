@@ -26,6 +26,120 @@ const navItems = [
   { href: "/profile", label: "Profile", icon: User },
 ];
 
+const ICON_COLUMN_WIDTH = 56;
+
+/** Single sidebar: width animates; icons stay fixed in 56px column; text appears when expanded. */
+function DesktopSidebar({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const router = useRouter();
+  const [userName, setUserName] = useState<string>("Sellerev");
+
+  useEffect(() => {
+    supabaseBrowser.auth.getUser().then(({ data: { user } }: { data: { user: SupabaseUser | null } }) => {
+      if (user?.user_metadata?.full_name) {
+        const name = String(user.user_metadata.full_name).split(" ")[0];
+        if (name) setUserName(`${name}'s`);
+      }
+    });
+  }, []);
+
+  async function handleLogout() {
+    try {
+      await supabaseBrowser.auth.signOut();
+      router.replace("/auth");
+    } catch (e) {
+      console.error("Logout error:", e);
+      router.replace("/auth");
+    }
+  }
+
+  return (
+    <aside
+      className="flex flex-col h-full overflow-hidden"
+      style={{ width: "100%", backgroundColor: "#4b5563" }}
+    >
+      {/* Header: fixed 56px column (Menu when collapsed, else empty); then name + X when expanded */}
+      <div className="flex flex-shrink-0 items-center h-14 min-h-[56px]">
+        <div
+          className="flex-shrink-0 flex items-center justify-center"
+          style={{ width: ICON_COLUMN_WIDTH }}
+        >
+          {collapsed ? (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="p-2 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-500 transition-colors"
+              aria-label="Expand sidebar"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+          ) : null}
+        </div>
+        {!collapsed && (
+          <>
+            <Link
+              href="/analyze"
+              className="flex-1 min-w-0 truncate px-2 text-sm font-semibold text-gray-100"
+            >
+              {userName}
+            </Link>
+            <button
+              type="button"
+              onClick={onToggle}
+              className="flex-shrink-0 p-2 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-500 transition-colors"
+              aria-label="Collapse sidebar"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Nav: icons in fixed 56px column (same size, no movement); text appears when expanded. Pushed down. */}
+      <nav className="flex-1 overflow-y-auto min-h-0 pt-6" aria-label="Main">
+        {navItems.map(({ href, label, icon: Icon }) => (
+          <Link
+            key={`${href}-${label}`}
+            href={href}
+            className="flex items-center w-full rounded-l-lg py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors min-w-0"
+          >
+            <span
+              className="flex-shrink-0 flex items-center justify-center"
+              style={{ width: ICON_COLUMN_WIDTH }}
+            >
+              <Icon className="w-5 h-5" />
+            </span>
+            <span className="min-w-0 truncate pr-3">{label}</span>
+          </Link>
+        ))}
+      </nav>
+
+      {/* Logout: same layout — icon column + text */}
+      <div className="flex-shrink-0 pt-2 pb-5">
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="flex items-center w-full rounded-l-lg py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors min-w-0"
+        >
+          <span
+            className="flex-shrink-0 flex items-center justify-center"
+            style={{ width: ICON_COLUMN_WIDTH }}
+          >
+            <LogOut className="w-5 h-5" />
+          </span>
+          <span className="min-w-0 truncate pr-3 text-left">Log out</span>
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+/** Full-width panel for mobile drawer (unchanged layout). */
 function SidePanel({
   onNavigate,
   onCollapse,
@@ -60,50 +174,27 @@ function SidePanel({
 
   return (
     <aside
-      className={`flex flex-col h-full border-r border-gray-700 ${className}`}
+      className={`flex flex-col h-full ${className}`}
       style={{ width: SIDE_PANEL_WIDTH, backgroundColor: "#4b5563" }}
     >
-      {/* Top: workspace name + collapse */}
-      <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-4 border-b border-gray-700">
-        <Link
-          href="/analyze"
-          onClick={onNavigate}
-          className="font-semibold text-gray-100 truncate min-w-0"
-        >
+      <div className="flex-shrink-0 flex items-center justify-between gap-2 px-4 py-4">
+        <Link href="/analyze" onClick={onNavigate} className="font-semibold text-gray-100 truncate min-w-0">
           {userName}
         </Link>
-        <button
-          type="button"
-          onClick={onCollapse}
-          className="flex-shrink-0 p-1.5 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-500 transition-colors"
-          aria-label="Collapse sidebar"
-        >
+        <button type="button" onClick={onCollapse} className="flex-shrink-0 p-1.5 rounded-md text-gray-400 hover:text-gray-100 hover:bg-gray-500 transition-colors" aria-label="Close">
           <X className="w-4 h-4" />
         </button>
       </div>
-
-      {/* Nav: highlight only on hover — distinct gray */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 min-h-0" aria-label="Main">
         {navItems.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={`${href}-${label}`}
-            href={href}
-            onClick={onNavigate}
-            className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors"
-          >
+          <Link key={`${href}-${label}`} href={href} onClick={onNavigate} className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors">
             <Icon className="w-4 h-4 shrink-0" />
             {label}
           </Link>
         ))}
       </nav>
-
-      {/* Logout at the very bottom */}
-      <div className="flex-shrink-0 border-t border-gray-700 pt-3 pb-5 px-2">
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors"
-        >
+      <div className="flex-shrink-0 pt-3 pb-5 px-2">
+        <button type="button" onClick={handleLogout} className="flex items-center gap-3 w-full rounded-l-lg px-3 py-3 text-sm font-medium text-gray-300 hover:bg-gray-500 hover:text-white transition-colors">
           <LogOut className="w-4 h-4 shrink-0" />
           Log out
         </button>
@@ -139,55 +230,13 @@ export default function AppShell({
         <div className="flex h-full min-h-screen overflow-hidden">
           {/* Desktop: collapsible side panel (gray-600) */}
           <div
-            className="hidden lg:block flex-shrink-0 h-full transition-[width] duration-200 ease-out"
+            className="hidden lg:block flex-shrink-0 h-full transition-[width] duration-200 ease-out overflow-hidden"
             style={{
               width: desktopCollapsed ? SIDE_PANEL_COLLAPSED_WIDTH : SIDE_PANEL_WIDTH,
               backgroundColor: "#4b5563",
             }}
           >
-            {desktopCollapsed ? (
-              <aside className="flex flex-col h-full border-r border-gray-700" style={{ backgroundColor: "#4b5563" }}>
-                <div className="flex-shrink-0 p-2 border-b border-gray-700">
-                  <button
-                    type="button"
-                    onClick={() => setDesktopCollapsed(false)}
-                    className="w-full flex items-center justify-center p-2 rounded-md text-gray-400 hover:bg-gray-500 hover:text-gray-100"
-                    aria-label="Expand sidebar"
-                  >
-                    <Menu className="w-5 h-5" />
-                  </button>
-                </div>
-                <nav className="flex-1 overflow-y-auto py-3 px-2 min-h-0 flex flex-col items-center gap-1" aria-label="Main">
-                  {navItems.map(({ href, label, icon: Icon }) => (
-                    <Link
-                      key={`${href}-${label}-collapsed`}
-                      href={href}
-                      className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-500 hover:text-white transition-colors"
-                      title={label}
-                      aria-label={label}
-                    >
-                      <Icon className="w-5 h-5 shrink-0" />
-                    </Link>
-                  ))}
-                </nav>
-                <div className="flex-shrink-0 border-t border-gray-700 pt-2 pb-4 flex justify-center">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await supabaseBrowser.auth.signOut();
-                      window.location.href = "/auth";
-                    }}
-                    className="flex items-center justify-center w-10 h-10 rounded-lg text-gray-300 hover:bg-gray-500 hover:text-white transition-colors"
-                    title="Log out"
-                    aria-label="Log out"
-                  >
-                    <LogOut className="w-5 h-5 shrink-0" />
-                  </button>
-                </div>
-              </aside>
-            ) : (
-              <SidePanel onCollapse={() => setDesktopCollapsed(true)} />
-            )}
+            <DesktopSidebar collapsed={desktopCollapsed} onToggle={() => setDesktopCollapsed((c) => !c)} />
           </div>
 
           {/* Mobile: hamburger + drawer */}

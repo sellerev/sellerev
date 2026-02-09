@@ -1604,8 +1604,8 @@ export default function AnalyzeForm({
         {/* LEFT COLUMN: PAGE 1 RESULTS (own bubble/panel)                   */}
         {/* ─────────────────────────────────────────────────────────────── */}
         <div className="flex-1 min-w-0 overflow-y-auto flex flex-col p-4" style={{ minHeight: 0 }}>
-          {/* Page 1 results bubble - full height while loading, grows with content when loaded */}
-          <div className="flex flex-col min-h-full rounded-2xl bg-white border border-gray-200 shadow-sm">
+          {/* Page 1 results bubble - height follows content; no extra space below cards */}
+          <div className="flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm w-full">
           <div className="flex-shrink-0 px-6 py-6 border-b border-gray-200">
             <SearchBar
               inputValue={inputValue}
@@ -1733,7 +1733,7 @@ export default function AnalyzeForm({
             </div>
           ) : analysis ? (
             /* CRITICAL: ALWAYS render results when analysis exists - never block rendering */
-            <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 py-6 space-y-6 relative min-w-0">
+            <div key={currentAnalysisRunId || analysis?.analysis_run_id || 'results'} className="px-6 pt-6 pb-4 space-y-6 relative min-w-0">
               {/* AI Thinking Message - shown when enriching (non-blocking) */}
               {analysisUIState === 'enriching' && (
                 <div className="mb-4">
@@ -3097,13 +3097,16 @@ export default function AnalyzeForm({
             opacity: isSidebarCollapsed ? 0 : 1,
           }}
         >
+          {/* Chat bubble - same card treatment as Page 1 results; resize handle on its left edge */}
+          <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm overflow-visible m-4 mr-0 relative">
           {!isSidebarCollapsed && (
             <div
               ref={sidebarResizeRef}
               onMouseDown={handleResizeStart}
-              className={`absolute left-0 top-0 bottom-0 cursor-col-resize transition-all z-10 group w-2 -ml-1 ${
+              className={`absolute left-0 top-0 bottom-0 cursor-col-resize transition-all z-10 group w-2 ${
                 isResizing ? "bg-primary" : "bg-transparent hover:bg-gray-400/50"
               }`}
+              style={{ transform: "translateX(-50%)" }}
               title="Drag to resize"
             >
               {!isResizing && (
@@ -3111,8 +3114,6 @@ export default function AnalyzeForm({
               )}
             </div>
           )}
-          {/* Chat bubble - same card treatment as Page 1 results */}
-          <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm overflow-hidden m-4 mr-0">
           <ChatSidebar
             analysisRunId={chatAvailable ? analysisRunIdForChat : null}
             snapshotId={analysis?.analysis_run_id || null}

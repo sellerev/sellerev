@@ -808,7 +808,7 @@ export default function ChatSidebar({
 
   return (
     <div
-      className={`h-full flex flex-col overflow-hidden ${isDark ? "bg-[#1a1a1f] border-r border-gray-700/50" : "bg-white border-l border-[#E5E7EB]"}`}
+      className={`h-full flex flex-col overflow-hidden ${isDark ? "bg-[#1a1a1f]" : "bg-white"}`}
       style={{ minHeight: 0 }}
     >
       {/* ─────────────────────────────────────────────────────────────────── */}
