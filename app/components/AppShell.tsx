@@ -10,13 +10,14 @@ import {
   User,
   LogOut,
   Menu,
+  ChevronLeft,
   X,
 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 
 const PUBLIC_PATHS = ["/", "/auth", "/terms", "/privacy", "/support"];
-const SIDE_PANEL_WIDTH = 260;
+const SIDE_PANEL_WIDTH = 200;
 const SIDE_PANEL_COLLAPSED_WIDTH = 56;
 
 const navItems = [
@@ -37,16 +38,6 @@ function DesktopSidebar({
   onToggle: () => void;
 }) {
   const router = useRouter();
-  const [userName, setUserName] = useState<string>("Sellerev");
-
-  useEffect(() => {
-    supabaseBrowser.auth.getUser().then(({ data: { user } }: { data: { user: SupabaseUser | null } }) => {
-      if (user?.user_metadata?.full_name) {
-        const name = String(user.user_metadata.full_name).split(" ")[0];
-        if (name) setUserName(`${name}'s`);
-      }
-    });
-  }, []);
 
   async function handleLogout() {
     try {
@@ -63,7 +54,7 @@ function DesktopSidebar({
       className="flex flex-col h-full overflow-hidden"
       style={{ width: "100%", backgroundColor: "#f3f4f6" }}
     >
-      {/* Header: fixed 56px column (Menu when collapsed, else empty); then name + X when expanded */}
+      {/* Header: fixed 56px column (Menu when collapsed, else empty); then name + collapse arrow when expanded */}
       <div className="flex flex-shrink-0 items-center h-14 min-h-[56px]">
         <div
           className="flex-shrink-0 flex items-center justify-center"
@@ -82,31 +73,26 @@ function DesktopSidebar({
         </div>
         {!collapsed && (
           <>
-            <Link
-              href="/analyze"
-              className="flex-1 min-w-0 truncate px-2 text-sm font-semibold text-gray-900"
-            >
-              {userName}
-            </Link>
+            <div className="flex-1 min-w-0" aria-hidden />
             <button
               type="button"
               onClick={onToggle}
               className="flex-shrink-0 p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-200 transition-colors"
               aria-label="Collapse sidebar"
             >
-              <X className="w-4 h-4" />
+              <ChevronLeft className="w-4 h-4" />
             </button>
           </>
         )}
       </div>
 
       {/* Nav: icons in fixed 56px column (same size, no movement); text appears when expanded. Pushed down. */}
-      <nav className="flex-1 overflow-y-auto min-h-0 pt-6" aria-label="Main">
+      <nav className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 pt-6" aria-label="Main">
         {navItems.map(({ href, label, icon: Icon }) => (
           <Link
             key={`${href}-${label}`}
             href={href}
-            className="flex items-center w-full rounded-l-lg py-3 text-sm font-medium text-gray-700 hover:bg-gray-200 hover:text-gray-900 transition-colors min-w-0"
+            className="flex items-center w-full rounded-lg py-3 text-sm font-medium text-gray-700 hover:bg-gray-200 hover:text-gray-900 transition-colors min-w-0"
           >
             <span
               className="flex-shrink-0 flex items-center justify-center"
@@ -124,7 +110,7 @@ function DesktopSidebar({
         <button
           type="button"
           onClick={handleLogout}
-          className="flex items-center w-full rounded-l-lg py-3 text-sm font-medium text-gray-700 hover:bg-gray-200 hover:text-gray-900 transition-colors min-w-0"
+          className="flex items-center w-full rounded-lg py-3 text-sm font-medium text-gray-700 hover:bg-gray-200 hover:text-gray-900 transition-colors min-w-0"
         >
           <span
             className="flex-shrink-0 flex items-center justify-center"

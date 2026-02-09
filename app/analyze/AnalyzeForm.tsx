@@ -1603,9 +1603,9 @@ export default function AnalyzeForm({
         {/* ─────────────────────────────────────────────────────────────── */}
         {/* LEFT COLUMN: PAGE 1 RESULTS (own bubble/panel)                   */}
         {/* ─────────────────────────────────────────────────────────────── */}
-        <div className="flex-1 min-w-0 overflow-y-auto flex flex-col p-2" style={{ minHeight: 0 }}>
-          {/* Page 1 results bubble - height follows content; no extra space below cards */}
-          <div className="flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm w-full">
+        <div className="flex-1 min-w-0 flex flex-col p-2" style={{ minHeight: 0 }}>
+          {/* Page 1 results bubble - fills column so bottom aligns with chat panel */}
+          <div className="flex-1 min-h-0 flex flex-col rounded-2xl bg-white border border-gray-200 shadow-sm w-full overflow-hidden">
           <div className="flex-shrink-0 px-6 py-6 border-b border-gray-200">
             <SearchBar
               inputValue={inputValue}
@@ -1726,6 +1726,7 @@ export default function AnalyzeForm({
             )}
           </div>
 
+          <div className="flex-1 min-h-0 overflow-auto flex flex-col">
           {loading && !analysis?.page_one_listings?.length && !analysis?.products?.length ? (
             /* Show skeleton while fetching (first search or new search after clearing listings) */
             <div className="px-6 py-6 space-y-6 relative min-w-0">
@@ -1907,60 +1908,6 @@ export default function AnalyzeForm({
                     
                     return (
                       <div className="bg-white border rounded-lg p-6">
-                        {/* Snapshot Freshness Badge */}
-                        {snapshotLastUpdated && snapshotType === 'snapshot' && (
-                          <div className="mb-4 flex items-center gap-2">
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">
-                              Using cached Page-1 snapshot (last updated: {formatTimeAgo(snapshotLastUpdated)})
-                            </span>
-                          </div>
-                        )}
-                        {/* Tier-2 Refinement Badge (non-blocking) */}
-                        {showRefiningBadge && (
-                          <div className="mb-4 flex items-center gap-2">
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-primary/15 text-primary border border-primary/30 animate-pulse">
-                              Refining
-                            </span>
-                            <span className="text-xs text-gray-600">
-                              Refining market accuracy in background{nextUpdateExpectedSec ? ` (${nextUpdateExpectedSec}s)` : ""}...
-                            </span>
-                          </div>
-                        )}
-                        {/* Data Source Badge */}
-                        {snapshotType === "estimated" ? (
-                          <div className="mb-4 flex items-center gap-2">
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
-                              Estimated
-                            </span>
-                            <span className="text-xs text-gray-600">
-                              Initial estimates based on Page-1 visibility and listing position. Refining with live Amazon category data.
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="mb-4 flex items-center gap-2">
-                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">
-                              Live
-                            </span>
-                            <span className="text-xs text-gray-600">
-                              Calculated using live Amazon category rankings.
-                            </span>
-                          </div>
-                        )}
-                        {/* Data used — explicit based on Amazon connection */}
-                        <div className="mb-4">
-                          <span className="text-xs font-medium text-gray-500">Data used: </span>
-                          <span className="text-xs text-gray-600">
-                            {amazonConnected
-                              ? "Connected to Amazon — using your account context to improve accuracy."
-                              : "Not connected to Amazon — using public listing/page signals + your inputs."}
-                          </span>
-                        </div>
-                        {showConnectedBanner && (
-                          <div className="mb-4 rounded-lg bg-primary/10 border border-primary/30 px-4 py-3 flex items-center gap-2">
-                            <span className="text-sm font-medium text-primary">Accuracy upgraded</span>
-                            <span className="text-xs text-gray-600">Amazon connected. Fee and margin estimates use your account context.</span>
-                          </div>
-                        )}
                         <h2 className="text-xl font-semibold text-gray-900 mb-4">Market Snapshot</h2>
                         
                         {/* Canonical Metrics - Exact Order */}
@@ -2418,7 +2365,7 @@ export default function AnalyzeForm({
                                 <button
                                   type="button"
                                   onClick={() => setBrandDropdownOpen(!brandDropdownOpen)}
-                                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary flex items-center gap-1.5"
+                                  className="text-xs font-medium border border-gray-200 rounded-full px-3 py-2 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary shadow-sm flex items-center gap-1.5 transition-colors"
                                 >
                                   <span>Brand</span>
                                   {selectedBrands.size > 0 && (
@@ -2431,10 +2378,10 @@ export default function AnalyzeForm({
                                   </svg>
                                 </button>
                                 {brandDropdownOpen && (
-                                <div className="absolute top-full left-0 mt-1 z-20 bg-white border border-gray-300 rounded shadow-lg max-h-64 overflow-y-auto min-w-[200px]">
-                                  <div className="p-2 space-y-1">
+                                <div className="absolute top-full left-0 mt-2 z-20 bg-white border border-gray-200 rounded-2xl shadow-xl shadow-gray-200/50 max-h-64 overflow-y-auto min-w-[200px]">
+                                  <div className="p-2 space-y-0.5">
                                     {brandsList.length === 0 ? (
-                                      <div className="text-xs text-gray-500 px-2 py-1.5">No brands available</div>
+                                      <div className="text-xs text-gray-500 px-3 py-2.5 rounded-xl">No brands available</div>
                                     ) : (
                                       brandsList.map((brand) => {
                                         const count = brandCounts.get(brand) || (brand === "Unknown" ? pageOneListings.filter((l: any) => {
@@ -2442,7 +2389,7 @@ export default function AnalyzeForm({
                                           return getRawBrand(l) === null;
                                         }).length : 0);
                                         return (
-                                          <label key={brand} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded cursor-pointer text-xs">
+                                          <label key={brand} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 rounded-xl cursor-pointer text-xs transition-colors">
                                             <input
                                               type="checkbox"
                                               checked={selectedBrands.has(brand)}
@@ -2510,24 +2457,24 @@ export default function AnalyzeForm({
                             </div> */}
                             
                             {/* Sponsored Filter */}
-                            <div className="flex items-center gap-2">
-                              <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                            <div className="flex items-center gap-1.5">
+                              <label className={`flex items-center gap-2 text-xs font-medium cursor-pointer rounded-full px-3 py-2 border transition-colors ${sponsoredFilter === "only" ? "bg-primary/10 border-primary/30 text-primary" : "text-gray-700 bg-white border-gray-200 hover:bg-gray-50 hover:border-gray-300"}`}>
                                 <input
                                   type="radio"
                                   name="sponsored-filter"
                                   checked={sponsoredFilter === "only"}
                                   onChange={() => setSponsoredFilter(sponsoredFilter === "only" ? null : "only")}
-                                  className="w-3.5 h-3.5 text-primary border-gray-300 focus:ring-primary"
+                                  className="w-3.5 h-3.5 text-primary border-gray-300 focus:ring-primary rounded-full"
                                 />
                                 <span>Sponsored only</span>
                               </label>
-                              <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                              <label className={`flex items-center gap-2 text-xs font-medium cursor-pointer rounded-full px-3 py-2 border transition-colors ${sponsoredFilter === "exclude" ? "bg-primary/10 border-primary/30 text-primary" : "text-gray-700 bg-white border-gray-200 hover:bg-gray-50 hover:border-gray-300"}`}>
                                 <input
                                   type="radio"
                                   name="sponsored-filter"
                                   checked={sponsoredFilter === "exclude"}
                                   onChange={() => setSponsoredFilter(sponsoredFilter === "exclude" ? null : "exclude")}
-                                  className="w-3.5 h-3.5 text-primary border-gray-300 focus:ring-primary"
+                                  className="w-3.5 h-3.5 text-primary border-gray-300 focus:ring-primary rounded-full"
                                 />
                                 <span>Exclude sponsored</span>
                               </label>
@@ -2538,25 +2485,25 @@ export default function AnalyzeForm({
                               <button
                                 type="button"
                                 onClick={clearFilters}
-                                className="text-xs text-gray-600 hover:text-gray-900 underline focus:outline-none focus:ring-2 focus:ring-primary rounded px-1"
+                                className="text-xs font-medium text-gray-600 hover:text-gray-900 rounded-full px-3 py-2 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
                               >
                                 Clear filters
                               </button>
                             )}
                             
                             {/* View Toggle: Products | Brands */}
-                            <div className="flex items-center gap-1 border border-gray-300 rounded overflow-hidden">
+                            <div className="flex items-center gap-0.5 p-0.5 bg-gray-100 rounded-full border border-gray-200">
                               <button
                                 type="button"
                                 onClick={() => setViewMode("products")}
-                                className={`px-3 py-1.5 text-xs font-medium transition-colors ${viewMode === "products" ? "bg-primary text-primary-foreground" : "bg-white text-gray-700 hover:bg-gray-50"}`}
+                                className={`px-3 py-2 text-xs font-medium rounded-full transition-all ${viewMode === "products" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"}`}
                               >
                                 Products
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setViewMode("brands")}
-                                className={`px-3 py-1.5 text-xs font-medium transition-colors ${viewMode === "brands" ? "bg-primary text-primary-foreground" : "bg-white text-gray-700 hover:bg-gray-50"}`}
+                                className={`px-3 py-2 text-xs font-medium rounded-full transition-all ${viewMode === "brands" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"}`}
                               >
                                 Brands
                               </button>
@@ -2572,7 +2519,8 @@ export default function AnalyzeForm({
                                   id="sort-select"
                                   value={sortBy}
                                   onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-                                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+                                  className="text-xs font-medium border border-gray-200 rounded-full pl-3 pr-8 py-2 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary shadow-sm appearance-none bg-[length:12px] bg-[right_0.5rem_center] bg-no-repeat transition-colors"
+                                  style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E\")" }}
                                 >
                                   <option value="rank">Amazon Rank</option>
                                   <option value="price-asc">Price: Low → High</option>
@@ -2595,7 +2543,8 @@ export default function AnalyzeForm({
                                   id="brand-sort-select"
                                   value={brandSortBy}
                                   onChange={(e) => setBrandSortBy(e.target.value as BrandSortOption)}
-                                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+                                  className="text-xs font-medium border border-gray-200 rounded-full pl-3 pr-8 py-2 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary shadow-sm appearance-none bg-[length:12px] bg-[right_0.5rem_center] bg-no-repeat transition-colors"
+                                  style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E\")" }}
                                 >
                                   <option value="revenue-desc">Revenue: High → Low</option>
                                   <option value="revenue-asc">Revenue: Low → High</option>
@@ -3051,8 +3000,8 @@ export default function AnalyzeForm({
               ) : null}
             </div>
           ) : (
-            /* Show ready state when not loading and no analysis */
-            <div className="flex items-center justify-center min-h-[calc(100vh-16rem)] py-20 px-6">
+            /* Show ready state when not loading and no analysis — fills space so bottom aligns with chat */
+            <div className="flex-1 flex items-center justify-center py-20 px-6">
               <div className="text-center max-w-md">
                 <div className="w-20 h-20 mx-auto mb-6 bg-gray-100/60 backdrop-blur-sm rounded-full flex items-center justify-center">
                   <svg
@@ -3079,6 +3028,7 @@ export default function AnalyzeForm({
               </div>
             </div>
           )}
+          </div>
         </div>
         </div>
 
