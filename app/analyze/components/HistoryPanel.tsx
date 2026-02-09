@@ -27,123 +27,161 @@ export default function HistoryPanel({ isOpen, onClose, anchorElement }: History
   const searchParams = useSearchParams();
   const activeRunId = searchParams.get("run");
 
+  const PAGE_SIZE = 25;
   const [analyses, setAnalyses] = useState<AnalysisRun[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Fetch analyses on mount and when panel opens
+  // Fetch initial analyses when panel opens
   useEffect(() => {
     if (isOpen) {
-      loadAnalyses();
+      loadAnalyses(true);
     }
   }, [isOpen]);
 
-  async function loadAnalyses() {
+  async function loadAnalyses(reset = false, cursorCreatedAt?: string) {
     try {
+      if (reset) {
+        setLoading(true);
+        setAnalyses([]);
+      }
+
       const {
         data: { user },
       } = await supabaseBrowser.auth.getUser();
 
       if (!user) {
         setLoading(false);
+        setHasMore(false);
         return;
       }
 
-      const { data, error } = await supabaseBrowser
+      let query = supabaseBrowser
         .from("analysis_runs")
         .select("id, input_value, created_at")
         .eq("user_id", user.id)
         .eq("input_type", "keyword")
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(PAGE_SIZE + 1);
+
+      if (!reset && cursorCreatedAt) {
+        query = query.lt("created_at", cursorCreatedAt);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         console.error("Error loading analyses:", error);
         setLoading(false);
+        setLoadingMore(false);
+        setHasMore(false);
         return;
       }
 
-      setAnalyses(data || []);
+      const list = data || [];
+      const next = list.length > PAGE_SIZE ? list.slice(0, PAGE_SIZE) : list;
+      setHasMore(list.length > PAGE_SIZE);
+      if (reset) {
+        setAnalyses(next);
+      } else {
+        setAnalyses((prev) => [...prev, ...next]);
+      }
     } catch (error) {
       console.error("Error fetching analyses:", error);
+      setHasMore(false);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }
 
-  // Group analyses by date
-  const groupedAnalyses = useMemo(() => {
+  async function loadMore() {
+    if (loadingMore || !hasMore || analyses.length === 0) return;
+    setLoadingMore(true);
+    const lastCreated = analyses[analyses.length - 1].created_at;
+    await loadAnalyses(false, lastCreated);
+  }
+
+  /** Returns group label for a given date (for grouping). Order matches sort. */
+  function getGroupLabel(dateString: string): string {
+    const date = new Date(dateString);
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    const twoDaysAgo = new Date(today);
-    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-    const lastWeek = new Date(today);
-    lastWeek.setDate(lastWeek.getDate() - 7);
+    const analysisDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const diffDays = Math.floor((today.getTime() - analysisDay.getTime()) / (1000 * 60 * 60 * 24));
 
-    // Filter by search query
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays >= 2 && diffDays <= 6) return "This week";
+    if (diffDays >= 7 && diffDays <= 13) return "2w ago";
+    if (diffDays >= 14 && diffDays <= 20) return "3w ago";
+    if (diffDays >= 21 && diffDays <= 44) return "1 month ago";
+    if (diffDays >= 45 && diffDays <= 74) return "2 months ago";
+    if (diffDays >= 75 && diffDays <= 104) return "3 months ago";
+    if (diffDays >= 105 && diffDays <= 199) return "6 months ago";
+    if (diffDays >= 200 && diffDays <= 364) return "1 year ago";
+    return "Older";
+  }
+
+  const groupOrder = [
+    "Today",
+    "Yesterday",
+    "This week",
+    "2w ago",
+    "3w ago",
+    "1 month ago",
+    "2 months ago",
+    "3 months ago",
+    "6 months ago",
+    "1 year ago",
+    "Older",
+  ];
+
+  const groupedAnalyses = useMemo(() => {
     const filtered = analyses.filter((analysis) =>
       analysis.input_value.toLowerCase().includes(searchQuery.toLowerCase())
     );
-
-    const groups: {
-      label: string;
-      analyses: AnalysisRun[];
-    }[] = [
-      { label: "Today", analyses: [] },
-      { label: "Yesterday", analyses: [] },
-      { label: "2 days ago", analyses: [] },
-      { label: "Last week", analyses: [] },
-    ];
-
+    const byLabel = new Map<string, AnalysisRun[]>();
     filtered.forEach((analysis) => {
-      const analysisDate = new Date(analysis.created_at);
-      const analysisDay = new Date(
-        analysisDate.getFullYear(),
-        analysisDate.getMonth(),
-        analysisDate.getDate()
-      );
-
-      const todayTime = today.getTime();
-      const yesterdayTime = yesterday.getTime();
-      const twoDaysAgoTime = twoDaysAgo.getTime();
-      const analysisDayTime = analysisDay.getTime();
-
-      // Categorize by day
-      if (analysisDayTime === todayTime) {
-        groups[0].analyses.push(analysis);
-      } else if (analysisDayTime === yesterdayTime) {
-        groups[1].analyses.push(analysis);
-      } else if (analysisDayTime === twoDaysAgoTime) {
-        groups[2].analyses.push(analysis);
-      } else if (analysisDate >= lastWeek) {
-        // Within last week but not in specific day buckets (3-7 days ago)
-        groups[3].analyses.push(analysis);
-      } else {
-        // Older than last week - include in "Last week" group as fallback
-        groups[3].analyses.push(analysis);
-      }
+      const label = getGroupLabel(analysis.created_at);
+      if (!byLabel.has(label)) byLabel.set(label, []);
+      byLabel.get(label)!.push(analysis);
     });
-
-    // Only return groups that have analyses
-    return groups.filter((group) => group.analyses.length > 0);
+    return groupOrder
+      .filter((label) => byLabel.has(label) && byLabel.get(label)!.length > 0)
+      .map((label) => ({ label, analyses: byLabel.get(label)! }));
   }, [analyses, searchQuery]);
 
+  /** Per-item time label — uses same boundaries as getGroupLabel so group header and item text match. */
   function formatRelativeTime(dateString: string): string {
     const date = new Date(dateString);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMinutes = Math.floor(diffMs / (1000 * 60));
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const analysisDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const diffDays = Math.floor((today.getTime() - analysisDay.getTime()) / (1000 * 60 * 60 * 24));
 
-    if (diffMinutes < 1) return "Just now";
-    if (diffMinutes < 60) return `${diffMinutes}m`;
-    if (diffHours < 24) return `${diffHours}h`;
-    if (diffDays < 7) return `${diffDays}d`;
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)}w`;
-    return `${Math.floor(diffDays / 30)}mo`;
+    if (diffDays === 0) {
+      if (diffMinutes < 1) return "Just now";
+      if (diffMinutes < 60) return `${diffMinutes}m ago`;
+      return `${diffHours}h ago`;
+    }
+    if (diffDays === 1) return "1d ago";
+    if (diffDays >= 2 && diffDays <= 6) return `${diffDays}d ago`;
+    if (diffDays >= 7 && diffDays <= 13) return "2w ago";
+    if (diffDays >= 14 && diffDays <= 20) return "3w ago";
+    if (diffDays >= 21 && diffDays <= 44) return "1 month ago";
+    if (diffDays >= 45 && diffDays <= 74) return "2 months ago";
+    if (diffDays >= 75 && diffDays <= 104) return "3 months ago";
+    if (diffDays >= 105 && diffDays <= 199) return "6 months ago";
+    if (diffDays >= 200 && diffDays <= 364) return "1 year ago";
+    return "Older";
   }
 
   function handleAnalysisClick(runId: string, e?: React.MouseEvent) {
@@ -245,57 +283,71 @@ export default function HistoryPanel({ isOpen, onClose, anchorElement }: History
               {searchQuery ? "No analyses match your search" : "No analyses yet"}
             </div>
           ) : (
-            groupedAnalyses.map((group) => (
-              <div key={group.label} className="border-b border-[#E5E7EB] last:border-b-0">
-                {/* Group header */}
-                <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider bg-white">
-                  {group.label}
-                </div>
+            <>
+              {groupedAnalyses.map((group) => (
+                <div key={group.label} className="border-b border-[#E5E7EB] last:border-b-0">
+                  {/* Group header */}
+                  <div className="px-4 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider bg-white">
+                    {group.label}
+                  </div>
 
-                {/* Group items */}
-                {group.analyses.map((analysis) => {
-                  const isActive = analysis.id === activeRunId;
-                  return (
-                    <div
-                      key={analysis.id}
-                      onClick={(e) => handleAnalysisClick(analysis.id, e)}
-                      className={`relative px-4 py-2.5 hover:bg-gray-100 cursor-pointer group transition-colors ${
-                        isActive ? "bg-primary/10 hover:bg-primary/10 border-l-2 border-primary" : ""
-                      }`}
-                    >
-                      <div className="flex items-start gap-3">
-                        {/* Magnifying glass icon */}
-                        <Search className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isActive ? "text-[#3B82F6]" : "text-gray-400"}`} />
+                  {/* Group items */}
+                  {group.analyses.map((analysis) => {
+                    const isActive = analysis.id === activeRunId;
+                    return (
+                      <div
+                        key={analysis.id}
+                        onClick={(e) => handleAnalysisClick(analysis.id, e)}
+                        className={`relative px-4 py-2.5 hover:bg-gray-100 cursor-pointer group transition-colors ${
+                          isActive ? "bg-primary/10 hover:bg-primary/10 border-l-2 border-primary" : ""
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          {/* Magnifying glass icon */}
+                          <Search className={`w-4 h-4 mt-0.5 flex-shrink-0 ${isActive ? "text-[#3B82F6]" : "text-gray-400"}`} />
 
-                        {/* Content */}
-                        <div className="flex-1 min-w-0">
-                          <div
-                            className={`text-sm truncate mb-1 ${
-                              isActive ? "text-gray-900 font-medium" : "text-gray-900"
-                            }`}
+                          {/* Content */}
+                          <div className="flex-1 min-w-0">
+                            <div
+                              className={`text-sm truncate mb-1 ${
+                                isActive ? "text-gray-900 font-medium" : "text-gray-900"
+                              }`}
+                            >
+                              {analysis.input_value}
+                            </div>
+                            <div className={`text-xs ${isActive ? "text-gray-600" : "text-gray-500"}`}>
+                              {formatRelativeTime(analysis.created_at)}
+                            </div>
+                          </div>
+
+                          {/* Delete icon - show on hover */}
+                          <button
+                            onClick={(e) => handleDeleteClick(analysis.id, e)}
+                            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-all flex-shrink-0"
+                            aria-label="Delete analysis"
+                            title="Delete (read-only)"
                           >
-                            {analysis.input_value}
-                          </div>
-                          <div className={`text-xs ${isActive ? "text-gray-600" : "text-gray-500"}`}>
-                            {formatRelativeTime(analysis.created_at)}
-                          </div>
+                            <Trash2 className="w-4 h-4 text-gray-400 hover:text-gray-600" />
+                          </button>
                         </div>
-
-                        {/* Delete icon - show on hover */}
-                        <button
-                          onClick={(e) => handleDeleteClick(analysis.id, e)}
-                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-all flex-shrink-0"
-                          aria-label="Delete analysis"
-                          title="Delete (read-only)"
-                        >
-                          <Trash2 className="w-4 h-4 text-gray-400 hover:text-gray-600" />
-                        </button>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ))
+                    );
+                  })}
+                </div>
+              ))}
+              {hasMore && (
+                <div className="p-3 border-t border-[#E5E7EB] bg-white">
+                  <button
+                    type="button"
+                    onClick={loadMore}
+                    disabled={loadingMore}
+                    className="w-full py-2.5 text-sm font-medium text-primary hover:bg-primary/5 rounded-lg border border-primary/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loadingMore ? "Loading…" : "Load more"}
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
