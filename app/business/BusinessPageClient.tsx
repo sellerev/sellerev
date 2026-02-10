@@ -319,7 +319,7 @@ export default function BusinessPageClient() {
                 <input
                   type="number"
                   min={0}
-                  value={form.experience_months === "" ? "" : form.experience_months}
+                  value={form.experience_months === "" ? "" : String(form.experience_months)}
                   onChange={(e) => update("experience_months", e.target.value === "" ? "" : e.target.value)}
                   className="w-full max-w-md rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50"
                   placeholder="e.g. 12"
@@ -350,7 +350,7 @@ export default function BusinessPageClient() {
                 <input
                   type="number"
                   min={0}
-                  value={form.timeline_days === "" ? "" : form.timeline_days}
+                  value={form.timeline_days === "" ? "" : String(form.timeline_days)}
                   onChange={(e) => update("timeline_days", e.target.value === "" ? "" : e.target.value)}
                   className="w-full max-w-md rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50"
                   placeholder="e.g. 180"
@@ -416,23 +416,23 @@ export default function BusinessPageClient() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Target price min</label>
-                <input type="number" step="0.01" min={0} value={form.target_price_min === "" ? "" : form.target_price_min} onChange={(e) => update("target_price_min", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
+                <input type="number" step="0.01" min={0} value={form.target_price_min === "" ? "" : String(form.target_price_min)} onChange={(e) => update("target_price_min", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Target price max</label>
-                <input type="number" step="0.01" min={0} value={form.target_price_max === "" ? "" : form.target_price_max} onChange={(e) => update("target_price_max", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
+                <input type="number" step="0.01" min={0} value={form.target_price_max === "" ? "" : String(form.target_price_max)} onChange={(e) => update("target_price_max", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Margin target %</label>
-                <input type="number" step="0.01" min={0} max={100} value={form.margin_target_pct === "" ? "" : form.margin_target_pct} onChange={(e) => update("margin_target_pct", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
+                <input type="number" step="0.01" min={0} max={100} value={form.margin_target_pct === "" ? "" : String(form.margin_target_pct)} onChange={(e) => update("margin_target_pct", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Max fee %</label>
-                <input type="number" step="0.01" min={0} max={100} value={form.max_fee_pct === "" ? "" : form.max_fee_pct} onChange={(e) => update("max_fee_pct", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
+                <input type="number" step="0.01" min={0} max={100} value={form.max_fee_pct === "" ? "" : String(form.max_fee_pct)} onChange={(e) => update("max_fee_pct", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Target net profit per unit</label>
-                <input type="number" step="0.01" value={form.target_net_profit_per_unit === "" ? "" : form.target_net_profit_per_unit} onChange={(e) => update("target_net_profit_per_unit", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
+                <input type="number" step="0.01" value={form.target_net_profit_per_unit === "" ? "" : String(form.target_net_profit_per_unit)} onChange={(e) => update("target_net_profit_per_unit", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Monthly revenue range</label>
@@ -501,7 +501,7 @@ export default function BusinessPageClient() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Lead time (days)</label>
-                <input type="number" min={0} value={form.lead_time_days === "" ? "" : form.lead_time_days} onChange={(e) => update("lead_time_days", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
+                <input type="number" min={0} value={form.lead_time_days === "" ? "" : String(form.lead_time_days)} onChange={(e) => update("lead_time_days", e.target.value === "" ? "" : e.target.value)} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-gray-900 focus:ring-2 focus:ring-primary/50" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">MOQ tolerance</label>

@@ -1480,12 +1480,12 @@ SELLER PROFILE:
 - Revenue Range: ${seller_memory.seller_profile.monthly_revenue_range || "Not specified"}
 - Capital Constraints: ${seller_memory.seller_profile.capital_constraints ?? "Not specified"}
 - Risk Tolerance: ${seller_memory.seller_profile.risk_tolerance ?? "Not specified"}
-- Primary goal: ${(seller_memory.seller_profile as Record<string, unknown>).primary_goal ?? "Not specified"}
-- Timeline (days): ${(seller_memory.seller_profile as Record<string, unknown>).timeline_days ?? "Not specified"}
-- Success definition: ${(seller_memory.seller_profile as Record<string, unknown>).success_definition ?? "Not specified"}
-- Marketplaces: ${Array.isArray((seller_memory.seller_profile as Record<string, unknown>).marketplaces) ? (seller_memory.seller_profile as Record<string, unknown>).marketplaces.join(", ") : "Not specified"}
-- Constraints: ${Array.isArray((seller_memory.seller_profile as Record<string, unknown>).constraints) ? (seller_memory.seller_profile as Record<string, unknown>).constraints.join(", ") : "None specified"}
-${(seller_memory.seller_profile as Record<string, unknown>).amazon_connected === false ? `
+- Primary goal: ${(seller_memory.seller_profile as unknown as Record<string, unknown>).primary_goal ?? "Not specified"}
+- Timeline (days): ${(seller_memory.seller_profile as unknown as Record<string, unknown>).timeline_days ?? "Not specified"}
+- Success definition: ${(seller_memory.seller_profile as unknown as Record<string, unknown>).success_definition ?? "Not specified"}
+- Marketplaces: ${Array.isArray((seller_memory.seller_profile as unknown as Record<string, unknown>).marketplaces) ? ((seller_memory.seller_profile as unknown as Record<string, unknown>).marketplaces as string[]).join(", ") : "Not specified"}
+- Constraints: ${Array.isArray((seller_memory.seller_profile as unknown as Record<string, unknown>).constraints) ? ((seller_memory.seller_profile as unknown as Record<string, unknown>).constraints as string[]).join(", ") : "None specified"}
+${(seller_memory.seller_profile as unknown as Record<string, unknown>).amazon_connected === false ? `
 IMPORTANT: Not connected to Amazon — use public listing/page signals + the seller's Business profile inputs. Do not assume live fee or account data.` : ""}
 
 Use this to tailor every recommendation. Frame takeaways and next actions around their primary goal and constraints.
