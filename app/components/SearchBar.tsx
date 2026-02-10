@@ -234,7 +234,7 @@ export default function SearchBar({
     <div className="flex gap-4 items-end">
           {/* Keyword Input Field */}
           <div className="flex-1 max-w-3xl">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-base font-bold text-gray-700 mb-2">
               Search Keyword
             </label>
             <div className="relative" ref={dropdownRef}>

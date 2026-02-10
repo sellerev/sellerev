@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
-import { Plus } from "lucide-react";
+import { Plus, ArrowUp } from "lucide-react";
 import SelectedAsinsBar, { type AsinDetail } from "./SelectedAsinsBar";
 
 const TEXTAREA_MIN_HEIGHT = 44;
@@ -137,11 +137,7 @@ export default function ChatComposer({
           type="button"
           onClick={onSend}
           disabled={disabled || sendDisabled}
-          className={`flex-shrink-0 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
-            isDark
-              ? "w-10 h-10 rounded-full bg-gray-700 hover:bg-primary text-white shadow-lg"
-              : "w-9 h-9 rounded-lg bg-gradient-to-r from-primary to-primary-glow text-primary-foreground hover:opacity-90"
-          }`}
+          className="flex-shrink-0 flex items-center justify-center rounded-full w-10 h-10 bg-gradient-to-r from-primary to-primary-glow text-primary-foreground shadow-sm hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           aria-label="Send message"
         >
           {loading ? (
@@ -150,9 +146,7 @@ export default function ChatComposer({
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>
           ) : (
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-            </svg>
+            <ArrowUp className="w-5 h-5" strokeWidth={2.5} />
           )}
         </button>
       </div>

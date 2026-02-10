@@ -10,6 +10,7 @@ import {
   User,
   LogOut,
   Menu,
+  PanelLeft,
   ChevronLeft,
   X,
 } from "lucide-react";
@@ -54,7 +55,7 @@ function DesktopSidebar({
       className="flex flex-col h-full overflow-hidden"
       style={{ width: "100%", backgroundColor: "#f3f4f6" }}
     >
-      {/* Header: fixed 56px column (Menu when collapsed, else empty); then name + collapse arrow when expanded */}
+      {/* Header: fixed 56px column (panel icon when collapsed, else empty); then collapse arrow when expanded */}
       <div className="flex flex-shrink-0 items-center h-14 min-h-[56px]">
         <div
           className="flex-shrink-0 flex items-center justify-center"
@@ -67,7 +68,7 @@ function DesktopSidebar({
               className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-200 transition-colors"
               aria-label="Expand sidebar"
             >
-              <Menu className="w-5 h-5" />
+              <PanelLeft className="w-5 h-5" />
             </button>
           ) : null}
         </div>
