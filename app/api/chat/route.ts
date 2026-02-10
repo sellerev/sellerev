@@ -1756,7 +1756,7 @@ export async function POST(req: NextRequest) {
     // First try with all fields (including new optional fields), fall back to core fields if needed
     let { data: sellerProfile, error: profileError } = await supabase
       .from("seller_profiles")
-      .select("stage, experience_months, monthly_revenue_range, sourcing_model, goals, risk_tolerance, margin_target, max_fee_pct, updated_at")
+      .select("*")
       .eq("id", user.id)
       .single();
 
@@ -1768,7 +1768,7 @@ export async function POST(req: NextRequest) {
         console.warn("New profile fields not available, falling back to core fields:", errorMsg);
         const { data: coreProfile, error: coreError } = await supabase
           .from("seller_profiles")
-          .select("stage, experience_months, monthly_revenue_range, sourcing_model")
+          .select("id, stage, experience_months, monthly_revenue_range, sourcing_model, updated_at")
           .eq("id", user.id)
           .single();
         

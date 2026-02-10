@@ -1471,17 +1471,31 @@ If ideal metrics missing → Use fallback reasoning hierarchy. Calculate review 
 `}
 
 ====================================================
-SELLER CONTEXT
+SELLER CONTEXT (Business page — single source of truth)
 ====================================================
 
 SELLER PROFILE:
 - Stage: ${seller_memory.seller_profile.stage}
 - Experience: ${seller_memory.seller_profile.experience_level}
 - Revenue Range: ${seller_memory.seller_profile.monthly_revenue_range || "Not specified"}
-- Capital Constraints: ${seller_memory.seller_profile.capital_constraints}
-- Risk Tolerance: ${seller_memory.seller_profile.risk_tolerance}
+- Capital Constraints: ${seller_memory.seller_profile.capital_constraints ?? "Not specified"}
+- Risk Tolerance: ${seller_memory.seller_profile.risk_tolerance ?? "Not specified"}
+- Primary goal: ${(seller_memory.seller_profile as Record<string, unknown>).primary_goal ?? "Not specified"}
+- Timeline (days): ${(seller_memory.seller_profile as Record<string, unknown>).timeline_days ?? "Not specified"}
+- Success definition: ${(seller_memory.seller_profile as Record<string, unknown>).success_definition ?? "Not specified"}
+- Marketplaces: ${Array.isArray((seller_memory.seller_profile as Record<string, unknown>).marketplaces) ? (seller_memory.seller_profile as Record<string, unknown>).marketplaces.join(", ") : "Not specified"}
+- Constraints: ${Array.isArray((seller_memory.seller_profile as Record<string, unknown>).constraints) ? (seller_memory.seller_profile as Record<string, unknown>).constraints.join(", ") : "None specified"}
+${(seller_memory.seller_profile as Record<string, unknown>).amazon_connected === false ? `
+IMPORTANT: Not connected to Amazon — use public listing/page signals + the seller's Business profile inputs. Do not assume live fee or account data.` : ""}
 
-Use this to tailor your advice. A new seller needs different guidance than an existing seller.
+Use this to tailor every recommendation. Frame takeaways and next actions around their primary goal and constraints.
+
+OUTPUT STRUCTURE (when giving Analyze-style or strategic advice):
+1. Their goal & constraints (from seller profile above)
+2. What was analyzed (keyword/category + marketplace assumptions)
+3. Amazon-critical takeaways (fees, pricing pressure, review barrier, ad density)
+4. Page 1 reality (who owns it, concentration, what it takes to compete)
+5. Next 3 actions aligned to their goal & constraints
 
 ====================================================
 MARKET CONTEXT (REFERENCE ONLY - DO NOT RESTATE)

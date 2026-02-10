@@ -167,11 +167,19 @@ CRITICAL RULES:
       decisionBrainPrompt = DECISION_BRAIN_PROMPT + aiContextSection;
     }
 
-    // Build user message for PASS 1
-    const pass1UserMessage = `SELLER CONTEXT:
-- Stage: ${sellerProfile.stage}
-- Experience (months): ${sellerProfile.experience_months ?? "null"}
-- Monthly revenue range: ${sellerProfile.monthly_revenue_range ?? "null"}
+    // Build user message for PASS 1 (Business page = single source of truth for personalization)
+    const profile = sellerProfile as Record<string, unknown>;
+    const pass1UserMessage = `SELLER CONTEXT (from Business profile):
+- Stage: ${profile.stage ?? "null"}
+- Sourcing model: ${profile.sourcing_model ?? "null"}
+- Experience (months): ${profile.experience_months ?? "null"}
+- Monthly revenue range: ${profile.monthly_revenue_range ?? "null"}
+- Primary goal: ${profile.primary_goal ?? "null"}
+- Timeline (days): ${profile.timeline_days ?? "null"}
+- Success definition: ${profile.success_definition ?? "null"}
+- Marketplaces: ${Array.isArray(profile.marketplaces) ? profile.marketplaces.join(", ") : profile.marketplace ?? "null"}
+- Constraints: ${Array.isArray(profile.constraints) ? profile.constraints.join(", ") : "none"}
+${profile.amazon_connected === false ? "- Not connected to Amazon — use public listing/page signals + Business profile inputs only." : ""}
 
 ANALYSIS REQUEST:
 ${keyword}`;
